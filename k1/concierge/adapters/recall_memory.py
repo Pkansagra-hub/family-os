@@ -99,7 +99,11 @@ def _hits_to_dicts(hits: Any) -> list[dict[str, Any]]:
     return out
 
 
-def build_recall_fn(recall_source: Any | None) -> Callable[..., Any]:
+def build_recall_fn(
+    recall_source: Any | None,
+    *,
+    space_id: str = "default",
+) -> Callable[..., Any]:
     """P5.2 / MS-3c: Build a recall closure that talks to K0 through the
     typed ``recall.request.v1`` paired contract.
 
@@ -115,6 +119,12 @@ def build_recall_fn(recall_source: Any | None) -> Callable[..., Any]:
 
             Anything that is not a recognised recall surface is treated
             as offline (returns ``[]``).
+        space_id: Tenant space identifier passed into every
+            ``RecallRequestV1`` payload. K0 filters its WAL / index by this
+            field, so the value must match the space under which atoms
+            were written (e.g. ``family:smith``) or recall returns no
+            hits. Defaults to ``"default"`` so unit tests with synthetic
+            bridges keep working.
 
     Returns:
         ``async def _recall(query, memory_types, max_results) -> list[dict]``
@@ -125,6 +135,7 @@ def build_recall_fn(recall_source: Any | None) -> Callable[..., Any]:
     """
 
     recall_client = _resolve_recall_client(recall_source)
+    target_space = space_id or "default"
 
     async def _recall(
         query: str,
@@ -147,6 +158,10 @@ def build_recall_fn(recall_source: Any | None) -> Callable[..., Any]:
                 try:
                     return SelectorType(value)
                 except ValueError:
+                    # ``procedural`` (and any other non-enum value) maps
+                    # to ``semantic`` so the LLM's default tool-call
+                    # (episodic+semantic+procedural) still produces a
+                    # well-formed K0 recall request.
                     return SelectorType.semantic
 
             selectors = [
@@ -155,7 +170,7 @@ def build_recall_fn(recall_source: Any | None) -> Callable[..., Any]:
             ]
             payload = RecallRequestV1(
                 selectors=selectors,
-                space_id="default",
+                space_id=target_space,
                 max_results=limit,
                 vector_query=query,
             )

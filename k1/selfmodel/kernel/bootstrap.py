@@ -39,12 +39,12 @@ from k1.selfmodel.service.capsule_builder import GroundingCapsuleBuilder
 from k1.selfmodel.service.citation_builder import CitationPackBuilder
 from k1.selfmodel.service.constitution import ConstitutionService
 from k1.selfmodel.service.errors import ConstitutionUnavailableError
-from k1.selfmodel.service.family_model import FAMILY_MODEL_WRITER_ID, FamilyModelService
 from k1.selfmodel.service.identity_session import IdentitySessionManager
 from k1.selfmodel.service.policy_evaluator import PolicyEvaluator
 from k1.selfmodel.service.self_model import SELF_MODEL_WRITER_ID, SelfModelService
 from k1.selfmodel.service.signature_chain import Ed25519SignatureChainValidator
 from k1.selfmodel.service.situation_composer import SituationFrameComposer
+from k1.selfmodel.service.space_graph import SPACE_GRAPH_WRITER_ID, SpaceGraphService
 
 if TYPE_CHECKING:  # pragma: no cover
     pass
@@ -77,7 +77,7 @@ class SelfModelServiceBundle:
     store: IProjectionStorePort
     # Read services (M1)
     self_model: SelfModelService
-    family_model: FamilyModelService
+    space_graph: SpaceGraphService
     constitution: ConstitutionService
     # Composer (M1)
     composer: SituationFrameComposer
@@ -93,7 +93,7 @@ class SelfModelServiceBundle:
     capsule_builder: GroundingCapsuleBuilder
     citation_builder: CitationPackBuilder
     # Config snapshot
-    family_space_id: str
+    space_id: str
     constitution_id: str = BOOTSTRAP_CONSTITUTION_ID_V1
     # Lifecycle
     safe_mode: bool = False
@@ -182,7 +182,7 @@ class SelfModelServiceBundle:
             "constitution": constitution_info,
             "store": {"kind": store_kind, "owns_store": self._owns_store},
             "identity": {"registered_profiles": registered_profiles},
-            "family_space_id": self.family_space_id,
+            "family_space_id": self.space_id,
             "started_at_ms": self.started_at_ms,
             "bootstrap": {
                 "created": self.bootstrap.created,
@@ -204,7 +204,7 @@ def _build_store(
     """
     allowlist = (
         SELF_MODEL_WRITER_ID,
-        FAMILY_MODEL_WRITER_ID,
+        SPACE_GRAPH_WRITER_ID,
         AMENDMENT_WRITER_ID,
         "selfmodel:bootstrap",
         "selfmodel:identity",
@@ -222,7 +222,7 @@ def build_self_model_bundle(
     bus: Any | None = None,
     hil_service: Any | None = None,
     projection_db_path: str | None = None,
-    family_space_id: str = "family:default",
+    space_id: str = "family:default",
     clock_ms: Any | None = None,
     publish_startup: bool = True,
 ) -> SelfModelServiceBundle:
@@ -268,12 +268,12 @@ def build_self_model_bundle(
         validator=validator,
     )
     self_model = SelfModelService(store)
-    family_model = FamilyModelService(store)
+    space_graph = SpaceGraphService(store)
     composer = SituationFrameComposer(
         self_model=self_model,
-        family_model=family_model,
+        space_graph=space_graph,
         constitution=constitution,
-        family_space_id=family_space_id,
+        space_id=space_id,
     )
     evaluator = PolicyEvaluator()
 
@@ -308,7 +308,7 @@ def build_self_model_bundle(
     bundle = SelfModelServiceBundle(
         store=store,
         self_model=self_model,
-        family_model=family_model,
+        space_graph=space_graph,
         constitution=constitution,
         composer=composer,
         evaluator=evaluator,
@@ -318,7 +318,7 @@ def build_self_model_bundle(
         bootstrap=bootstrap,
         capsule_builder=capsule_builder,
         citation_builder=citation_builder,
-        family_space_id=family_space_id,
+        space_id=space_id,
         constitution_id=BOOTSTRAP_CONSTITUTION_ID_V1,
         safe_mode=safe_mode,
         started_at_ms=now_ms,

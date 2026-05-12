@@ -40,20 +40,26 @@ from k1.model_hub.types import (
     CapabilityType,
     ChatPayload,
     ChatResult,
+)
+from k1.model_hub.types import FinishReason as K1FinishReason
+from k1.model_hub.types import (
     HubChunk,
     HubRequest,
     HubResponse,
+)
+from k1.model_hub.types import Message as K1Message
+from k1.model_hub.types import (
     ReasonResult,
     RequestConstraints,
     ResponseMetadata,
     StructuredResult,
     TokenUsage,
     ToolCallPayload,
+)
+from k1.model_hub.types import ToolCallResult as K1ToolCallResult
+from k1.model_hub.types import (
     ToolCallResultSet,
 )
-from k1.model_hub.types import FinishReason as K1FinishReason
-from k1.model_hub.types import Message as K1Message
-from k1.model_hub.types import ToolCallResult as K1ToolCallResult
 from k1.model_hub.types import ToolDefinition as K1ToolDefinition
 
 logger = logging.getLogger(__name__)
@@ -527,6 +533,7 @@ async def react_loop(
                 messages=_k1_msgs,
                 tools=_to_k1_tools(effective_tools),
                 tool_choice=_tc,
+                system_prompt=system_prompt,
             )
         else:
             _payload = ChatPayload(

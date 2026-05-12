@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from k1.selfmodel.contracts.family_model import RelationshipEdge
+from k1.selfmodel.contracts.space_graph import RelationshipEdge
 from k1.selfmodel.contracts.situations import SITUATION_KINDS
 from k1.selfmodel.service.errors import (
     UnknownActorError,
@@ -235,7 +235,7 @@ def test_composer_requires_family_space_id() -> None:
     with pytest.raises(ValueError):
         SituationFrameComposer(
             self_model=bundle.self_model,
-            family_model=bundle.family_model,
+            space_graph=bundle.space_graph,
             constitution=bundle.constitution,
-            family_space_id="",
+            space_id="",
         )

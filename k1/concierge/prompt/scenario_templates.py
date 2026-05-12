@@ -31,12 +31,12 @@ from k1.concierge.prompt.mode import PromptMode
 
 SCENARIO_DATA_TEMPLATES: dict[PromptMode, str] = {
     PromptMode.STANDARD: (
-        "== YOUR FAMILY ==\n"
-        "You are talking to: {active_member}\n"
-        "{family_context}\n"
-        "{async_results_context}"
+        "== ACTIVE MEMBER ==\n" "You are talking to: {active_member}\n" "{async_results_context}"
     ),
-    # Family context only. Memories come from recall_memory tool calls.
+    # Active member only. Household roster + relationships come from the
+    # grounding capsule's [household] block (Stage 9.5) -- duplicating them
+    # here was the C3 issue identified in the May 2026 prompt audit.
+    # Memories come from recall_memory tool calls.
     # async_results_context is populated when background tasks completed
     # since the user's last turn -- Front should weave them naturally into
     # the response like a human saying "oh, about that thing you asked..."
@@ -106,10 +106,9 @@ SCENARIO_DATA_TEMPLATES: dict[PromptMode, str] = {
     PromptMode.CLARIFY_RESOLVE: "",
     # User's answer is in messages array. SS clarifications shows what was asked.
     PromptMode.INTERRUPT: (
-        "== YOUR FAMILY ==\n"
-        "You are talking to: {active_member}\n"
-        "{family_context}\n"
-        "{async_results_context}"
+        "== ACTIVE MEMBER ==\n" "You are talking to: {active_member}\n" "{async_results_context}"
     ),
-    # Family context only. Memories come from recall_memory tool calls.
+    # Active member only. Household roster + relationships come from the
+    # grounding capsule's [household] block. Memories come from
+    # recall_memory tool calls.
 }

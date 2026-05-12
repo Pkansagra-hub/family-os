@@ -45,9 +45,9 @@ from k1.selfmodel.ports.identity import (
 )
 from k1.selfmodel.service.amendment import AmendmentService
 from k1.selfmodel.service.constitution import ConstitutionService
-from k1.selfmodel.service.family_model import (
-    FAMILY_MODEL_WRITER_ID,
-    FamilyModelService,
+from k1.selfmodel.service.space_graph import (
+    SPACE_GRAPH_WRITER_ID,
+    SpaceGraphService,
 )
 from k1.selfmodel.service.identity_session import IdentitySessionManager
 from k1.selfmodel.service.self_model import (
@@ -76,7 +76,7 @@ CID = DEFAULT_CONSTITUTION_ID
 WRITER_AMD = "selfmodel:amendment"
 ALL_WRITERS = (
     SELF_MODEL_WRITER_ID,
-    FAMILY_MODEL_WRITER_ID,
+    SPACE_GRAPH_WRITER_ID,
     WRITER_AMD,
     "test:fixture",
 )
@@ -158,18 +158,18 @@ def _build_integration_bundle(
     actor = make_actor("g1", role="guardian", name="Aanya")
     family = make_family(members=(make_member("g1", role="guardian", name="Aanya"),))
     store.write_self(actor, writer_id="test:fixture")
-    store.write_family(family, writer_id="test:fixture")
+    store.write_space(family, writer_id="test:fixture")
 
     # ---- Real services ----
     bus = _RecordingBus()
     cs = ConstitutionService(store, constitution_id=CID, validator=validator)
     sm = SelfModelService(store)
-    fm = FamilyModelService(store)
+    fm = SpaceGraphService(store)
     composer = SituationFrameComposer(
         self_model=sm,
-        family_model=fm,
+        space_graph=fm,
         constitution=cs,
-        family_space_id=DEFAULT_FAMILY_SPACE,
+        space_id=DEFAULT_FAMILY_SPACE,
     )
     amendments = AmendmentService(
         store,

@@ -495,10 +495,15 @@ class AvailabilityTracker:
         if new_avail is None:
             return
 
-        # Auto-register if not tracked
+        # Issue 7 fix: never silently auto-register unknown providers.
+        # Callers must explicitly call register() before a provider is tracked.
         if not self.is_tracked(provider_id):
-            old_avail = _CB_TO_AVAILABILITY.get(old_state, Availability.ONLINE.value)  # type: ignore
-            self.register(provider_id, initial_state=old_avail)
+            logger.warning(
+                "AvailabilityTracker.on_state_change: unknown provider %r — ignoring. "
+                "Call register() before the CircuitBreaker fires.",
+                provider_id,
+            )
+            return
 
         try:
             self.update_state(

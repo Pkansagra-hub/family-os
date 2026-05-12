@@ -105,6 +105,7 @@ from k1.fabric.core.context_builder import (
 from k1.fabric.core.contract_validator import (
     ContractValidationError,
     ContractValidator,
+    clear_schema_cache,
     detect_contract_type,
 )
 from k1.fabric.core.discovery_tools import (
@@ -135,6 +136,7 @@ __all__ = [
     # --- Validation (M2) ---
     "ContractValidationError",
     "ContractValidator",
+    "clear_schema_cache",
     "detect_contract_type",
     # --- Registry (M2) ---
     "CapabilityRegistry",

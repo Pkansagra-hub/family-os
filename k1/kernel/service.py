@@ -84,9 +84,7 @@ from k1.memory_writer.health.circuit_breaker import CircuitBreaker as MWCircuitB
 from k1.model_hub.adapters.config_adapter import ConfigAdapter
 from k1.model_hub.adapters.credential_store_adapter import CredentialStoreAdapter
 from k1.model_hub.adapters.event_bus_adapter import EventBusAdapter as MHEventBusAdapter
-from k1.model_hub.adapters.health_report_adapter import (
-    HealthReportAdapter as MHHealthReportAdapter,
-)
+from k1.model_hub.adapters.health_report_adapter import HealthReportAdapter as MHHealthReportAdapter
 from k1.model_hub.adapters.prometheus_adapter import PrometheusAdapter
 from k1.model_hub.adapters.session_state_prod import SessionStateProdAdapter
 from k1.model_hub.factory import ModelHubFactory
@@ -108,19 +106,13 @@ from k1.orchestrator.config import OrchestratorConfig
 from k1.orchestrator.factory import OrchestratorFactory
 from k1.orchestrator.workflows.persistence import SQLiteWorkflowAdapter
 from k1.planner.adapters.bridge_adapter import BridgeAdapter as PlannerBridgeAdapter
-from k1.planner.adapters.delta_bus_adapter import (
-    DeltaBusAdapter as PlannerDeltaBusAdapter,
-)
-from k1.planner.adapters.event_bus_adapter import (
-    EventBusAdapter as PlannerEventBusAdapter,
-)
+from k1.planner.adapters.delta_bus_adapter import DeltaBusAdapter as PlannerDeltaBusAdapter
+from k1.planner.adapters.event_bus_adapter import EventBusAdapter as PlannerEventBusAdapter
 from k1.planner.adapters.fabric_registry_adapter import FabricRegistryAdapter
 from k1.planner.adapters.fabric_retrieval_adapter import FabricRetrievalAdapter
 from k1.planner.adapters.llm_gateway_adapter import LLMGatewayAdapter
 from k1.planner.adapters.mailbox_adapter import MailboxAdapter as PlannerMailboxAdapter
-from k1.planner.adapters.session_state_adapter import (
-    SessionStateReadAdapter as PlannerStateAdapter,
-)
+from k1.planner.adapters.session_state_adapter import SessionStateReadAdapter as PlannerStateAdapter
 from k1.planner.factory import PlannerFactory
 
 # M5.E3.I2 + I3: k1.selfmodel kernel wiring (S2.6 + P3.5).
@@ -229,6 +221,13 @@ class KernelService:
         # so process boot does not pay the ~20s model load cost.
         self._phase1_pipeline: Any | None = None
 
+        # M15: Family-tools bundle (k1.tools.family). Built at S8 of
+        # _startup_tier1 when KernelConfig.enable_family_tools is True.
+        # Owns the K1FamilyStore SQLite connection, ToolRegistry,
+        # IdempotencyStore, and NativeToolProvider registered into the
+        # shared Fabric. Closed during shutdown / cleanup.
+        self._family_tools: Any | None = None
+
         # P1.1: Shared routing reader (resolves session_id → SSM)
         self._session_routing_reader: SessionRoutingStateReader | None = None
 
@@ -282,6 +281,17 @@ class KernelService:
         round budgets, and safety policy decisions.
         """
         return self._hil_service
+
+    @property
+    def family_tools(self) -> Any | None:
+        """The :class:`FamilyToolsBundle` built at S8, or ``None`` if disabled.
+
+        Populated when ``KernelConfig.enable_family_tools`` is True. Exposes
+        the registered ``ToolRegistry`` (used by the web UI to mount per-
+        adapter REST routers) and the ``NativeToolProvider`` registered
+        into the shared Fabric.
+        """
+        return self._family_tools
 
     @property
     def self_model_bundle(self) -> SelfModelServiceBundle | None:
@@ -441,6 +451,15 @@ class KernelService:
             except Exception as exc:
                 errors.append(exc)
                 logger.warning("shutdown: Fabric shutdown failed: %s", exc)
+
+        # ── Reverse S8: Close FamilyToolsBundle (M15) ─────────
+        if self._family_tools is not None:
+            try:
+                self._family_tools.close()
+            except Exception as exc:
+                errors.append(exc)
+                logger.warning("shutdown: FamilyToolsBundle close failed: %s", exc)
+            self._family_tools = None
 
         # ── Reverse S2: ModelHub plugin drain (P2.3) ──────────
         if self._model_hub is not None:
@@ -789,6 +808,10 @@ class KernelService:
         """
         actor_id = f"actor:{session_id}"
         device_resolved = device_id or ""
+        # Prefer the explicitly-resolved member id supplied via KernelConfig.
+        config_member_id = getattr(self._config, "active_member_id", "") or ""
+        if config_member_id:
+            actor_id = config_member_id
         try:
             meta = ssm.get_section("meta")
         except Exception:
@@ -1226,12 +1249,12 @@ class KernelService:
                     bus=self._async_bus,
                     hil_service=self._hil_service,
                     projection_db_path=self._config.selfmodel_projection_db_path,
-                    family_space_id=self._config.selfmodel_family_space_id,
+                    space_id=self._config.selfmodel_space_id,
                 )
                 logger.info(
-                    "selfmodel: bundle ready (db=%s, family=%s, safe_mode=%s)",
+                    "selfmodel: bundle ready (db=%s, space=%s, safe_mode=%s)",
                     self._config.selfmodel_projection_db_path or "<memory>",
-                    self._config.selfmodel_family_space_id,
+                    self._config.selfmodel_space_id,
                     self._self_model_bundle.safe_mode,
                 )
             except Exception:
@@ -1250,8 +1273,27 @@ class KernelService:
 
         # ── S4: Bridge (kernel-level IBridgePort) ─────────
         # S4 before S3 because Fabric needs a bridge adapter.
+        # Three modes:
+        #   k0_endpoint set    → LiveBridgeAdapter (HttpBridgeClient via BridgeRuntime)
+        #   bridge_enabled     → SinkBridgeAdapter (offline outbox, default)
+        #   neither            → OfflineBridgeAdapter (null object)
         try:
-            if self._config.bridge_enabled:
+            if self._config.k0_endpoint:
+                from k1.kernel.adapters.live_bridge_adapter import LiveBridgeAdapter
+
+                live_adapter = LiveBridgeAdapter(
+                    endpoint=self._config.k0_endpoint,
+                    default_space_id=getattr(self._config, "selfmodel_space_id", "")
+                    or "family:default",
+                    default_actor=getattr(self._config, "active_member_id", "") or "",
+                )
+                await live_adapter.connect()
+                self._bridge = live_adapter
+                logger.info(
+                    "K1 Kernel S4: bridge=LIVE (HttpBridgeClient → %s).",
+                    self._config.k0_endpoint,
+                )
+            elif self._config.bridge_enabled:
                 self._bridge = SinkBridgeAdapter(
                     outbox_path=self._config.bridge_outbox_path,
                 )
@@ -1449,6 +1491,13 @@ class KernelService:
             # tier 1 component. Construction is cheap (lazy_load defers
             # the ~20s familyos_ultrabert model load to first analyze()).
             self._phase1_pipeline = self._build_shared_phase1_pipeline()
+
+            # ── S8: Family-tools (M15) ───────────────────────
+            # Bootstrap the FamilyToolsBundle when enabled. Registers
+            # the NativeToolProvider with the shared Fabric and creates
+            # the K1FamilyStore SQLite WAL connection. Off by default.
+            if getattr(self._config, "enable_family_tools", False):
+                self._family_tools = self._bootstrap_family_tools()
         except Exception:
             # S7 or verification failed — tear down S6 through S1.
             if self._planner_task is not None:
@@ -1464,10 +1513,54 @@ class KernelService:
             await self._bridge.disconnect()
             self._bus.close()
             self._router.close()
+            if self._family_tools is not None:
+                try:
+                    self._family_tools.close()
+                except Exception:
+                    pass
+                self._family_tools = None
             raise
 
         self._running = True
         logger.info("Tier 1 startup complete — all shared components wired")
+
+    def _bootstrap_family_tools(self) -> Any:
+        """Build the FamilyToolsBundle (M15) and register it with Fabric.
+
+        Resolves ``KernelConfig.family_tool_service_paths`` (each entry
+        ``"package.module:ClassName"``) into ``BaseToolService`` subclasses
+        and hands them to :func:`k1.tools.family.bootstrap_family_tools`.
+
+        Failures here are surfaced to ``_startup_tier1`` and trigger the
+        standard reverse-order cleanup chain.
+        """
+        from importlib import import_module
+
+        from k1.tools.family import NullSsePublisher, bootstrap_family_tools
+
+        service_classes: list[type] = []
+        for path in getattr(self._config, "family_tool_service_paths", ()) or ():
+            if ":" not in path:
+                raise ValueError(
+                    f"family_tool_service_paths entry {path!r} must be "
+                    "'package.module:ClassName'"
+                )
+            mod_name, cls_name = path.split(":", 1)
+            mod = import_module(mod_name)
+            cls = getattr(mod, cls_name)
+            service_classes.append(cls)
+
+        bundle = bootstrap_family_tools(
+            fabric=self._shared_fabric,
+            sse_publisher=NullSsePublisher(),
+            db_path=getattr(self._config, "family_tools_db_path", "./data/k1_family.db"),
+            service_classes=tuple(service_classes),
+        )
+        logger.info(
+            "S8: family-tools bundle ready (adapters=%s)",
+            bundle.tool_registry.adapter_ids(),
+        )
+        return bundle
 
     def _build_shared_phase1_pipeline(self) -> Any:
         """Build the process-wide Phase1 classification pipeline (P4B.8).
@@ -1583,6 +1676,14 @@ class KernelService:
                 await self._shared_fabric.shutdown()
             except Exception:
                 pass
+
+        # M15: Close FamilyToolsBundle (S8) if it was constructed.
+        if self._family_tools is not None:
+            try:
+                self._family_tools.close()
+            except Exception:
+                pass
+            self._family_tools = None
 
         # P2.3: drain ModelHub plugin connections before nulling the field.
         # Pre-P2.2 there was no shutdown() to call; post-P2.2 omitting this
@@ -1822,7 +1923,12 @@ class KernelService:
                 # ``build_recall_fn`` resolves the typed client out of the
                 # bridge composite client (or returns an offline-graceful
                 # ``[]`` when no recall surface is bound).
-                memory=RecallMemoryAdapter(build_recall_fn(self._bridge.get_client())),
+                memory=RecallMemoryAdapter(
+                    build_recall_fn(
+                        self._bridge.get_client(),
+                        space_id=getattr(self._config, "selfmodel_space_id", "") or "default",
+                    )
+                ),
                 # P4B.6: pass IWriterPort explicitly (was reach-through in factory step 7)
                 writer=ss_writer,
             )

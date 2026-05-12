@@ -73,6 +73,7 @@ def _extract_tool_call(payload: ToolCallPayload) -> Dict[str, Any]:
         "messages": payload.messages,
         "tools": tools,
         "tool_choice": payload.tool_choice,
+        "system_prompt": payload.system_prompt,
     }
 
 

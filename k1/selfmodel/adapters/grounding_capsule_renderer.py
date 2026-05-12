@@ -68,6 +68,11 @@ class GroundingCapsuleRenderer:
         """
         try:
             frame = self._frame_provider()
+            logger.debug(
+                "GroundingCapsuleRenderer  frame ok actor=%s self_view=%s",
+                getattr(frame, "actor_id", "?"),
+                getattr(frame, "self_view", None) is not None,
+            )
         except Exception as exc:  # noqa: BLE001
             # M15.E1.I3 — surface UnknownActorError on the bus so
             # observability tooling sees that the capsule was skipped
@@ -85,7 +90,12 @@ class GroundingCapsuleRenderer:
                 )
             return None
         try:
-            return self._builder.build(frame)
+            capsule = self._builder.build(frame)
+            logger.debug(
+                "GroundingCapsuleRenderer  capsule ok self_block=%r",
+                bool(getattr(capsule, "self_block", "")),
+            )
+            return capsule
         except Exception:
             logger.exception("GroundingCapsuleRenderer  builder failed; skipping capsule")
             return None

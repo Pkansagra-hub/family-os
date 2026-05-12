@@ -19,8 +19,8 @@ from k1.selfmodel.contracts.constitution import (
     ConstitutionSnapshot,
     SigningProof,
 )
-from k1.selfmodel.contracts.family_model import FamilySelfModelSnapshot
 from k1.selfmodel.contracts.self_model import K1SelfModelSnapshot
+from k1.selfmodel.contracts.space_graph import SpaceGraphSnapshot
 from k1.selfmodel.ports.projection_store import (
     IProjectionStorePort,
     ProjectionFreshness,
@@ -52,7 +52,7 @@ class InMemoryProjectionStore(IProjectionStorePort):
         self._allowed_writers = frozenset(allowed_writers) if allowed_writers is not None else None
         # key -> (snapshot, revision)
         self._self: dict[str, tuple[K1SelfModelSnapshot, ProjectionRevision]] = {}
-        self._family: dict[str, tuple[FamilySelfModelSnapshot, ProjectionRevision]] = {}
+        self._space: dict[str, tuple[SpaceGraphSnapshot, ProjectionRevision]] = {}
         self._constitution: dict[str, tuple[ConstitutionSnapshot, ProjectionRevision]] = {}
         # Amendments are keyed by amendment_id; signatures are appended.
         self._amendments: dict[str, AmendmentProposal] = {}
@@ -126,14 +126,12 @@ class InMemoryProjectionStore(IProjectionStorePort):
             return StoreWriteResult(revision=revision, accepted=True)
 
     # ------------------------------------------------------------------
-    # Family
+    # Space graph
     # ------------------------------------------------------------------
-    def read_family(
-        self, family_space_id: str
-    ) -> tuple[FamilySelfModelSnapshot | None, StoreReadResult]:
-        key = f"family:{family_space_id}"
+    def read_space(self, space_id: str) -> tuple[SpaceGraphSnapshot | None, StoreReadResult]:
+        key = f"space:{space_id}"
         with self._lock:
-            entry = self._family.get(family_space_id)
+            entry = self._space.get(space_id)
             if entry is None:
                 return None, StoreReadResult(
                     found=False, freshness=self._freshness.get(key, ProjectionFreshness.FRESH)
@@ -145,18 +143,16 @@ class InMemoryProjectionStore(IProjectionStorePort):
                 freshness=self._freshness.get(key, ProjectionFreshness.FRESH),
             )
 
-    def write_family(
-        self, snapshot: FamilySelfModelSnapshot, *, writer_id: str
-    ) -> StoreWriteResult:
+    def write_space(self, snapshot: SpaceGraphSnapshot, *, writer_id: str) -> StoreWriteResult:
         denial = self._check_writer(writer_id)
         if denial is not None:
             return denial
         with self._lock:
-            prev = self._family.get(snapshot.family_space_id)
+            prev = self._space.get(snapshot.space_id)
             parent = prev[1].revision if prev is not None else ""
             revision = _new_revision(parent=parent)
-            self._family[snapshot.family_space_id] = (snapshot, revision)
-            self._freshness.pop(f"family:{snapshot.family_space_id}", None)
+            self._space[snapshot.space_id] = (snapshot, revision)
+            self._freshness.pop(f"space:{snapshot.space_id}", None)
             return StoreWriteResult(revision=revision, accepted=True)
 
     # ------------------------------------------------------------------

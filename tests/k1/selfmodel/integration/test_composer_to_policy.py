@@ -1,7 +1,7 @@
 """M5.E1.I1 — Composer ➜ Policy end-to-end round-trip.
 
 Compose a real ``SituationFrame`` from the assembled selfmodel bundle
-(InMemoryProjectionStore + SelfModelService + FamilyModelService +
+(InMemoryProjectionStore + SelfModelService + SpaceGraphService +
 ConstitutionService + SituationFrameComposer) and feed it into a real
 ``PolicyEvaluator``.
 

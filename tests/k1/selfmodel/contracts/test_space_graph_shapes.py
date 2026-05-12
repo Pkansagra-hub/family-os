@@ -6,7 +6,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from k1.selfmodel.contracts.family_model import (
+from k1.selfmodel.contracts.space_graph import (
     FamilyMemberRef,
     FamilySelfModelSnapshot,
     RelationshipEdge,
@@ -38,8 +38,8 @@ def test_routine_ref_min_construct() -> None:
 
 
 def test_family_self_model_snapshot_min_construct() -> None:
-    snap = FamilySelfModelSnapshot(family_space_id="fs-1")
-    assert snap.family_space_id == "fs-1"
+    snap = FamilySelfModelSnapshot(space_id="fs-1")
+    assert snap.space_id == "fs-1"
     assert snap.members == ()
     assert snap.relations == ()
     assert snap.routines == ()
@@ -51,7 +51,7 @@ def test_family_self_model_snapshot_min_construct() -> None:
         (FamilyMemberRef(member_id="alice"), "member_id"),
         (RelationshipEdge(from_member="a", to_member="b", kind="x"), "from_member"),
         (RoutineRef(routine_id="r-1"), "routine_id"),
-        (FamilySelfModelSnapshot(family_space_id="fs-1"), "family_space_id"),
+        (FamilySelfModelSnapshot(space_id="fs-1"), "space_id"),
     ],
 )
 def test_family_dataclasses_are_frozen(instance: object, field_name: str) -> None:

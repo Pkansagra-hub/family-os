@@ -17,7 +17,7 @@ from k1.selfmodel.contracts.constitution import (
     ConstitutionSnapshot,
     SigningProof,
 )
-from k1.selfmodel.contracts.family_model import FamilySelfModelSnapshot
+from k1.selfmodel.contracts.space_graph import FamilySelfModelSnapshot
 from k1.selfmodel.contracts.policy import (
     PolicyDecision,
     PolicyRequest,
@@ -42,7 +42,7 @@ from k1.selfmodel.ports import (
     IdentityTier,
     IIdentityPort,
     IPolicyPort,
-    ISelfFamilyPort,
+    ISelfSpacePort,
     ISituationFramePort,
     ProfileSummary,
     VerificationResult,
@@ -161,9 +161,9 @@ class _SelfFamilyStub:
     def get_self(self, actor_id: str, T_ms: int, device_id: str) -> K1SelfModelSnapshot | None:
         return None
 
-    def get_family_view(self, actor_id: str, T_ms: int, device_id: str) -> FamilySelfModelSnapshot:
+    def get_space_view(self, actor_id: str, T_ms: int, device_id: str) -> FamilySelfModelSnapshot:
         return FamilySelfModelSnapshot(
-            family_space_id="fs",
+            space_id="fs",
             members=(),
             edges=(),
             routines=(),
@@ -217,7 +217,7 @@ _PORTS: tuple[tuple[type, type], ...] = (
     (IIdentityPort, _IdentityStub),
     (ICredentialPort, _CredentialStub),
     (IConstitutionPort, _ConstitutionStub),
-    (ISelfFamilyPort, _SelfFamilyStub),
+    (ISelfSpacePort, _SelfFamilyStub),
     (ISituationFramePort, _SituationStub),
     (IPolicyPort, _PolicyStub),
 )

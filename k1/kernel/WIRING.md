@@ -95,7 +95,7 @@ self._self_model_bundle = build_self_model_bundle(
     bus=self._async_bus,
     hil_service=self._hil_service,
     projection_db_path=config.selfmodel_projection_db_path,
-    family_space_id=config.selfmodel_family_space_id,
+    space_id=config.selfmodel_space_id,
 )
 ```
 

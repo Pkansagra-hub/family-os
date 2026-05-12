@@ -25,14 +25,14 @@ from k1.selfmodel.ports.projection_store import (
     StoreReadResult,
     StoreWriteResult,
 )
-from k1.selfmodel.ports.selffamily import ISelfFamilyPort
+from k1.selfmodel.ports.selfspace import ISelfSpacePort
 from k1.selfmodel.ports.situation import ISituationFramePort
 
 __all__ = [
     "IIdentityPort",
     "ICredentialPort",
     "IConstitutionPort",
-    "ISelfFamilyPort",
+    "ISelfSpacePort",
     "ISituationFramePort",
     "IPolicyPort",
     "IProjectionStorePort",

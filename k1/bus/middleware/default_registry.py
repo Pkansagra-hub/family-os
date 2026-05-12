@@ -32,6 +32,7 @@ _DEFAULT_PREFIXES: tuple[str, ...] = (
     # Core subsystems
     "k1.affect.",
     "k1.agent.",
+    "k1.arbiter.",  # intent arbitration (k1.arbiter.intent.v1 etc.)
     "k1.bench.",  # benchmark suites (round-trip, perf)
     "k1.capability.",
     "k1.capsule.",
@@ -52,6 +53,7 @@ _DEFAULT_PREFIXES: tuple[str, ...] = (
     "k1.mcp.",
     "k1.memory.",
     "k1.metric.",
+    "k1.model_hub.",  # model hub request/response events
     "k1.mw.",  # memory_writer pipeline
     "k1.observability.",
     "k1.orchestration.",

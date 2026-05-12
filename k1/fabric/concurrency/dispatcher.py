@@ -272,6 +272,7 @@ class FabricDispatcher:
     __slots__ = (
         "_config",
         "_semaphore",
+        "_semaphore_lock",
         "_in_flight",
         "_total_dispatched",
         "_total_rejected",
@@ -298,7 +299,11 @@ class FabricDispatcher:
                 Called when backpressure level transitions to WARNING or SHEDDING.
         """
         self._config = config or FabricDispatcherConfig()
-        self._semaphore = asyncio.Semaphore(self._config.max_concurrent)
+        # Issue 1 fix: create Semaphore lazily on first dispatch() call so it
+        # binds to the correct running event loop, not the one active at
+        # construction time (which may not exist or be a different loop).
+        self._semaphore: Optional[asyncio.Semaphore] = None
+        self._semaphore_lock = threading.Lock()  # guards one-time init
         self._in_flight: int = 0
         self._total_dispatched: int = 0
         self._total_rejected: int = 0
@@ -448,6 +453,13 @@ class FabricDispatcher:
                 "Dispatcher has been shut down. No new requests accepted."
             )
 
+        # Lazy semaphore init: create inside the running event loop so it
+        # is bound to the correct loop (Issue 1 fix).
+        if self._semaphore is None:
+            with self._semaphore_lock:
+                if self._semaphore is None:
+                    self._semaphore = asyncio.Semaphore(self._config.max_concurrent)
+
         # Pre-semaphore backpressure check (fast reject for shed/saturated)
         rejection = self._should_reject(request)
         if rejection is not None:
@@ -551,9 +563,11 @@ class FabricDispatcher:
         with self._lock:
             was_in_flight = self._in_flight
 
-        # Drain: acquire all permits to ensure all in-flight complete
-        for _ in range(self._config.max_concurrent):
-            await self._semaphore.acquire()
+        # If semaphore was never initialised there are no in-flight requests.
+        if self._semaphore is not None:
+            # Drain: acquire all permits to ensure all in-flight complete
+            for _ in range(self._config.max_concurrent):
+                await self._semaphore.acquire()
 
         return was_in_flight
 

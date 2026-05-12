@@ -2,7 +2,7 @@
 
 ---
 
-## Issue 1 — `asyncio.Semaphore` created outside the event loop
+## Issue 1 — ~~`asyncio.Semaphore` created outside the event loop~~ ✅ FIXED
 
 **File**: `k1/fabric/concurrency/dispatcher.py`
 **Class**: `FabricDispatcher.__init__()`
@@ -20,9 +20,13 @@ runner creates a new loop per test.
 **Fix**: Construct the semaphore inside the first `async dispatch()` call (lazy), or move
 `FabricDispatcher` construction into an `async` classmethod that runs inside the event loop.
 
+> **FIXED**: `_semaphore` initialised to `None` in `__init__`. First `dispatch()` call creates
+> `asyncio.Semaphore(max_concurrent)` inside the running event loop under a `threading.Lock`
+> double-checked guard. `shutdown()` skips drain when semaphore is still `None`.
+
 ---
 
-## Issue 2 — `_schema_cache` is a module-level mutable global with no lock
+## Issue 2 — ~~`_schema_cache` is a module-level mutable global with no lock~~ ✅ FIXED
 
 **File**: `k1/fabric/core/contract_validator.py`
 **Symbol**: `_schema_cache: Dict[str, dict]`
@@ -42,9 +46,13 @@ startup. Unpredictable behaviour when contract type schemas are hot-swapped.
 **Fix**: Protect writes with a `threading.Lock`. Add a `clear_schema_cache()` module-level
 function callable from test fixtures. Consider per-instance caching if isolation is required.
 
+> **FIXED**: Added `_schema_lock: threading.Lock` at module level. `_load_schema()` checks cache
+> under lock, reads schema from disk outside lock, then writes under lock. `clear_schema_cache()`
+> exported from `k1.fabric.core` for test fixtures.
+
 ---
 
-## Issue 3 — `RetrievalEngine` accesses `EmbeddingIndex._vectors` directly — data race confirmed
+## Issue 3 — ~~`RetrievalEngine` accesses `EmbeddingIndex._vectors` directly — data race confirmed~~ ✅ FIXED
 
 **File**: `k1/fabric/retrieval/retrieval_engine.py`
 **Symbol**: `RetrievalEngine` → `getattr(index, "_vectors", {})`
@@ -72,6 +80,10 @@ internal storage; once that branch is hit, `_vectors` may diverge.
 **Fix**: Add a public `get_vectors_snapshot() -> Dict[str, np.ndarray]` method to
 `EmbeddingIndex` that acquires `_lock` and returns a copy. `RetrievalEngine` should use
 that method instead of `getattr(..., "_vectors", {})`.
+
+> **FIXED**: `EmbeddingIndex.get_vectors_snapshot()` added — acquires `_lock`, returns
+> `dict(self._vectors)`. `RetrievalEngine._run_pipeline()` updated to call
+> `self._index.get_vectors_snapshot().get(name)` instead of the bare `getattr` bypass.
 
 ---
 
@@ -141,7 +153,7 @@ logic races with reactivation the same `Agent` object could be handed to two cal
 
 ---
 
-## Issue 7 — `AvailabilityTracker.on_state_change()` auto-registers unknown providers
+## Issue 7 — ~~`AvailabilityTracker.on_state_change()` auto-registers unknown providers~~ ✅ FIXED
 
 **File**: `k1/fabric/health/availability_tracker.py`
 **Method**: `on_state_change(provider_id, old_state, new_state)`
@@ -161,9 +173,12 @@ been healthy.
 the explicit `register()` call in `HealthChecker.register_provider_instance()` handle the initial
 registration.
 
+> **FIXED**: `on_state_change()` now logs a WARNING and returns early when `provider_id` is not
+> tracked. Callers must explicitly `register()` a provider before any CB notification arrives.
+
 ---
 
-## Issue 8 — `WorkflowProvider._current_depth` depth guard is permanently dead
+## Issue 8 — ~~`WorkflowProvider._current_depth` depth guard is permanently dead~~ ✅ FIXED
 
 **File**: `k1/fabric/providers/workflow_provider.py`
 **File**: `k1/fabric/factory.py`
@@ -197,6 +212,12 @@ This is moot while Bug 1 exists, but must be fixed alongside it.
 2. Pass `current_depth: int` as a parameter through `_execute()` and into recursive
    sub-workflow invocations (via `ExecutionContext.params` or a direct parameter).
 3. Update `factory.py` to thread `current_depth` through the execution call chain.
+
+> **FIXED**: `_current_depth` removed from `__slots__` and `__init__`. `_execute()` now reads
+> `current_depth = int((context.params or {}).get("__workflow_depth__", 0))` on every call,
+> making depth per-invocation and safe for concurrent calls. `_build_manifest()` takes
+> `current_depth` as an explicit parameter. `__repr__` updated. `factory.py` required no change
+> (it never passed `current_depth` directly).
 
 ---
 

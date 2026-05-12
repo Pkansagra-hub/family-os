@@ -407,7 +407,6 @@ class WorkflowProvider(BaseProvider):
         "_orchestrator",
         "_capability_names",
         "_max_depth",
-        "_current_depth",
     )
 
     def __init__(
@@ -419,7 +418,6 @@ class WorkflowProvider(BaseProvider):
         orchestrator: IOrchestrator,
         capability_names: Optional[List[str]] = None,
         max_depth: int = MAX_WORKFLOW_DEPTH,
-        current_depth: int = 0,
         **_kwargs: Any,
     ) -> None:
         super().__init__(config)
@@ -428,7 +426,6 @@ class WorkflowProvider(BaseProvider):
         self._orchestrator = orchestrator
         self._capability_names: List[str] = list(capability_names or [])
         self._max_depth = max_depth
-        self._current_depth = current_depth
 
     # ======================================================================
     # CapabilityProvider interface
@@ -483,8 +480,14 @@ class WorkflowProvider(BaseProvider):
           7. Return result
         """
         # --- Step 1: Guard max depth ---
-        if self._current_depth >= self._max_depth:
-            raise WorkflowDepthExceededError(self.provider_id, self._current_depth, self._max_depth)
+        # Issue 8 fix: read depth from the call-time ExecutionContext so that
+        # (a) concurrent calls on the same instance are independent, and
+        # (b) sub-workflows spawned by the orchestrator correctly inherit depth
+        # by reading "__workflow_depth__" from their own ExecutionContext.
+        # The factory no longer stores current_depth as instance state.
+        current_depth: int = int((context.params or {}).get("__workflow_depth__", 0))
+        if current_depth >= self._max_depth:
+            raise WorkflowDepthExceededError(self.provider_id, current_depth, self._max_depth)
 
         # --- Step 2: Load WorkflowSpec ---
         workflow_name = request.capability_name
@@ -498,7 +501,7 @@ class WorkflowProvider(BaseProvider):
             spec.name,
             spec.version,
             len(spec.steps),
-            self._current_depth,
+            current_depth,
         )
 
         # --- Step 3: Validate capabilities exist ---
@@ -524,7 +527,7 @@ class WorkflowProvider(BaseProvider):
                 )
 
         # --- Step 5: Build RunManifest ---
-        manifest = self._build_manifest(spec, drifts, trace_id)
+        manifest = self._build_manifest(spec, drifts, trace_id, current_depth)
 
         logger.debug(
             "[%s] manifest built: %s (hash=%s)",
@@ -608,6 +611,7 @@ class WorkflowProvider(BaseProvider):
         spec: WorkflowSpec,
         drifts: List[SchemaDrift],
         trace_id: str,
+        current_depth: int = 0,
     ) -> RunManifest:
         """
         Build an auditable RunManifest from a validated WorkflowSpec.
@@ -650,7 +654,7 @@ class WorkflowProvider(BaseProvider):
             workflow_version=spec.version,
             steps=resolved_steps,
             content_hash=content_hash,
-            depth=self._current_depth,
+            depth=current_depth,
             trace_id=trace_id,
             drifts=drifts,
         )
@@ -660,5 +664,5 @@ class WorkflowProvider(BaseProvider):
             f"WorkflowProvider("
             f"provider_id={self.provider_id!r}, "
             f"capabilities={len(self._capability_names)}, "
-            f"depth={self._current_depth}/{self._max_depth})"
+            f"max_depth={self._max_depth})"
         )

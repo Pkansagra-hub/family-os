@@ -1,4 +1,4 @@
-"""Family-model snapshot dataclasses (the ``F`` set, projected for actor).
+"""Space-graph snapshot dataclasses (the ``F`` set, projected for actor).
 
 Holds only ``ProjectedSelf`` of related members (NEVER raw ``S``);
 Empty-Set Invariant E5 enforced at the projection step (M1).
@@ -9,16 +9,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 __all__ = [
-    "FamilyMemberRef",
-    "RelationshipEdge",
+    "ActorRef",
+    "SpaceEdge",
     "RoutineRef",
-    "FamilySelfModelSnapshot",
+    "SpaceGraphSnapshot",
 ]
 
 
 @dataclass(frozen=True)
-class FamilyMemberRef:
-    """Stable reference to a household member."""
+class ActorRef:
+    """Stable reference to an actor in a space."""
 
     member_id: str
     display_name: str = ""
@@ -27,8 +27,8 @@ class FamilyMemberRef:
 
 
 @dataclass(frozen=True)
-class RelationshipEdge:
-    """One directed edge in the family graph adjacent to the actor."""
+class SpaceEdge:
+    """One directed edge in the space graph adjacent to the actor."""
 
     from_member: str
     to_member: str
@@ -38,7 +38,7 @@ class RelationshipEdge:
 
 @dataclass(frozen=True)
 class RoutineRef:
-    """Reference to a known household routine."""
+    """Reference to a known routine in a space."""
 
     routine_id: str
     name: str = ""
@@ -46,17 +46,26 @@ class RoutineRef:
 
 
 @dataclass(frozen=True)
-class FamilySelfModelSnapshot:
-    """Family view projected for a single actor at ``(T, D)``.
+class SpaceGraphSnapshot:
+    """Space graph projected for a single actor at ``(T, D)``.
 
     ``members`` contains only members the actor is permitted to see per
     ``C.visibility_rules``; ``relations`` contains only edges adjacent
     to the actor.
     """
 
-    family_space_id: str
+    space_id: str
     revision: str = ""
-    members: tuple[FamilyMemberRef, ...] = field(default_factory=tuple)
-    relations: tuple[RelationshipEdge, ...] = field(default_factory=tuple)
+    members: tuple[ActorRef, ...] = field(default_factory=tuple)
+    relations: tuple[SpaceEdge, ...] = field(default_factory=tuple)
     routines: tuple[RoutineRef, ...] = field(default_factory=tuple)
     composed_at_ms: int = 0
+
+
+# --- Deprecated aliases (kept for one release; remove in next major) ---
+# Existing call sites outside k1/selfmodel/ are zero (verified May 2026), but the
+# YAML constitution bodies and external integrations may still reference the old
+# names. Removing them is a follow-up task tracked separately.
+FamilyMemberRef = ActorRef  # noqa: PYI042
+RelationshipEdge = SpaceEdge  # noqa: PYI042
+FamilySelfModelSnapshot = SpaceGraphSnapshot  # noqa: PYI042

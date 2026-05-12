@@ -10,7 +10,7 @@ import json
 
 import pytest
 
-from k1.selfmodel.contracts.family_model import RelationshipEdge
+from k1.selfmodel.contracts.space_graph import RelationshipEdge
 from k1.selfmodel.contracts.self_model import LayerObservation
 from k1.selfmodel.contracts.situation import ProjectedSelf
 

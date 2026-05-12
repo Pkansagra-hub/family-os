@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from k1.selfmodel.contracts.family_model import RelationshipEdge
+from k1.selfmodel.contracts.space_graph import RelationshipEdge
 
 from tests.k1.selfmodel.service._helpers import (
     T0_MS,

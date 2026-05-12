@@ -37,10 +37,6 @@ from typing import Any
 
 from k1.selfmodel.contracts import constitution_body as body_keys
 from k1.selfmodel.contracts.conscience import ConscienceDigest
-from k1.selfmodel.contracts.family_model import (
-    FamilyMemberRef,
-    RelationshipEdge,
-)
 from k1.selfmodel.contracts.pattern import coerce_l3
 from k1.selfmodel.contracts.self_model import K1SelfModelSnapshot
 from k1.selfmodel.contracts.situation import (
@@ -53,6 +49,7 @@ from k1.selfmodel.contracts.situation import (
     Visibility,
 )
 from k1.selfmodel.contracts.situations import is_known_situation
+from k1.selfmodel.contracts.space_graph import ActorRef, SpaceEdge
 from k1.selfmodel.ports.projection_store import ProjectionFreshness
 from k1.selfmodel.service.constitution import ConstitutionService
 from k1.selfmodel.service.errors import (
@@ -60,11 +57,11 @@ from k1.selfmodel.service.errors import (
     UnknownActorError,
     UnknownSituationError,
 )
-from k1.selfmodel.service.family_model import (
-    FamilyModelService,
+from k1.selfmodel.service.self_model import SelfModelService
+from k1.selfmodel.service.space_graph import (
+    SpaceGraphService,
     _adjacent_member_ids,
 )
-from k1.selfmodel.service.self_model import SelfModelService
 
 __all__ = ["SituationFrameComposer"]
 
@@ -99,16 +96,16 @@ class SituationFrameComposer:
         self,
         *,
         self_model: SelfModelService,
-        family_model: FamilyModelService,
+        space_graph: SpaceGraphService,
         constitution: ConstitutionService,
-        family_space_id: str,
+        space_id: str,
     ) -> None:
-        if not family_space_id:
-            raise ValueError("family_space_id must be non-empty")
+        if not space_id:
+            raise ValueError("space_id must be non-empty")
         self._self = self_model
-        self._family = family_model
+        self._space = space_graph
         self._constitution = constitution
-        self._family_space_id = family_space_id
+        self._space_id = space_id
 
     # ------------------------------------------------------------------
     # Public surface (matches ``ISituationFramePort.compose``)
@@ -150,7 +147,7 @@ class SituationFrameComposer:
             constitution_freshness = self._constitution.freshness()
 
         # ---- Read F (projected for actor) ---------------------------
-        family_read = self._family.get_view(actor_id, self._family_space_id)
+        family_read = self._space.get_view(actor_id, self._space_id)
         family = family_read.snapshot
 
         # ---- Build projected_self (actor sees own L1+L2+filtered L3) -
@@ -224,14 +221,14 @@ class SituationFrameComposer:
         *,
         actor_id: str,
         actor_role: str,
-        adjacent_edges: tuple[RelationshipEdge, ...],
-        members: tuple[FamilyMemberRef, ...],
+        adjacent_edges: tuple[SpaceEdge, ...],
+        members: tuple[ActorRef, ...],
         constitution_body: Mapping[str, Any],
     ) -> RelationsSubset:
         if not adjacent_edges:
             return RelationsSubset()
 
-        member_index: dict[str, FamilyMemberRef] = {m.member_id: m for m in members}
+        member_index: dict[str, ActorRef] = {m.member_id: m for m in members}
         other_ids = _adjacent_member_ids(adjacent_edges, actor_id)
         projected: list[ProjectedSelf] = []
 
@@ -503,7 +500,7 @@ def _build_visibility(
     *,
     constitution_body: Mapping[str, Any],
     actor_role: str,
-    members: tuple[FamilyMemberRef, ...],
+    members: tuple[ActorRef, ...],
     actor_id: str,
 ) -> Visibility:
     """Per-member visibility map for the actor (E2 default-deny)."""

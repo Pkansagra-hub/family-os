@@ -377,6 +377,7 @@ class ToolCallPayload:
     tools: List[ToolDefinition] = field(default_factory=list)
     tool_choice: str = "auto"
     parallel_tool_calls: bool = True
+    system_prompt: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not self.messages:

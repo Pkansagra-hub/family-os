@@ -38,7 +38,7 @@ import yaml
 
 from k1.selfmodel.adapters.l3_ports import L3PortBundle
 from k1.selfmodel.adapters.memory_projection_store import InMemoryProjectionStore
-from k1.selfmodel.contracts.family_model import RoutineRef
+from k1.selfmodel.contracts.space_graph import RoutineRef
 from k1.selfmodel.contracts.pattern import Goal, Habit
 from k1.selfmodel.contracts.self_model import K1SelfModelSnapshot
 from k1.selfmodel.service.self_model import SelfModelService

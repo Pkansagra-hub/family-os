@@ -266,7 +266,7 @@ class SelfModelService:
 
     def write_routines(self, actor_id: str, routines: tuple[object, ...]) -> None:
         # ``routines`` items may be RoutineRef OR mappings.
-        from k1.selfmodel.contracts.family_model import RoutineRef
+        from k1.selfmodel.contracts.space_graph import RoutineRef
 
         items: list[dict[str, str]] = []
         for r in routines:

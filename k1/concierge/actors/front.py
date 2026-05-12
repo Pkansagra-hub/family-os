@@ -846,6 +846,12 @@ async def front_handler(
     if self_model is not None:
         try:
             grounding_capsule = self_model.render_capsule()
+            logger.debug(
+                "front_handler: render_capsule actor=%s capsule=%s self_block=%r",
+                getattr(self_model, "actor_id", "?"),
+                grounding_capsule is not None,
+                bool(getattr(grounding_capsule, "self_block", "")) if grounding_capsule else False,
+            )
         except Exception:
             logger.warning(
                 "front_handler: render_capsule() failed; falling back to None",
