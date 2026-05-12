@@ -180,12 +180,11 @@ def _to_hub_request(request: PlannerLLMRequest) -> HubRequest:
 
     # Coerce the planner-side dict payload into the model_hub typed
     # payload dataclass (ChatPayload / StructuredOutputPayload / ...).
-    # Reuses the shared dispatch table in
-    # ``k1.model_hub.adapters.bus_envelope_deserializer._build_payload``
-    # so payload construction stays single-sourced.
-    from k1.model_hub.adapters.bus_envelope_deserializer import _build_payload
+    # Public re-export of the shared dispatch table keeps payload construction
+    # single-sourced without leaking a private name.
+    from k1.model_hub.adapters import build_payload
 
-    typed_payload = _build_payload(capability, request.payload)
+    typed_payload = build_payload(capability, request.payload)
 
     return HubRequest(
         capability=capability,

@@ -108,7 +108,7 @@ class FakeExpandService:
         self.micro_result: Optional[ExpandedPlan] = None
         self.micro_error: Optional[Exception] = None
 
-    async def execute(self, sketch_result: Any, ctx: Any) -> Any:
+    async def execute(self, sketch_result: Any, request: Any, ctx: Any) -> Any:
         self.execute_calls.append({"sketch_result": sketch_result, "ctx": ctx})
         return self.micro_result
 
@@ -141,7 +141,7 @@ class FakeValidateService:
         self.micro_result: Optional[ValidationVerdict] = None
         self.micro_error: Optional[Exception] = None
 
-    async def execute(self, expanded_plan: Any, ctx: Any) -> Any:
+    async def execute(self, expanded_plan: Any, request: Any, ctx: Any) -> Any:
         self.execute_calls.append({"expanded_plan": expanded_plan, "ctx": ctx})
         return self.micro_result
 
@@ -178,6 +178,7 @@ class FakeCommitService:
     async def execute(
         self,
         expanded_plan: Any,
+        request: Any,
         verdict: Any,
         ctx: Any,
     ) -> CommittedPlan:

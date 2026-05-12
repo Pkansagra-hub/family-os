@@ -13,7 +13,6 @@ MCP children.
 from __future__ import annotations
 
 import time
-from collections import deque
 from typing import Any, Iterable, Protocol, runtime_checkable
 
 from .contracts import (
@@ -22,6 +21,11 @@ from .contracts import (
     OfflineAdapterError,
     ToolDescriptor,
     UnknownAdapterError,
+)
+from .crash_budget import (
+    DEFAULT_CRASH_BUDGET_COUNT,
+    DEFAULT_CRASH_BUDGET_WINDOW_S,
+    CrashBudget,
 )
 
 
@@ -83,7 +87,7 @@ class _AdapterRecord:
         "tools",
         "last_ping_ms",
         "consecutive_failures",
-        "crashes",
+        "crash_budget",
     )
 
     def __init__(self, *, adapter_id: str, manifest: dict[str, Any]) -> None:
@@ -93,7 +97,7 @@ class _AdapterRecord:
         self.tools: list[ToolDescriptor] = []
         self.last_ping_ms = 0
         self.consecutive_failures = 0
-        self.crashes: deque[float] = deque(maxlen=32)
+        self.crash_budget = CrashBudget()
 
 
 class SkeletonMCPProcessManager:
@@ -109,8 +113,8 @@ class SkeletonMCPProcessManager:
     """
 
     #: Configurable so tests can shrink the budget.
-    crash_budget_count: int = 3
-    crash_budget_window_s: float = 60.0
+    crash_budget_count: int = DEFAULT_CRASH_BUDGET_COUNT
+    crash_budget_window_s: float = DEFAULT_CRASH_BUDGET_WINDOW_S
 
     def __init__(self) -> None:
         self._records: dict[str, _AdapterRecord] = {}
@@ -141,12 +145,11 @@ class SkeletonMCPProcessManager:
         record = self._records.get(adapter_id)
         if record is None:
             return
-        now = time.monotonic()
-        record.crashes.append(now)
-        cutoff = now - self.crash_budget_window_s
-        recent = [t for t in record.crashes if t >= cutoff]
-        record.crashes = deque(recent, maxlen=record.crashes.maxlen)
-        if len(recent) >= self.crash_budget_count:
+        # Honour any class-level overrides set by tests/subclasses.
+        record.crash_budget.count = self.crash_budget_count
+        record.crash_budget.window_s = self.crash_budget_window_s
+        record.crash_budget.record()
+        if record.crash_budget.is_over_budget():
             record.state = "quarantined"
 
     # -- Protocol surface --------------------------------------------------
@@ -202,7 +205,7 @@ class SkeletonMCPProcessManager:
             state=record.state,
             last_ping_ms=record.last_ping_ms,
             consecutive_failures=record.consecutive_failures,
-            crash_count_window=len(record.crashes),
+            crash_count_window=record.crash_budget.recent_count(),
         )
 
     def adapter_ids(self) -> Iterable[str]:

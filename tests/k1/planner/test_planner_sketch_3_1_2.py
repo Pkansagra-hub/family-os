@@ -775,23 +775,26 @@ class TestParseResponse:
             svc._parse_response("[1, 2, 3]", [])
 
     def test_depends_on_resolved_to_intents(self, svc: SketchService) -> None:
+        # P08 fix: depends_on now uses intent strings (stable identifiers).
         content = _plan_json(
             steps=[
                 {"intent": "First"},
-                {"intent": "Second", "depends_on": [0]},
+                {"intent": "Second", "depends_on": ["First"]},
             ]
         )
         result, _, _ = svc._parse_response(content, [])
         assert result.rough_steps[1].depends_on == ["First"]
 
     def test_out_of_range_depends_on_ignored(self, svc: SketchService) -> None:
+        # P08 fix: unknown intent strings now raise SketchFailedError
+        # instead of being silently dropped.
         content = _plan_json(
             steps=[
-                {"intent": "Only step", "depends_on": [99]},
+                {"intent": "Only step", "depends_on": ["phantom-step"]},
             ]
         )
-        result, _, _ = svc._parse_response(content, [])
-        assert result.rough_steps[0].depends_on == []
+        with pytest.raises(SketchFailedError, match="unknown depends_on"):
+            svc._parse_response(content, [])
 
 
 # ===========================================================================
@@ -956,7 +959,7 @@ class TestExecute:
                 content=_plan_json(
                     steps=[
                         {"intent": "Search restaurants"},
-                        {"intent": "Book table", "depends_on": [0]},
+                        {"intent": "Book table", "depends_on": ["Search restaurants"]},
                         {"intent": "Send confirmation"},
                     ]
                 )

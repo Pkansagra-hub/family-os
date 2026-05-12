@@ -15,7 +15,7 @@ from k1.selfmodel.service.situation_composer import (
     _extract_role,
     _project_visible_attributes,
 )
-from k1.selfmodel.contracts.family_model import FamilyMemberRef
+from k1.selfmodel.contracts.space_graph import FamilyMemberRef
 
 
 def _snap(*, l1=None, l2=None, l3=None) -> K1SelfModelSnapshot:

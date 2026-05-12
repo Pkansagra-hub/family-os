@@ -36,6 +36,17 @@ outbox_routing:
       inline_body_limit: 4096
 
     # -------------------------------------------------------------------------
+    # memory.write.v1 -- Versioned alias (bridge generated K1 client) -> P02
+    # -------------------------------------------------------------------------
+    - pattern: "memory.write.v1"
+      match_type: "exact"
+      outbox_driver: "st_epi"
+      bus_topic: "cognitive.memory.write.committed.v1"
+      pipeline: "P02"
+      priority: "NORMAL"
+      inline_body_limit: 4096
+
+    # -------------------------------------------------------------------------
     # session.snapshot -> Archive (no pipeline)
     # -------------------------------------------------------------------------
     - pattern: "session.snapshot"

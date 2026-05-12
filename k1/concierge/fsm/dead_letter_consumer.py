@@ -136,3 +136,19 @@ class DeadLetterConsumer:
         self._counts_by_reason.clear()
         self._counts_by_state.clear()
         self._counts_by_topic.clear()
+
+    def stop(self) -> None:
+        """Unsubscribe from the bus. Idempotent.
+
+        Called during session teardown (3.3.4) before ``bus.close()`` to
+        explicitly release the subscription handle instead of relying on
+        bus shutdown to drop subscribers implicitly.
+        """
+        handle = self._handle
+        if handle is None:
+            return
+        self._handle = None  # type: ignore[assignment]
+        try:
+            self._bus.unsubscribe(handle)
+        except Exception:
+            logger.warning("DeadLetterConsumer.stop: unsubscribe failed", exc_info=True)

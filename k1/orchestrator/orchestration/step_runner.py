@@ -34,6 +34,7 @@ Anti-hallucination:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from dataclasses import replace
@@ -43,7 +44,12 @@ import jsonschema
 
 from k1.fabric.types import CapabilityRequest, CapabilityResult, Tier
 from k1.orchestrator.metrics import OrchestratorMetrics
-from k1.orchestrator.types import OrchestratorPolicies, SchemaResult, StepResult, StepStatus
+from k1.orchestrator.types import (
+    OrchestratorPolicies,
+    SchemaResult,
+    StepResult,
+    StepStatus,
+)
 
 if TYPE_CHECKING:
     from k1.orchestrator.orchestration.error_router import ErrorRouter
@@ -353,8 +359,63 @@ class StepRunner:
 
         while True:
             try:
+                # M5.1.1: enforce step-level timeout at the orchestrator
+                # boundary so a hung Fabric call cannot stall the wave.
+                # Step-specific timeout if set, else policy default.
+                effective_timeout_ms = (
+                    step.timeout_ms
+                    if step.timeout_ms and step.timeout_ms > 0
+                    else self._policies.step_timeout_default_ms
+                )
+                timeout_seconds = effective_timeout_ms / 1000.0
                 with self._metrics.time_adapter_wait(adapter="fabric", operation="execute"):
-                    result = await self._fabric_port.execute(current_request)
+                    result = await asyncio.wait_for(
+                        self._fabric_port.execute(current_request),
+                        timeout=timeout_seconds,
+                    )
+            except asyncio.TimeoutError:
+                # Map orchestrator-side timeout to a structured failure.
+                log.warning(
+                    "[StepRunner] step %s exceeded timeout=%dms",
+                    step.id,
+                    effective_timeout_ms,
+                )
+                self._metrics.increment_step_retry(reason="timeout")
+                # Treat as retriable up to the normal retry budget.
+                if normal_attempts < max_normal:
+                    normal_attempts += 1
+                    current_request = request
+                    continue
+                return (
+                    CapabilityResult.failure_result(
+                        request_id=current_request.request_id,
+                        error_code="step_timeout",
+                        error_message=(
+                            f"Step {step.id} exceeded timeout " f"{effective_timeout_ms}ms"
+                        ),
+                        retriable=False,
+                        trace_id=current_request.trace_id,
+                    ),
+                    normal_attempts,
+                    schema_retried,
+                )
+            except asyncio.CancelledError:
+                # M5.1.2: cooperative cancellation surfaced from adapter.
+                log.info(
+                    "[StepRunner] step %s cancelled cooperatively",
+                    step.id,
+                )
+                return (
+                    CapabilityResult.failure_result(
+                        request_id=current_request.request_id,
+                        error_code="step_cancelled",
+                        error_message=f"Step {step.id} cancelled",
+                        retriable=False,
+                        trace_id=current_request.trace_id,
+                    ),
+                    normal_attempts,
+                    schema_retried,
+                )
             except Exception as exc:
                 # Fabric execution raised an exception (not a structured
                 # CapabilityResult failure). Wrap as failure result.

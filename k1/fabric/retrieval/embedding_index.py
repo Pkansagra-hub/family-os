@@ -358,6 +358,22 @@ class EmbeddingIndex:
         """Check if a contract_id is in the index."""
         return contract_id in self._vectors
 
+    def get_vectors_snapshot(self) -> Dict[str, np.ndarray]:
+        """
+        Return a thread-safe copy of all stored vectors.
+
+        Acquires ``_lock`` and returns a shallow copy of ``_vectors`` so
+        callers can read vectors without holding the lock.  Fixes Issue 3:
+        ``RetrievalEngine`` previously accessed ``_vectors`` directly via
+        ``getattr()``, bypassing the lock entirely.
+
+        Returns:
+            Dict mapping contract_id -> embedding vector (copies of references;
+            ndarray values are immutable after insertion so no deep-copy needed).
+        """
+        with self._lock:
+            return dict(self._vectors)
+
     @property
     def size(self) -> int:
         """Number of indexed vectors."""

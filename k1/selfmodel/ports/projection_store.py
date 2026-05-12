@@ -17,8 +17,8 @@ from k1.selfmodel.contracts.constitution import (
     ConstitutionSnapshot,
     SigningProof,
 )
-from k1.selfmodel.contracts.family_model import FamilySelfModelSnapshot
 from k1.selfmodel.contracts.self_model import K1SelfModelSnapshot
+from k1.selfmodel.contracts.space_graph import SpaceGraphSnapshot
 
 __all__ = [
     "ProjectionFreshness",
@@ -83,18 +83,14 @@ class IProjectionStorePort(ABC):
     def write_self(self, snapshot: K1SelfModelSnapshot, *, writer_id: str) -> StoreWriteResult:
         """Persist ``snapshot`` (L1/L2/L3 only; L4/L5 are dropped)."""
 
-    # ---- Family --------------------------------------------------------
+    # ---- Space graph -----------------------------------------------
     @abstractmethod
-    def read_family(
-        self, family_space_id: str
-    ) -> tuple[FamilySelfModelSnapshot | None, StoreReadResult]:
-        """Read the persisted family projection."""
+    def read_space(self, space_id: str) -> tuple[SpaceGraphSnapshot | None, StoreReadResult]:
+        """Read the persisted space-graph projection."""
 
     @abstractmethod
-    def write_family(
-        self, snapshot: FamilySelfModelSnapshot, *, writer_id: str
-    ) -> StoreWriteResult:
-        """Persist the family projection."""
+    def write_space(self, snapshot: SpaceGraphSnapshot, *, writer_id: str) -> StoreWriteResult:
+        """Persist the space-graph projection."""
 
     # ---- Constitution --------------------------------------------------
     @abstractmethod

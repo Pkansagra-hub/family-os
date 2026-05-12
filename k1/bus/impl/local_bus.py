@@ -225,6 +225,8 @@ class BusStats:
     mailbox_high_water_mark: int = 0
     async_handler_retries: int = 0
     async_handler_dlq: int = 0
+    # M7.1 / B01: envelopes dropped because their TTL expired before delivery.
+    ttl_drops: int = 0
 
     def snapshot(self) -> dict[str, int]:
         """Return a point-in-time copy of all stats."""
@@ -240,6 +242,7 @@ class BusStats:
             "mailbox_high_water_mark": self.mailbox_high_water_mark,
             "async_handler_retries": self.async_handler_retries,
             "async_handler_dlq": self.async_handler_dlq,
+            "ttl_drops": self.ttl_drops,
         }
 
 
@@ -343,7 +346,7 @@ class _AsyncSubscription:
             depth = self.mailbox.pending()
             if depth > self._bus_stats.mailbox_high_water_mark:
                 self._bus_stats.mailbox_high_water_mark = depth
-        except BackpressureError:
+        except BackpressureError as bp_err:
             self._bus_stats.mailbox_full_drops += 1
             self._dec_inflight()
             logger.warning(
@@ -354,6 +357,19 @@ class _AsyncSubscription:
                 envelope.topic,
                 envelope.envelope_id,
             )
+            # M7.2 / B04: route backpressure drops through the DLQ
+            # callback when configured.  Use ``attempts=0`` to signal
+            # "never attempted" (distinct from retry-exhaustion which
+            # uses ``attempts >= 1``).
+            if self._dlq_callback is not None:
+                try:
+                    self._dlq_callback(envelope, bp_err, 0)  # type: ignore[operator]
+                except Exception:
+                    logger.exception(
+                        "DLQ callback failed for backpressure-dropped " "envelope_id=%d topic=%s",
+                        envelope.envelope_id,
+                        envelope.topic,
+                    )
         except ValueError:
             # Mailbox closed during teardown; silently drop
             self._dec_inflight()
@@ -394,9 +410,49 @@ class _AsyncSubscription:
         injected ``_retry_policy`` resolver.  Default = no retry, matching
         the synchronous-dispatch contract.
 
-        Phase 6 / P6.7: on retry exhaustion, hand off to the DLQ
-        callback if configured, otherwise log at ERROR level.
+        M7.1 / B01: TTL enforcement.  If the envelope's ``ttl_ms`` window
+        has elapsed since publish (``created_ns`` stamp), drop it without
+        invoking the handler.  TTL drops route to the DLQ callback (if
+        configured) so consumers can observe expired traffic, and
+        increment ``BusStats.ttl_drops``.
         """
+        from k1.bus.ports.mailbox import TtlExpiredError
+
+        if envelope.ttl_ms > 0:
+            age_ms = (time.monotonic_ns() - envelope.created_ns) // 1_000_000
+            if age_ms >= envelope.ttl_ms:
+                self._bus_stats.ttl_drops += 1
+                logger.debug(
+                    "TTL expired (async) topic=%s envelope_id=%d sub=%s "
+                    "age_ms=%d ttl_ms=%d -- dropping envelope",
+                    envelope.topic,
+                    envelope.envelope_id,
+                    self.subscription_id,
+                    age_ms,
+                    envelope.ttl_ms,
+                )
+                if self._dlq_callback is not None:
+                    try:
+                        self._dlq_callback(  # type: ignore[operator]
+                            envelope,
+                            TtlExpiredError(
+                                envelope.envelope_id,
+                                envelope.topic,
+                                age_ms,
+                                envelope.ttl_ms,
+                            ),
+                            0,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "DLQ callback failed for ttl-expired envelope_id=%d topic=%s",
+                            envelope.envelope_id,
+                            envelope.topic,
+                        )
+                return
+
+        # Phase 6 / P6.7: on retry exhaustion, hand off to the DLQ
+        # callback if configured, otherwise log at ERROR level.
         attempts = 1
         max_attempts = 1
         policy = None
@@ -672,14 +728,17 @@ class LocalBus:
             logger.warning("LocalBus.publish: empty topic, dropping envelope")
             return
 
-        # Stamp bus-assigned fields
+        # Stamp bus-assigned fields (Phase 1: id + created_ns).
+        # Sequence is deferred until AFTER middleware so that
+        # middleware-dropped envelopes do not consume a sequence number
+        # (which would create gaps for STRICT-mode timing chains).  See
+        # M7.1.3 / B02.
         envelope_id = self._id_gen.next()
-        sequence = self._seq_gen.next(topic)
         created_ns = time.monotonic_ns()
 
         stamped = envelope.with_bus_fields(
             envelope_id=envelope_id,
-            sequence=sequence,
+            sequence=0,
             created_ns=created_ns,
         )
 
@@ -688,22 +747,11 @@ class LocalBus:
             self._topics_seen.add(topic)
             self._stats.topics_seen = len(self._topics_seen)
 
-        # P6.13: durability append BEFORE dispatch.  If a crash happens
-        # between the outbox write and the handler invocation, replay
-        # will redeliver on next startup (at-least-once for durable topics).
-        if self._outbox is not None and topic in self._durable_topics:
-            try:
-                self._outbox.append(stamped)  # type: ignore[attr-defined]
-            except Exception:
-                logger.exception(
-                    "Outbox append failed for topic=%s envelope_id=%d "
-                    "-- continuing with in-memory dispatch only",
-                    topic,
-                    stamped.envelope_id,
-                )
-
-        # Run middleware chain (after stamping, before dispatch).
-        # Middleware sees headers only.  None return = drop the envelope.
+        # Run middleware chain (after partial stamp, before sequence
+        # allocation and dispatch).  Middleware sees envelope_id and
+        # created_ns but sequence is a placeholder (0) until after
+        # middleware confirms the envelope is not dropped.  None return
+        # = drop the envelope; no sequence is consumed.
         if self._middleware is not None:
             try:
                 result = self._middleware.process(stamped)
@@ -717,6 +765,33 @@ class LocalBus:
             if result is None:
                 return
             stamped = result
+
+        # Phase 2: allocate sequence and re-stamp.  Only envelopes that
+        # passed middleware consume a sequence number, ensuring a gap-free
+        # monotonic per-topic sequence stream for downstream consumers.
+        sequence = self._seq_gen.next(topic)
+        stamped = stamped.with_bus_fields(
+            envelope_id=stamped.envelope_id,
+            sequence=sequence,
+            created_ns=stamped.created_ns,
+        )
+
+        # P6.13: durability append BEFORE dispatch.  If a crash happens
+        # between the outbox write and the handler invocation, replay
+        # will redeliver on next startup (at-least-once for durable topics).
+        # NOTE: append is now after middleware so that middleware-rejected
+        # envelopes are not durably stored (they would otherwise be
+        # replayed on restart, defeating the middleware's drop decision).
+        if self._outbox is not None and topic in self._durable_topics:
+            try:
+                self._outbox.append(stamped)  # type: ignore[attr-defined]
+            except Exception:
+                logger.exception(
+                    "Outbox append failed for topic=%s envelope_id=%d "
+                    "-- continuing with in-memory dispatch only",
+                    topic,
+                    stamped.envelope_id,
+                )
 
         # Capture mode: record before dispatch
         if self._capture:
@@ -749,6 +824,125 @@ class LocalBus:
             self._timing_chain.process(stamped, _dispatch_fn)
         else:
             self._dispatch(stamped, handlers)
+
+    # ------------------------------------------------------------------
+    # IBus.publish_batch
+    # ------------------------------------------------------------------
+
+    def publish_batch(self, envelopes: list[Envelope]) -> None:
+        """
+        Publish a batch of envelopes with shared trie-lock acquisition.
+
+        M7.2 / B06: each envelope still goes through the full per-envelope
+        pipeline (topic check, stamping, middleware, sequence allocation,
+        outbox, capture, dispatch), but the subscriber-trie read lock is
+        acquired ONCE for the whole batch instead of once per envelope.
+        This benefits callers (e.g. ``SessionBusAdapter.emit_batch``) that
+        publish many envelopes in tight succession.
+
+        Empty batch is a no-op.  A per-envelope error (middleware drop,
+        outbox failure, etc.) is contained to that envelope and does NOT
+        abort the batch.
+
+        When ``timing_chain`` is configured, envelopes are routed through
+        it after the lock is released, identical to single ``publish``.
+        """
+        if not envelopes:
+            return
+
+        # Phase 1: stamp + middleware + sequence + outbox + capture for
+        # each envelope, accumulating (stamped, dispatch_action) pairs.
+        # Done OUTSIDE the trie lock since these steps don't touch
+        # subscribers.
+        pending: list[Envelope] = []
+        for envelope in envelopes:
+            topic = envelope.topic
+            if not topic:
+                logger.warning("LocalBus.publish_batch: empty topic, skipping envelope")
+                continue
+
+            envelope_id = self._id_gen.next()
+            created_ns = time.monotonic_ns()
+            stamped = envelope.with_bus_fields(
+                envelope_id=envelope_id,
+                sequence=0,
+                created_ns=created_ns,
+            )
+
+            if topic not in self._topics_seen:
+                self._topics_seen.add(topic)
+                self._stats.topics_seen = len(self._topics_seen)
+
+            # Middleware
+            if self._middleware is not None:
+                try:
+                    result = self._middleware.process(stamped)
+                except Exception:
+                    logger.exception(
+                        "Middleware chain error for topic=%s envelope_id=%d " "-- envelope dropped",
+                        stamped.topic,
+                        stamped.envelope_id,
+                    )
+                    continue
+                if result is None:
+                    continue
+                stamped = result
+
+            # Allocate sequence and re-stamp (only envelopes passing middleware)
+            sequence = self._seq_gen.next(topic)
+            stamped = stamped.with_bus_fields(
+                envelope_id=stamped.envelope_id,
+                sequence=sequence,
+                created_ns=stamped.created_ns,
+            )
+
+            # Outbox (durable topics)
+            if self._outbox is not None and topic in self._durable_topics:
+                try:
+                    self._outbox.append(stamped)  # type: ignore[attr-defined]
+                except Exception:
+                    logger.exception(
+                        "Outbox append failed for topic=%s envelope_id=%d "
+                        "-- continuing with in-memory dispatch only",
+                        topic,
+                        stamped.envelope_id,
+                    )
+
+            # Capture mode
+            if self._capture:
+                self._captured.append(stamped)
+
+            self._stats.envelopes_published += 1
+            pending.append(stamped)
+
+        if not pending:
+            return
+
+        # Phase 2: match all topics under a SINGLE read-lock acquisition.
+        matched: list[tuple[Envelope, list[BusHandler]]] = []
+        self._rw_lock.acquire_read()
+        try:
+            for stamped in pending:
+                matched.append((stamped, self._trie.match(stamped.topic)))
+        finally:
+            self._rw_lock.release_read()
+
+        # Phase 3: dispatch outside the lock.
+        if self._timing_chain is not None:
+
+            def _dispatch_fn(env: Envelope) -> None:
+                self._rw_lock.acquire_read()
+                try:
+                    child_handlers = self._trie.match(env.topic)
+                finally:
+                    self._rw_lock.release_read()
+                self._dispatch(env, child_handlers)
+
+            for stamped, _ in matched:
+                self._timing_chain.process(stamped, _dispatch_fn)
+        else:
+            for stamped, handlers in matched:
+                self._dispatch(stamped, handlers)
 
     # ------------------------------------------------------------------
     # IBus.subscribe
@@ -890,7 +1084,24 @@ class LocalBus:
         Priority-aware: handlers are invoked in match order (trie DFS).
         WFQ scheduling across concurrent publishes happens at the
         envelope level (publish ordering), not within a single dispatch.
+
+        M7.1 / B01: enforce envelope TTL before invoking handlers.  Sync
+        path drops silently (matching the sync error contract: log,
+        increment counter, no DLQ).  Async path TTL enforcement lives
+        in ``_AsyncSubscription._invoke_handler``.
         """
+        if envelope.ttl_ms > 0:
+            age_ms = (time.monotonic_ns() - envelope.created_ns) // 1_000_000
+            if age_ms >= envelope.ttl_ms:
+                self._stats.ttl_drops += 1
+                logger.debug(
+                    "TTL expired (sync) topic=%s envelope_id=%d age_ms=%d ttl_ms=%d",
+                    envelope.topic,
+                    envelope.envelope_id,
+                    age_ms,
+                    envelope.ttl_ms,
+                )
+                return
         for handler in handlers:
             try:
                 handler(envelope)

@@ -72,6 +72,32 @@ class PlaceResolver:
             self._exact_map[key] = resolved
             self._entries.append((key, resolved))
 
+    def set_entities(self, location_entities: list) -> None:
+        """Replace the entity map with a new list (called per-turn from pipeline Stage 2).
+
+        Allows the resolver singleton constructed at factory time to be updated
+        with fresh SessionState snapshot data before envelope building (MW-04-A).
+        """
+        self._exact_map.clear()
+        self._entries.clear()
+        for entity in location_entities:
+            etype = getattr(entity, "type", None)
+            if etype != "LOCATION":
+                continue
+            canonical = getattr(entity, "display_name", "") or ""
+            if not canonical.strip():
+                continue
+            place_id = _to_place_id(canonical)
+            confidence = float(getattr(entity, "confidence", 1.0))
+            resolved = ResolvedPlace(
+                place_id=place_id,
+                canonical_name=canonical.strip(),
+                confidence=confidence,
+            )
+            key = canonical.strip().lower()
+            self._exact_map[key] = resolved
+            self._entries.append((key, resolved))
+
     def resolve(self, name: Optional[str]) -> Optional[str]:
         """Resolve a location name to a stable place_id.
 

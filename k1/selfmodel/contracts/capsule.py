@@ -10,7 +10,7 @@ M7 additions:
     * ``hobbies_block``      — hobbies/likes/dislikes
     * ``goals_block``        — active goals
     * ``routines_block``     — routines + habits
-    * ``household_block``    — family routines (read from family_view)
+    * ``space_graph_block``  — space graph members (read from space view)
     * ``context_block``      — situation/device/communication style
     * ``conscience_block``   — forbidden + must_ask social acts (M6)
 
@@ -49,7 +49,7 @@ class GroundingCapsule:
     hobbies_block: str = ""
     goals_block: str = ""
     routines_block: str = ""
-    household_block: str = ""
+    space_graph_block: str = ""
     context_block: str = ""
 
     # M6 conscience block.
@@ -65,7 +65,7 @@ class GroundingCapsule:
             3. ``hobbies_block``
             4. ``goals_block``
             5. ``routines_block``
-            6. ``household_block`` (or legacy ``family_block`` fallback)
+            6. ``space_graph_block`` (or legacy ``family_block`` fallback)
             7. ``context_block``
             8. ``conscience_block`` (or legacy ``rules`` + ``capabilities``)
             9. ``freshness_footer``
@@ -79,7 +79,7 @@ class GroundingCapsule:
             self.hobbies_block,
             self.goals_block,
             self.routines_block,
-            self.household_block or self.family_block,
+            self.space_graph_block or self.family_block,
             self.context_block,
             self.conscience_block or self.rules_block,
             # Legacy capabilities block kept only when conscience is empty.

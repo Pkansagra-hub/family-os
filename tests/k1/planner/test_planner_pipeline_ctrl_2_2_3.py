@@ -109,7 +109,7 @@ class FakeExpandService:
         self._result = result if result is not None else {"steps": ["expanded1"]}
         self.calls: List[Tuple[Any, StageContext]] = []
 
-    async def execute(self, sketch_result: Any, ctx: StageContext) -> Any:
+    async def execute(self, sketch_result: Any, request: Any, ctx: StageContext) -> Any:
         self.calls.append((sketch_result, ctx))
         return self._result
 
@@ -121,7 +121,7 @@ class FakeValidateService:
         self._verdict = verdict if verdict is not None else _approved_verdict()
         self.calls: List[Tuple[Any, StageContext]] = []
 
-    async def execute(self, expanded_plan: Any, ctx: StageContext) -> Any:
+    async def execute(self, expanded_plan: Any, request: Any, ctx: StageContext) -> Any:
         self.calls.append((expanded_plan, ctx))
         return self._verdict
 
@@ -133,7 +133,9 @@ class FakeCommitService:
         self._result = result if result is not None else FakeCommittedPlan()
         self.calls: List[Tuple[Any, Any, StageContext]] = []
 
-    async def execute(self, expanded_plan: Any, verdict: Any, ctx: StageContext) -> Any:
+    async def execute(
+        self, expanded_plan: Any, request: Any, verdict: Any, ctx: StageContext
+    ) -> Any:
         self.calls.append((expanded_plan, verdict, ctx))
         return self._result
 

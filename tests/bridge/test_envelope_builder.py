@@ -14,7 +14,6 @@ import os
 from typing import Any
 
 import pytest
-from blake3 import blake3  # type: ignore[import]
 
 from bridge.core.envelope_builder import (
     BridgeConfig,
@@ -97,7 +96,6 @@ class TestEnvelopeFields:
             "schema_version",
             "body",
             "payload_sha256",
-            "idem_key",
             "envelope_sha256",
             "sig",
             "sig_alg",
@@ -151,11 +149,11 @@ class TestEnvelopeFields:
         assert ts.endswith("Z")
         assert "T" in ts
 
-    def test_schema_version_is_1_0(
+    def test_schema_version_is_2_2(
         self, builder: EnvelopeBuilder, sample_body: dict[str, Any]
     ) -> None:
         envelope = builder.build("memory.write", sample_body)
-        assert envelope["schema_version"] == "1.0"
+        assert envelope["schema_version"] == "2.2"
 
     def test_sig_alg_matches_signer(
         self, builder: EnvelopeBuilder, sample_body: dict[str, Any]
@@ -216,61 +214,14 @@ class TestSchemaUriDerivation:
 
 
 class TestIdemKeyDeterminism:
-    """Verify BLAKE3-based idempotency key is deterministic."""
+    """Bridge does NOT produce idem_key; K0 gate owns derivation via HMAC."""
 
-    def test_same_inputs_same_idem_key(
+    def test_idem_key_absent_from_envelope(
         self, builder: EnvelopeBuilder, sample_body: dict[str, Any]
     ) -> None:
-        """Same topic + body + device_id = same idem_key (trace_id excluded)."""
-        env1 = builder.build("memory.write", sample_body, trace_id="trace-1")
-        env2 = builder.build("memory.write", sample_body, trace_id="trace-2")
-        assert env1["idem_key"] == env2["idem_key"]
-
-    def test_different_topic_different_idem_key(
-        self, builder: EnvelopeBuilder, sample_body: dict[str, Any]
-    ) -> None:
-        env1 = builder.build("memory.write", sample_body)
-        env2 = builder.build("session.snapshot", sample_body)
-        assert env1["idem_key"] != env2["idem_key"]
-
-    def test_different_body_different_idem_key(
-        self, builder: EnvelopeBuilder, sample_body: dict[str, Any]
-    ) -> None:
-        body2 = {**sample_body, "text": "Different text entirely"}
-        env1 = builder.build("memory.write", sample_body)
-        env2 = builder.build("memory.write", body2)
-        assert env1["idem_key"] != env2["idem_key"]
-
-    def test_different_device_different_idem_key(
-        self, sample_body: dict[str, Any], signer: HmacSigning
-    ) -> None:
-        config_a = BridgeConfig(tenant_id="t", space_id="s", device_id="device-A")
-        config_b = BridgeConfig(tenant_id="t", space_id="s", device_id="device-B")
-        builder_a = EnvelopeBuilder(config=config_a, signer=signer)
-        builder_b = EnvelopeBuilder(config=config_b, signer=signer)
-        env_a = builder_a.build("memory.write", sample_body)
-        env_b = builder_b.build("memory.write", sample_body)
-        assert env_a["idem_key"] != env_b["idem_key"]
-
-    def test_idem_key_is_hex(self, builder: EnvelopeBuilder, sample_body: dict[str, Any]) -> None:
-        envelope = builder.build("memory.write", sample_body)
-        idem_key = envelope["idem_key"]
-        assert all(c in "0123456789abcdef" for c in idem_key)
-
-    def test_idem_key_matches_manual_blake3(
-        self, builder: EnvelopeBuilder, config: BridgeConfig, sample_body: dict[str, Any]
-    ) -> None:
-        """Manually compute BLAKE3 and verify it matches."""
-        envelope = builder.build("memory.write", sample_body)
-        body_json = _canonical_json(sample_body)
-        digest = blake3()
-        digest.update(b"memory.write")
-        digest.update(b"\x00")
-        digest.update(body_json.encode("utf-8"))
-        digest.update(b"\x00")
-        digest.update(config.device_id.encode("utf-8"))
-        expected = digest.hexdigest()
-        assert envelope["idem_key"] == expected
+        """Bridge must not send idem_key so K0 can compute it via HMAC."""
+        env = builder.build("memory.write", sample_body)
+        assert "idem_key" not in env
 
 
 # ===========================================================================
@@ -294,23 +245,23 @@ class TestHashIntegrity:
     ) -> None:
         """envelope_sha256 = SHA-256 of canonical envelope (before sig fields)."""
         envelope = builder.build("memory.write", sample_body)
-        # Reconstruct the pre-sig envelope
-        pre_sig = {
-            k: v
-            for k, v in envelope.items()
-            if k not in ("envelope_sha256", "sig", "sig_alg", "sig_kid")
-        }
+        # Reconstruct the pre-sig envelope: exclude only sig and envelope_sha256.
+        # sig_alg and sig_kid are INCLUDED in the canonical hash — same as K0's
+        # compute_envelope_sha256 (canonical_envelope(exclude_signature=True)).
+        pre_sig = {k: v for k, v in envelope.items() if k not in ("envelope_sha256", "sig")}
         canonical_bytes = _canonical_json(pre_sig).encode("utf-8")
         expected = hashlib.sha256(canonical_bytes).hexdigest()
         assert envelope["envelope_sha256"] == expected
 
-    def test_sig_covers_envelope_sha256(
+    def test_sig_covers_canonical_envelope(
         self, builder: EnvelopeBuilder, signer: HmacSigning, sample_body: dict[str, Any]
     ) -> None:
-        """sig is the signer's signature of envelope_sha256."""
+        """sig is the signer's signature of canonical envelope bytes (not the sha256 hex)."""
         envelope = builder.build("memory.write", sample_body)
-        envelope_sha256 = envelope["envelope_sha256"]
-        assert signer.verify(envelope_sha256.encode("utf-8"), envelope["sig"]) is True
+        # The builder signs the canonical envelope (everything except sig+envelope_sha256).
+        canonical = {k: v for k, v in envelope.items() if k not in ("sig", "envelope_sha256")}
+        canonical_bytes = _canonical_json(canonical).encode("utf-8")
+        assert signer.verify(canonical_bytes, envelope["sig"]) is True
 
 
 # ===========================================================================
@@ -392,8 +343,9 @@ class TestEd25519Integration:
         ed_signer = Ed25519Signing(signing_key_bytes=seed, key_id="ed-key-001")
         builder = EnvelopeBuilder(config=config, signer=ed_signer)
         envelope = builder.build("memory.write", sample_body)
-        assert envelope["sig_alg"] == "ed25519"
+        assert envelope["sig_alg"] == "Ed25519SHA512"
         assert envelope["sig_kid"] == "ed-key-001"
-        assert (
-            ed_signer.verify(envelope["envelope_sha256"].encode("utf-8"), envelope["sig"]) is True
-        )
+        # Builder signs canonical envelope bytes (all fields except sig+envelope_sha256).
+        canonical = {k: v for k, v in envelope.items() if k not in ("sig", "envelope_sha256")}
+        canonical_bytes = _canonical_json(canonical).encode("utf-8")
+        assert ed_signer.verify(canonical_bytes, envelope["sig"]) is True

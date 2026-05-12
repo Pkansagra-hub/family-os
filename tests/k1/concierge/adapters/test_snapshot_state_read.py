@@ -21,7 +21,7 @@ class TestSnapshotStateReadProtocol:
 class TestSnapshotStateReadBehaviour:
     def test_read_sections_unbound_returns_empty(self) -> None:
         adapter = SnapshotStateReadAdapter()
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             adapter.read_sections(["beliefs_active", "control"])
         )
         assert isinstance(result, SessionSnapshot)
@@ -39,7 +39,7 @@ class TestSnapshotStateReadBehaviour:
         )
         adapter = SnapshotStateReadAdapter()
         adapter.bind(snapshot)
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             adapter.read_sections(["beliefs_active", "control"])
         )
         assert "beliefs_active" in result.sections
@@ -57,7 +57,7 @@ class TestSnapshotStateReadBehaviour:
         )
         adapter = SnapshotStateReadAdapter()
         adapter.bind(snapshot)
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             adapter.read_sections(["beliefs_active", "control"])
         )
         assert len(result.sections) == 2
@@ -66,14 +66,14 @@ class TestSnapshotStateReadBehaviour:
         snapshot = SessionSnapshot(session_id="sess-99", sections={"a": {"x": 1}})
         adapter = SnapshotStateReadAdapter()
         adapter.bind(snapshot)
-        result = asyncio.get_event_loop().run_until_complete(adapter.read_sections(["a"]))
+        result = asyncio.run(adapter.read_sections(["a"]))
         assert result.session_id == "sess-99"
 
     def test_bind_preserves_timestamp(self) -> None:
         snapshot = SessionSnapshot(session_id="s", sections={"a": {"x": 1}}, timestamp_ms=42000)
         adapter = SnapshotStateReadAdapter()
         adapter.bind(snapshot)
-        result = asyncio.get_event_loop().run_until_complete(adapter.read_sections(["a"]))
+        result = asyncio.run(adapter.read_sections(["a"]))
         assert result.timestamp_ms == 42000
 
     def test_bind_none_resets_to_empty(self) -> None:
@@ -81,7 +81,7 @@ class TestSnapshotStateReadBehaviour:
         adapter = SnapshotStateReadAdapter()
         adapter.bind(snapshot)
         adapter.bind(None)
-        result = asyncio.get_event_loop().run_until_complete(adapter.read_sections(["a"]))
+        result = asyncio.run(adapter.read_sections(["a"]))
         assert result.sections == {}
 
     def test_rebind_overwrites_previous(self) -> None:
@@ -90,7 +90,8 @@ class TestSnapshotStateReadBehaviour:
         adapter = SnapshotStateReadAdapter()
         adapter.bind(snap1)
         adapter.bind(snap2)
-        result = asyncio.get_event_loop().run_until_complete(adapter.read_sections(["a", "b"]))
+        result = asyncio.run(adapter.read_sections(["a", "b"]))
         assert "a" not in result.sections
         assert "b" in result.sections
         assert result.session_id == "s2"
+

@@ -84,6 +84,8 @@ class ProviderChunk:
     done: bool = False
     tool_calls: Optional[List[ToolCallResult]] = None
     metadata: Optional[Dict[str, Any]] = None
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
 
 
 @dataclass(frozen=True)

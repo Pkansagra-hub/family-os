@@ -214,7 +214,10 @@ class TestConstructorValid:
 
     def test_constructor_cancel_set_empty(self) -> None:
         agent = _make_agent()
-        assert agent._cancel_set == set()
+        # 4.2.5 / P06: _cancel_set is now Dict[request_id, monotonic_ts]
+        # (was Set[str]). Public ``cancel_set`` property still exposes
+        # a Set view for backward compatibility.
+        assert agent._cancel_set == {}
         assert agent.cancel_set == set()
 
     def test_constructor_running_is_false(self) -> None:
@@ -380,7 +383,8 @@ class TestInstanceIsolation:
     def test_cancel_sets_are_independent(self) -> None:
         agent1 = _make_agent()
         agent2 = _make_agent()
-        agent1._cancel_set.add("req-001")
+        # 4.2.5 / P06: _cancel_set is Dict[str, float]; insert via item-set.
+        agent1._cancel_set["req-001"] = 0.0
         assert "req-001" not in agent2._cancel_set
 
     def test_plan_locks_are_independent(self) -> None:

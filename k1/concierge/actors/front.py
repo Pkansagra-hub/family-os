@@ -784,7 +784,14 @@ async def front_handler(
         (c.history_window for c in ss_configs if c.section == "history_active"),
         _front_cfg.history_window_fallback,
     )
-    messages = build_chat_history(history_active, window=history_window)
+    messages = build_chat_history(
+        history_active,
+        window=history_window,
+        # M6 E6.2 (C10): In WEAVE mode the LLM needs to see prior weave
+        # entries (deferred async results) so it can build on them
+        # rather than repeating them.
+        include_weave=(mode == PromptMode.WEAVE),
+    )
 
     # 7b. Add current-turn user input as an explicit user message.
     #     This is NOT history; it's the active query for this invocation.
@@ -839,6 +846,12 @@ async def front_handler(
     if self_model is not None:
         try:
             grounding_capsule = self_model.render_capsule()
+            logger.debug(
+                "front_handler: render_capsule actor=%s capsule=%s self_block=%r",
+                getattr(self_model, "actor_id", "?"),
+                grounding_capsule is not None,
+                bool(getattr(grounding_capsule, "self_block", "")) if grounding_capsule else False,
+            )
         except Exception:
             logger.warning(
                 "front_handler: render_capsule() failed; falling back to None",

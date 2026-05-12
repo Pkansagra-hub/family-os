@@ -96,7 +96,7 @@ class FakeExpandService:
         self.micro_call_count = 0
         self.micro_calls: List[Tuple[Any, Dict[str, StepResult]]] = []
 
-    async def execute(self, sketch_result: Any, ctx: StageContext) -> Any:
+    async def execute(self, sketch_result: Any, request: Any, ctx: StageContext) -> Any:
         return {"steps": ["unused"]}
 
     async def micro_execute(
@@ -121,7 +121,7 @@ class FakeValidateService:
         self.micro_call_count = 0
         self.micro_calls: List[Any] = []
 
-    async def execute(self, expanded_plan: Any, ctx: StageContext) -> Any:
+    async def execute(self, expanded_plan: Any, request: Any, ctx: StageContext) -> Any:
         return _make_verdict(VERDICT_APPROVED)
 
     async def micro_execute(
@@ -146,7 +146,9 @@ class FakeCommitService:
         self.call_count = 0
         self.calls: List[Tuple[Any, Any, StageContext]] = []
 
-    async def execute(self, expanded_plan: Any, verdict: Any, ctx: StageContext) -> Any:
+    async def execute(
+        self, expanded_plan: Any, request: Any, verdict: Any, ctx: StageContext
+    ) -> Any:
         self.call_count += 1
         self.calls.append((expanded_plan, verdict, ctx))
         if self._error is not None:

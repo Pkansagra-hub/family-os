@@ -27,10 +27,10 @@ CREATE INDEX IF NOT EXISTS idx_self_projection_written_at
     ON self_projection(written_at_ms);
 
 -- ---------------------------------------------------------------
--- Family-model projection
+-- Space-graph projection  (was: family-model projection pre-M0)
 -- ---------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS family_projection (
-    family_space_id   TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS space_projection (
+    space_id          TEXT PRIMARY KEY,
     revision          TEXT NOT NULL,
     parent_revision   TEXT NOT NULL DEFAULT '',
     written_at_ms     INTEGER NOT NULL,

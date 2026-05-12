@@ -132,7 +132,7 @@ class TestSessionIsolation:
     def test_inject_on_closed_session_raises(self):
         runtime = ConciergeFactory.create_standalone()
         session = ConciergeFactory.create_request_scope(runtime)
-        asyncio.get_event_loop().run_until_complete(session.close())
+        asyncio.run(session.close())
 
         with pytest.raises(RuntimeError, match="closed"):
             session.inject(dispatch=object())
@@ -285,3 +285,4 @@ class TestConciergeConfigMethods:
         cfg = ConciergeConfig()
         with pytest.raises(ValueError, match="phase1_pipeline"):
             cfg.with_overrides(phase1_pipeline="INVALID")
+

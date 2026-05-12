@@ -11,7 +11,7 @@ from k1.selfmodel.contracts.constitution import (
     ConstitutionSnapshot,
     SigningProof,
 )
-from k1.selfmodel.contracts.family_model import FamilySelfModelSnapshot
+from k1.selfmodel.contracts.space_graph import FamilySelfModelSnapshot
 from k1.selfmodel.contracts.self_model import K1SelfModelSnapshot
 from k1.selfmodel.ports.projection_store import (
     IProjectionStorePort,
@@ -81,14 +81,14 @@ def test_self_second_write_chains_parent_revision() -> None:
 
 def test_family_round_trip() -> None:
     store = InMemoryProjectionStore()
-    snap = FamilySelfModelSnapshot(family_space_id="fs1")
-    write = store.write_family(snap, writer_id="selfmodel:test")
+    snap = FamilySelfModelSnapshot(space_id="fs1")
+    write = store.write_space(snap, writer_id="selfmodel:test")
     assert write.accepted
 
-    got, read = store.read_family("fs1")
+    got, read = store.read_space("fs1")
     assert read.found
     assert got is not None
-    assert got.family_space_id == "fs1"
+    assert got.space_id == "fs1"
 
 
 # ---------------------------------------------------------------------
@@ -214,7 +214,7 @@ def test_open_store_accepts_any_writer() -> None:
 # ---------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("key", ["self:unknown", "family:unknown", "constitution:unknown"])
+@pytest.mark.parametrize("key", ["self:unknown", "space:unknown", "constitution:unknown"])
 def test_freshness_defaults_to_fresh_for_unknown_key(key: str) -> None:
     store = InMemoryProjectionStore()
     assert store.freshness(key) == ProjectionFreshness.FRESH
@@ -222,7 +222,7 @@ def test_freshness_defaults_to_fresh_for_unknown_key(key: str) -> None:
 
 def test_missing_family_and_constitution_reads() -> None:
     store = InMemoryProjectionStore()
-    fam, fr = store.read_family("ghost")
+    fam, fr = store.read_space("ghost")
     assert fam is None and not fr.found
     con, cr = store.read_constitution("ghost")
     assert con is None and not cr.found
@@ -230,15 +230,15 @@ def test_missing_family_and_constitution_reads() -> None:
 
 def test_freshness_override_propagates_to_family_and_constitution_reads() -> None:
     store = InMemoryProjectionStore()
-    store.write_family(FamilySelfModelSnapshot(family_space_id="fs1"), writer_id="selfmodel:test")
+    store.write_space(FamilySelfModelSnapshot(space_id="fs1"), writer_id="selfmodel:test")
     store.write_constitution(
         ConstitutionSnapshot(constitution_id="c1", version="v1"),
         writer_id="selfmodel:test",
     )
-    store.mark_stale("family:fs1")
+    store.mark_stale("space:fs1")
     store.mark_offline_local_only("constitution:c1")
 
-    _, fr = store.read_family("fs1")
+    _, fr = store.read_space("fs1")
     assert fr.freshness == ProjectionFreshness.STALE
     _, cr = store.read_constitution("c1")
     assert cr.freshness == ProjectionFreshness.OFFLINE_LOCAL_ONLY
@@ -246,9 +246,9 @@ def test_freshness_override_propagates_to_family_and_constitution_reads() -> Non
 
 def test_missing_family_and_constitution_freshness_override_on_unknown_key() -> None:
     store = InMemoryProjectionStore()
-    store.mark_stale("family:none")
+    store.mark_stale("space:none")
     store.mark_offline_local_only("constitution:none")
-    _, fr = store.read_family("none")
+    _, fr = store.read_space("none")
     assert fr.freshness == ProjectionFreshness.STALE
     _, cr = store.read_constitution("none")
     assert cr.freshness == ProjectionFreshness.OFFLINE_LOCAL_ONLY

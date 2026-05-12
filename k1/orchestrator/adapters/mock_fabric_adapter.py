@@ -58,7 +58,11 @@ class MockFabricAdapter:
     # IFabricGatewayPort.execute
     # ------------------------------------------------------------------
 
-    async def execute(self, request: CapabilityRequest) -> CapabilityResult:
+    async def execute(
+        self,
+        request: CapabilityRequest,
+        cancellation_token: Optional[asyncio.Event] = None,
+    ) -> CapabilityResult:
         """Execute a capability. Returns scripted result or generic success."""
         self.call_log.append(request)
         cap = request.capability_name
@@ -67,9 +71,26 @@ class MockFabricAdapter:
         if cap in self.scripted_errors:
             raise AdapterException(self.scripted_errors[cap])
 
-        # Check scripted timeout (asyncio.sleep then return)
+        # Check scripted timeout (asyncio.sleep then return).
+        # Honor cancellation_token (M5.1.2) during simulated waits.
         if cap in self.scripted_timeouts:
-            await asyncio.sleep(self.scripted_timeouts[cap])
+            if cancellation_token is not None:
+                sleep_task = asyncio.create_task(
+                    asyncio.sleep(self.scripted_timeouts[cap])
+                )
+                cancel_task = asyncio.create_task(cancellation_token.wait())
+                done, pending = await asyncio.wait(
+                    {sleep_task, cancel_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for p in pending:
+                    p.cancel()
+                if cancel_task in done:
+                    raise asyncio.CancelledError(
+                        "mock fabric.execute cancelled by token"
+                    )
+            else:
+                await asyncio.sleep(self.scripted_timeouts[cap])
 
         # Check scripted result
         if cap in self.scripted_results:

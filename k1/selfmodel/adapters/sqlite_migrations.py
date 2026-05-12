@@ -87,6 +87,32 @@ def current_user_version(conn: sqlite3.Connection) -> int:
     return int(conn.execute("PRAGMA user_version").fetchone()[0])
 
 
+def _verify_migration_target(
+    conn: sqlite3.Connection,
+    migration: "Migration",
+    original_exc: sqlite3.OperationalError,
+) -> None:
+    """Re-raise *original_exc* unless the migration's target state is already present.
+
+    This allows a migration to be a no-op on a freshly created database
+    where an earlier schema version already incorporated the rename.
+    For example, migration 0002 (family_projection → space_projection) is
+    skipped when 0001 was updated to create space_projection directly.
+    """
+    tables = {
+        row[0]
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    }
+    # Migration 0002: source table gone, target table present → already done.
+    if "family_projection" not in tables and "space_projection" in tables:
+        logger.debug(
+            "selfmodel.migrations: %s is a no-op (target state already present)",
+            migration.name,
+        )
+        return
+    raise original_exc
+
+
 def apply_migrations(
     conn: sqlite3.Connection,
     *,
@@ -118,6 +144,16 @@ def apply_migrations(
         try:
             conn.execute("BEGIN")
             conn.executescript(migration.sql)
+            conn.execute(f"PRAGMA user_version = {migration.target_version}")
+            conn.commit()
+        except sqlite3.OperationalError as exc:
+            conn.rollback()
+            # A migration may be a no-op on a fresh database if it migrates
+            # tables that were renamed in a previous schema version (e.g. the
+            # family→space rename in 0002 is skipped when 0001 already creates
+            # space_projection).  Verify the target state is consistent before
+            # accepting the skip.
+            _verify_migration_target(conn, migration, exc)
             conn.execute(f"PRAGMA user_version = {migration.target_version}")
             conn.commit()
         except sqlite3.Error:

@@ -90,6 +90,8 @@ from k1.planner.types import (
     VERDICT_APPROVED,
     VERDICT_REJECT,
     VERDICT_REVISE,
+    ArbiterVerdict,
+    DeterministicValidationResult,
     ExpandedPlan,
     PlannerConstraints,
     PlannerLLMRequest,
@@ -337,15 +339,21 @@ class ValidateService:
                 ctx.request_id,
                 len([i for i in det_issues if i.severity == SEVERITY_ERROR]),
             )
-            return ValidationVerdict(
-                status=VERDICT_REJECT,
+            # P04 fix: explicit two-phase composition. Deterministic
+            # failure must hard-gate to reject.
+            det_result = DeterministicValidationResult(
                 issues=det_issues,
-                confidence=1.0,
+                passed=False,
+            )
+            arbiter_skip = ArbiterVerdict(
+                status=VERDICT_REJECT,
                 rationale="Deterministic structural checks failed",
-                deterministic_pass=False,
+                confidence=1.0,
                 safety_assessment=SAFETY_UNKNOWN,
+                issues=[],
                 suggested_fixes=[i.detail for i in det_issues if i.severity == SEVERITY_ERROR],
             )
+            return ValidationVerdict.from_components(det_result, arbiter_skip)
 
         # -- Phase 2: LLM arbiter --
         try:

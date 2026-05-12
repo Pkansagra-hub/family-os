@@ -379,9 +379,11 @@ class ModelHubFactory:
             dispatcher=dispatcher,
             audit_logger=audit_logger,
             metrics_port=metrics_port,
+            event_port=event_port,
+            state_read_port=state_read_port,  # 3.1.3
         )
 
-        health_adapter = HealthReportAdapter()
+        health_adapter = health_port if health_port is not None else HealthReportAdapter()
         facade = _HubCore(
             router=router,
             registry=registry,
@@ -477,9 +479,11 @@ class ModelHubFactory:
             dispatcher=dispatcher,
             audit_logger=AuditLogger(),
             metrics_port=metrics_port,
+            event_port=event_port,
+            state_read_port=state_read_port,  # 3.1.3
         )
 
-        health_adapter = HealthReportAdapter()
+        health_adapter = health_port if health_port is not None else HealthReportAdapter()
         return _HubCore(
             router=router,
             registry=registry,
@@ -506,10 +510,11 @@ class ModelHubFactory:
         ``await hub.shutdown()`` on teardown to drain plugin sessions.
 
         Only ``credential_port`` is consumed from ``ports``;
-        ``metrics_port`` flows into the ``RequestRouter``. Other accepted
-        keys (``event_port``, ``state_read_port``, ``config_port``,
-        ``health_port``) are validated but not yet wired into any service
-        -- pre-existing factory behavior; not addressed by P2.2.
+        ``metrics_port``, ``event_port``, and ``state_read_port`` (3.1.3)
+        flow into the ``RequestRouter``. Other accepted keys
+        (``config_port``, ``health_port``) are validated but not yet
+        wired into any service -- pre-existing factory behavior; not
+        addressed by P2.2.
 
         Idempotency: calling ``from_config`` twice on the same hub is
         not supported. The loader will record every entry as ``failed``
@@ -521,9 +526,14 @@ class ModelHubFactory:
 
         if ports is None:
             hub = ModelHubFactory.create_standalone(config=hub_config)
+            loader = ProviderLoader(hub, manifest_root=manifest_root)
         else:
             hub = ModelHubFactory.create_with_ports(ports, config=hub_config)
-        loader = ProviderLoader(hub, manifest_root=manifest_root)  # type: ignore[arg-type]
+            loader = ProviderLoader(
+                hub,  # type: ignore[arg-type]
+                manifest_root=manifest_root,
+                event_port=ports.get("event_port"),
+            )
         result = await loader.load(config)
         return hub, result
 

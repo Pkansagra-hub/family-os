@@ -30,7 +30,12 @@ from k1.concierge.bus.topics import (
     TOPIC_TASK_DISPATCH,
     TOPIC_TASK_RESUME,
 )
-from k1.concierge.llm.types import ConciergeModelResponse, FinishReason, ToolCallResult, ToolSchema
+from k1.concierge.llm.types import (
+    ConciergeModelResponse,
+    FinishReason,
+    ToolCallResult,
+    ToolSchema,
+)
 from k1.concierge.protocols.cancellation import CancellationToken, CancelReason
 from k1.concierge.react.loop import ReactResult, react_loop
 from k1.concierge.task.parallel_safety import classify_tool_batch
@@ -702,6 +707,7 @@ class TestParallelToolSafety:
             mock_cfg.react.parallel_tools_enabled = True
             mock_cfg.react.front_degenerate_fallback = "sorry"
             mock_cfg.react.front_budget_fallback = "out of budget"
+            mock_cfg.react.tool_timeout_ms = 30_000
             mock_cfg.llm.default_timeout_ms = 30000
             mock_config.return_value = mock_cfg
 
@@ -779,6 +785,7 @@ class TestParallelToolSafety:
             mock_cfg.react.parallel_tools_enabled = True
             mock_cfg.react.front_degenerate_fallback = "sorry"
             mock_cfg.react.front_budget_fallback = "out of budget"
+            mock_cfg.react.tool_timeout_ms = 30_000
             mock_cfg.llm.default_timeout_ms = 30000
             mock_config.return_value = mock_cfg
 
@@ -857,6 +864,7 @@ class TestParallelToolSafety:
             mock_cfg.react.parallel_tools_enabled = False
             mock_cfg.react.front_degenerate_fallback = "sorry"
             mock_cfg.react.front_budget_fallback = "out of budget"
+            mock_cfg.react.tool_timeout_ms = 30_000
             mock_cfg.llm.default_timeout_ms = 30000
             mock_config.return_value = mock_cfg
 

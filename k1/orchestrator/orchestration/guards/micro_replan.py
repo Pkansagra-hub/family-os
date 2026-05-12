@@ -263,13 +263,15 @@ class MicroReplanCheckpoint(DAGGuard):
                 reason=f"No param overlap for {len(discoveries)} discoveries",
             )
 
-        # 4. Check replan budget
-        if self._replans_used >= self._max_replans:
+        # 4. Check replan budget (M5.4.1: shared ctx flag covers any
+        # prior micro/failure replan in the same DAG run).
+        if getattr(ctx, "micro_replan_done", False) or self._replans_used >= self._max_replans:
             logger.info(
-                "[%s] Replan budget exhausted (%d/%d) -- continuing original plan",
+                "[%s] Replan budget exhausted (%d/%d, ctx.done=%s) -- continuing original plan",
                 _GUARD_NAME,
                 self._replans_used,
                 self._max_replans,
+                getattr(ctx, "micro_replan_done", False),
             )
             return GuardDecision(
                 guard_name=_GUARD_NAME,
@@ -338,6 +340,12 @@ class MicroReplanCheckpoint(DAGGuard):
 
         # 8. Success! Increment budget and return new plan via metadata
         self._replans_used += 1
+        # M5.4.1: mark shared flag so FailureReplanCheckpoint also honors
+        # the budget for the rest of this DAG run.
+        try:
+            ctx.micro_replan_done = True
+        except Exception:
+            pass
         logger.info(
             "[%s] Micro-replan succeeded: %d new steps (replans: %d/%d)",
             _GUARD_NAME,

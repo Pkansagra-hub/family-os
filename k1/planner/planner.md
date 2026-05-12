@@ -9464,8 +9464,12 @@ The kernel bootstrap sequence (kernel.md Section 7) wires modules in dependency
 order.  The Planner is Phase 5 -- it depends on the Fabric bus (Phase 3) and
 SessionState (Phase 3) being available.
 
-**Current state (V1)**: Phase 5 is a commented-out TODO in kernel.md.  The
-Orchestrator is wired with `MockPlannerAdapter()` in Phase 4:
+**Current state (V1.1, May 2026 — IMPLEMENTED in kernel/service.py:1322-1422)**:
+Phase 5 is fully wired. The Orchestrator is built at S5 with `MockPlannerAdapter()`
+as a placeholder, then S6a builds the real `PlannerAgent` via
+`PlannerFactory.create_production(...)` (8 ports incl. hil_port), S6b builds
+`PlannerAdapter(mailbox, cb_planner)` and calls `orchestrator.bind_planner()`,
+and S7 starts the agent task. The mock is replaced before `_running = True`.
 
 ```text
  kernel.md Phase 4 (current):
@@ -9483,8 +9487,8 @@ Orchestrator is wired with `MockPlannerAdapter()` in Phase 4:
    )
 ```
 
-**Phase 5 wiring (TODO)**: When the Planner module is ready, the commented-out
-block in kernel.md will be activated:
+**Phase 5 wiring (IMPLEMENTED in kernel/service.py:1322-1422)**: The block below
+is the production-active wiring:
 
 ```text
  Phase 5: Planner cross-wiring
@@ -9606,9 +9610,10 @@ infrastructure (Fabric, Bus) is torn down.
 `Orchestrator (partial) -> Planner -> Orchestrator (complete) -> Fabric ->
 SessionState -> Bus -> Mailbox Router`.
 
-**Current state**: The Planner shutdown step (step 3) is not yet wired in
-kernel.md because Phase 5 is TODO.  When activated, it will be inserted between
-Orchestrator DAG drain (step 2) and Orchestrator final teardown (step 4).
+**Current state**: The Planner shutdown step (step 3) is wired in
+`kernel/service.py` `destroy_session` and `stop()` paths. Phase 5 is live. The
+step is inserted between Orchestrator DAG drain (step 2) and Orchestrator final
+teardown (step 4) as designed.
 
 ### 29.4 MockPlannerAdapter (Pre-Phase-5)
 

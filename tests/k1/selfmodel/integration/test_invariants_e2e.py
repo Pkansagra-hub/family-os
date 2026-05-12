@@ -52,7 +52,7 @@ from k1.selfmodel.contracts.constitution import (
     ConstitutionSnapshot,
     SigningProof,
 )
-from k1.selfmodel.contracts.family_model import RelationshipEdge
+from k1.selfmodel.contracts.space_graph import RelationshipEdge
 from k1.selfmodel.contracts.policy import (
     FreshnessState,
     PolicyRequest,
@@ -73,9 +73,9 @@ from k1.selfmodel.service.capsule_builder import GroundingCapsuleBuilder
 from k1.selfmodel.service.citation_builder import CitationPackBuilder
 from k1.selfmodel.service.constitution import ConstitutionService
 from k1.selfmodel.service.errors import ConstitutionUnavailableError
-from k1.selfmodel.service.family_model import (
-    FAMILY_MODEL_WRITER_ID,
-    FamilyModelService,
+from k1.selfmodel.service.space_graph import (
+    SPACE_GRAPH_WRITER_ID,
+    SpaceGraphService,
 )
 from k1.selfmodel.service.policy_evaluator import PolicyEvaluator
 from k1.selfmodel.service.self_model import (
@@ -105,7 +105,7 @@ CID = DEFAULT_CONSTITUTION_ID
 WRITER_AMD = "selfmodel:amendment"
 ALL_WRITERS = (
     SELF_MODEL_WRITER_ID,
-    FAMILY_MODEL_WRITER_ID,
+    SPACE_GRAPH_WRITER_ID,
     WRITER_AMD,
     "test:fixture",
 )
@@ -138,7 +138,7 @@ class _RecordingBridge:
 class _AssembledBundle:
     store: InMemoryProjectionStore
     self_model: SelfModelService
-    family_model: FamilyModelService
+    space_graph: SpaceGraphService
     constitution: ConstitutionService
     composer: SituationFrameComposer
     evaluator: PolicyEvaluator
@@ -194,7 +194,7 @@ def _build_assembled_bundle() -> _AssembledBundle:
     )
     for a in actors:
         store.write_self(a, writer_id="test:fixture")
-    store.write_family(family, writer_id="test:fixture")
+    store.write_space(family, writer_id="test:fixture")
 
     # Real signed bootstrap constitution.
     body = v0_body()
@@ -223,13 +223,13 @@ def _build_assembled_bundle() -> _AssembledBundle:
     validator.register_signer("bootstrap", pk)
 
     sm = SelfModelService(store)
-    fm = FamilyModelService(store)
+    fm = SpaceGraphService(store)
     cs = ConstitutionService(store, constitution_id=CID, validator=validator)
     composer = SituationFrameComposer(
         self_model=sm,
-        family_model=fm,
+        space_graph=fm,
         constitution=cs,
-        family_space_id=DEFAULT_FAMILY_SPACE,
+        space_id=DEFAULT_FAMILY_SPACE,
     )
     evaluator = PolicyEvaluator()
     capsule = GroundingCapsuleBuilder(clock_ms=lambda: T0_MS)
@@ -240,7 +240,7 @@ def _build_assembled_bundle() -> _AssembledBundle:
     return _AssembledBundle(
         store=store,
         self_model=sm,
-        family_model=fm,
+        space_graph=fm,
         constitution=cs,
         composer=composer,
         evaluator=evaluator,
@@ -262,7 +262,7 @@ def _apply_freshness_chaos(store: InMemoryProjectionStore, *, rng: random.Random
         "self:g1",
         "self:c1",
         "self:c2",
-        f"family:{DEFAULT_FAMILY_SPACE}",
+        f"space:{DEFAULT_FAMILY_SPACE}",
         f"constitution:{CID}",
     )
     states = (
@@ -316,7 +316,7 @@ def test_e2_unknown_role_yields_empty_visibility() -> None:
     # Inject an actor with a role missing from the visibility table.
     rogue = make_actor("x1", role="unknown_role", name="Rogue")
     bundle.store.write_self(rogue, writer_id="test:fixture")
-    bundle.store.write_family(
+    bundle.store.write_space(
         make_family(
             members=(
                 make_member("g1", role="guardian"),

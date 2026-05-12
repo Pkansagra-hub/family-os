@@ -22,8 +22,49 @@ from __future__ import annotations
 import json
 import time
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from typing import Any, Dict, FrozenSet, List, Optional
+
+import flatbuffers
+
+from k1.sessionstate.generated.flatbuffers.K1.SessionState.SectionHeader import (
+    SectionHeaderAddLastUpdatedMs,
+    SectionHeaderAddSectionName,
+    SectionHeaderAddSizeBytes,
+    SectionHeaderEnd,
+    SectionHeaderStart,
+)
+from k1.sessionstate.generated.flatbuffers.K1.SessionState.TaskStateEntry import (
+    TaskStateEntry as _FBTaskStateEntryClass,
+)
+from k1.sessionstate.generated.flatbuffers.K1.SessionState.TaskStateEntry import (
+    TaskStateEntryAddAction,
+    TaskStateEntryAddCompletedAtMs,
+    TaskStateEntryAddDependsOn,
+    TaskStateEntryAddDispatchedAtMs,
+    TaskStateEntryAddHilSuspensionsCount,
+    TaskStateEntryAddPendingHil,
+    TaskStateEntryAddPendingHilData,
+    TaskStateEntryAddPresentedAtTurn,
+    TaskStateEntryAddProgressPct,
+    TaskStateEntryAddStatus,
+    TaskStateEntryAddTaskId,
+    TaskStateEntryEnd,
+    TaskStateEntryStart,
+    TaskStateEntryStartDependsOnVector,
+)
+from k1.sessionstate.generated.flatbuffers.K1.SessionState.TaskStateSection import (
+    TaskStateSection as _FBTaskStateSectionClass,
+)
+from k1.sessionstate.generated.flatbuffers.K1.SessionState.TaskStateSection import (
+    TaskStateSectionAddHeader,
+    TaskStateSectionAddLastUpdatedMs,
+    TaskStateSectionAddNeverEvict,
+    TaskStateSectionAddTasks,
+    TaskStateSectionEnd,
+    TaskStateSectionStart,
+    TaskStateSectionStartTasksVector,
+)
 
 # =============================================================================
 # TaskStatus Constants
@@ -102,6 +143,18 @@ class TaskStateEntry:
     pending_hil_data: Optional[Dict[str, Any]] = None
 
 
+# Status string → int8 ordinal (must match FlatBuffer schema ordering)
+_STATUS_TO_INT8: Dict[str, int] = {
+    TaskStatus.PENDING: 0,
+    TaskStatus.DISPATCHED: 1,
+    TaskStatus.ACTIVE: 2,
+    TaskStatus.SUSPENDED: 3,
+    TaskStatus.COMPLETED: 4,
+    TaskStatus.FAILED: 5,
+    TaskStatus.CANCELLED: 6,
+}
+_INT8_TO_STATUS: Dict[int, str] = {v: k for k, v in _STATUS_TO_INT8.items()}
+
 # Pruning threshold: remove completed tasks N turns after presentation
 _PRUNE_AFTER_TURNS: int = 10
 
@@ -170,37 +223,104 @@ class TaskStateSection:
         return 50 + len(self._tasks) * 120
 
     def to_flatbuffer(self) -> bytes:
-        """Serialize to JSON bytes (POC -- no FlatBuffer schema for task_state)."""
-        payload = {
-            "section": self.SECTION_NAME,
-            "last_updated_ms": self._last_updated_ms,
-            "tasks": [asdict(t) for t in self._tasks.values()],
-        }
-        data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        builder = flatbuffers.Builder(512)
+
+        tasks = list(self._tasks.values())
+
+        # Pre-create all offsets (must be done before any StartObject)
+        entry_offsets: List[int] = []
+        for t in tasks:
+            task_id_off = builder.CreateString(t.task_id or "")
+            action_off = builder.CreateString(t.action or "")
+            # pending_hil_data: dict → JSON string (FB schema types it as string)
+            hil_data_off = None
+            if t.pending_hil_data is not None:
+                hil_data_off = builder.CreateString(json.dumps(t.pending_hil_data))
+            # depends_on: vector of string offsets
+            dep_offsets = [builder.CreateString(d) for d in (t.depends_on or [])]
+            TaskStateEntryStartDependsOnVector(builder, len(dep_offsets))
+            for off in reversed(dep_offsets):
+                builder.PrependUOffsetTRelative(off)
+            depends_on_vec = builder.EndVector(len(dep_offsets))
+
+            TaskStateEntryStart(builder)
+            TaskStateEntryAddTaskId(builder, task_id_off)
+            TaskStateEntryAddAction(builder, action_off)
+            TaskStateEntryAddStatus(builder, _STATUS_TO_INT8.get(t.status, 0))
+            TaskStateEntryAddDispatchedAtMs(builder, t.dispatched_at_ms)
+            TaskStateEntryAddCompletedAtMs(builder, t.completed_at_ms)
+            TaskStateEntryAddDependsOn(builder, depends_on_vec)
+            TaskStateEntryAddProgressPct(builder, t.progress_pct)
+            TaskStateEntryAddPendingHil(builder, t.pending_hil)
+            TaskStateEntryAddHilSuspensionsCount(builder, t.hil_suspensions_count)
+            TaskStateEntryAddPresentedAtTurn(builder, t.presented_at_turn)
+            if hil_data_off is not None:
+                TaskStateEntryAddPendingHilData(builder, hil_data_off)
+            entry_offsets.append(TaskStateEntryEnd(builder))
+
+        # Tasks vector
+        TaskStateSectionStartTasksVector(builder, len(entry_offsets))
+        for off in reversed(entry_offsets):
+            builder.PrependUOffsetTRelative(off)
+        tasks_vec = builder.EndVector(len(entry_offsets))
+
+        # Header
+        section_name_off = builder.CreateString(self.SECTION_NAME)
+        SectionHeaderStart(builder)
+        SectionHeaderAddSectionName(builder, section_name_off)
+        SectionHeaderAddSizeBytes(builder, self.get_size_bytes())
+        SectionHeaderAddLastUpdatedMs(builder, self._last_updated_ms)
+        header_off = SectionHeaderEnd(builder)
+
+        # Root table
+        TaskStateSectionStart(builder)
+        TaskStateSectionAddHeader(builder, header_off)
+        TaskStateSectionAddTasks(builder, tasks_vec)
+        TaskStateSectionAddLastUpdatedMs(builder, self._last_updated_ms)
+        TaskStateSectionAddNeverEvict(builder, True)
+        root = TaskStateSectionEnd(builder)
+
+        builder.Finish(root)
+        data = bytes(builder.Output())
         self._cached_bytes = data
         self._cache_valid = True
         return data
 
     def from_flatbuffer(self, data: bytes) -> None:
-        """Deserialize from JSON bytes."""
-        payload = json.loads(data)
-        self._last_updated_ms = payload.get("last_updated_ms", int(time.time() * 1000))
+        buf = bytearray(data)
+        section = _FBTaskStateSectionClass.GetRootAsTaskStateSection(buf, 0)
+        self._last_updated_ms = section.LastUpdatedMs() or int(time.time() * 1000)
         self._tasks.clear()
-        for t in payload.get("tasks", []):
+        for i in range(section.TasksLength()):
+            fb_entry = section.Tasks(i)
+            if fb_entry is None:
+                continue
+            task_id = (fb_entry.TaskId() or b"").decode("utf-8")
+            action = (fb_entry.Action() or b"").decode("utf-8")
+            status = _INT8_TO_STATUS.get(fb_entry.Status(), TaskStatus.PENDING)
+            depends_on = [
+                (fb_entry.DependsOn(j) or b"").decode("utf-8")
+                for j in range(fb_entry.DependsOnLength())
+            ]
+            raw_hil = fb_entry.PendingHilData()
+            if raw_hil is not None:
+                pending_hil_data: Optional[Dict[str, Any]] = json.loads(raw_hil.decode("utf-8"))
+            else:
+                pending_hil_data = None
             entry = TaskStateEntry(
-                task_id=t["task_id"],
-                action=t["action"],
-                status=t["status"],
-                dispatched_at_ms=t.get("dispatched_at_ms", 0),
-                completed_at_ms=t.get("completed_at_ms", 0),
-                depends_on=t.get("depends_on", []),
-                progress_pct=t.get("progress_pct", 0),
-                pending_hil=t.get("pending_hil", False),
-                hil_suspensions_count=t.get("hil_suspensions_count", 0),
-                presented_at_turn=t.get("presented_at_turn", 0),
-                pending_hil_data=t.get("pending_hil_data"),
+                task_id=task_id,
+                action=action,
+                status=status,
+                dispatched_at_ms=fb_entry.DispatchedAtMs(),
+                completed_at_ms=fb_entry.CompletedAtMs(),
+                depends_on=depends_on,
+                progress_pct=fb_entry.ProgressPct(),
+                pending_hil=fb_entry.PendingHil(),
+                hil_suspensions_count=fb_entry.HilSuspensionsCount(),
+                presented_at_turn=fb_entry.PresentedAtTurn(),
+                pending_hil_data=pending_hil_data,
             )
-            self._tasks[entry.task_id] = entry
+            self._tasks[task_id] = entry
         self._cache_valid = False
 
     def clear(self) -> None:

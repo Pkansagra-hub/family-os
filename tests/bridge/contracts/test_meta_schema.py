@@ -198,7 +198,10 @@ def test_ca_bundle_placeholder_validates(ca_bundle_schema: dict) -> None:
     assert errors == [], (
         f"ca_bundle.json must validate against its schema; got: " f"{[e.message for e in errors]}"
     )
-    assert bundle["ca_id"] == "familyos_root_v1"
+    # As of MS-5 PR#3 the bundle ships a real dev keypair
+    # (``dev_familyos_root_v1``). Production ceremony will replace
+    # this with ``familyos_root_v1`` + a hardware-issued key.
+    assert bundle["ca_id"] in {"dev_familyos_root_v1", "familyos_root_v1"}
     assert bundle["status"] == "active"
-    # Placeholder marker is intentionally present until pre-MS-5.
-    assert "PLACEHOLDER" in bundle["ed25519_public_key"]
+    # Placeholder marker MUST be gone post-PR#3.
+    assert "PLACEHOLDER" not in bundle["ed25519_public_key"]

@@ -567,9 +567,19 @@ class TestWalAndDeltaIntegration:
         _register_caps(fabric, "cap.a", "cap.b")
         await dag.execute(_plan([_step("a", "cap.a"), _step("b", "cap.b")]), _snapshot())
 
-        # STEP_COMPLETE uses dag_id=step_id in current implementation.
-        assert any(e["entry_type"] == "STEP_COMPLETE" for e in bridge.get_wal("a"))
-        assert any(e["entry_type"] == "STEP_COMPLETE" for e in bridge.get_wal("b"))
+        # M5.2.5: STEP_COMPLETE keyed by plan_id (was step.id) so
+        # recover_from_wal(plan_id) can actually retrieve these entries.
+        plan_wal = bridge.get_wal("plan-1")
+        step_completes = [e for e in plan_wal if e["entry_type"] == "STEP_COMPLETE"]
+        step_ids = {e["payload"]["step_id"] for e in step_completes}
+        assert step_ids == {"a", "b"}
+        # Confirm the legacy step-id-keyed buckets are now empty.
+        assert not any(
+            e["entry_type"] == "STEP_COMPLETE" for e in bridge.get_wal("a")
+        )
+        assert not any(
+            e["entry_type"] == "STEP_COMPLETE" for e in bridge.get_wal("b")
+        )
 
     @pytest.mark.asyncio
     async def test_dag_started_and_completed_emitted(self) -> None:

@@ -117,6 +117,7 @@ class AnthropicPlugin:
                 self._raise_for_status(resp.status, text, request)
 
             event_type = ""
+            _input_tokens = 0  # captured from message_start
             async for line in resp.content:
                 decoded = line.decode("utf-8").strip()
                 if not decoded:
@@ -132,7 +133,12 @@ class AnthropicPlugin:
                 payload = decoded[len("data:") :].strip()
                 chunk_data = json.loads(payload)
 
-                if event_type == "content_block_delta":
+                if event_type == "message_start":
+                    # Capture prompt token count for the done-chunk later.
+                    msg_usage = chunk_data.get("message", {}).get("usage", {})
+                    _input_tokens = int(msg_usage.get("input_tokens", 0))
+
+                elif event_type == "content_block_delta":
                     delta = chunk_data.get("delta", {})
                     delta_type = delta.get("type", "")
                     if delta_type == "text_delta":
@@ -150,13 +156,13 @@ class AnthropicPlugin:
 
                 elif event_type == "message_delta":
                     delta = chunk_data.get("delta", {})
+                    usage = chunk_data.get("usage", {})
                     yield ProviderChunk(
                         text="",
                         done=True,
-                        metadata={
-                            "stop_reason": delta.get("stop_reason"),
-                            "usage": chunk_data.get("usage", {}),
-                        },
+                        prompt_tokens=_input_tokens,
+                        completion_tokens=int(usage.get("output_tokens", 0)),
+                        metadata={"stop_reason": delta.get("stop_reason")},
                     )
 
                 elif event_type == "message_stop":

@@ -288,6 +288,18 @@ class BusFactory:
 
         chain = TimingChain(config=config, timeout_ms=timeout_ms)
         mw_chain = _to_chain(middleware)
+        # M7.3 / B07: when no middleware is provided, install the
+        # default TopicValidationMiddleware against DEFAULT_TOPIC_REGISTRY
+        # so misrouted/typo'd topics surface as WARNING logs in
+        # production.  Validation mode is permissive: unknown topics are
+        # still delivered.  Callers that want stricter behaviour pass
+        # their own middleware chain explicitly.
+        if mw_chain is None:
+            from k1.bus.middleware import MiddlewareChain
+            from k1.bus.middleware.default_registry import get_default_registry
+            from k1.bus.middleware.topic_validation import TopicValidationMiddleware
+
+            mw_chain = MiddlewareChain([TopicValidationMiddleware(get_default_registry())])
         return LocalBus(
             capture=capture,
             timing_chain=chain,

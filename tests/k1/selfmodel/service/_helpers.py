@@ -16,23 +16,23 @@ from k1.selfmodel.contracts.constitution import (
     ConstitutionSnapshot,
     SigningProof,
 )
-from k1.selfmodel.contracts.family_model import (
+from k1.selfmodel.contracts.self_model import K1SelfModelSnapshot
+from k1.selfmodel.contracts.space_graph import (
     FamilyMemberRef,
     FamilySelfModelSnapshot,
     RelationshipEdge,
     RoutineRef,
 )
-from k1.selfmodel.contracts.self_model import K1SelfModelSnapshot
 from k1.selfmodel.service.constitution import ConstitutionService
-from k1.selfmodel.service.family_model import (
-    FAMILY_MODEL_WRITER_ID,
-    FamilyModelService,
-)
 from k1.selfmodel.service.self_model import (
     SELF_MODEL_WRITER_ID,
     SelfModelService,
 )
 from k1.selfmodel.service.situation_composer import SituationFrameComposer
+from k1.selfmodel.service.space_graph import (
+    SPACE_GRAPH_WRITER_ID,
+    SpaceGraphService,
+)
 
 T0_MS = 1_700_000_000_000  # fixed 2023-11-14 epoch ms; never time.time()
 DEFAULT_FAMILY_SPACE = "fs:home_household"
@@ -79,13 +79,13 @@ def make_actor(
 
 def make_family(
     *,
-    family_space_id: str = DEFAULT_FAMILY_SPACE,
+    space_id: str = DEFAULT_FAMILY_SPACE,
     members: tuple[FamilyMemberRef, ...] = (),
     edges: tuple[RelationshipEdge, ...] = (),
     routines: tuple[RoutineRef, ...] = (),
 ) -> FamilySelfModelSnapshot:
     return FamilySelfModelSnapshot(
-        family_space_id=family_space_id,
+        space_id=space_id,
         members=members,
         relations=edges,
         routines=routines,
@@ -207,7 +207,7 @@ def v0_body(
 class Bundle:
     store: InMemoryProjectionStore
     self_model: SelfModelService
-    family_model: FamilyModelService
+    space_graph: SpaceGraphService
     constitution: ConstitutionService
     composer: SituationFrameComposer
 
@@ -217,13 +217,13 @@ def build_bundle(
     actors: tuple[K1SelfModelSnapshot, ...] = (),
     family: FamilySelfModelSnapshot | None = None,
     constitution: ConstitutionSnapshot | None = None,
-    family_space_id: str = DEFAULT_FAMILY_SPACE,
+    space_id: str = DEFAULT_FAMILY_SPACE,
     constitution_id: str = DEFAULT_CONSTITUTION_ID,
     enforce_writer_allowlist: bool = True,
 ) -> Bundle:
     """Wire all four M1 services on top of an in-memory store."""
     allowed = (
-        (SELF_MODEL_WRITER_ID, FAMILY_MODEL_WRITER_ID, "test:fixture")
+        (SELF_MODEL_WRITER_ID, SPACE_GRAPH_WRITER_ID, "test:fixture")
         if enforce_writer_allowlist
         else None
     )
@@ -231,20 +231,20 @@ def build_bundle(
     for actor in actors:
         store.write_self(actor, writer_id="test:fixture")
     if family is not None:
-        store.write_family(family, writer_id="test:fixture")
+        store.write_space(family, writer_id="test:fixture")
     if constitution is not None:
         store.write_constitution(constitution, writer_id="test:fixture")
 
     sm = SelfModelService(store)
-    fm = FamilyModelService(store)
+    fm = SpaceGraphService(store)
     cs = ConstitutionService(store, constitution_id=constitution_id)
     composer = SituationFrameComposer(
         self_model=sm,
-        family_model=fm,
+        space_graph=fm,
         constitution=cs,
-        family_space_id=family_space_id,
+        space_id=space_id,
     )
-    return Bundle(store=store, self_model=sm, family_model=fm, constitution=cs, composer=composer)
+    return Bundle(store=store, self_model=sm, space_graph=fm, constitution=cs, composer=composer)
 
 
 def now_ms() -> int:

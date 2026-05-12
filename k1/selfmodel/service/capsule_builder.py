@@ -60,7 +60,7 @@ class _BuiltBlocks:
     hobbies: str = ""
     goals: str = ""
     routines: str = ""
-    household: str = ""
+    space_graph: str = ""
     context: str = ""
     # M6 conscience block
     conscience: str = ""
@@ -114,7 +114,7 @@ class GroundingCapsuleBuilder:
             hobbies=self._render_hobbies(frame),
             goals=self._render_goals(frame),
             routines=self._render_routines(frame),
-            household=self._render_household(frame),
+            space_graph=self._render_space_graph(frame),
             context=self._render_context(frame),
             conscience=self._render_conscience(frame),
         )
@@ -132,7 +132,7 @@ class GroundingCapsuleBuilder:
             hobbies_block=blocks.hobbies,
             goals_block=blocks.goals,
             routines_block=blocks.routines,
-            household_block=blocks.household,
+            space_graph_block=blocks.space_graph,
             context_block=blocks.context,
             conscience_block=blocks.conscience,
         )
@@ -256,6 +256,11 @@ class GroundingCapsuleBuilder:
             lines.append(f"language={_safe_str(sv.language)}")
         if sv.pronouns:
             lines.append(f"pronouns={_safe_str(sv.pronouns)}")
+        # occupation lives in L1_core but not on SelfView — pull from projected_self
+        projected = getattr(frame, "projected_self", None) or {}
+        occ = projected.get("occupation", "")
+        if occ:
+            lines.append(f"occupation={_safe_str(occ)}")
         if len(lines) == 1:
             return ""
         return "\n".join(lines)
@@ -309,15 +314,15 @@ class GroundingCapsuleBuilder:
             lines.append(f"- habit: {_safe_str(h.summary or h.habit_id)} ({_safe_str(h.cadence)})")
         return "\n".join(lines)
 
-    def _render_household(self, frame: SituationFrame) -> str:
+    def _render_space_graph(self, frame: SituationFrame) -> str:
         rel = frame.relations
         if rel is None:
             return ""
-        family_routines: tuple = getattr(rel, "family_routines", ()) or ()
+        family_routines: tuple = getattr(rel, "space_routines", ()) or ()
         others = rel.projected_others or ()
         if not family_routines and not others:
             return ""
-        lines = ["[household]"]
+        lines = ["[space]"]
         for other in others:
             visible = other.visible_attributes or {}
             if _has_black_band(visible):
@@ -407,7 +412,7 @@ class GroundingCapsuleBuilder:
 
         Truncation order (preserve highest-priority semantic content):
         legacy capabilities/family/rules first, then preferences/hobbies/
-        goals/routines/household, then context, conscience, self_block,
+        goals/routines/space_graph, then context, conscience, self_block,
         and footer last (footer always preserved).
         """
         order_to_truncate = (
@@ -419,7 +424,7 @@ class GroundingCapsuleBuilder:
             "hobbies",
             "goals",
             "routines",
-            "household",
+            "space_graph",
             "context",
             "conscience",
             "self_block",
@@ -436,7 +441,7 @@ class GroundingCapsuleBuilder:
             "hobbies": blocks.hobbies,
             "goals": blocks.goals,
             "routines": blocks.routines,
-            "household": blocks.household,
+            "space_graph": blocks.space_graph,
             "context": blocks.context,
             "conscience": blocks.conscience,
         }
@@ -465,7 +470,7 @@ class GroundingCapsuleBuilder:
             hobbies=block_dict["hobbies"],
             goals=block_dict["goals"],
             routines=block_dict["routines"],
-            household=block_dict["household"],
+            space_graph=block_dict["space_graph"],
             context=block_dict["context"],
             conscience=block_dict["conscience"],
         )

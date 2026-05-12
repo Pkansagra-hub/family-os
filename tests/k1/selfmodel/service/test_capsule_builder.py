@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from k1.selfmodel.contracts.capsule import GroundingCapsule
-from k1.selfmodel.contracts.family_model import RelationshipEdge
 from k1.selfmodel.contracts.privacy import BlackBandLeakError
 from k1.selfmodel.contracts.situation import (
     ApplicableRules,
@@ -15,6 +14,7 @@ from k1.selfmodel.contracts.situation import (
     SituationFrame,
     Visibility,
 )
+from k1.selfmodel.contracts.space_graph import RelationshipEdge
 from k1.selfmodel.service.capsule_builder import (
     DEFAULT_CAPSULE_SIZE_LIMIT,
     GroundingCapsuleBuilder,
@@ -214,10 +214,10 @@ def test_as_prompt_text_joins_non_empty_blocks() -> None:
     # M7 fallback: when self_view is None, self_block is empty so the
     # legacy actor_block surfaces in its place.
     assert text.count("[actor]") == 1
-    # When conscience is None and household_block is empty (no
-    # family_routines/projected_others), the legacy family_block
+    # When conscience is None and space_graph_block is empty (no
+    # space_routines/projected_others), the legacy family_block
     # surfaces. The test frame has at least one of those.
-    assert ("[family]" in text) or ("[household]" in text)
+    assert ("[family]" in text) or ("[space]" in text)
     assert text.count("[freshness]") == 1
     # Conscience absent → legacy rules_block surfaces.
     assert ("[rules]" in text) or ("[conscience]" in text)

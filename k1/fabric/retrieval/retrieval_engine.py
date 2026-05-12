@@ -349,8 +349,8 @@ class RetrievalEngine:
             # Get capability vector from the index
             cap_vector = None
             if self._index.contains(name):
-                # Need to get the stored vector -- access internal _vectors
-                cap_vector = getattr(self._index, "_vectors", {}).get(name)
+                # Use the public thread-safe snapshot method (Issue 3 fix)
+                cap_vector = self._index.get_vectors_snapshot().get(name)
 
             ranker_candidates.append(
                 RankerCandidate(

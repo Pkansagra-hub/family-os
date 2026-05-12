@@ -25,16 +25,10 @@ Exports:
     - back_resume_handler: Resume a suspended Back task
     - back_cancel_handler: Handle task cancellation
 
-  Back Event Subscriptions (Epic 7.2):
-    - subscribe_back_events: Wire Back to bus topics
-
   Back Event Emissions (Epic 7.3):
     - emit_tool_started: Publish tool.started.v1
     - emit_tool_completed: Publish tool.completed.v1
     - emit_artifact_created: Publish artifact.created.v1
-
-  Back Resume/Cancel (Epic 7.4):
-    - store_pending_context: Store ReAct history on suspend
 
   Shared Actor Utilities (E3.5):
     - parse_envelope_payload: Safely parse JSON bytes from Envelope
@@ -54,8 +48,6 @@ from k1.concierge.actors.back import (
     emit_tool_completed,
     emit_tool_started,
     route_back_envelope,
-    store_pending_context,
-    subscribe_back_events,
 )
 from k1.concierge.actors.front import (
     _build_resolution,
@@ -68,7 +60,11 @@ from k1.concierge.actors.front import (
 )
 
 # Shared Actor Utilities (E3.5)
-from k1.concierge.actors.shared import never_cancel, parse_envelope_payload, safe_get_section
+from k1.concierge.actors.shared import (
+    never_cancel,
+    parse_envelope_payload,
+    safe_get_section,
+)
 
 __all__ = [
     # Front
@@ -84,11 +80,11 @@ __all__ = [
     "back_resume_handler",
     "back_cancel_handler",
     "route_back_envelope",
-    # subscribe_back_events: deprecated M3 E3.1.5, removal in M8
+    # M6 E6.2 (C07): subscribe_back_events / store_pending_context /
+    # _get_pending_context / _clear_pending_context removed (dead code).
     "emit_tool_started",
     "emit_tool_completed",
     "emit_artifact_created",
-    "store_pending_context",
     "_budget_to_iterations",
     "_filter_back_tools",
     "_summarize_args",

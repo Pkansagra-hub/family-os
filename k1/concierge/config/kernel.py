@@ -37,6 +37,12 @@ class KernelConfig:
     # P3.4c: tool_tier removed; tier is per-task derived in dispatch_task.
     session_mode: str = "standalone"  # standalone | testing
     session_id: str | None = None
+    # These four flags gate ConciergeFactory component wiring only.
+    # They do NOT suppress the corresponding KernelService Tier 1/2
+    # startup stages (S5 Orchestrator, S6 Planner, etc.).  Setting
+    # enable_orchestrator=False disables orchestrator dispatch inside
+    # Concierge but the KernelService still instantiates and starts the
+    # OrchestratorService in S5.
     enable_experience: bool = True
     enable_delta: bool = True
     enable_hitl: bool = True
@@ -76,9 +82,16 @@ class KernelConfig:
     # Issue 2.1.3: Tier 1 boot/wiring config for multi-session KernelService
     max_sessions: int = 100  # SIM-D-02 session limit
     idle_timeout_minutes: int = 30  # session idle eviction
-    bridge_enabled: bool = True  # enable/disable K0 connection
+    bridge_enabled: bool = (
+        True  # True = enable LocalOutbox queueing (SinkBridgeClient, OFFLINE mode); does NOT establish a live K0 connection — for live K0 use bridge_live when HttpBridgeClient is wired
+    )
     bridge_offline_ok: bool = True  # allow startup without K0 (SIM-D-32)
     bridge_outbox_path: str = "./data/bridge_outbox.db"  # SinkBridgeClient SQLite queue
+    # M14: live bridge endpoint. If non-empty, S4 wires a LiveBridgeAdapter pointed at
+    # this URL (HttpBridgeClient via BridgeRuntime). Example: "http://localhost:8090".
+    # When empty (default), S4 uses SinkBridgeAdapter (offline outbox mode).
+    # Set via env var K0_ENDPOINT in ui/web/__main__.py.
+    k0_endpoint: str = ""
     model_hub_plugins: list[str] = field(default_factory=lambda: ["openai"])
     system_bus_enabled: bool = True  # system_bus for admin events
     otel_enabled: bool = True  # OpenTelemetry tracing
@@ -130,10 +143,10 @@ class KernelConfig:
     # (suitable for tests + dev). Honored only when
     # ``enable_self_model=True``.
     selfmodel_projection_db_path: str | None = None
-    # Default family space id seeded into the SituationFrameComposer.
-    # Per-session composition resolves the actor's family relative to
+    # Default space id seeded into the SituationFrameComposer.
+    # Per-session composition resolves the actor's space relative to
     # this id when the session does not supply its own.
-    selfmodel_family_space_id: str = "family:default"
+    selfmodel_space_id: str = "family:default"
     # M15.E1.I6: per-deployment override for the always-on
     # ``situation_kind`` used by the SituationFrameComposer/grounding
     # capsule renderer. Defaults to the broadest read-only V0
@@ -141,3 +154,19 @@ class KernelConfig:
     # a tighter or differently-scoped capsule can override here without
     # patching kernel internals.
     selfmodel_situation_kind: str = "caregiver_context_briefing"
+    # The resolved actor_id for the active family member (e.g. "actor:alex").
+    # When set, _derive_session_actor uses this directly instead of falling
+    # back to the opaque "actor:{session_id}" form.  Set by the web UI
+    # coordinator after resolving the device → family member mapping.
+    active_member_id: str = ""
+    # M15: Family-tools (k1.tools.family) wiring. When True, S8 of
+    # ``KernelService._startup_tier1`` bootstraps the FamilyToolsBundle
+    # (K1FamilyStore + IdempotencyStore + ToolRegistry + NativeToolProvider)
+    # and registers it with the shared Fabric. Defaults to False so legacy
+    # deployments and the existing test suite are unchanged.
+    enable_family_tools: bool = False
+    family_tools_db_path: str = "./data/k1_family.db"
+    # Dotted import paths to ``BaseToolService`` subclasses to register, e.g.
+    # ``("k1.tools.family.adapters.calendar:CalendarToolService",)``. Empty
+    # by default; ui/web populates this from environment when needed.
+    family_tool_service_paths: tuple[str, ...] = ()

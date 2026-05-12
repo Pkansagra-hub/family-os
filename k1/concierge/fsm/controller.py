@@ -58,6 +58,7 @@ from k1.concierge.bus.topics import (
     TOPIC_ARTIFACT_CREATED,
     TOPIC_CLARIFICATION_REQUEST,
     TOPIC_CLARIFICATION_RESPONSE,
+    TOPIC_CONCIERGE_CONFIG_UPDATE,
     TOPIC_DAG_COMPLETED,
     TOPIC_FINAL_RESPONSE,
     TOPIC_FINDINGS_READY,
@@ -817,6 +818,8 @@ class ConciergeController:
             (TOPIC_WEAVE_BATCH, self._on_weave_batch),
             # M8 E8.5.1: UI typing signal for weave suppression
             (TOPIC_UI_TYPING, self._on_ui_typing),
+            # M6 E6.4 (C06): runtime concierge config updates
+            (TOPIC_CONCIERGE_CONFIG_UPDATE, self._on_concierge_config_update),
         ]
         for topic, handler in subscriptions:
             handle = self._bus.subscribe(topic, handler)
@@ -3356,6 +3359,29 @@ class ConciergeController:
             )
             self._ledger.append_sync(rf_event)
 
+        # M6 E6.3 (C04): ResponseDelivered marker -- crash-recovery duplicate
+        # delivery guard.  Written AFTER the decision is committed but BEFORE
+        # the side-effecting `_execute_response_final_decision` (which routes
+        # through weave-flush + Front delivery).  On replay, recovery treats
+        # this event as proof that delivery already happened and avoids
+        # re-emitting the response.
+        if (
+            self._ledger is not None
+            and decision.action != ResponseFinalAction.IGNORE
+            and decision.action != ResponseFinalAction.DEAD_LETTER
+        ):
+            from k1.concierge.events.base import from_envelope
+            from k1.concierge.events.conversation import ResponseDelivered
+
+            _meta_d = from_envelope(envelope, "fsm")
+            rd_event = ResponseDelivered(
+                text_preview=text[:200],
+                entry_type=decision.entry_type,
+                is_fallback=is_fallback,
+                **_meta_d,
+            )
+            self._ledger.append_sync(rd_event)
+
         # Write history with decision-resolved entry_type
         self._write_history(
             entry_type=decision.entry_type,
@@ -4304,6 +4330,35 @@ class ConciergeController:
             self._activity_tracker.on_typing_start()
         else:
             self._activity_tracker.on_typing_stop()
+
+    def _on_concierge_config_update(self, envelope: Envelope) -> None:
+        """Handle k1.internal.concierge.config.update.v1 -- runtime config toggle (M6 E6.4 C06).
+
+        Payload schema: {"weave_policy": {"enabled": bool}, ...}
+
+        Currently supported toggles:
+            weave_policy.enabled -- WeavePolicy.set_enabled(bool)
+
+        Unknown keys are logged at debug and ignored (forward-compatible).
+        Malformed payloads are logged at warning and dropped.
+        """
+        try:
+            payload = _parse_payload(envelope)
+        except Exception:
+            logger.warning(
+                "FSM._on_concierge_config_update: malformed payload envelope_id=%d",
+                envelope.envelope_id,
+            )
+            return
+
+        wp = payload.get("weave_policy")
+        if isinstance(wp, dict) and "enabled" in wp and self._weave_policy is not None:
+            new_enabled = bool(wp["enabled"])
+            self._weave_policy.set_enabled(new_enabled)
+            logger.info(
+                "FSM._on_concierge_config_update: weave_policy.enabled=%s",
+                new_enabled,
+            )
 
     def _on_weave_batch(self, envelope: Envelope) -> None:
         """Handle k1.internal.weave.batch.v1 -- weave timer fired."""

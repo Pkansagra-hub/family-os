@@ -235,7 +235,14 @@ class TestTriggerState:
             assert due == []
 
             due2 = await adapter.get_due_triggers(now=5000.0)
-            assert due2 == [("wf-1", trig)]
+            # M5.2: deserialized TriggerSpec now reflects the persisted
+            # last_fire timestamp via the last_triggered_at field.
+            expected = TriggerSpec(
+                type=TriggerType.CRON,
+                schedule="0 9 * * MON",
+                last_triggered_at=100.0,
+            )
+            assert due2 == [("wf-1", expected)]
         finally:
             adapter.close()
 

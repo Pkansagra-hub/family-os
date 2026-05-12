@@ -1654,7 +1654,7 @@ class TestBusSubscriptionRoutingInvariant:
         """Verify expected count of FSM-routed topics."""
         from k1.concierge.bus.topics import FSM_ROUTED_TOPICS
 
-        assert len(FSM_ROUTED_TOPICS) == 8
+        assert len(FSM_ROUTED_TOPICS) == 9
 
     def test_front_subscriptions_count(self):
         """Verify expected count of front subscriptions (should be small)."""

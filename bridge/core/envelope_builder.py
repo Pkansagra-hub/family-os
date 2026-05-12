@@ -16,8 +16,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from blake3 import blake3  # type: ignore[import]
-
 from .signing import SigningBackend
 
 logger = logging.getLogger(__name__)
@@ -56,6 +54,7 @@ class BridgeConfig:
     actor: str = "bridge"
     policy_version: str = "1.0"
     default_band: str = "GREEN"
+    default_roles: tuple[str, ...] = ("guest",)
 
 
 # ---------------------------------------------------------------------------
@@ -145,13 +144,15 @@ class EnvelopeBuilder:
         # Compute payload_sha256 (body-only hash)
         payload_sha256 = hashlib.sha256(body_bytes).hexdigest()
 
-        # Compute deterministic idempotency key: BLAKE3(topic + body_json + device_id)
-        idem_key = self._compute_idem_key(topic, body_json, cfg.device_id)
+        # Schema version — must match what's seeded in K0's schema_registry.
+        # K0 validates schema_uri@schema_version must be ACTIVE in the registry.
+        schema_version = "2.2"
 
-        # Schema version from topic schema (always "1.0" for now)
-        schema_version = "1.0"
-
-        # Build envelope (without sig fields yet)
+        # Build envelope (without sig fields yet).
+        # idem_key is intentionally omitted: K0's gate computes it via
+        # HMAC-SHA256(device_secret, envelope_sha256|device_id|time_bucket).
+        # Any client-supplied value that doesn't match is rejected with
+        # IDEM_KEY_MISMATCH — so we let K0 own this field entirely.
         envelope: dict[str, Any] = {
             "cognitive_trace_id": resolved_trace_id,
             "tenant_id": cfg.tenant_id,
@@ -166,7 +167,13 @@ class EnvelopeBuilder:
             "schema_version": schema_version,
             "body": body,
             "payload_sha256": payload_sha256,
-            "idem_key": idem_key,
+            "policy": {"abac": {"roles": list(cfg.default_roles)}},
+            # Sig metadata is part of the canonical envelope per K0's
+            # ``canonical_envelope`` (which only excludes ``sig`` and
+            # ``envelope_sha256``). Added before hashing so K0's recomputed
+            # ``envelope_sha256`` matches ours bit-for-bit.
+            "sig_alg": self._signer.algorithm,
+            "sig_kid": self._signer.key_id,
         }
 
         # Compute envelope_sha256 (full envelope hash, excluding sig fields)
@@ -176,11 +183,13 @@ class EnvelopeBuilder:
         envelope_sha256 = hashlib.sha256(canonical_bytes).hexdigest()
         envelope["envelope_sha256"] = envelope_sha256
 
-        # Sign the envelope_sha256
-        sig_result = self._signer.sign(envelope_sha256.encode("utf-8"))
+        # Sign the canonical envelope bytes (NOT the hex digest). K0's
+        # ``verify_signature`` runs over ``canonical_envelope(envelope)``
+        # with sig + envelope_sha256 excluded — i.e. the same bytes we
+        # just hashed. Signing the hex digest instead would force K0 to
+        # double-hash, which it does not.
+        sig_result = self._signer.sign(canonical_bytes)
         envelope["sig"] = sig_result
-        envelope["sig_alg"] = self._signer.algorithm
-        envelope["sig_kid"] = self._signer.key_id
 
         return envelope
 
@@ -209,14 +218,3 @@ class EnvelopeBuilder:
         else:
             base = topic.replace(".", "_")
         return f"schema://k0/topics/{base}.body.json"
-
-    @staticmethod
-    def _compute_idem_key(topic: str, body_json: str, device_id: str) -> str:
-        """BLAKE3(topic + canonical_json(body) + device_id) -> hex digest."""
-        digest = blake3()  # type: ignore[call-arg]
-        digest.update(topic.encode("utf-8"))
-        digest.update(b"\x00")
-        digest.update(body_json.encode("utf-8"))
-        digest.update(b"\x00")
-        digest.update(device_id.encode("utf-8"))
-        return digest.hexdigest()

@@ -320,6 +320,11 @@ class TriggerSpec:
     timezone: str = "UTC"
     event_topic: Optional[str] = None
     enabled: bool = True
+    # M5.2.1: epoch seconds when this trigger last successfully fired.
+    # Loaded from the SQLite triggers table (last_fire_time column).
+    # None if never fired. Used by scheduler observability and idempotency
+    # checks. Not part of the user-supplied save_request payload.
+    last_triggered_at: Optional[float] = None
 
     def __post_init__(self) -> None:
         if self.type == TriggerType.CRON and not self.schedule:
@@ -490,6 +495,11 @@ class RegistryEntry:
     required_inputs: List[str] = field(default_factory=list)
     output: Dict[str, Any] = field(default_factory=dict)
     cost_per_call: float = 0.0
+    # M5.3.3: free-form intent tags advertised by the capability provider
+    # (e.g. ["calendar", "schedule", "appointment"]). Used by
+    # ConstraintResolver.find_alternatives() to filter alternatives by
+    # intent overlap. Empty list => no intent affinity (treat as neutral).
+    intent_tags: List[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -663,6 +673,10 @@ class PlanStep:
     timeout_ms: Optional[int] = None
     required_context: Optional[List[str]] = None
     safety_band_min: Optional[str] = None
+    # M5.3.3: intent tags inherited from the planner sketch step or copied
+    # from the resolved RegistryEntry. Used by ConstraintResolver to filter
+    # alternative capabilities and by ExecutionMonitor heuristics.
+    intent_tags: List[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self.id:
@@ -705,6 +719,8 @@ class PlanStep:
             result["required_context"] = list(self.required_context)
         if self.safety_band_min is not None:
             result["safety_band_min"] = self.safety_band_min
+        if self.intent_tags:
+            result["intent_tags"] = list(self.intent_tags)
         return result
 
     @classmethod
@@ -736,6 +752,7 @@ class PlanStep:
             timeout_ms=data.get("timeout_ms"),
             required_context=data.get("required_context"),
             safety_band_min=data.get("safety_band_min"),
+            intent_tags=list(data.get("intent_tags", [])),
         )
 
     @classmethod
@@ -769,6 +786,7 @@ class PlanStep:
             timeout_ms=extensions.get("timeout_ms"),
             required_context=extensions.get("required_context"),
             safety_band_min=extensions.get("safety_band_min"),
+            intent_tags=list(extensions.get("intent_tags", [])),
         )
 
 
@@ -903,6 +921,11 @@ class CommittedPlan:
     dependencies: Dict[str, List[str]] = field(default_factory=dict)
     estimated_duration_ms: Optional[int] = None
     created_at: float = 0.0
+    # M5.3.5: planner-asserted hint that this plan should be reviewed by
+    # a human before/during execution. Consumed by ExecutionMonitor to
+    # raise an HIL override request without relying on heuristic step-count
+    # thresholds. Default False preserves backward-compat with stored WAL.
+    requires_hitl: bool = False
 
     def __post_init__(self) -> None:
         if not self.plan_id:
@@ -962,6 +985,7 @@ class CommittedPlan:
             "estimated_duration_ms": self.estimated_duration_ms,
             "created_at": self.created_at,
             "trace_id": self.trace_id,
+            "requires_hitl": self.requires_hitl,
         }
 
     @classmethod
@@ -977,6 +1001,7 @@ class CommittedPlan:
             estimated_duration_ms=data.get("estimated_duration_ms"),
             created_at=data.get("created_at", 0.0),
             trace_id=data.get("trace_id", ""),
+            requires_hitl=bool(data.get("requires_hitl", False)),
         )
 
 
@@ -1280,6 +1305,17 @@ class ProcessingContext:
     # Interrupt flag (set by OrchestratorService.handle_interrupt())
     interrupt_flag: bool = False
 
+    # M5.3.5: planner-asserted human-in-the-loop hint mirrored from the
+    # active CommittedPlan.requires_hitl. ExecutionMonitor reads this to
+    # force an override prompt regardless of the step-count heuristic.
+    requires_hitl: bool = False
+
+    # M5.4.1: shared flag indicating a micro/failure replan has already
+    # been performed for this DAG run. Both replan checkpoints AND the
+    # OrchestratorService consult this so the budget is enforced
+    # globally instead of per-checkpoint instance.
+    micro_replan_done: bool = False
+
     def __post_init__(self) -> None:
         if not self.trace_id:
             raise ValueError("ProcessingContext.trace_id is required")
@@ -1301,8 +1337,6 @@ class PendingPlanContext:
     state_snapshot: SessionSnapshot
     created_at: float = field(default_factory=time.time)
     timeout_ms: int = 45_000
-
-
 
 
 # ===========================================================================

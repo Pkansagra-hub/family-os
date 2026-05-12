@@ -875,10 +875,13 @@ class TestAdapterInitReExports:
         }
         assert expected.issubset(set(adapters_mod.__all__))
 
-    def test_adapter_count_is_seven(self):
+    def test_adapter_count_is_eight(self):
         import k1.planner.adapters as adapters_mod
 
-        assert len(adapters_mod.__all__) == 7
+        # Eighth adapter (4.2.2 / P03): FabricRegistryAdapter exposes
+        # deterministic O(1) capability lookup distinct from the
+        # semantic-search FabricRetrievalAdapter.
+        assert len(adapters_mod.__all__) == 8
 
 
 # ===================================================================

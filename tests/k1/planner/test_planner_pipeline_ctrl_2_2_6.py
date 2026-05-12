@@ -54,7 +54,7 @@ class FakeExpandService:
     def __init__(self) -> None:
         self.call_count = 0
 
-    async def execute(self, sketch_result: Any, ctx: StageContext) -> Any:
+    async def execute(self, sketch_result: Any, request: Any, ctx: StageContext) -> Any:
         self.call_count += 1
         return {"steps": ["e1"]}
 
@@ -64,7 +64,9 @@ class FakeValidateService:
         self._verdicts = verdicts or [_approved()]
         self.call_count = 0
 
-    async def execute(self, expanded_plan: Any, ctx: StageContext) -> ValidationVerdict:
+    async def execute(
+        self, expanded_plan: Any, request: Any, ctx: StageContext
+    ) -> ValidationVerdict:
         self.call_count += 1
         idx = min(self.call_count - 1, len(self._verdicts) - 1)
         return self._verdicts[idx]
@@ -74,7 +76,9 @@ class FakeCommitService:
     def __init__(self) -> None:
         self.call_count = 0
 
-    async def execute(self, expanded_plan: Any, verdict: Any, ctx: StageContext) -> Any:
+    async def execute(
+        self, expanded_plan: Any, request: Any, verdict: Any, ctx: StageContext
+    ) -> Any:
         self.call_count += 1
         return {"plan_id": "p1", "request_id": "req-timeout-001"}
 

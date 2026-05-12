@@ -697,7 +697,7 @@ class WeavePolicy:
         # result.decision, result.window_ms, result.reasoning
     """
 
-    __slots__ = ("_cfg",)
+    __slots__ = ("_cfg", "_enabled")
 
     def __init__(self, config: Any = None) -> None:
         """Initialize with optional WeavePolicyConfig.
@@ -707,6 +707,20 @@ class WeavePolicy:
                     If None, uses default thresholds from E8.1 constants.
         """
         self._cfg = config
+        # M6 E6.4 (C06): Runtime-toggleable enabled flag.  Initialized from
+        # cfg.enabled if present; mutable via set_enabled() for live ops
+        # toggle (e.g. via TOPIC_CONCIERGE_CONFIG_UPDATE bus message).
+        self._enabled = bool(getattr(config, "enabled", True)) if config is not None else True
+
+    def set_enabled(self, enabled: bool) -> None:
+        """M6 E6.4: Runtime toggle of adaptive policy.
+
+        When disabled, decide() short-circuits to a safe default
+        BATCH(default_batch_ms) decision -- equivalent to Rule 9 --
+        bypassing the 9-rule decision table.  Used by ops to disable
+        adaptive weaving without restarting the session.
+        """
+        self._enabled = bool(enabled)
 
     # -----------------------------------------------------------------
     # Config accessors (fall back to module constants / spec defaults)
@@ -794,6 +808,16 @@ class WeavePolicy:
         Returns:
             WeaveDecisionResult with decision, window_ms, reasoning.
         """
+        # ----- Rule 0 (M6 E6.4): runtime disable short-circuit -----
+        if not self._enabled:
+            return WeaveDecisionResult(
+                decision=WeaveDecision.BATCH,
+                window_ms=self._default_batch_ms,
+                reasoning=f"R0: policy disabled -> BATCH({self._default_batch_ms}ms)",
+                urgency_override=False,
+                emotional_gate_applied=False,
+            )
+
         # ----- Rule 1: LISTENING + long idle -> eager delivery -----
         if (
             signal.fsm_state == ConciergeState.LISTENING.name

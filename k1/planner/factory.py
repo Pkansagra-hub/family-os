@@ -313,6 +313,7 @@ class PlannerFactory:
         event_port: IEventPort,
         mailbox_port: IMailboxPort,
         hil_port: Optional[IHILPort] = None,
+        fabric_registry_port: Optional[Any] = None,
         config: Optional[PlannerConfig] = None,
     ) -> PlannerAgent:
         """Create a planner with explicitly provided typed ports.
@@ -379,7 +380,9 @@ class PlannerFactory:
             if hil_port is not None
             else PlannerFactory._build_default_hil(event_port, llm_port)
         )
-        agent = await PlannerFactory._wire(ports, effective_config, effective_hil)
+        agent = await PlannerFactory._wire(
+            ports, effective_config, effective_hil, fabric_registry_port
+        )
         logger.info("planner_factory.create_with_ports.complete")
         return agent
 
@@ -398,6 +401,7 @@ class PlannerFactory:
         event_port: IEventPort,
         mailbox_port: IMailboxPort,
         hil_port: Optional[IHILPort] = None,
+        fabric_registry_port: Optional[Any] = None,
         config: Optional[PlannerConfig] = None,
     ) -> PlannerAgent:
         """Create a fully-wired planner for production (kernel Phase 5).
@@ -470,7 +474,9 @@ class PlannerFactory:
             if hil_port is not None
             else PlannerFactory._build_default_hil(event_port, llm_port)
         )
-        agent = await PlannerFactory._wire(ports, effective_config, effective_hil)
+        agent = await PlannerFactory._wire(
+            ports, effective_config, effective_hil, fabric_registry_port
+        )
         logger.info("planner_factory.create_production.complete")
         return agent
 
@@ -483,6 +489,7 @@ class PlannerFactory:
         ports: Dict[str, Any],
         config: PlannerConfig,
         hil_port: IHILPort,
+        fabric_registry_port: Optional[Any] = None,
     ) -> PlannerAgent:
         """Construct the full planner object graph in dependency order.
 
@@ -521,10 +528,12 @@ class PlannerFactory:
         mailbox_port = ports["mailbox_port"]
 
         # Step 1: Leaf service -- routes tool calls to 3 backend ports
+        # plus an optional deterministic registry lookup for get_schema().
         tool_router = ToolCallRouter(
             fabric_retrieval=fabric_port,
             state_read=state_port,
             bridge_port=bridge_port,
+            fabric_registry=fabric_registry_port,
             config=config,
         )
 

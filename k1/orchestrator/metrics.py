@@ -242,6 +242,12 @@ class OrchestratorMetrics:
     def set_pending_plans(self, count: int) -> None:
         self._set_gauge("orchestrator.pending_plans", float(max(0, count)))
 
+    def set_deferred_plan_depth(self, depth: int) -> None:
+        """M5.1.6: gauge for plans currently re-enqueued waiting on
+        the ConcurrencyGuard. Distinct from mailbox depth: counts only
+        plans that have hit the deferred re-enqueue path."""
+        self._set_gauge("orchestrator.deferred_plan_depth", float(max(0, depth)))
+
     @contextmanager
     def time_adapter_wait(self, *, adapter: str, operation: str) -> Iterator[None]:
         """Track adapter wait to subtract from total overhead measurement."""

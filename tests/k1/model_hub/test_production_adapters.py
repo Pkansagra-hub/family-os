@@ -405,5 +405,8 @@ class TestAdaptersReExport:
             "SessionStateReadAdapter",
             "TOPIC_HUB_EXECUTE",
             "TOPIC_HUB_RESPONSE",
+            # 4.2.1 fix: build_payload re-exported as a public helper
+            # so planner adapters don't need a deferred private import.
+            "build_payload",
         }
         assert set(__all__) == expected

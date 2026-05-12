@@ -20,8 +20,9 @@ References
 
 from __future__ import annotations
 
+import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Optional
 
 # ===========================================================================
@@ -110,6 +111,7 @@ class _ProviderRate:
     rpm_bucket: _TokenBucket
     tpm_bucket: _TokenBucket
     headroom_pct: float = 0.80
+    lock: threading.Lock = field(default_factory=threading.Lock)
 
 
 # ===========================================================================
@@ -183,9 +185,10 @@ class RateLimiter:
             return True
 
         # Check both RPM and TPM buckets
-        return rate.rpm_bucket.available >= 1 and rate.tpm_bucket.available >= max(
-            token_estimate, 1
-        )
+        with rate.lock:
+            return rate.rpm_bucket.available >= 1 and rate.tpm_bucket.available >= max(
+                token_estimate, 1
+            )
 
     # -- Acquire ---------------------------------------------------------------
 
@@ -214,22 +217,23 @@ class RateLimiter:
         tokens_needed = max(token_estimate, 1)
 
         # Check both buckets before consuming
-        rpm_ok = rate.rpm_bucket.available >= 1
-        tpm_ok = rate.tpm_bucket.available >= tokens_needed
+        with rate.lock:
+            rpm_ok = rate.rpm_bucket.available >= 1
+            tpm_ok = rate.tpm_bucket.available >= tokens_needed
 
-        if rpm_ok and tpm_ok:
-            rate.rpm_bucket.try_consume(1)
-            rate.tpm_bucket.try_consume(tokens_needed)
-            return RateDecision(
-                allowed=True,
-                provider_id=provider_id,
-                tokens_remaining=rate.tpm_bucket.available,
-                requests_remaining=rate.rpm_bucket.available,
-            )
+            if rpm_ok and tpm_ok:
+                rate.rpm_bucket.try_consume(1)
+                rate.tpm_bucket.try_consume(tokens_needed)
+                return RateDecision(
+                    allowed=True,
+                    provider_id=provider_id,
+                    tokens_remaining=rate.tpm_bucket.available,
+                    requests_remaining=rate.rpm_bucket.available,
+                )
 
-        # Compute retry_after from whichever bucket is the bottleneck
-        retry_rpm = rate.rpm_bucket.retry_after(1) if not rpm_ok else 0.0
-        retry_tpm = rate.tpm_bucket.retry_after(tokens_needed) if not tpm_ok else 0.0
+            # Compute retry_after from whichever bucket is the bottleneck
+            retry_rpm = rate.rpm_bucket.retry_after(1) if not rpm_ok else 0.0
+            retry_tpm = rate.tpm_bucket.retry_after(tokens_needed) if not tpm_ok else 0.0
 
         return RateDecision(
             allowed=False,

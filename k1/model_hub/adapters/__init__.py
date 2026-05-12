@@ -8,6 +8,9 @@ from k1.model_hub.adapters.bus_envelope_deserializer import (
     TOPIC_HUB_RESPONSE,
     BusEnvelopeDeserializer,
 )
+from k1.model_hub.adapters.bus_envelope_deserializer import (
+    _build_payload as build_payload,
+)
 from k1.model_hub.adapters.config_adapter import ConfigAdapter
 from k1.model_hub.adapters.credential_store_adapter import CredentialStoreAdapter
 from k1.model_hub.adapters.event_bus_adapter import EventBusAdapter
@@ -29,4 +32,5 @@ __all__ = [
     "SessionStateReadAdapter",
     "TOPIC_HUB_EXECUTE",
     "TOPIC_HUB_RESPONSE",
+    "build_payload",
 ]

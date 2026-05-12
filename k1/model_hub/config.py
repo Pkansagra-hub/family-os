@@ -56,6 +56,10 @@ class ModelHubConfig:
     # Shutdown
     shutdown_grace_period_ms: int = 10000
 
+    # Budget (MH-10)
+    daily_budget_usd: float = 5.0
+    monthly_budget_usd: float = 100.0
+
     def __post_init__(self) -> None:
         if self.max_concurrent_requests <= 0:
             raise ValueError(
@@ -85,6 +89,10 @@ class ModelHubConfig:
             raise ValueError(
                 f"shutdown_grace_period_ms must be > 0, got {self.shutdown_grace_period_ms}"
             )
+        if self.daily_budget_usd <= 0:
+            raise ValueError(f"daily_budget_usd must be > 0, got {self.daily_budget_usd}")
+        if self.monthly_budget_usd <= 0:
+            raise ValueError(f"monthly_budget_usd must be > 0, got {self.monthly_budget_usd}")
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> ModelHubConfig:

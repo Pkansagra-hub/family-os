@@ -20,7 +20,9 @@ References
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
+import json
 import threading
 import time
 from collections import OrderedDict
@@ -122,25 +124,37 @@ class ResponseCache:
         payload: Any,
         model_id: str = "",
         temperature: float = 0.7,
+        session_id: str = "",
     ) -> str:
         """Build a deterministic cache key from request components.
 
-        Key: SHA-256 of (capability + payload_repr + model_id + temperature).
+        Key: SHA-256 of (capability + payload_repr + model_id + temperature + session_id).
+
+        ``session_id`` is included so that two concurrent sessions cannot
+        collide on cached LLM responses (3.1.1 follow-up). An empty
+        ``session_id`` (the default for boot/shared traffic) keeps the
+        legacy behaviour for non-session-bound requests.
 
         Args:
             capability: Request capability type.
             payload: Request payload (must be serializable via repr).
             model_id: Selected model ID.
             temperature: Request temperature.
+            session_id: Per-request session identifier (HubRequest.session_id).
 
         Returns:
             Hex digest cache key.
         """
         key_parts = [
             capability.value,
-            repr(payload),
+            json.dumps(
+                dataclasses.asdict(payload) if dataclasses.is_dataclass(payload) else payload,
+                sort_keys=True,
+                default=str,
+            ),
             model_id,
             f"{temperature:.4f}",
+            session_id,
         ]
         key_str = "|".join(key_parts)
         return hashlib.sha256(key_str.encode("utf-8")).hexdigest()
@@ -229,6 +243,9 @@ class ResponseCache:
         effective_ttl = ttl_s if ttl_s is not None else self._default_ttl_s
 
         with self._lock:
+            # Sweep expired entries before eviction to free space.
+            self._sweep_expired_locked()
+
             # If key exists, remove it first (will re-add at end)
             if cache_key in self._cache:
                 del self._cache[cache_key]
@@ -245,6 +262,12 @@ class ResponseCache:
             )
 
     # -- Invalidate / Clear ----------------------------------------------------
+
+    def _sweep_expired_locked(self) -> None:
+        """Remove all expired entries. Must be called with self._lock held."""
+        expired = [k for k, e in self._cache.items() if e.is_expired]
+        for k in expired:
+            del self._cache[k]
 
     def invalidate(self, cache_key: str) -> bool:
         """Remove a specific entry from the cache.

@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
@@ -76,8 +77,19 @@ _VALID_TRIGGER_TYPES = {"cron", "event", "manual"}
 
 _TOOL_PROVIDER_TYPES = {"MCP", "WASM", "BRIDGE", "LOCAL_STUB"}
 
-# Cache for loaded JSON schemas
+# Cache for loaded JSON schemas — guarded by _schema_lock (Issue 2 fix)
 _schema_cache: Dict[str, dict] = {}
+_schema_lock: threading.Lock = threading.Lock()
+
+
+def clear_schema_cache() -> None:
+    """Clear the module-level JSON Schema cache.
+
+    Call from test fixtures after mutating schema files on disk to prevent
+    stale cached schemas from leaking between test runs.
+    """
+    with _schema_lock:
+        _schema_cache.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -120,8 +132,9 @@ class ContractValidationError(Exception):
 
 def _load_schema(contract_type: str) -> dict:
     """Load and cache a JSON Schema file for the given contract type."""
-    if contract_type in _schema_cache:
-        return _schema_cache[contract_type]
+    with _schema_lock:
+        if contract_type in _schema_cache:
+            return _schema_cache[contract_type]
 
     filename = _CONTRACT_TYPE_TO_SCHEMA_FILE.get(contract_type)
     if not filename:
@@ -138,7 +151,9 @@ def _load_schema(contract_type: str) -> dict:
 
     # Validate the schema itself is valid Draft-07
     Draft7Validator.check_schema(schema)
-    _schema_cache[contract_type] = schema
+
+    with _schema_lock:
+        _schema_cache[contract_type] = schema
     return schema
 
 

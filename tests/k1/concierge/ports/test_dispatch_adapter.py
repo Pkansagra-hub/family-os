@@ -20,7 +20,7 @@ class TestMockDispatchAdapterBehaviour:
 
         adapter = MockDispatchAdapter()
         req = CapabilityRequest(capability_name="test_cap", params={"x": 1})
-        asyncio.get_event_loop().run_until_complete(adapter.dispatch_direct(req))
+        asyncio.run(adapter.dispatch_direct(req))
         assert len(adapter.direct_calls) == 1
         assert adapter.direct_calls[0] is req
 
@@ -30,7 +30,7 @@ class TestMockDispatchAdapterBehaviour:
 
         adapter = MockDispatchAdapter()
         req = CapabilityRequest(capability_name="test_cap")
-        result = asyncio.get_event_loop().run_until_complete(adapter.dispatch_direct(req))
+        result = asyncio.run(adapter.dispatch_direct(req))
         assert result.success is True
 
     def test_dispatch_envelope_records_call(self) -> None:
@@ -38,7 +38,7 @@ class TestMockDispatchAdapterBehaviour:
 
         adapter = MockDispatchAdapter()
         env = object()  # adapter does not introspect envelope
-        asyncio.get_event_loop().run_until_complete(adapter.dispatch_envelope(env))
+        asyncio.run(adapter.dispatch_envelope(env))
         assert len(adapter.envelope_calls) == 1
 
     def test_dispatch_envelope_returns_aggregated(self) -> None:
@@ -46,7 +46,7 @@ class TestMockDispatchAdapterBehaviour:
 
         adapter = MockDispatchAdapter()
         env = object()
-        result = asyncio.get_event_loop().run_until_complete(adapter.dispatch_envelope(env))
+        result = asyncio.run(adapter.dispatch_envelope(env))
         assert result.success is True
 
 
@@ -65,4 +65,5 @@ class TestFabricDispatchAdapterBehaviour:
         adapter = FabricDispatchAdapter(fabric_port=None, orchestrator=None)
         env = object()
         with pytest.raises(RuntimeError, match="no orchestrator"):
-            asyncio.get_event_loop().run_until_complete(adapter.dispatch_envelope(env))
+            asyncio.run(adapter.dispatch_envelope(env))
+

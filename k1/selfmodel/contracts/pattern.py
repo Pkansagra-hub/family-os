@@ -21,7 +21,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from k1.selfmodel.contracts.family_model import RoutineRef
+from k1.selfmodel.contracts.space_graph import RoutineRef
 
 __all__ = [
     "Goal",

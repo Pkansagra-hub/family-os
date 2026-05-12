@@ -208,7 +208,7 @@ class TestFabricDispatchDirect:
         fabric = _FakeFabricPort()
         adapter = FabricDispatchAdapter(fabric_port=fabric)
         req = CapabilityRequest(capability_name="test_cap", params={"x": 1})
-        result = asyncio.get_event_loop().run_until_complete(adapter.dispatch_direct(req))
+        result = asyncio.run(adapter.dispatch_direct(req))
         assert len(fabric.calls) == 1
         assert fabric.calls[0] is req
         assert result.success is True
@@ -220,7 +220,7 @@ class TestFabricDispatchDirect:
         fabric = _FakeFabricPort(result=expected)
         adapter = FabricDispatchAdapter(fabric_port=fabric)
         req = CapabilityRequest(capability_name="fail_cap")
-        result = asyncio.get_event_loop().run_until_complete(adapter.dispatch_direct(req))
+        result = asyncio.run(adapter.dispatch_direct(req))
         assert result is expected
 
     def test_multiple_direct_dispatches(self) -> None:
@@ -230,7 +230,7 @@ class TestFabricDispatchDirect:
         adapter = FabricDispatchAdapter(fabric_port=fabric)
         for i in range(3):
             req = CapabilityRequest(capability_name=f"cap_{i}")
-            asyncio.get_event_loop().run_until_complete(adapter.dispatch_direct(req))
+            asyncio.run(adapter.dispatch_direct(req))
         assert len(fabric.calls) == 3
 
 
@@ -241,7 +241,7 @@ class TestFabricDispatchEnvelope:
         orch = _FakeOrchestrator()
         adapter = FabricDispatchAdapter(fabric_port=None, orchestrator=orch)
         env = object()  # adapter does not introspect envelope
-        result = asyncio.get_event_loop().run_until_complete(adapter.dispatch_envelope(env))
+        result = asyncio.run(adapter.dispatch_envelope(env))
         assert len(orch.calls) == 1
         assert orch.calls[0] is env
         assert result.success is True
@@ -250,7 +250,7 @@ class TestFabricDispatchEnvelope:
         adapter = FabricDispatchAdapter(fabric_port=None, orchestrator=None)
         env = object()
         with pytest.raises(RuntimeError, match="no orchestrator"):
-            asyncio.get_event_loop().run_until_complete(adapter.dispatch_envelope(env))
+            asyncio.run(adapter.dispatch_envelope(env))
 
     def test_returns_orchestrator_result(self) -> None:
         from types import SimpleNamespace
@@ -259,7 +259,7 @@ class TestFabricDispatchEnvelope:
         orch = _FakeOrchestrator(result=expected)
         adapter = FabricDispatchAdapter(fabric_port=None, orchestrator=orch)
         env = object()
-        result = asyncio.get_event_loop().run_until_complete(adapter.dispatch_envelope(env))
+        result = asyncio.run(adapter.dispatch_envelope(env))
         assert result is expected
 
 
@@ -289,7 +289,7 @@ class TestRecallMemoryAdapterRecall:
             return [{"type": "fact", "content": "result"}]
 
         adapter = RecallMemoryAdapter(tracked)
-        result = asyncio.get_event_loop().run_until_complete(adapter.recall("test query"))
+        result = asyncio.run(adapter.recall("test query"))
         assert len(calls) == 1
         assert calls[0][0] == "test query"
         assert len(result) == 1
@@ -302,7 +302,7 @@ class TestRecallMemoryAdapterRecall:
             return []
 
         adapter = RecallMemoryAdapter(tracked)
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             adapter.recall("q", memory_types=["episodic", "semantic"])
         )
         assert calls[0] == ["episodic", "semantic"]
@@ -315,7 +315,7 @@ class TestRecallMemoryAdapterRecall:
             return []
 
         adapter = RecallMemoryAdapter(tracked)
-        asyncio.get_event_loop().run_until_complete(adapter.recall("q", max_results=10))
+        asyncio.run(adapter.recall("q", max_results=10))
         assert calls[0] == 10
 
     def test_default_memory_types_none(self) -> None:
@@ -326,7 +326,7 @@ class TestRecallMemoryAdapterRecall:
             return []
 
         adapter = RecallMemoryAdapter(tracked)
-        asyncio.get_event_loop().run_until_complete(adapter.recall("q"))
+        asyncio.run(adapter.recall("q"))
         assert calls[0] is None
 
     def test_default_max_results_five(self) -> None:
@@ -337,7 +337,7 @@ class TestRecallMemoryAdapterRecall:
             return []
 
         adapter = RecallMemoryAdapter(tracked)
-        asyncio.get_event_loop().run_until_complete(adapter.recall("q"))
+        asyncio.run(adapter.recall("q"))
         assert calls[0] == 5
 
     def test_returns_closure_result(self) -> None:
@@ -350,7 +350,7 @@ class TestRecallMemoryAdapterRecall:
             return memories
 
         adapter = RecallMemoryAdapter(fn)
-        result = asyncio.get_event_loop().run_until_complete(adapter.recall("anything"))
+        result = asyncio.run(adapter.recall("anything"))
         assert result == memories
 
     def test_returns_empty_list(self) -> None:
@@ -358,5 +358,6 @@ class TestRecallMemoryAdapterRecall:
             return []
 
         adapter = RecallMemoryAdapter(fn)
-        result = asyncio.get_event_loop().run_until_complete(adapter.recall("nothing"))
+        result = asyncio.run(adapter.recall("nothing"))
         assert result == []
+

@@ -20,7 +20,7 @@ from k1.selfmodel.contracts.constitution import (
     ConstitutionSnapshot,
     SigningProof,
 )
-from k1.selfmodel.contracts.family_model import (
+from k1.selfmodel.contracts.space_graph import (
     FamilyMemberRef,
     FamilySelfModelSnapshot,
     RelationshipEdge,
@@ -164,7 +164,7 @@ def test_self_persists_across_reopen(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------
 def _family() -> FamilySelfModelSnapshot:
     return FamilySelfModelSnapshot(
-        family_space_id="fs:home",
+        space_id="fs:home",
         revision="r1",
         members=(
             FamilyMemberRef(
@@ -182,8 +182,8 @@ def _family() -> FamilySelfModelSnapshot:
 def test_family_round_trip(tmp_path: Path) -> None:
     s = _store(tmp_path)
     try:
-        s.write_family(_family(), writer_id=WRITER)
-        snap, rd = s.read_family("fs:home")
+        s.write_space(_family(), writer_id=WRITER)
+        snap, rd = s.read_space("fs:home")
         assert rd.found
         assert snap.members[0].display_name == "Aanya"
         assert snap.relations[0].weight == 2.0
@@ -195,7 +195,7 @@ def test_family_round_trip(tmp_path: Path) -> None:
 def test_family_writer_denial(tmp_path: Path) -> None:
     s = _store(tmp_path)
     try:
-        wr = s.write_family(_family(), writer_id="ghost")
+        wr = s.write_space(_family(), writer_id="ghost")
         assert wr.accepted is False
     finally:
         s.close()

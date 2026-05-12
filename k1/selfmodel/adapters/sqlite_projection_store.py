@@ -46,8 +46,8 @@ from k1.selfmodel.contracts.constitution import (
     ConstitutionSnapshot,
     SigningProof,
 )
-from k1.selfmodel.contracts.family_model import FamilySelfModelSnapshot
 from k1.selfmodel.contracts.self_model import K1SelfModelSnapshot
+from k1.selfmodel.contracts.space_graph import SpaceGraphSnapshot
 from k1.selfmodel.ports.identity import IdentitySession, IdentityTier
 from k1.selfmodel.ports.projection_store import (
     IProjectionStorePort,
@@ -94,9 +94,7 @@ class SQLiteProjectionStore(IProjectionStorePort):
     ) -> None:
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._allowed_writers = (
-            frozenset(allowed_writers) if allowed_writers is not None else None
-        )
+        self._allowed_writers = frozenset(allowed_writers) if allowed_writers is not None else None
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(
             str(self._db_path),
@@ -147,9 +145,7 @@ class SQLiteProjectionStore(IProjectionStorePort):
     # ------------------------------------------------------------------
     # Self
     # ------------------------------------------------------------------
-    def read_self(
-        self, actor_id: str
-    ) -> tuple[K1SelfModelSnapshot | None, StoreReadResult]:
+    def read_self(self, actor_id: str) -> tuple[K1SelfModelSnapshot | None, StoreReadResult]:
         with self._lock:
             row = self._conn.execute(
                 "SELECT revision, parent_revision, written_at_ms, snapshot_json "
@@ -168,9 +164,7 @@ class SQLiteProjectionStore(IProjectionStorePort):
         )
         return snapshot, StoreReadResult(found=True, revision=revision, freshness=freshness)
 
-    def write_self(
-        self, snapshot: K1SelfModelSnapshot, *, writer_id: str
-    ) -> StoreWriteResult:
+    def write_self(self, snapshot: K1SelfModelSnapshot, *, writer_id: str) -> StoreWriteResult:
         denial = self._check_writer(writer_id)
         if denial is not None:
             return denial
@@ -207,22 +201,20 @@ class SQLiteProjectionStore(IProjectionStorePort):
         return StoreWriteResult(revision=revision, accepted=True)
 
     # ------------------------------------------------------------------
-    # Family
+    # Space graph
     # ------------------------------------------------------------------
-    def read_family(
-        self, family_space_id: str
-    ) -> tuple[FamilySelfModelSnapshot | None, StoreReadResult]:
+    def read_space(self, space_id: str) -> tuple[SpaceGraphSnapshot | None, StoreReadResult]:
         with self._lock:
             row = self._conn.execute(
                 "SELECT revision, parent_revision, written_at_ms, snapshot_json "
-                "FROM family_projection WHERE family_space_id = ?",
-                (family_space_id,),
+                "FROM space_projection WHERE space_id = ?",
+                (space_id,),
             ).fetchone()
-            freshness = self._read_freshness(f"family:{family_space_id}")
+            freshness = self._read_freshness(f"space:{space_id}")
         if row is None:
             return None, StoreReadResult(found=False, freshness=freshness)
         body = json.loads(row["snapshot_json"])
-        snapshot = _family_from_json(body)
+        snapshot = _space_from_json(body)
         revision = ProjectionRevision(
             revision=row["revision"],
             parent_revision=row["parent_revision"] or "",
@@ -230,17 +222,15 @@ class SQLiteProjectionStore(IProjectionStorePort):
         )
         return snapshot, StoreReadResult(found=True, revision=revision, freshness=freshness)
 
-    def write_family(
-        self, snapshot: FamilySelfModelSnapshot, *, writer_id: str
-    ) -> StoreWriteResult:
+    def write_space(self, snapshot: SpaceGraphSnapshot, *, writer_id: str) -> StoreWriteResult:
         denial = self._check_writer(writer_id)
         if denial is not None:
             return denial
-        body = _family_to_json(snapshot)
+        body = _space_to_json(snapshot)
         with self._lock, self._conn:
             row = self._conn.execute(
-                "SELECT revision FROM family_projection WHERE family_space_id = ?",
-                (snapshot.family_space_id,),
+                "SELECT revision FROM space_projection WHERE space_id = ?",
+                (snapshot.space_id,),
             ).fetchone()
             parent = row["revision"] if row is not None else ""
             revision = ProjectionRevision(
@@ -249,21 +239,21 @@ class SQLiteProjectionStore(IProjectionStorePort):
                 written_at_ms=_now_ms(),
             )
             self._conn.execute(
-                "INSERT INTO family_projection "
-                "(family_space_id, revision, parent_revision, written_at_ms, snapshot_json) "
+                "INSERT INTO space_projection "
+                "(space_id, revision, parent_revision, written_at_ms, snapshot_json) "
                 "VALUES (?, ?, ?, ?, ?) "
-                "ON CONFLICT(family_space_id) DO UPDATE SET "
+                "ON CONFLICT(space_id) DO UPDATE SET "
                 " revision=excluded.revision, parent_revision=excluded.parent_revision, "
                 " written_at_ms=excluded.written_at_ms, snapshot_json=excluded.snapshot_json",
                 (
-                    snapshot.family_space_id,
+                    snapshot.space_id,
                     revision.revision,
                     revision.parent_revision,
                     revision.written_at_ms,
                     json.dumps(body, separators=(",", ":")),
                 ),
             )
-            self._clear_freshness(f"family:{snapshot.family_space_id}")
+            self._clear_freshness(f"space:{snapshot.space_id}")
         return StoreWriteResult(revision=revision, accepted=True)
 
     # ------------------------------------------------------------------
@@ -347,9 +337,7 @@ class SQLiteProjectionStore(IProjectionStorePort):
     # ------------------------------------------------------------------
     # Amendments
     # ------------------------------------------------------------------
-    def upsert_amendment(
-        self, amendment: AmendmentProposal, *, writer_id: str
-    ) -> StoreWriteResult:
+    def upsert_amendment(self, amendment: AmendmentProposal, *, writer_id: str) -> StoreWriteResult:
         denial = self._check_writer(writer_id)
         if denial is not None:
             return denial
@@ -484,9 +472,7 @@ class SQLiteProjectionStore(IProjectionStorePort):
             for s in sig_rows
         )
         conflict = (
-            _conflict_from_json(json.loads(row["conflict_json"]))
-            if row["conflict_json"]
-            else None
+            _conflict_from_json(json.loads(row["conflict_json"])) if row["conflict_json"] else None
         )
         return AmendmentProposal(
             amendment_id=row["amendment_id"],
@@ -533,9 +519,7 @@ class SQLiteProjectionStore(IProjectionStorePort):
         except ValueError:
             return ProjectionFreshness.FRESH
 
-    def _set_freshness(
-        self, projection_key: str, freshness: ProjectionFreshness
-    ) -> None:
+    def _set_freshness(self, projection_key: str, freshness: ProjectionFreshness) -> None:
         self._conn.execute(
             "INSERT INTO projection_sync_state "
             "(projection_key, freshness, last_synced_at_ms, last_revision) "
@@ -657,9 +641,9 @@ def _self_from_json(body: dict) -> K1SelfModelSnapshot:
     )
 
 
-def _family_to_json(snapshot: FamilySelfModelSnapshot) -> dict:
+def _space_to_json(snapshot: SpaceGraphSnapshot) -> dict:
     return {
-        "family_space_id": snapshot.family_space_id,
+        "space_id": snapshot.space_id,
         "revision": snapshot.revision,
         "members": [
             {
@@ -687,16 +671,16 @@ def _family_to_json(snapshot: FamilySelfModelSnapshot) -> dict:
     }
 
 
-def _family_from_json(body: dict) -> FamilySelfModelSnapshot:
-    from k1.selfmodel.contracts.family_model import (
-        FamilyMemberRef,
-        FamilySelfModelSnapshot as _Snap,
-        RelationshipEdge,
+def _space_from_json(body: dict) -> SpaceGraphSnapshot:
+    from k1.selfmodel.contracts.space_graph import (
+        ActorRef,
         RoutineRef,
+        SpaceEdge,
     )
+    from k1.selfmodel.contracts.space_graph import SpaceGraphSnapshot as _Snap
 
     members = tuple(
-        FamilyMemberRef(
+        ActorRef(
             member_id=m.get("member_id", ""),
             display_name=m.get("display_name", ""),
             role=m.get("role", ""),
@@ -705,7 +689,7 @@ def _family_from_json(body: dict) -> FamilySelfModelSnapshot:
         for m in body.get("members") or ()
     )
     relations = tuple(
-        RelationshipEdge(
+        SpaceEdge(
             from_member=r.get("from_member", ""),
             to_member=r.get("to_member", ""),
             kind=r.get("kind", ""),
@@ -722,7 +706,7 @@ def _family_from_json(body: dict) -> FamilySelfModelSnapshot:
         for rt in body.get("routines") or ()
     )
     return _Snap(
-        family_space_id=body.get("family_space_id", ""),
+        space_id=body.get("space_id", ""),
         revision=body.get("revision", ""),
         members=members,
         relations=relations,

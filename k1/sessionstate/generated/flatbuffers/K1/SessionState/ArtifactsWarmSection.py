@@ -97,5 +97,3 @@ def ArtifactsWarmSectionAddLastUpdatedMs(builder, lastUpdatedMs):
 
 def ArtifactsWarmSectionEnd(builder):
     return builder.EndObject()
-    return builder.EndObject()
-    return builder.EndObject()

@@ -19,8 +19,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from k1.selfmodel.contracts.conscience import ConscienceDigest
-from k1.selfmodel.contracts.family_model import RelationshipEdge, RoutineRef
 from k1.selfmodel.contracts.pattern import Goal, Habit
+from k1.selfmodel.contracts.space_graph import RoutineRef, SpaceEdge
 
 __all__ = [
     "ProjectedSelf",
@@ -52,7 +52,7 @@ class ProjectedSelf:
 class RelationsSubset:
     """Subset of the family graph adjacent to the actor."""
 
-    edges: tuple[RelationshipEdge, ...] = field(default_factory=tuple)
+    edges: tuple[SpaceEdge, ...] = field(default_factory=tuple)
     projected_others: tuple[ProjectedSelf, ...] = field(default_factory=tuple)
 
 

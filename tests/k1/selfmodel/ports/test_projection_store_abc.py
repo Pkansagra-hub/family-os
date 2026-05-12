@@ -9,7 +9,7 @@ from k1.selfmodel.contracts.constitution import (
     ConstitutionSnapshot,
     SigningProof,
 )
-from k1.selfmodel.contracts.family_model import FamilySelfModelSnapshot
+from k1.selfmodel.contracts.space_graph import FamilySelfModelSnapshot
 from k1.selfmodel.contracts.self_model import K1SelfModelSnapshot
 from k1.selfmodel.ports.projection_store import (
     IProjectionStorePort,
@@ -41,10 +41,10 @@ class _CompleteStore(IProjectionStorePort):
     def write_self(self, snapshot: K1SelfModelSnapshot, *, writer_id: str):  # type: ignore[override]
         return StoreWriteResult(revision=ProjectionRevision(revision="r1"))
 
-    def read_family(self, family_space_id):  # type: ignore[override]
+    def read_space(self, space_id):  # type: ignore[override]
         return (None, StoreReadResult(found=False))
 
-    def write_family(self, snapshot: FamilySelfModelSnapshot, *, writer_id: str):  # type: ignore[override]
+    def write_space(self, snapshot: FamilySelfModelSnapshot, *, writer_id: str):  # type: ignore[override]
         return StoreWriteResult(revision=ProjectionRevision(revision="r1"))
 
     def read_constitution(self, constitution_id):  # type: ignore[override]

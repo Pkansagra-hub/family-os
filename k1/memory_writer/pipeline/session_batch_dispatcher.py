@@ -26,8 +26,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import deque
 from typing import Optional
 
+from k1.memory_writer.events import TOPIC_TURN_COMPLETE as _CANONICAL_TOPIC
 from k1.memory_writer.events import TurnCompletePayload
 from k1.memory_writer.pipeline.pipeline import MemoryWriterPipeline
 from k1.memory_writer.pipeline.turn_dispatcher import TurnDispatcher
@@ -65,21 +67,22 @@ class SessionBatchDispatcher:
 
         self._subscription: Optional[Subscription] = None
         self._buffer: list[TurnCompletePayload] = []
-        self._processed_ids: set[str] = set()
+        self._processed_ids: deque[str] = deque(maxlen=200)  # bounded: MW-02-A
         self._lock = asyncio.Lock()
         self._idle_task: Optional[asyncio.Task[None]] = None
         self._last_arrival_ts: float = 0.0
         self._stopping: bool = False
+        self._flush_in_progress: bool = False  # MW-03: concurrent flush guard
 
     async def start(self) -> None:
         """Subscribe to ``turn.completed.v1`` and start the idle-flush task."""
+        # Drift guard: ensure our TOPIC matches the canonical events.py constant (MW-01-D)
+        assert (
+            self.TOPIC == _CANONICAL_TOPIC
+        ), f"SessionBatchDispatcher.TOPIC drift: {self.TOPIC!r} != {_CANONICAL_TOPIC!r}"
         self._stopping = False
-        self._subscription = await self._event_port.subscribe(
-            self.TOPIC, self._on_turn_completed
-        )
-        self._idle_task = asyncio.create_task(
-            self._idle_loop(), name="mw-session-idle-flush"
-        )
+        self._subscription = await self._event_port.subscribe(self.TOPIC, self._on_turn_completed)
+        self._idle_task = asyncio.create_task(self._idle_loop(), name="mw-session-idle-flush")
         log.info(
             "MW: SessionBatchDispatcher started, topic=%s, threshold=%d, idle=%ds",
             self.TOPIC,
@@ -138,7 +141,7 @@ class SessionBatchDispatcher:
         async with self._lock:
             if payload.turn_id in self._processed_ids:
                 return  # double-check under lock
-            self._processed_ids.add(payload.turn_id)
+            self._processed_ids.append(payload.turn_id)  # bounded deque: MW-02-A
             self._buffer.append(payload)
             self._last_arrival_ts = time.monotonic()
             should_flush = len(self._buffer) >= self._flush_turn_threshold
@@ -165,10 +168,11 @@ class SessionBatchDispatcher:
     async def _flush_buffer(self, reason: str) -> None:
         """Flush the buffer through the pipeline (one LLM call). Never raises."""
         async with self._lock:
-            if not self._buffer:
+            if not self._buffer or self._flush_in_progress:
                 return
             turns = self._buffer
             self._buffer = []
+            self._flush_in_progress = True  # MW-03: block concurrent flushes
 
         try:
             result = await self._pipeline.process_session(turns)
@@ -189,6 +193,9 @@ class SessionBatchDispatcher:
                 len(turns),
                 str(exc),
             )
+        finally:
+            async with self._lock:
+                self._flush_in_progress = False
 
     # ----- Test introspection helpers -----
 

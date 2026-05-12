@@ -34,10 +34,10 @@ class TestTopicCounts:
     """Verify set cardinalities match V2 Section 3."""
 
     def test_all_topics_count(self) -> None:
-        assert len(ALL_TOPICS) == 46
+        assert len(ALL_TOPICS) == 47
 
     def test_strict_count(self) -> None:
-        assert len(STRICT_TOPICS) == 36
+        assert len(STRICT_TOPICS) == 37
 
     def test_relaxed_count(self) -> None:
         assert len(RELAXED_TOPICS) == 10

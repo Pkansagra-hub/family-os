@@ -394,12 +394,20 @@ class SQLiteWorkflowAdapter(IWorkflowStoragePort):
 
     @staticmethod
     def _deserialize_trigger_spec(row: sqlite3.Row) -> TriggerSpec:
+        # M5.2.1: surface last_fire_time as TriggerSpec.last_triggered_at so
+        # callers (scheduler, admin API, observability) can see when each
+        # trigger last ran without a separate query.
+        try:
+            last_fire = row["last_fire_time"]
+        except (IndexError, KeyError):
+            last_fire = None
         return TriggerSpec(
             type=TriggerType(SQLiteWorkflowAdapter._parse_enum_value(row["type"])),
             schedule=row["schedule"],
             timezone=row["timezone"] or "UTC",
             event_topic=row["event_topic"],
             enabled=bool(row["enabled"]),
+            last_triggered_at=(float(last_fire) if last_fire is not None else None),
         )
 
     # ---------------------------------------------------------------------

@@ -116,7 +116,7 @@ class FakeExpandService:
         self.call_count: int = 0
         self.calls: List[Tuple[Any, StageContext]] = []
 
-    async def execute(self, sketch_result: Any, ctx: StageContext) -> Any:
+    async def execute(self, sketch_result: Any, request: Any, ctx: StageContext) -> Any:
         self.call_count += 1
         self.calls.append((sketch_result, ctx))
         if self._error is not None:
@@ -139,7 +139,7 @@ class FakeValidateService:
         self.call_count: int = 0
         self.calls: List[Tuple[Any, StageContext]] = []
 
-    async def execute(self, expanded_plan: Any, ctx: StageContext) -> Any:
+    async def execute(self, expanded_plan: Any, request: Any, ctx: StageContext) -> Any:
         self.call_count += 1
         self.calls.append((expanded_plan, ctx))
         if self._error is not None:
@@ -164,6 +164,7 @@ class FakeCommitService:
     async def execute(
         self,
         expanded_plan: Any,
+        request: Any,
         verdict: Any,
         ctx: StageContext,
     ) -> Any:

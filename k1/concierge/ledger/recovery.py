@@ -252,6 +252,11 @@ class CrashRecoveryOrchestrator:
             elif entry.event_type == "conversation.weave.emitted":
                 last_response_final = True
                 last_user_input = False
+            # M6 E6.3 (C04): ResponseDelivered is the authoritative
+            # delivery-committed marker (covers non-weave responses too).
+            elif entry.event_type == "conversation.response.delivered.v1":
+                last_response_final = True
+                last_user_input = False
 
         if last_user_input and not last_response_final:
             return "DISPATCHING"

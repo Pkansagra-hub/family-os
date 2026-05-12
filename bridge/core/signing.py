@@ -127,7 +127,7 @@ class Ed25519Signing:
 
     @property
     def algorithm(self) -> str:
-        return "ed25519"
+        return "Ed25519SHA512"
 
     @property
     def key_id(self) -> str:

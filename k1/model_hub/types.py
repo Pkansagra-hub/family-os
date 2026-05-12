@@ -291,6 +291,11 @@ class HubRequest:
     trace_id: str = ""
     idempotency_key: Optional[str] = None
     request_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    # 3.1.1: Per-request session context. Empty string = no session bound
+    # (boot tier / shared traffic). RequestRouter will use this to look up
+    # the per-session SessionState read port (3.1.3) and ResponseCache will
+    # include it in the cache key to prevent cross-session cache hits.
+    session_id: str = ""
 
     def __post_init__(self) -> None:
         if not self.trace_id:
@@ -372,6 +377,7 @@ class ToolCallPayload:
     tools: List[ToolDefinition] = field(default_factory=list)
     tool_choice: str = "auto"
     parallel_tool_calls: bool = True
+    system_prompt: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not self.messages:

@@ -276,6 +276,7 @@ class OrchestratorService:
         "_pending_plans",
         "_executed_plans",
         "_requeued_envelope_ids",
+        "_deferred_dequeue_count",
         "_started_at",
         "_initialized",
         "_running",
@@ -333,6 +334,11 @@ class OrchestratorService:
         self._pending_plans: Dict[str, PendingPlanContext] = {}
         self._executed_plans: OrderedDict[str, float] = OrderedDict()
         self._requeued_envelope_ids: OrderedDict[str, float] = OrderedDict()
+        # M5.1.4: tracks how many times a plan/envelope has been re-enqueued
+        # via the ConcurrencyGuard deferral paths. Keyed by request_id (for
+        # CommittedPlan) or trace_id (for TaskEnvelope/WorkflowRunRequest).
+        # CommittedPlan is frozen, so this lives outside the dataclass.
+        self._deferred_dequeue_count: Dict[str, int] = {}
         self._started_at: float = time.time()
 
         # --- Lifecycle state (set by init()) ---
@@ -1102,16 +1108,52 @@ class OrchestratorService:
                     # DAG-requiring types: defer if guard active.
                     if isinstance(msg, (TaskEnvelope, CommittedPlan, WorkflowRunRequest)):
                         if getattr(self._concurrency_guard, "active", False):
+                            # M5.1.4 + M5.1.5: bound the deferral retry loop.
+                            # Without this, a stuck DAG could re-enqueue the
+                            # same plan indefinitely, starving other tiers.
+                            defer_key = self._defer_key(msg)
+                            count = self._deferred_dequeue_count.get(defer_key, 0) + 1
+                            max_retries = self._config.max_deferred_plan_retries
+                            if count > max_retries:
+                                self._deferred_dequeue_count.pop(defer_key, None)
+                                self._metrics.set_deferred_plan_depth(
+                                    len(self._deferred_dequeue_count)
+                                )
+                                log.error(
+                                    "mailbox_loop.deferred_exhausted",
+                                    extra={
+                                        "message_type": msg_type,
+                                        "trace_id": trace_id,
+                                        "defer_key": defer_key,
+                                        "max_retries": max_retries,
+                                    },
+                                )
+                                # Resolve any handle_task() waiter so caller
+                                # doesn't hang until plan_request_timeout_ms.
+                                waiter = self._handle_task_waiters.pop(trace_id, None)
+                                if waiter is not None and not waiter.done():
+                                    waiter.set_result(ProcessResult.FAILED)
+                                # Drop the message.
+                                return
+                            self._deferred_dequeue_count[defer_key] = count
+                            self._metrics.set_deferred_plan_depth(len(self._deferred_dequeue_count))
                             self._mailbox.enqueue(msg, priority="BACKGROUND")
                             log.info(
                                 "mailbox_loop.deferred",
                                 extra={
                                     "message_type": msg_type,
                                     "trace_id": trace_id,
+                                    "defer_key": defer_key,
+                                    "dequeue_count": count,
                                     "reason": "DAG active, re-enqueued at BACKGROUND",
                                 },
                             )
                             return
+
+                # Made it past the deferral gate -- clear retry counter so a
+                # later second deferral starts fresh.
+                if isinstance(msg, (TaskEnvelope, CommittedPlan, WorkflowRunRequest)):
+                    self._clear_deferred_count(msg)
 
                 # Step 4: Dispatch to process().
                 result = await self.process(msg)
@@ -1287,7 +1329,9 @@ class OrchestratorService:
             which catches exceptions from this call to emit
             ``task.failed.v1``.
         """
-        from k1.concierge.orchestrator.types import TaskEnvelope as _ConciergeTaskEnvelope
+        from k1.concierge.orchestrator.types import (
+            TaskEnvelope as _ConciergeTaskEnvelope,
+        )
         from k1.concierge.task.complexity import ComplexityTier as _CTier
 
         if isinstance(envelope, TaskEnvelope):
@@ -1871,8 +1915,9 @@ class OrchestratorService:
 
             return ProcessResult.FAILED
 
-        # 3. Record in executed_plans LRU (before execution, for dedup).
-        self._record_executed_plan(plan.plan_id)
+        # 3. (M5.1.5) Dedup recording moved to AFTER ConcurrencyGuard.acquire
+        #    so that DEFERRED re-enqueues are not mistakenly treated as
+        #    duplicate executions on the next dequeue.
 
         # Update ctx with dag execution context.
         ctx.dag_id = plan.plan_id
@@ -1921,15 +1966,57 @@ class OrchestratorService:
 
         # 6. Acquire ConcurrencyGuard (V1: single DAG at a time).
         if not await self._concurrency_guard.acquire(ctx):
+            # M5.1.5: re-enqueue plan with bounded retry instead of dropping.
+            # Restore pending so the next dequeue can correlate, and track
+            # the dequeue count so a stuck DAG can't cause infinite re-entry.
+            defer_key = f"plan:{plan.request_id}"
+            count = self._deferred_dequeue_count.get(defer_key, 0) + 1
+            max_retries = self._config.max_deferred_plan_retries
+            if count > max_retries:
+                self._deferred_dequeue_count.pop(defer_key, None)
+                self._metrics.set_deferred_plan_depth(len(self._deferred_dequeue_count))
+                log.error(
+                    "receive_plan.concurrency_rejected_exhausted",
+                    extra={
+                        "trace_id": ctx.trace_id,
+                        "plan_id": plan.plan_id,
+                        "request_id": plan.request_id,
+                        "max_retries": max_retries,
+                    },
+                )
+                # Resolve any handle_task() waiter so caller doesn't hang.
+                waiter = self._handle_task_waiters.pop(ctx.trace_id, None)
+                if waiter is not None and not waiter.done():
+                    waiter.set_result(ProcessResult.FAILED)
+                return ProcessResult.FAILED
+
+            self._deferred_dequeue_count[defer_key] = count
+            self._metrics.set_deferred_plan_depth(len(self._deferred_dequeue_count))
+            # Restore pending context for the next attempt.
+            self._pending_plans[plan.request_id] = pending
+            self._metrics.set_pending_plans(len(self._pending_plans))
+            # Re-enqueue at BACKGROUND so the active DAG can finish first.
+            self._mailbox.enqueue(plan, priority="BACKGROUND")
             log.warning(
                 "receive_plan.concurrency_rejected",
                 extra={
                     "trace_id": ctx.trace_id,
                     "plan_id": plan.plan_id,
+                    "dequeue_count": count,
+                    "max_retries": max_retries,
                 },
             )
             return ProcessResult.DEFERRED
+
+        # Acquired -- now safe to record dedup entry and clear deferral state.
+        self._record_executed_plan(plan.plan_id)
+        self._clear_deferred_count(plan)
         self._metrics.set_dag_active(True)
+
+        # M5.3.5: propagate planner-asserted HIL hint into the request-scoped
+        # context so ExecutionMonitor.after_wave() can force an override
+        # prompt independent of the step-count heuristic.
+        ctx.requires_hitl = bool(getattr(plan, "requires_hitl", False))
 
         try:
             # 7. Execute DAG.
@@ -2565,6 +2652,24 @@ class OrchestratorService:
         # Evict oldest if over capacity.
         while len(self._executed_plans) > _EXECUTED_PLANS_MAX:
             self._executed_plans.popitem(last=False)
+
+    def _defer_key(self, msg: MailboxMessage) -> str:
+        """M5.1.4: stable key for tracking ConcurrencyGuard deferral retries.
+
+        CommittedPlan is keyed by request_id (consistent with _pending_plans).
+        Other DAG-requiring messages fall back to trace_id.
+        """
+        if isinstance(msg, CommittedPlan):
+            return f"plan:{msg.request_id}"
+        trace_id = getattr(msg, "trace_id", "") or ""
+        return f"trace:{trace_id}"
+
+    def _clear_deferred_count(self, msg: MailboxMessage) -> None:
+        """Clear deferral counter once a message is being processed (not deferred)."""
+        key = self._defer_key(msg)
+        if key in self._deferred_dequeue_count:
+            self._deferred_dequeue_count.pop(key, None)
+            self._metrics.set_deferred_plan_depth(len(self._deferred_dequeue_count))
 
     def _handle_adapter_error(
         self,

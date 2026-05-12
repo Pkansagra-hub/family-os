@@ -23,6 +23,13 @@ SINGLE WRITER ENFORCEMENT:
     In standalone mode, DirectWriterAdapter IS the single writer.
     In production, Concierge uses ConciergeAdapter instead.
 
+LOCK HIERARCHY (must be acquired in this order to prevent deadlock):
+  1. DirectWriterAdapter._lock  (RLock — reentrant)
+  2. SessionStateManager._write_lock  (RLock — reentrant)
+  3. MutationGuard._lock  (plain Lock — NON-reentrant)
+  Events must be emitted AFTER all locks are released to avoid callbacks
+  re-entering DirectWriterAdapter while the lock chain is held.
+
 ==============================================================================
 CLASS: DirectWriterAdapter
 ==============================================================================

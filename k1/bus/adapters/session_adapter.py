@@ -229,11 +229,42 @@ class SessionBusAdapter(IEventPort):
         return self._bus.unsubscribe(handle)
 
     # ------------------------------------------------------------------
-    # IEventPort: emit_batch (inherited default calls emit() per event)
+    # IEventPort: emit_batch
     # ------------------------------------------------------------------
 
-    # emit_batch is inherited from IEventPort ABC default implementation.
-    # It calls self.emit() for each (event_type, payload) tuple.
+    def emit_batch(self, events: list[tuple[str, Any]]) -> None:
+        """Emit a batch of events through the bus in a single call.
+
+        M7.2 / B06: overrides the ABC default (which loops ``emit()``)
+        with a single call to ``LocalBus.publish_batch``.  This shares
+        a single subscriber-trie read-lock acquisition across the
+        whole batch instead of one acquisition per event.
+
+        Empty list is a no-op.  Fire-and-forget: never raises.
+        """
+        if not events:
+            return
+        envelopes: list[Envelope] = []
+        for event_type, payload in events:
+            topic = _map_topic(event_type)
+            try:
+                raw = _serialize_payload(payload)
+            except Exception:
+                logger.exception(
+                    "SessionBusAdapter.emit_batch: failed to serialize "
+                    "payload for event_type=%s -- skipping",
+                    event_type,
+                )
+                continue
+            envelopes.append(
+                Envelope(
+                    topic=topic,
+                    payload=raw,
+                    priority=Priority.INTERACTIVE,
+                )
+            )
+        if envelopes:
+            self._bus.publish_batch(envelopes)
 
     # ------------------------------------------------------------------
     # Observability

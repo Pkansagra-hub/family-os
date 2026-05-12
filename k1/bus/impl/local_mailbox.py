@@ -91,6 +91,14 @@ class LocalMailbox:
         "_closed",
         "_delivered_count",
         "_received_count",
+        # M7.3 / B08: DRR state.  When ``wfq_quantum`` is None we run
+        # the original strict-priority scheduler.  Otherwise each
+        # priority bucket accumulates deficit credit at its quantum
+        # rate per scheduling round and we round-robin a cursor across
+        # buckets to enforce fairness.
+        "_quantum",
+        "_deficit",
+        "_drr_cursor",
     )
 
     # Priority levels in dequeue order (highest first)
@@ -119,6 +127,14 @@ class LocalMailbox:
         else:
             self._queues = []
             self._single_queue = deque()
+
+        # M7.3 / B08: DRR state.  When ``wfq_quantum`` is None we run
+        # the original strict-priority scheduler.  Otherwise each
+        # priority bucket accumulates deficit credit at its quantum
+        # rate per scheduling round.
+        self._quantum: Optional[tuple[int, int, int, int]] = config.wfq_quantum
+        self._deficit: list[int] = [0, 0, 0, 0] if self._quantum is not None else []
+        self._drr_cursor: int = 0
 
     # ------------------------------------------------------------------
     # IMailbox interface
@@ -192,20 +208,64 @@ class LocalMailbox:
         """
         Try to dequeue one envelope.  Must be called under self._lock.
 
-        When WFQ: strict priority -- pick from highest-priority non-empty queue.
+        When WFQ + ``wfq_quantum=None``: strict priority -- pick from the
+        highest-priority non-empty queue (V1 behaviour, default).
+
+        When WFQ + ``wfq_quantum=(qU, qR, qI, qB)``: deficit round-robin
+        (DRR).  Each non-empty bucket accumulates ``quantum[p]`` credit
+        per scheduling round; one envelope is served if the bucket has
+        ``deficit >= 1``.  Empty buckets keep their accumulated deficit
+        (capped at ``quantum[p]``) so they can drain promptly when work
+        arrives.  This prevents BACKGROUND starvation under sustained
+        URGENT-only load while preserving relative weighting.
+
         When FIFO: pick from the single queue.
         """
         if self._size == 0:
             return None
 
         if self._priority_wfq:
-            for priority in self._PRIORITY_ORDER:
-                q = self._queues[priority.value]
-                if q:
-                    envelope = q.popleft()
-                    self._size -= 1
-                    self._received_count += 1
-                    return envelope
+            if self._quantum is None:
+                # Strict priority (V1 default).
+                for priority in self._PRIORITY_ORDER:
+                    q = self._queues[priority.value]
+                    if q:
+                        envelope = q.popleft()
+                        self._size -= 1
+                        self._received_count += 1
+                        return envelope
+                return None  # Should not happen if _size > 0
+
+            # Deficit round-robin scheduling.
+            quantum = self._quantum
+            deficit = self._deficit
+            order = self._PRIORITY_ORDER
+            n = len(order)
+            attempts = 0
+            while attempts < n:
+                priority = order[self._drr_cursor]
+                idx = priority.value
+                q = self._queues[idx]
+                if not q:
+                    # Empty bucket forfeits its credit and the cursor
+                    # moves on (prevents stale credit accumulation).
+                    deficit[idx] = 0
+                    self._drr_cursor = (self._drr_cursor + 1) % n
+                    attempts += 1
+                    continue
+                if deficit[idx] < 1:
+                    deficit[idx] += quantum[idx]
+                # quantum[idx] >= 1 by validation, so deficit[idx] >= 1.
+                envelope = q.popleft()
+                deficit[idx] -= 1
+                self._size -= 1
+                self._received_count += 1
+                if not q or deficit[idx] < 1:
+                    # Bucket drained or credit exhausted -- advance.
+                    if not q:
+                        deficit[idx] = 0
+                    self._drr_cursor = (self._drr_cursor + 1) % n
+                return envelope
             return None  # Should not happen if _size > 0
         else:
             assert self._single_queue is not None

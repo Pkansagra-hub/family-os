@@ -106,12 +106,30 @@ def test_verifier_trust_unsigned_skips_check() -> None:
     verifier.verify({"topic": "ifl.unsigned.v1"})  # no raise
 
 
-def test_verifier_rejects_placeholder_public_key_when_strict() -> None:
-    """Real ca_bundle.json ships with PLACEHOLDER_REPLACE_BEFORE_MS5
-    until the keypair generation ceremony runs. Strict mode must refuse
-    to validate signatures against placeholder keys."""
-    verifier = CABundleAdapterVerifier(trust_unsigned=False)
-    # Default ca_bundle.json is the placeholder one.
+def test_verifier_rejects_placeholder_public_key_when_strict(
+    tmp_path: Path,
+) -> None:
+    """Strict mode must refuse to validate signatures against
+    placeholder keys, regardless of which bundle the verifier is
+    pointed at. Historically ca_bundle.json shipped with
+    ``PLACEHOLDER_REPLACE_BEFORE_MS5``; now the production bundle
+    carries a real dev key, so we inject a placeholder bundle
+    explicitly to exercise this guard."""
+    bundle = tmp_path / "ca_bundle.json"
+    bundle.write_text(
+        json.dumps(
+            {
+                "ca_id": "familyos_root_v1",
+                "ed25519_public_key": "PLACEHOLDER_REPLACE_BEFORE_MS5",
+                "status": "active",
+                "valid_until": "2099-01-01T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    verifier = CABundleAdapterVerifier(
+        ca_bundle_path=bundle, trust_unsigned=False,
+    )
     sk = SigningKey.generate()
     manifest = _signed_manifest(sk, ca_id="familyos_root_v1")
     with pytest.raises(InvalidAdapterSignatureError, match="placeholder"):

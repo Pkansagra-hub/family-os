@@ -224,11 +224,60 @@ class ResponseFinalDecided(CanonicalEventMeta):
         )
 
 
+@dataclass
+class ResponseDelivered(CanonicalEventMeta):
+    """Response delivery confirmation -- crash-recovery duplicate-delivery guard.
+
+    M6 E6.3 (C04): Written to the ledger inside `_on_response_final` AFTER
+    `ResponseFinalDecided` and BEFORE `_execute_response_final_decision` /
+    network delivery.  On crash recovery, presence of this event for the
+    current turn signals that delivery was committed -- the recovery path
+    derives `LISTENING` rather than replaying the response.
+
+    Attributes:
+        text_preview: First 200 chars of the delivered text (for audit/debug).
+        entry_type:   History entry type carried through from the decision
+                      (final, weave, proactive, proactive_fallback).
+        is_fallback:  Whether the delivered text was a budget/degenerate fallback.
+    """
+
+    event_type: str = field(default="conversation.response.delivered.v1", init=False)
+    text_preview: str = ""
+    entry_type: str = ""
+    is_fallback: bool = False
+
+    def to_payload(self) -> dict[str, Any]:
+        d = super().to_payload()
+        d["text_preview"] = self.text_preview
+        d["entry_type"] = self.entry_type
+        d["is_fallback"] = self.is_fallback
+        return d
+
+    @classmethod
+    def from_payload(cls, data: dict[str, Any]) -> ResponseDelivered:
+        return cls(
+            event_id=data.get("event_id", ""),
+            session_id=data.get("session_id", ""),
+            correlation_id=data.get("correlation_id", ""),
+            causation_id=data.get("causation_id", ""),
+            parent_event_id=data.get("parent_event_id", ""),
+            task_id=data.get("task_id", ""),
+            actor=data.get("actor", ""),
+            ts_utc=data.get("ts_utc", ""),
+            priority=data.get("priority", 1),
+            payload_schema_version=data.get("payload_schema_version", "1.0.0"),
+            text_preview=data.get("text_preview", ""),
+            entry_type=data.get("entry_type", ""),
+            is_fallback=data.get("is_fallback", False),
+        )
+
+
 __all__ = [
     "UserInputReceived",
     "IntentArbitrated",
     "DeadLettered",
     "ResponseFinalDecided",
+    "ResponseDelivered",
     "Phase1Classified",
     "TaskRouted",
 ]

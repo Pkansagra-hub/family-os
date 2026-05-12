@@ -123,8 +123,8 @@ class ProviderRegistry:
         )
         self._provider_info[pid] = info
 
-        # Rebuild capability index
-        self._rebuild_capability_index()
+        # Incrementally add to capability index (O(caps) not O(N*caps)).
+        self._add_to_index(info)
 
     def unregister(self, provider_id: str) -> None:
         """Remove a provider from the registry.
@@ -141,8 +141,8 @@ class ProviderRegistry:
         del self._manifests[provider_id]
         del self._provider_info[provider_id]
 
-        # Rebuild capability index
-        self._rebuild_capability_index()
+        # Incrementally remove from capability index.
+        self._remove_from_index(provider_id)
 
     # -- Queries ---------------------------------------------------------------
 
@@ -206,6 +206,25 @@ class ProviderRegistry:
         return len(self._plugins)
 
     # -- Internal --------------------------------------------------------------
+
+    def _add_to_index(self, info: "ProviderInfo") -> None:
+        """Incrementally add a provider to the capability index."""
+        for cap in info.capabilities:
+            if cap not in self._capability_index:
+                self._capability_index[cap] = []
+            self._capability_index[cap].append(info)
+
+    def _remove_from_index(self, provider_id: str) -> None:
+        """Incrementally remove a provider from the capability index."""
+        caps_to_delete = []
+        for cap, infos in self._capability_index.items():
+            filtered = [i for i in infos if i.provider_id != provider_id]
+            if filtered:
+                self._capability_index[cap] = filtered
+            else:
+                caps_to_delete.append(cap)
+        for cap in caps_to_delete:
+            del self._capability_index[cap]
 
     def _rebuild_capability_index(self) -> None:
         """Rebuild the capability index from all registered providers.

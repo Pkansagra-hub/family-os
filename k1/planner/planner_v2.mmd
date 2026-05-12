@@ -487,7 +487,7 @@ end
 subgraph BOOTSTRAP["BOOTSTRAP -- Kernel Phase 5"]
   direction TB
 
-  BOOT_PHASE["KERNEL PHASE 5 (TODO)\nCurrent: MockPlannerAdapter in Phase 4\nPhase 5 activates real Planner:\n1. PlannerFactory.create_standalone(7 ports)\n2. Extract mailbox reference\n3. Create CB_PLANNER\n4. Create PlannerAdapter(mailbox, cb)\n5. Hot-swap mock -> production"]:::bootstrap
+  BOOT_PHASE["KERNEL PHASE 5 (IMPLEMENTED — service.py:1322-1422)\nS5: MockPlannerAdapter placeholder\nS6a: PlannerFactory.create_production(8 ports incl hil_port)\nS6b: PlannerAdapter(mailbox, cb_planner) + orchestrator.bind_planner()\nS7: asyncio.create_task(planner.start()) + cross-wire verify\nMock replaced before _running = True"]:::bootstrap
 
   BOOT_MOCK["MockPlannerAdapter (pre-Phase-5)\nrequest_plan -> PlanAck(ACCEPTED), never produces plan\ncancel_plan -> no-op\nmicro_replan -> None\nOrchestrator timeout reaper cleans up (45s)"]:::adapter_test
 

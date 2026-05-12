@@ -66,6 +66,7 @@ from k1.planner.ports.event_port import IEventPort
 from k1.planner.types import (
     DELTA_PLAN_END,
     DELTA_STAGE_TRANSITION,
+    DELTA_WAL_WRITE_FAILED,
     PLANNER_AGENT_ID,
     SECTION_PIPELINE,
     CommitFailedError,
@@ -403,6 +404,27 @@ class CommitService:
                         "commit.wal_persist_failed plan_id=%s attempt=2 " "proceeding_without_wal",
                         committed_plan.plan_id,
                     )
+                    # P07: Emit dedicated WAL_WRITE_FAILED delta so operators
+                    # have a discoverable signal beyond the wal_persisted=False
+                    # field on the stage_transition delta.
+                    try:
+                        self._delta_port.emit(
+                            DeltaPayload(
+                                agent_id=PLANNER_AGENT_ID,
+                                delta_type=DELTA_WAL_WRITE_FAILED,
+                                section=SECTION_PIPELINE,
+                                data={
+                                    "plan_id": committed_plan.plan_id,
+                                    "attempts": 2,
+                                },
+                                trace_id=ctx.trace_id,
+                            )
+                        )
+                    except Exception:
+                        log.warning(
+                            "commit.wal_failed_delta_emit_failed plan_id=%s",
+                            committed_plan.plan_id,
+                        )
 
         return False
 

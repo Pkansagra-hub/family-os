@@ -198,3 +198,19 @@ class SuspensionTimeoutError(Exception):
         self.task_id = task_id
         self.timeout = timeout
         super().__init__(f"Task {task_id} suspension timed out after {timeout}s")
+
+
+class SuspensionResolutionNotFound(Exception):
+    """Raised when a task resume cannot find its suspension context.
+
+    M6 E6.2 (C08): Replaces the silent legacy ``_get_pending_context``
+    fallback in ``back_resume_handler``.  When envelope-carried
+    ``resume_context`` is missing AND SuspensionManager has nothing to
+    pop for ``task_id``, we surface this exception so the FSM can
+    re-emit the original HITL question to Front (best UX) instead of
+    failing the task with a generic ``no_pending_context`` error.
+    """
+
+    def __init__(self, task_id: str) -> None:
+        self.task_id = task_id
+        super().__init__(f"No suspension resolution context available for task {task_id}")

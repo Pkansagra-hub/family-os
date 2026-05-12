@@ -695,7 +695,7 @@ class TestModelHubPOCBridgeExecute:
     def test_execute_chat_returns_hub_response(self) -> None:
         inner = _FakePOCAdapter()
         bridge = ModelHubPOCBridge(inner)
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             bridge.execute(self._make_chat_request())
         )
         assert isinstance(result, HubResponse)
@@ -705,7 +705,7 @@ class TestModelHubPOCBridgeExecute:
     def test_execute_metadata_populated(self) -> None:
         inner = _FakePOCAdapter()
         bridge = ModelHubPOCBridge(inner)
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             bridge.execute(self._make_chat_request())
         )
         m = result.metadata
@@ -720,7 +720,7 @@ class TestModelHubPOCBridgeExecute:
         resp = ConciergeModelResponse(text="x", finish_reason="tool_calls")
         inner = _FakePOCAdapter(response=resp)
         bridge = ModelHubPOCBridge(inner)
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             bridge.execute(self._make_chat_request())
         )
         assert result.metadata.finish_reason == HubFinishReason.TOOL_CALLS
@@ -729,7 +729,7 @@ class TestModelHubPOCBridgeExecute:
         """consumer_id 'concierge.front' maps actor to 'front'."""
         inner = _FakePOCAdapter()
         bridge = ModelHubPOCBridge(inner)
-        asyncio.get_event_loop().run_until_complete(bridge.execute(self._make_chat_request()))
+        asyncio.run(bridge.execute(self._make_chat_request()))
         poc_req = inner.generate_calls[0]
         assert poc_req.actor == "front"
 
@@ -759,7 +759,7 @@ class TestModelHubPOCBridgeToolCall:
             ),
             trace_id="trace-tc",
         )
-        result = asyncio.get_event_loop().run_until_complete(bridge.execute(req))
+        result = asyncio.run(bridge.execute(req))
         assert isinstance(result.result, ToolCallResultSet)
         assert len(result.result.tool_calls) == 1
         assert result.result.tool_calls[0].name == "get_weather"
@@ -779,7 +779,7 @@ class TestModelHubPOCBridgeToolCall:
             ),
             trace_id="trace-td",
         )
-        asyncio.get_event_loop().run_until_complete(bridge.execute(req))
+        asyncio.run(bridge.execute(req))
         poc_req = inner.generate_calls[0]
         assert poc_req.tools is not None
         assert len(poc_req.tools) == 1
@@ -805,7 +805,7 @@ class TestModelHubPOCBridgeStructured:
             ),
             trace_id="trace-struct",
         )
-        result = asyncio.get_event_loop().run_until_complete(bridge.execute(req))
+        result = asyncio.run(bridge.execute(req))
         assert isinstance(result.result, StructuredResult)
         assert result.result.json_output == {"name": "John", "age": 30}
 
@@ -829,7 +829,7 @@ class TestModelHubPOCBridgeReason:
             ),
             trace_id="trace-reason",
         )
-        result = asyncio.get_event_loop().run_until_complete(bridge.execute(req))
+        result = asyncio.run(bridge.execute(req))
         assert isinstance(result.result, ReasonResult)
         assert result.result.text == "The answer is 42."
         assert result.result.thinking == "Let me think step by step..."
@@ -856,7 +856,7 @@ class TestModelHubPOCBridgeStream:
             async for chunk in bridge.stream_execute(req):
                 collected.append(chunk)
 
-        asyncio.get_event_loop().run_until_complete(_collect())
+        asyncio.run(_collect())
         assert len(collected) == 2
         assert collected[0].content == "Hello "
         assert collected[1].content == "world"
@@ -886,7 +886,7 @@ class TestModelHubPOCBridgeStream:
             async for chunk in bridge.stream_execute(req):
                 collected.append(chunk)
 
-        asyncio.get_event_loop().run_until_complete(_collect())
+        asyncio.run(_collect())
         assert collected[-1].done is True
         assert collected[-1].metadata is not None
 
@@ -909,7 +909,7 @@ class TestModelHubPOCBridgeStream:
             async for chunk in bridge.stream_execute(req):
                 collected.append(chunk)
 
-        asyncio.get_event_loop().run_until_complete(_collect())
+        asyncio.run(_collect())
         assert collected[0].tool_calls is not None
         assert collected[0].tool_calls[0].name == "search"
 
@@ -920,7 +920,7 @@ class TestModelHubPOCBridgeDiscovery:
     def test_discover_capabilities_four_types(self) -> None:
         inner = _FakePOCAdapter()
         bridge = ModelHubPOCBridge(inner)
-        caps = asyncio.get_event_loop().run_until_complete(bridge.discover_capabilities())
+        caps = asyncio.run(bridge.discover_capabilities())
         assert CapabilityType.CHAT in caps
         assert CapabilityType.TOOL_CALL in caps
         assert CapabilityType.STRUCTURED in caps
@@ -929,27 +929,27 @@ class TestModelHubPOCBridgeDiscovery:
     def test_discover_capabilities_all_have_poc_bridge(self) -> None:
         inner = _FakePOCAdapter()
         bridge = ModelHubPOCBridge(inner)
-        caps = asyncio.get_event_loop().run_until_complete(bridge.discover_capabilities())
+        caps = asyncio.run(bridge.discover_capabilities())
         for cap, providers in caps.items():
             assert "poc-bridge" in providers
 
     def test_discover_models_returns_list(self) -> None:
         inner = _FakePOCAdapter()
         bridge = ModelHubPOCBridge(inner)
-        models = asyncio.get_event_loop().run_until_complete(bridge.discover_models())
+        models = asyncio.run(bridge.discover_models())
         assert isinstance(models, list)
         assert all(isinstance(m, ModelInfo) for m in models)
 
     def test_discover_models_have_google_provider(self) -> None:
         inner = _FakePOCAdapter()
         bridge = ModelHubPOCBridge(inner)
-        models = asyncio.get_event_loop().run_until_complete(bridge.discover_models())
+        models = asyncio.run(bridge.discover_models())
         assert all(m.provider_id == "google" for m in models)
 
     def test_discover_models_no_duplicates(self) -> None:
         inner = _FakePOCAdapter()
         bridge = ModelHubPOCBridge(inner)
-        models = asyncio.get_event_loop().run_until_complete(bridge.discover_models())
+        models = asyncio.run(bridge.discover_models())
         ids = [m.id for m in models]
         assert len(ids) == len(set(ids))
 
@@ -960,18 +960,19 @@ class TestModelHubPOCBridgeHealth:
     def test_health_returns_report(self) -> None:
         inner = _FakePOCAdapter()
         bridge = ModelHubPOCBridge(inner)
-        report = asyncio.get_event_loop().run_until_complete(bridge.health())
+        report = asyncio.run(bridge.health())
         assert isinstance(report, HubHealthReport)
 
     def test_health_status_healthy(self) -> None:
         inner = _FakePOCAdapter()
         bridge = ModelHubPOCBridge(inner)
-        report = asyncio.get_event_loop().run_until_complete(bridge.health())
+        report = asyncio.run(bridge.health())
         assert report.status == "HEALTHY"
 
     def test_health_has_provider(self) -> None:
         inner = _FakePOCAdapter()
         bridge = ModelHubPOCBridge(inner)
-        report = asyncio.get_event_loop().run_until_complete(bridge.health())
+        report = asyncio.run(bridge.health())
         assert len(report.providers) == 1
         assert report.providers[0].provider_id == "poc-bridge"
+

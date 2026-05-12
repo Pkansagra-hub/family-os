@@ -111,6 +111,26 @@ class IBus(Protocol):
         """
         ...
 
+    def publish_batch(self, envelopes: list[Envelope]) -> None:
+        """
+        Publish a batch of envelopes (M7.2 / B06).
+
+        Equivalent to calling ``publish`` for each envelope, but
+        implementations MAY amortise per-envelope overhead (e.g.,
+        sharing a single subscriber-trie read-lock acquisition across
+        the batch).  Per-envelope semantics (stamping, middleware,
+        sequence allocation, dispatch) are otherwise identical to
+        ``publish``.
+
+        An empty list is a no-op.  The batch is best-effort: a
+        middleware drop, outbox failure, or other per-envelope error
+        for one envelope does NOT abort the batch.
+
+        Args:
+            envelopes: Envelopes to publish, in order.
+        """
+        ...
+
     def subscribe(self, pattern: str, handler: BusHandler) -> SubscriptionHandle:
         """
         Subscribe a handler to a topic pattern.

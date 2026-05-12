@@ -84,8 +84,9 @@ class LocalEventAdapter(IEventPort):
         self._subscriptions: Dict[str, Tuple[str, Callable[[Any], None]]] = {}
         self._capture_mode = capture_mode
         self._captured_events: List[Tuple[str, Any, float]] = []
-        self._event_queue: queue.Queue[Tuple[str, Any]] = queue.Queue()
+        self._event_queue: queue.Queue[Tuple[str, Any]] = queue.Queue(maxsize=10000)
         self._lock = threading.RLock()
+        self._drop_count: int = 0
         self._running = True
         self._dispatch_thread = threading.Thread(
             target=self._dispatch_loop,
@@ -129,7 +130,17 @@ class LocalEventAdapter(IEventPort):
         if self._capture_mode:
             with self._lock:
                 self._captured_events.append((event_type, payload, time.time()))
-        self._event_queue.put((event_type, payload))
+        try:
+            self._event_queue.put_nowait((event_type, payload))
+        except queue.Full:
+            with self._lock:
+                self._drop_count += 1
+                drop_count = self._drop_count
+            logger.warning(
+                "LocalEventAdapter: event queue full, dropping %s (total drops=%d)",
+                event_type,
+                drop_count,
+            )
 
     def subscribe(
         self,

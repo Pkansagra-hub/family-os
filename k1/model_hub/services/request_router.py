@@ -32,6 +32,8 @@ import time
 from typing import Any, AsyncIterator, Optional, Protocol, runtime_checkable
 
 from k1.model_hub.plugins.base import NormalizedRequest
+from k1.model_hub.ports.event_port import IEventPort
+from k1.model_hub.ports.state_read_port import IStateReadPort
 from k1.model_hub.services.audit_logger import AuditLogger
 from k1.model_hub.services.capability_router import CapabilityRouter
 from k1.model_hub.services.model_selector import ModelSelector
@@ -99,6 +101,8 @@ class RequestRouter:
         dispatcher: ProviderDispatcher,
         audit_logger: Optional[AuditLogger] = None,
         metrics_port: Optional[_MetricsEmitter] = None,
+        event_port: Optional[IEventPort] = None,
+        state_read_port: Optional[IStateReadPort] = None,
     ) -> None:
         self._capability_router = capability_router
         self._model_selector = model_selector
@@ -107,6 +111,13 @@ class RequestRouter:
         self._dispatcher = dispatcher
         self._audit_logger = audit_logger
         self._metrics = metrics_port
+        self._event_port = event_port
+        # 3.1.3: state_read_port wired through (was previously validated
+        # in factory but silently discarded). Currently held for future
+        # state-driven routing/policy decisions; not yet consumed in
+        # route(). Per-request session_id is available on
+        # ``HubRequest.session_id`` (3.1.1).
+        self._state_read_port = state_read_port
         self._active_requests = 0
 
     # -- route() (MH-16) ------------------------------------------------------
@@ -148,9 +159,27 @@ class RequestRouter:
             self._emit(
                 "model_hub.errors_total", 1, {**std_labels, "error_type": "no_eligible_provider"}
             )
+            await self._publish(
+                "k1.model_hub.request.failed.v1",
+                {
+                    "request_id": request.request_id,
+                    "trace_id": request.trace_id,
+                    "error": "no_eligible_provider",
+                    **std_labels,
+                },
+            )
             raise
         except Exception:
             self._emit("model_hub.errors_total", 1, {**std_labels, "error_type": "internal"})
+            await self._publish(
+                "k1.model_hub.request.failed.v1",
+                {
+                    "request_id": request.request_id,
+                    "trace_id": request.trace_id,
+                    "error": "internal",
+                    **std_labels,
+                },
+            )
             raise
         finally:
             self._active_requests = max(0, self._active_requests - 1)
@@ -198,6 +227,7 @@ class RequestRouter:
                 request.payload,
                 choice.model_id,
                 request.constraints.temperature,
+                request.session_id,
             )
             cache_result = self._response_cache.get(cache_key)
             if cache_result.hit and cache_result.response is not None:
@@ -280,6 +310,7 @@ class RequestRouter:
                 request.payload,
                 choice.model_id,
                 request.constraints.temperature,
+                request.session_id,
             )
             self._response_cache.put(cache_key, response)
 
@@ -301,6 +332,20 @@ class RequestRouter:
             response.metadata.usage.prompt_tokens + response.metadata.usage.completion_tokens
         )
         self._emit("model_hub.tokens_used", total_tokens, result_labels)
+
+        await self._publish(
+            "k1.model_hub.request.completed.v1",
+            {
+                "request_id": request.request_id,
+                "trace_id": request.trace_id,
+                "provider": dispatch_result.provider_id,
+                "model": choice.model_id,
+                "capability": request.capability.value,
+                "latency_ms": latency_ms,
+                "total_tokens": total_tokens,
+                "fallback_used": dispatch_result.fallback_used,
+            },
+        )
 
         return response
 
@@ -385,7 +430,10 @@ class RequestRouter:
                     request_id=request.request_id,
                     model_id=choice.model_id,
                     provider_id=choice.provider_id,
-                    usage=TokenUsage(),
+                    usage=TokenUsage(
+                        prompt_tokens=chunk.prompt_tokens,
+                        completion_tokens=chunk.completion_tokens,
+                    ),
                     cost_usd=0.0,
                     latency_ms=0,
                     cache_hit=False,
@@ -419,6 +467,15 @@ class RequestRouter:
             self._metrics.emit(metric_name, value, labels)
         except Exception:  # noqa: BLE001
             logger.debug("Metric emission failed: %s", metric_name, exc_info=True)
+
+    async def _publish(self, topic: str, payload: Any) -> None:
+        """Fire-and-forget event publication. Never raises."""
+        if self._event_port is None:
+            return
+        try:
+            await self._event_port.publish(topic, payload)
+        except Exception:  # noqa: BLE001
+            logger.debug("Event publish failed: %s", topic, exc_info=True)
 
     # -- Validation ------------------------------------------------------------
 

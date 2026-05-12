@@ -130,13 +130,15 @@ class FailureReplanCheckpoint(DAGGuard):
                 reason="No remaining steps to amend",
             )
 
-        # 3. Replan budget gate.
-        if self._replans_used >= self._max_replans:
+        # 3. Replan budget gate (M5.4.1: shared ctx flag prevents
+        # double-replan when MicroReplanCheckpoint already ran).
+        if getattr(ctx, "micro_replan_done", False) or self._replans_used >= self._max_replans:
             logger.info(
-                "[%s] Replan budget exhausted (%d/%d) -- continuing",
+                "[%s] Replan budget exhausted (%d/%d, ctx.done=%s) -- continuing",
                 _GUARD_NAME,
                 self._replans_used,
                 self._max_replans,
+                getattr(ctx, "micro_replan_done", False),
             )
             return GuardDecision(
                 guard_name=_GUARD_NAME,
@@ -218,6 +220,11 @@ class FailureReplanCheckpoint(DAGGuard):
 
         # 6. Success — surface amended plan to executor via metadata.
         self._replans_used += 1
+        # M5.4.1: cross-guard budget bookkeeping.
+        try:
+            ctx.micro_replan_done = True
+        except Exception:
+            pass
         logger.info(
             "[%s] Failure-replan succeeded: %d new steps " "(replans=%d/%d)",
             _GUARD_NAME,

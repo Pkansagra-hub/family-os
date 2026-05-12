@@ -1,41 +1,56 @@
-"""Model selection (capability + preference + placement + health) [F42].
+"""Model selection: tier-based routing with health-gated fallback [F42].
 
-Selects optimal (provider, model) pair from eligible providers using
-4 dimensions: preference, placement, health, plus an explicit fallback
-chain. Cost/latency/budget scoring removed (family-os: provider cost
-tables are not enforced; capability routing is enough).
+Two routing paths, driven by request Priority:
 
-Import graph (Layer 3 -- imports Layer 0 + Layer 1 + Layer 2)
---------------------------------------------------------------
+  REALTIME / INTERACTIVE  → FAST-tier model (chat + tooling)
+  BACKGROUND              → PREMIUM-tier model (planning)
+
+Within a tier, UNHEALTHY providers are excluded entirely.
+DEGRADED providers are only used as last-resort fallback.
+Fallback chain is capped at 3 entries (MH-06).
+
+Import graph (Layer 3 -- imports Layer 0 + Layer 2)
+----------------------------------------------------
 k1.model_hub.services.model_selector
   -> k1.model_hub.types              (Layer 0)
-  -> k1.model_hub.manifest           (Layer 0)
   -> k1.model_hub.services.capability_router  (Layer 3, sibling)
-  -> k1.model_hub.services.provider_registry  (Layer 3, sibling)
   -> stdlib only
 
 NEVER import from any adapter or runtime module.
-
-References
-----------
-- model_hub.mmd: ModelSelector service
-- Invariant MH-06: Fallback is CAPABILITY-AWARE (top 3)
-- Invariant MH-13: Placement cascade (Local -> Remote -> Cached -> Template)
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import List, Optional
 
-from k1.model_hub.manifest import ModelSpec
 from k1.model_hub.services.capability_router import EligibleProvider
 from k1.model_hub.types import (
     HealthStatus,
     HubRequest,
     ModelPreference,
+    ModelTier,
     PlacementType,
+    Priority,
 )
+
+# Maximum fallback chain depth (MH-06)
+_MAX_FALLBACK_DEPTH = 3
+
+# Map request priority → required model tier
+_PRIORITY_TO_TIER: dict[Priority, ModelTier] = {
+    Priority.REALTIME: ModelTier.FAST,
+    Priority.INTERACTIVE: ModelTier.FAST,
+    Priority.BACKGROUND: ModelTier.PREMIUM,
+}
+
+# Placement scoring: local inference preferred over remote (MH-13).
+_PLACEMENT_SCORES: dict[PlacementType, int] = {
+    PlacementType.LOCAL_GPU: 3,
+    PlacementType.LOCAL_CPU: 2,
+    PlacementType.REMOTE: 1,
+}
+
 
 # ===========================================================================
 # ModelChoice -- output of selection
@@ -69,56 +84,27 @@ class FallbackEntry:
 
 
 # ===========================================================================
-# Scoring weights (family-os: simple, capability-first)
-# ===========================================================================
-
-# Preference + placement + health, weights sum to 1.0
-_WEIGHTS: Dict[str, float] = {
-    "preference": 0.5,
-    "placement": 0.2,
-    "health": 0.3,
-}
-
-# Placement type scores (local > remote, MH-13)
-_PLACEMENT_SCORES: Dict[PlacementType, float] = {
-    PlacementType.LOCAL_GPU: 1.0,
-    PlacementType.LOCAL_CPU: 0.7,
-    PlacementType.REMOTE: 0.4,
-}
-
-# Health status scores
-_HEALTH_SCORES: Dict[HealthStatus, float] = {
-    HealthStatus.HEALTHY: 1.0,
-    HealthStatus.DEGRADED: 0.5,
-    HealthStatus.UNHEALTHY: 0.0,
-}
-
-# Maximum fallback chain depth (MH-06)
-_MAX_FALLBACK_DEPTH = 3
-
-
-# ===========================================================================
 # ModelSelector
 # ===========================================================================
 
 
 class ModelSelector:
-    """Capability-first selection: preference + placement + health.
+    """Tier-based model routing with health-gated fallback.
 
-    3 scoring dimensions:
-      1. preference_score: User/consumer preferred provider/model match.
-      2. placement_score:  Local > remote (MH-13).
-      3. health_score:     HEALTHY > DEGRADED > UNHEALTHY.
-
-    Builds fallback chain of top 3 choices (MH-06).
-
-    Cost-based ranking and budget pressure removed -- family-os runs
-    on provider-supplied cost (recorded passively elsewhere) and does
-    not need to outsmart the provider's own pricing.
+    Selection rules:
+      1. Determine target tier from request priority:
+           REALTIME / INTERACTIVE → FAST (chat + tooling)
+           BACKGROUND             → PREMIUM (planning)
+      2. Build candidate list from eligible providers:
+           - Exclude UNHEALTHY providers entirely.
+           - HEALTHY providers go first; DEGRADED last-resort only.
+      3. Within HEALTHY candidates, tier-matched models listed before
+         non-matching models. Same ordering within DEGRADED bucket.
+      4. Return primary + up to 3 fallbacks (MH-06).
     """
 
     def __init__(self) -> None:
-        """Initialize ModelSelector. No state."""
+        pass
 
     def select(
         self,
@@ -127,133 +113,70 @@ class ModelSelector:
         *,
         preference: Optional[ModelPreference] = None,
     ) -> Optional[ModelChoice]:
-        """Select optimal (provider, model) pair with fallback chain.
+        """Select primary model and fallback chain for request.
 
         Args:
             eligible_providers: Pre-filtered providers from CapabilityRouter.
-            request: Original HubRequest (currently unused beyond context).
-            preference: Optional model preference from SessionState persona.
+            request: HubRequest — priority used for tier routing.
+            preference: Optional ModelPreference — avoid_providers applied.
 
         Returns:
-            ModelChoice with primary selection + fallback chain.
-            None if no eligible providers.
+            ModelChoice with primary + fallback chain, or None.
         """
         if not eligible_providers:
             return None
 
-        # If caller did not pass an explicit preference, fall back to the
-        # constraints-bound preference from the request envelope.
-        if preference is None:
-            preference = request.constraints.model_preference
+        avoid: set[str] = set(preference.avoid_providers) if preference else set()
+        target_tier = _PRIORITY_TO_TIER.get(request.constraints.priority, ModelTier.FAST)
 
-        # Score all (provider, model) candidates
-        candidates = self._score_all_candidates(eligible_providers, preference)
+        # Partition by health: healthy first, degraded last-resort
+        healthy: list[tuple[str, str]] = []
+        degraded: list[tuple[str, str]] = []
 
-        if not candidates:
+        for ep in eligible_providers:
+            if ep.health_status == HealthStatus.UNHEALTHY:
+                continue  # hard exclude
+            if ep.provider_info.provider_id in avoid:
+                continue  # preference-avoided: skip entirely
+            bucket = healthy if ep.health_status == HealthStatus.HEALTHY else degraded
+            _add_candidates(ep, target_tier, bucket)
+
+        all_candidates = healthy + degraded
+        if not all_candidates:
             return None
 
-        # Sort by score descending
-        candidates.sort(key=lambda c: c[2], reverse=True)
-
-        # Build primary choice + fallback chain (MH-06: top 3)
-        primary = candidates[0]
+        primary = all_candidates[0]
         fallbacks = [
-            FallbackEntry(
-                provider_id=c[0],
-                model_id=c[1],
-                score=c[2],
-            )
-            for c in candidates[1:_MAX_FALLBACK_DEPTH]
+            FallbackEntry(provider_id=p, model_id=m, score=0.0)
+            for p, m in all_candidates[1 : _MAX_FALLBACK_DEPTH + 1]
         ]
-
+        primary_score = 1.0 if primary in healthy else 0.5
         return ModelChoice(
             provider_id=primary[0],
             model_id=primary[1],
             fallback_chain=fallbacks,
-            score=primary[2],
+            score=primary_score,
         )
 
-    # -- Scoring ---------------------------------------------------------------
 
-    def _score_all_candidates(
-        self,
-        eligible_providers: List[EligibleProvider],
-        preference: Optional[ModelPreference],
-    ) -> List[tuple]:
-        """Score all (provider, model) pairs.
+def _add_candidates(
+    ep: EligibleProvider,
+    target_tier: ModelTier,
+    bucket: list[tuple[str, str]],
+) -> None:
+    """Append (provider_id, model_id) pairs to bucket.
 
-        Returns list of (provider_id, model_id, score) tuples.
-        """
-        candidates: List[tuple] = []
+    Tier-matched models go first within the bucket; unmatched after.
+    """
+    provider_id = ep.provider_info.provider_id
+    if not ep.eligible_models:
+        bucket.append((provider_id, ""))
+        return
 
-        for ep in eligible_providers:
-            for model in ep.eligible_models:
-                score = self._score_candidate(ep, model, preference)
-                candidates.append((ep.provider_info.provider_id, model.id, score))
-
-            # If no specific models, score provider with empty model
-            if not ep.eligible_models:
-                score = self._score_provider_only(ep, preference)
-                candidates.append((ep.provider_info.provider_id, "", score))
-
-        return candidates
-
-    def _score_candidate(
-        self,
-        ep: EligibleProvider,
-        model: ModelSpec,
-        preference: Optional[ModelPreference],
-    ) -> float:
-        """Score a single (provider, model) candidate across 3 dimensions."""
-        preference_score = self._compute_preference_score(
-            ep.provider_info.provider_id, model.id, preference
-        )
-        placement_score = _PLACEMENT_SCORES.get(ep.provider_info.placement_type, 0.4)
-        health_score = _HEALTH_SCORES.get(ep.health_status, 0.5)
-
-        return (
-            _WEIGHTS["preference"] * preference_score
-            + _WEIGHTS["placement"] * placement_score
-            + _WEIGHTS["health"] * health_score
-        )
-
-    def _score_provider_only(
-        self,
-        ep: EligibleProvider,
-        preference: Optional[ModelPreference],
-    ) -> float:
-        """Score a provider with no specific model information."""
-        preference_score = self._compute_preference_score(
-            ep.provider_info.provider_id, "", preference
-        )
-        placement_score = _PLACEMENT_SCORES.get(ep.provider_info.placement_type, 0.4)
-        health_score = _HEALTH_SCORES.get(ep.health_status, 0.5)
-
-        return (
-            _WEIGHTS["preference"] * preference_score
-            + _WEIGHTS["placement"] * placement_score
-            + _WEIGHTS["health"] * health_score
-        )
-
-    @staticmethod
-    def _compute_preference_score(
-        provider_id: str,
-        model_id: str,
-        preference: Optional[ModelPreference],
-    ) -> float:
-        """Compute preference match score (0-1)."""
-        if preference is None:
-            return 0.5  # Neutral when no preference
-
-        score = 0.5
-        if preference.preferred_provider and preference.preferred_provider == provider_id:
-            score += 0.3
-        if preference.preferred_model and preference.preferred_model == model_id:
-            score += 0.2
-        if provider_id in (preference.avoid_providers or []):
-            score = 0.0  # Hard avoid
-
-        return min(score, 1.0)
+    matched = [m for m in ep.eligible_models if m.tier == target_tier]
+    unmatched = [m for m in ep.eligible_models if m.tier != target_tier]
+    for m in matched + unmatched:
+        bucket.append((provider_id, m.id))
 
 
 __all__ = [

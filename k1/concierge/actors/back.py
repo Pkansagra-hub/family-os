@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 from typing import Any
 
 from k1.bus.envelope import Envelope
@@ -56,6 +55,7 @@ from k1.concierge.llm.types import ModelMessage
 from k1.concierge.llm.validator import LLMOutputValidator
 from k1.concierge.prompt.back_prompt import build_back_prompt
 from k1.concierge.protocols.cancellation import CancellationToken, CancelReason
+from k1.concierge.protocols.suspension import SuspensionResolutionNotFound
 from k1.concierge.react.history import build_chat_history_for_back
 from k1.concierge.react.loop import ReactResult, react_loop
 from k1.concierge.tools.dispatcher import ToolDispatcher, create_back_dispatcher
@@ -698,54 +698,47 @@ async def back_resume_handler(
     )
 
     # 1. Retrieve prior context
-    # M3 E3.3.1 + 3.3.2: SuspensionManager is single resume-context owner.
-    # Primary path: read from envelope-carried resume_context (enriched
-    # by FSM _on_task_resume via SuspensionManager.pop_context).
-    # Fallback: legacy _get_pending_context (deprecated, warns).
+    # M3 E3.3.1 + 3.3.2 + M6 E6.2 (C08): SuspensionManager is the single
+    # resume-context owner.  FSM enriches the resume envelope's payload
+    # via SuspensionManager.pop_context.  If the payload lacks
+    # ``resume_context`` (or ``resume_context`` lacks the required keys),
+    # there is no recovery path here -- raise SuspensionResolutionNotFound
+    # so the caller can re-emit the original HITL question to Front.
     original_task: dict[str, Any] = {}
     prior_messages: list[ModelMessage] = []
 
     if resume_context and (
         resume_context.get("original_task") or resume_context.get("react_history")
     ):
-        # Primary path: envelope-carried context from SuspensionManager
         original_task = resume_context.get("original_task", {})
         raw_history = resume_context.get("react_history", [])
         if isinstance(raw_history, list) and raw_history:
             prior_messages = _deserialize_messages(raw_history)
         logger.info(
             "back_resume_handler: using envelope-carried resume_context "
-            "(primary path) original_task_keys=%s prior_msgs=%d",
+            "original_task_keys=%s prior_msgs=%d",
             list(original_task.keys())[:5] if original_task else [],
             len(prior_messages),
         )
     else:
-        # Fallback: legacy _get_pending_context (deprecated M3 E3.3.3)
-        pending = _get_pending_context(fsm_state, task_id)
-        if pending:
-            original_task = pending.get("original_task", {})
-            prior_messages = pending.get("prior_messages", [])
-            logger.warning(
-                "back_resume_handler: using legacy _get_pending_context "
-                "fallback (deprecated) for task_id=%s",
-                task_id,
-            )
-        else:
-            logger.warning(
-                "back_resume_handler: no resume context available for "
-                "task_id=%s (neither envelope nor fsm_state)",
-                task_id,
-            )
-            env = build_task_failed(
-                payload={
-                    "task_id": task_id,
-                    "reason": "no_pending_context",
-                    "error_code": "NO_PENDING_CONTEXT",
-                },
-                parent_id=envelope.envelope_id,
-            )
-            bus.publish(env)
-            return ReactResult(status="cancelled", data={"reason": "no_pending_context"})
+        logger.warning(
+            "back_resume_handler: no resume_context for task_id=%s "
+            "-- raising SuspensionResolutionNotFound",
+            task_id,
+        )
+        # Emit task_failed with the canonical error_code so observers
+        # see a clean failure trail, then raise so the FSM can re-emit
+        # the HITL question.
+        env = build_task_failed(
+            payload={
+                "task_id": task_id,
+                "reason": "suspension_resolution_not_found",
+                "error_code": "SUSPENSION_RESOLUTION_NOT_FOUND",
+            },
+            parent_id=envelope.envelope_id,
+        )
+        bus.publish(env)
+        raise SuspensionResolutionNotFound(task_id)
 
     tier = original_task.get("tier", "LOW")
     # P3.4c: Per-task tier rebind for the back dispatcher.
@@ -852,8 +845,8 @@ async def back_resume_handler(
         tool_call_summaries=resume_call_summaries,
     )
 
-    # 10. Clean up pending context
-    _clear_pending_context(fsm_state, task_id)
+    # 10. M6 E6.2 (C07): legacy _clear_pending_context call removed --
+    # SuspensionManager.cleanup_task is now the single owner.
 
     logger.info(
         "back_resume_handler complete: task_id=%s status=%s trace=%s",
@@ -1061,119 +1054,6 @@ async def route_back_envelope(
         getattr(envelope, "envelope_id", "?"),
     )
     return None
-
-
-# =========================================================================
-# store_pending_context -- Epic 7.4.2 (Suspend context storage)
-# =========================================================================
-
-
-def store_pending_context(
-    fsm_state: Any,
-    task_id: str,
-    original_task: dict[str, Any],
-    prior_messages: list[ModelMessage],
-) -> None:
-    """Store ReAct message history on suspend for later resume.
-
-    .. deprecated:: M3 E3.3.3
-        SuspensionManager is now the single resume-context owner.
-        Resume context flows via envelope payload (FSM enriches on
-        resume via SuspensionManager.pop_context). This function is
-        no longer called by any production path.
-        Scheduled for removal in M8.
-
-    Args:
-        fsm_state: FSMTurnState with pending_context dict.
-        task_id: ID of the suspended task.
-        original_task: The full TaskDispatch payload.
-        prior_messages: Complete ReAct message list before suspend.
-    """
-    # TODO: Remove in M8 -- replaced by SuspensionManager (M3 E3.3.1)
-    if fsm_state is None:
-        return
-
-    if not hasattr(fsm_state, "pending_context"):
-        return
-
-    suspension_count = 0
-    existing = fsm_state.pending_context.get(task_id)
-    if existing:
-        suspension_count = existing.get("suspension_count", 0)
-
-    fsm_state.pending_context[task_id] = {
-        "original_task": original_task,
-        "prior_messages": prior_messages,
-        "suspended_at": time.monotonic(),
-        "suspension_count": suspension_count + 1,
-    }
-
-
-# =========================================================================
-# Event subscription wiring -- Epic 7.2
-# =========================================================================
-
-
-def subscribe_back_events(
-    bus: IBus,
-    handler_fn: Any,
-) -> list[Any]:
-    """Subscribe to all Back-relevant bus topics.
-
-    .. deprecated:: M3 E3.1.5
-        This function is dead code. The FSM controller delivers envelopes
-        via MailboxRouter and route_back_envelope handles topic-based
-        dispatch. Do NOT call this function in new code.
-        Scheduled for removal in M8.
-
-    Wires up the Back handler to receive events from the bus.
-    The 4 primary subscriptions per V2 Section 6.2:
-      - k1.orchestration.task.dispatch.v1
-      - k1.orchestration.task.cancel.v1
-      - k1.orchestration.task.resume.v1
-      - k1.orchestration.clarification.response.v1
-
-    Args:
-        bus: IBus instance.
-        handler_fn: Callable[[Envelope], None] handler for each topic.
-
-    Returns:
-        List of SubscriptionHandle objects from bus.subscribe().
-    """
-    import warnings
-
-    warnings.warn(
-        "subscribe_back_events is deprecated (M3 E3.1.5). "
-        "Use route_back_envelope for topic-based dispatch. "
-        "Removal scheduled for M8.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    from k1.concierge.bus.topics import (
-        TOPIC_CLARIFICATION_RESPONSE,
-        TOPIC_TASK_CANCEL,
-        TOPIC_TASK_DISPATCH,
-        TOPIC_TASK_RESUME,
-    )
-
-    topics = [
-        TOPIC_TASK_DISPATCH,
-        TOPIC_TASK_CANCEL,
-        TOPIC_TASK_RESUME,
-        TOPIC_CLARIFICATION_RESPONSE,
-    ]
-
-    logger.info(
-        "subscribe_back_events: wiring %d topics to back handler",
-        len(topics),
-    )
-    handles = []
-    for topic in topics:
-        handle = bus.subscribe(topic, handler_fn)
-        handles.append(handle)
-        logger.debug("  subscribed back -> %s", topic)
-    logger.info("subscribe_back_events: complete (%d handles)", len(handles))
-    return handles
 
 
 # =========================================================================
@@ -1393,36 +1273,3 @@ def _build_cancellation_check(
         "provided — Back loop will not be interruptible by HITL timeout"
     )
     return _never_cancel
-
-
-def _get_pending_context(fsm_state: Any, task_id: str) -> dict[str, Any] | None:
-    """Retrieve pending context for a suspended task from FSMTurnState.
-
-    .. deprecated:: M3 E3.3.3
-        SuspensionManager is now the single resume-context owner.
-        back_resume_handler reads from envelope.payload.resume_context
-        as the primary path. This function is only used as a legacy
-        fallback. Scheduled for removal in M8.
-    """
-    # TODO: Remove in M8 -- replaced by envelope-carried resume_context
-    if fsm_state is None:
-        return None
-    if not hasattr(fsm_state, "pending_context"):
-        return None
-    return fsm_state.pending_context.get(task_id)
-
-
-def _clear_pending_context(fsm_state: Any, task_id: str) -> None:
-    """Remove pending context after resume completes.
-
-    .. deprecated:: M3 E3.3.3
-        SuspensionManager is now the single resume-context owner.
-        Cleanup is handled by SuspensionManager.cleanup_task on
-        task terminal states. Scheduled for removal in M8.
-    """
-    # TODO: Remove in M8 -- replaced by SuspensionManager.cleanup_task
-    if fsm_state is None:
-        return
-    if not hasattr(fsm_state, "pending_context"):
-        return
-    fsm_state.pending_context.pop(task_id, None)

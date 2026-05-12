@@ -20,6 +20,7 @@ References
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -63,8 +64,10 @@ class AuditLogger:
     this in-memory implementation supports testing and local dev.
     """
 
+    _MAX_RECORDS: int = 10_000
+
     def __init__(self) -> None:
-        self._records: List[AuditRecord] = []
+        self._records: deque[AuditRecord] = deque(maxlen=self._MAX_RECORDS)
 
     def log(
         self,

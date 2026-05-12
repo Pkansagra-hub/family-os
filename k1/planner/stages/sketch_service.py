@@ -114,10 +114,12 @@ SKETCH_OUTPUT_SCHEMA: Dict[str, Any] = {
                     },
                     "depends_on": {
                         "type": "array",
-                        "items": {"type": "integer"},
+                        "items": {"type": "string"},
                         "description": (
-                            "Zero-based indices of steps that must "
-                            "complete before this step can begin."
+                            "Intent strings of preceding steps that "
+                            "must complete before this step can begin. "
+                            "Each entry must exactly match the intent of "
+                            "another step in this list."
                         ),
                     },
                 },
@@ -530,8 +532,8 @@ class SketchService:
             "the agent's behaviour.\n"
             "- Each step must describe ONE concrete action.\n"
             "- Prefer the minimal number of steps.\n"
-            "- Express step dependencies via depends_on (zero-based "
-            "indices).\n"
+            "- Express step dependencies via depends_on using the "
+            "exact intent strings of preceding steps (NOT indices).\n"
             "- Only suggest capabilities you discovered via "
             "discover_capabilities.\n"
             "- If the intent is genuinely ambiguous, set "
@@ -787,16 +789,33 @@ class SketchService:
             )
 
         # Build RoughStep list.
+        # P08 fix: depends_on entries are intent strings (stable identifiers),
+        # not zero-based integer indices. The previous integer scheme was
+        # fragile under reordering and silently dropped out-of-range indices.
+        known_intents: set[str] = set()
+        for raw in raw_steps:
+            intent = raw.get("intent", "")
+            if intent:
+                known_intents.add(intent)
+
         steps: List[RoughStep] = []
         for raw in raw_steps:
+            raw_deps = raw.get("depends_on", [])
+            unknown_deps = [d for d in raw_deps if not (isinstance(d, str) and d in known_intents)]
+            if unknown_deps:
+                raise SketchFailedError(
+                    (
+                        "LLM produced unknown depends_on intent strings "
+                        f"{unknown_deps!r} for step intent="
+                        f"{raw.get('intent', '')!r}; valid intents are "
+                        f"{sorted(known_intents)!r}"
+                    ),
+                    stage="SKETCH",
+                )
             step = RoughStep(
                 intent=raw.get("intent", ""),
                 suggested_capability=raw.get("suggested_capability"),
-                depends_on=[
-                    raw_steps[i].get("intent", "")
-                    for i in raw.get("depends_on", [])
-                    if 0 <= i < len(raw_steps)
-                ],
+                depends_on=list(raw_deps),
             )
             steps.append(step)
 
@@ -1189,9 +1208,10 @@ class SketchService:
             "sufficient context.\n"
             "- Prefer the minimal change: reuse remaining steps that "
             "are still valid.\n"
-            "- Express step dependencies via depends_on (zero-based "
-            "indices). Replacement steps may depend on completed "
-            "step outputs.\n"
+            "- Express step dependencies via depends_on using the "
+            "exact intent strings of preceding steps (NOT indices). "
+            "Replacement steps may depend on completed step outputs by "
+            "intent string.\n"
             "- Do NOT request clarification (set "
             "needs_clarification to false).\n"
             "\n"

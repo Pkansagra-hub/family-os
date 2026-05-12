@@ -54,6 +54,9 @@ class _ConformingBus:
     def publish(self, envelope: Envelope) -> None:
         pass
 
+    def publish_batch(self, envelopes: list[Envelope]) -> None:
+        pass
+
     def subscribe(self, pattern: str, handler: BusHandler) -> SubscriptionHandle:
         return SubscriptionHandle(subscription_id="test", pattern=pattern)
 

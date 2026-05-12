@@ -213,30 +213,46 @@ def _safe_get_ss_section(ss: Any, section_name: str) -> Any:
 
 
 def _render_task_state_full(section: Any, cfg: SSReadConfig) -> str:
-    """Delegate to section.to_prompt()."""
+    """Delegate to section.to_prompt(). Suppress empty placeholder strings."""
     if hasattr(section, "to_prompt"):
-        return section.to_prompt()
+        text = section.to_prompt() or ""
+        stripped = text.strip().lower()
+        if stripped in {"", "(no active task)", "(no task)", "(none)"}:
+            return ""
+        return text
     return ""
 
 
 def _render_task_state_slim(section: Any, cfg: SSReadConfig) -> str:
-    """Delegate to section.to_slim_prompt()."""
+    """Delegate to section.to_slim_prompt(). Suppress empty placeholder strings."""
     if hasattr(section, "to_slim_prompt"):
-        return section.to_slim_prompt()
+        text = section.to_slim_prompt() or ""
+        stripped = text.strip().lower()
+        if stripped in {"", "(no active task)", "(no task)", "(none)"}:
+            return ""
+        return text
     return ""
 
 
 def _render_task_artifacts_full(section: Any, cfg: SSReadConfig) -> str:
-    """Delegate to section.to_prompt()."""
+    """Delegate to section.to_prompt(). Suppress empty placeholder strings."""
     if hasattr(section, "to_prompt"):
-        return section.to_prompt()
+        text = section.to_prompt() or ""
+        stripped = text.strip().lower()
+        if stripped in {"", "(no artifacts)", "(none)", "0 artifact(s)"}:
+            return ""
+        return text
     return ""
 
 
 def _render_task_artifacts_slim(section: Any, cfg: SSReadConfig) -> str:
-    """Delegate to section.to_slim_prompt()."""
+    """Delegate to section.to_slim_prompt(). Suppress empty placeholder strings."""
     if hasattr(section, "to_slim_prompt"):
-        return section.to_slim_prompt()
+        text = section.to_slim_prompt() or ""
+        stripped = text.strip().lower()
+        if stripped in {"", "(no artifacts)", "(none)", "0 artifact(s)"}:
+            return ""
+        return text
     return ""
 
 
@@ -272,7 +288,10 @@ def _render_beliefs_active_full(section: Any, cfg: SSReadConfig) -> str:
         for eid, eref in section._entities.items():
             name = getattr(eref, "display_name", eid)
             etype = getattr(eref, "type", "")
-            lines.append(f"  [entity: {name} ({etype})]")
+            if etype:
+                lines.append(f"  [entity: {name} ({etype})]")
+            else:
+                lines.append(f"  [entity: {name}]")
     # Mentioned time/location
     if hasattr(section, "_mentioned_time") and section._mentioned_time:
         raw = getattr(section._mentioned_time, "raw_text", "")
@@ -503,12 +522,20 @@ def _render_affective_now_slim(section: Any, cfg: SSReadConfig) -> str:
 
 
 def _render_control_full(section: Any, cfg: SSReadConfig) -> str:
-    """Full: get_metadata() dict including fsm_overlay."""
+    """Full: get_metadata() dict including fsm_overlay. Pretty-prints
+    nested dicts as ``key.subkey: value`` lines (avoids Python ``repr``
+    leaking into the prompt)."""
     if hasattr(section, "get_metadata"):
         meta = section.get_metadata()
         lines: list[str] = []
         for key, val in meta.items():
-            lines.append(f"{key}: {val}")
+            if isinstance(val, dict):
+                if not val:
+                    continue
+                for sub_key, sub_val in val.items():
+                    lines.append(f"{key}.{sub_key}: {sub_val}")
+            else:
+                lines.append(f"{key}: {val}")
         return "\n".join(lines)
     return ""
 
@@ -904,41 +931,94 @@ class DynamicPromptBuilder:
             modifiers.skip_refine_affect,
         )
 
-        # Stage 9.5: Append grounding capsule (k1.selfmodel M4)
-        # When ``grounding_capsule`` is None the pipeline is identical
-        # to the pre-M4 baseline. When provided, the capsule's
-        # prompt-safe blocks are appended last so the LLM sees them
-        # right before the assembled system_prompt boundary.
+        # Stage 9.5: Promote LIVE turn-specific signals + split capsule.
         #
-        # M6 framing preamble: the LLM previously confused the
-        # ``[conscience]`` block (a *behavioural conscience*) with the
-        # ``tools=[]`` JSON-Schema list (a *capability menu*). The
-        # preamble below disambiguates them so the model neither
-        # refuses tools that are simply unmentioned by the conscience
-        # nor invokes acts that ARE listed under ``forbidden``.
+        # Rationale (audit findings, May 2026): the previous layout buried
+        # CURRENT TIME, affect band, and the conscience block at positions
+        # 14+, 16, and 17 — even though IDENTITY/SAFETY rules at positions 1
+        # and 10 directly reference them. We now promote three blocks to
+        # sit RIGHT AFTER IDENTITY so they precede every rule that depends
+        # on them:
+        #   1. == NOW ==              one-line clock from temporal_context
+        #   2. == AFFECT STATE ==     band + tone-rule + length-rule (consolidated)
+        #   3. == CONSCIENCE ==       forbidden / must_ask acts (from capsule)
+        #
+        # The remaining capsule blocks ([self] / [preferences] / [space]
+        # / etc. and the freshness footer) stay at the bottom under a
+        # tightened == GROUNDING == header.
+        #
+        # M6 framing note: the LLM previously confused the conscience
+        # (behavioural) with ``tools=[]`` (capability menu). The new
+        # preamble keeps that disambiguation while being much shorter.
+        live_now_block = self._build_now_block(ss)
+        affect_state_block = self._build_affect_state_block(affect_band, modifiers, ss)
+        active_member_block = ""
+        conscience_block_text = ""
+        capsule_text = ""
         if grounding_capsule is not None:
+            active_member_block = self._build_active_member_block(grounding_capsule)
+            conscience_block_text = getattr(grounding_capsule, "conscience_block", "") or ""
             try:
-                capsule_text = grounding_capsule.as_prompt_text()
+                capsule_text = self._render_capsule_without_conscience(grounding_capsule)
             except Exception:
-                logger.exception("  Stage 9.5  grounding_capsule.as_prompt_text() raised; skipping")
+                logger.exception("  Stage 9.5  capsule render raised; skipping capsule body")
                 capsule_text = ""
-            if capsule_text:
-                preamble = (
-                    "[grounding]\n"
-                    "The blocks below describe WHO the user is, WHAT family context "
-                    "applies, and WHICH social acts the constitution forbids or "
-                    "requires confirmation for. They are not a tool allowlist — your "
-                    "available tools are listed separately under `tools=[...]`. "
-                    "Use the [self] / [preferences] / [hobbies] / [goals] / "
-                    "[routines] / [household] / [context] blocks to ground your "
-                    "reply. Treat the [conscience] block as the only authoritative "
-                    "source of refusal: act ids in `forbidden` MUST NOT be performed; "
-                    "act ids in `must_ask` require explicit user confirmation; "
-                    "everything else is allowed by default."
-                )
-                prompt_parts.append(preamble)
-                prompt_parts.append(capsule_text)
-                logger.debug("  Stage 9.5  capsule appended (len=%d)", len(capsule_text))
+
+        # Compute insertion index: directly after IDENTITY (always part[0]
+        # when present). For modes whose first section is not IDENTITY we
+        # still insert at index 0.
+        insert_idx = 1 if prompt_parts and prompt_parts[0].startswith("== IDENTITY ==") else 0
+
+        # Promotion order (inserted at insert_idx in sequence):
+        #   [self]+[space]  ->  NOW  ->  AFFECT STATE  ->  CONSCIENCE
+        # This ensures IDENTITY is immediately followed by WHO the user is,
+        # then the live turn signals, then the refusal authority — all before
+        # any rule section that references them.
+        promoted: list[str] = []
+        if active_member_block:
+            promoted.append(active_member_block)
+        if live_now_block:
+            promoted.append(live_now_block)
+        if affect_state_block:
+            promoted.append(affect_state_block)
+        if conscience_block_text:
+            conscience_header = (
+                "== CONSCIENCE (live, from constitution) ==\n"
+                "This block is the ONLY authoritative refusal source for this turn.\n"
+                "  forbidden=...  -> these act ids MUST NOT be performed.\n"
+                "  must_ask=...   -> these act ids REQUIRE explicit user confirmation.\n"
+                "  everything else is allowed by default.\n"
+                "Read this BEFORE the SAFETY & HITL RELAY rules below.\n\n" + conscience_block_text
+            )
+            promoted.append(conscience_header)
+
+        # Insert in original order at insert_idx
+        for i, block in enumerate(promoted):
+            prompt_parts.insert(insert_idx + i, block)
+
+        # Late grounding (reference-lookup blocks: prefs, hobbies, goals,
+        # routines, context, freshness). Identity + space + conscience
+        # are already promoted earlier in this stage.
+        if capsule_text:
+            preamble = (
+                "== REFERENCE PROFILE (live projection) ==\n"
+                "Look up facts here when personalizing a response. These supplement\n"
+                "the [self]/[space] blocks already shown above.\n"
+                "- [preferences]  stored defaults for decisions (payment, dietary, etc.)\n"
+                "- [hobbies]      likes/dislikes for tone + recommendation flavoring\n"
+                "- [goals]        active goals for relevance-ranking + suggestions\n"
+                "- [routines]     regular patterns for habit-aware responses\n"
+                "- [context]      current device/situation override\n"
+                "- [freshness]    staleness signal — stale = note but proceed\n"
+                "- NOT a tool allowlist; tools are listed under `tools=[...]`."
+            )
+            prompt_parts.append(preamble)
+            prompt_parts.append(capsule_text)
+            logger.debug(
+                "  Stage 9.5  capsule split: conscience_promoted=%s body_len=%d",
+                bool(conscience_block_text),
+                len(capsule_text),
+            )
 
         # Assemble and interpolate placeholders
         system_prompt = "\n\n".join(part for part in prompt_parts if part)
@@ -1004,6 +1084,156 @@ class DynamicPromptBuilder:
         """Filter tool schemas by mode allowlist with conditional inclusion."""
         allowed_names = get_tool_allowlist(mode, affect_confidence, tier)
         return [t for t in all_schemas if t.name in allowed_names]
+
+    # -----------------------------------------------------------------
+    # Stage 9.5 helpers — promote live signals + split capsule
+    # -----------------------------------------------------------------
+
+    @staticmethod
+    def _build_now_block(ss: Any) -> str:
+        """One-line ``== NOW ==`` header derived from temporal_context.
+
+        Returns ``""`` if ss is None or temporal anchor unavailable.
+        """
+        if ss is None:
+            return ""
+        section = _safe_get_ss_section(ss, "control")
+        if section is None or not hasattr(section, "get_temporal_anchor"):
+            return ""
+        try:
+            anchor = section.get_temporal_anchor() or {}
+        except Exception:
+            return ""
+        if not anchor:
+            return ""
+        iso = anchor.get("local_time_iso", "")
+        day = anchor.get("day_of_week", "")
+        tod = anchor.get("time_of_day", "")
+        tz = anchor.get("timezone", "UTC")
+        is_weekend = anchor.get("is_weekend", False)
+        time_str = iso
+        try:
+            from datetime import datetime as _dt
+
+            time_str = _dt.fromisoformat(iso).strftime("%I:%M %p")
+        except Exception:
+            pass
+        pieces = [p for p in [time_str, day, tod, tz] if p]
+        kind = "weekend" if is_weekend else "weekday"
+        return f"== NOW ==\n{' | '.join(pieces)} ({kind})"
+
+    @staticmethod
+    def _build_affect_state_block(
+        affect_band: AffectBand,
+        modifiers: Any,
+        ss: Any,
+    ) -> str:
+        """Consolidated ``== AFFECT STATE ==`` block.
+
+        Combines: resolved band, tone rule (from AFFECT_TONE_BLOCKS body),
+        response-length rule (from AffectModifiers), and raw valence/arousal
+        from affective_now. Replaces the previously scattered TONE: ... and
+        == RESPONSE LENGTH == blocks (those remain available downstream as
+        reference material but are now headlined here).
+        """
+        band = getattr(affect_band, "band", "neutral")
+        valence = None
+        arousal = None
+        emotion = None
+        if ss is not None:
+            section = _safe_get_ss_section(ss, "affective_now")
+            if section is not None:
+                emotion = getattr(section, "current_emotion", None)
+                valence = getattr(section, "valence", None)
+                arousal = getattr(section, "arousal", None)
+
+        length_hint = ""
+        if modifiers is not None:
+            length_hint = getattr(modifiers, "response_length_hint", "") or ""
+
+        # Compact one-line tone rule per band
+        tone_rules = {
+            "crisis": "Calm + structured. Lead with action. Max 3 numbered options. NO empathy monologue.",
+            "low": "Gentle + brief. Don't force cheerfulness. Offer help without pressure.",
+            "elevated": "Acknowledge feeling in ONE sentence, then move to action.",
+            "positive": "Match energy. Be playful. Slightly more expressive than baseline.",
+            "neutral": "Natural voice. Efficient + warm. Light wit OK.",
+        }
+        tone = tone_rules.get(band, tone_rules["neutral"])
+
+        lines = ["== AFFECT STATE ==", f"Band: {band.upper()}"]
+        raw_parts = []
+        if emotion:
+            raw_parts.append(f"emotion={emotion}")
+        if valence is not None:
+            raw_parts.append(f"valence={valence}")
+        if arousal is not None:
+            raw_parts.append(f"arousal={arousal}")
+        if raw_parts:
+            lines.append(f"Raw: {' '.join(raw_parts)}")
+        lines.append(f"Tone rule: {tone}")
+        if length_hint:
+            lines.append(f"Response length: {length_hint}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _build_active_member_block(grounding_capsule: Any) -> str:
+        """Compose ``== ACTIVE MEMBER ==`` from M7 typed ``self_block`` +
+        ``space_graph_block`` only.
+
+        Placed at position 2 (right after IDENTITY) so every rule that
+        references 'the user' or 'the family' is grounded before the LLM
+        reads it.
+
+        Only uses M7 typed fields. Legacy ``actor_block`` / ``family_block``
+        are intentionally excluded so backward-compat tests that use only
+        legacy fields are unaffected by this promotion.
+        """
+        self_block = getattr(grounding_capsule, "self_block", "") or ""
+        space_graph_block = getattr(grounding_capsule, "space_graph_block", "") or ""
+        if not self_block and not space_graph_block:
+            return ""
+        parts = [
+            "== ACTIVE MEMBER (authoritative — read before all rules) ==",
+            "Ground truth for who you are talking to and their space.\n"
+            "These blocks override any inference from chat history.",
+        ]
+        if self_block:
+            parts.append(self_block)
+        if space_graph_block:
+            parts.append(space_graph_block)
+        return "\n\n".join(parts)
+
+    @staticmethod
+    def _render_capsule_without_conscience(grounding_capsule: Any) -> str:
+        """Render capsule WITHOUT:
+        - ``conscience_block`` (promoted near SAFETY rules)
+        - ``self_block`` (promoted to ACTIVE MEMBER when M7 field is set)
+        - ``space_graph_block`` (promoted to ACTIVE MEMBER when M7 field is set)
+
+        If only the legacy ``actor_block`` / ``family_block`` fields are
+        present (no M7 typed blocks), they fall through here unchanged for
+        backward compatibility.
+        """
+        self_block = getattr(grounding_capsule, "self_block", "") or ""
+        space_graph_block = getattr(grounding_capsule, "space_graph_block", "") or ""
+        # If M7 typed block is set it was already promoted — don't duplicate.
+        # If only legacy is set, keep it in the tail for back-compat.
+        identity_slot = "" if self_block else (getattr(grounding_capsule, "actor_block", "") or "")
+        space_slot = (
+            "" if space_graph_block else (getattr(grounding_capsule, "family_block", "") or "")
+        )
+        ordered = [
+            identity_slot,
+            getattr(grounding_capsule, "preferences_block", ""),
+            getattr(grounding_capsule, "hobbies_block", ""),
+            getattr(grounding_capsule, "goals_block", ""),
+            getattr(grounding_capsule, "routines_block", ""),
+            space_slot,
+            getattr(grounding_capsule, "context_block", ""),
+            getattr(grounding_capsule, "freshness_footer", ""),
+        ]
+        return "\n".join(p for p in ordered if p)
 
     def _format_scenario_data(self, mode: PromptMode, data: dict[str, Any]) -> str:
         """Format scenario data using SCENARIO_DATA_TEMPLATES.

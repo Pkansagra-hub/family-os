@@ -58,7 +58,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any, List, Optional, Set
+import time
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
 
 from k1.fabric.ports.event_port import SubscriptionHandle
 from k1.orchestrator.types import CommittedPlan, MicroReplanRequest, PlanRequest
@@ -172,7 +173,10 @@ class PlannerAgent:
         self._plan_lock: asyncio.Lock = asyncio.Lock()
 
         # -- Cancel set (SS24.2) --
-        self._cancel_set: Set[str] = set()
+        # P06: dict (request_id -> time.monotonic() at insert) so we can
+        # bound memory by sweeping stale entries each dequeue iteration.
+        # Membership tests (`in`) and discards keep O(1) semantics on a dict.
+        self._cancel_set: Dict[str, float] = {}
 
         # -- Dequeue loop control --
         self._running: bool = False
@@ -221,7 +225,7 @@ class PlannerAgent:
 
         Returns a shallow copy to prevent external mutation.
         """
-        return set(self._cancel_set)
+        return set(self._cancel_set.keys())
 
     @property
     def running(self) -> bool:
@@ -375,7 +379,7 @@ class PlannerAgent:
                     extra={"payload_type": type(payload).__name__},
                 )
                 return
-            self._cancel_set.add(request_id)
+            self._cancel_set[request_id] = time.monotonic()
             logger.info(
                 "planner_agent.cancel_registered",
                 extra={"request_id": request_id, "source": "event"},
@@ -435,9 +439,19 @@ class PlannerAgent:
             if not self._running:
                 break
 
+            # -- P06: Sweep stale cancel entries --
+            # Cancellations registered for requests that were rejected by the
+            # mailbox, completed before being seen, or duplicate-cancelled
+            # have no `discard` site. Without this sweep, _cancel_set would
+            # grow unbounded over the agent's lifetime.
+            stale_cutoff = time.monotonic() - (self._config.pipeline_timeout_ms / 1000.0 + 5.0)
+            stale_keys = [rid for rid, ts in self._cancel_set.items() if ts < stale_cutoff]
+            for rid in stale_keys:
+                self._cancel_set.pop(rid, None)
+
             # -- Cancel pre-check (SS24.2.2 checkpoint 1) --
             if request.request_id in self._cancel_set:
-                self._cancel_set.discard(request.request_id)
+                self._cancel_set.pop(request.request_id, None)
                 try:
                     self._event_port.emit(
                         TOPIC_PLAN_CANCELLED,
@@ -524,7 +538,7 @@ class PlannerAgent:
                 # stale pipeline state (asyncio is cooperative, but this
                 # is defensively correct).
                 self._in_flight_request_id = None
-                self._cancel_set.discard(request.request_id)
+                self._cancel_set.pop(request.request_id, None)
                 self._pipeline.reset()
                 self._plan_lock.release()
 
@@ -674,7 +688,7 @@ class PlannerAgent:
         # -- Step 3: Cancel in-flight plan (SS23.5 step 3) --
         in_flight_cancelled = False
         if self._plan_lock.locked() and self._in_flight_request_id:
-            self._cancel_set.add(self._in_flight_request_id)
+            self._cancel_set[self._in_flight_request_id] = time.monotonic()
             in_flight_cancelled = True
             logger.info(
                 "planner_agent.shutdown_cancel_inflight",
@@ -761,7 +775,7 @@ class PlannerAgent:
 
         Implemented in Issue 2.3.4 (cancel set management).
         """
-        self._cancel_set.add(request_id)
+        self._cancel_set[request_id] = time.monotonic()
         logger.info(
             "planner_agent.cancel_registered",
             extra={"request_id": request_id},

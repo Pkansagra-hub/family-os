@@ -50,7 +50,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -254,6 +254,13 @@ class _GapBuffer:
     with sequence > expected, it's buffered until the gap is filled.
 
     Thread-safe: per-topic locks (zero cross-topic contention).
+
+    M7.2 / B03: ``_expected`` and ``_locks`` were previously never
+    deleted; long-running buses that publish to many distinct topics
+    leaked memory linearly with topic count.  An LRU bound on
+    distinct-topic count (``max_topics``, default 512) now evicts the
+    least-recently-created topic when the cap is exceeded; its sequence
+    state, lock, and any pending buffered envelopes are dropped.
     """
 
     __slots__ = (
@@ -262,14 +269,21 @@ class _GapBuffer:
         "_locks",
         "_global_lock",
         "_max_per_topic",
+        "_topic_order",
+        "_max_topics",
     )
 
-    def __init__(self, max_per_topic: int = 10_000) -> None:
+    def __init__(self, max_per_topic: int = 10_000, max_topics: int = 512) -> None:
         self._expected: dict[str, int] = {}  # topic -> next expected seq
         self._buffers: dict[str, dict[int, _BufferedEnvelope]] = {}  # topic -> {seq: be}
         self._locks: dict[str, threading.Lock] = {}
         self._global_lock = threading.Lock()
         self._max_per_topic = max_per_topic
+        # LRU of distinct topics ever locked.  Keys are inserted on
+        # first ``_get_lock`` for a topic; eviction removes the oldest
+        # when ``len(_topic_order) > _max_topics``.
+        self._topic_order: OrderedDict[str, None] = OrderedDict()
+        self._max_topics = max_topics
 
     def check_and_buffer(self, envelope: Envelope, now_ns: int) -> tuple[bool, list[Envelope]]:
         """
@@ -418,7 +432,12 @@ class _GapBuffer:
         )
 
     def _get_lock(self, topic: str) -> threading.Lock:
-        """Get or create per-topic lock. Double-checked locking."""
+        """Get or create per-topic lock. Double-checked locking.
+
+        Also tracks LRU insertion order; when distinct-topic count
+        exceeds ``_max_topics``, evicts the least-recently-created
+        topic's lock, sequence state, and pending buffer (M7.2 / B03).
+        """
         lock = self._locks.get(topic)
         if lock is not None:
             return lock
@@ -427,6 +446,22 @@ class _GapBuffer:
             if lock is None:
                 lock = threading.Lock()
                 self._locks[topic] = lock
+                self._topic_order[topic] = None
+                # Evict oldest topics if we exceed the cap.
+                while len(self._topic_order) > self._max_topics:
+                    evicted, _ = self._topic_order.popitem(last=False)
+                    if evicted == topic:
+                        # Shouldn't happen (just inserted), but guard.
+                        self._topic_order[topic] = None
+                        break
+                    self._locks.pop(evicted, None)
+                    self._expected.pop(evicted, None)
+                    self._buffers.pop(evicted, None)
+                    logger.debug(
+                        "GapBuffer: evicted topic %s (LRU, max_topics=%d)",
+                        evicted,
+                        self._max_topics,
+                    )
             return lock
 
 

@@ -1,0 +1,8 @@
+{
+  "ca_id": "dev_familyos_root_v1",
+  "ed25519_public_key_b64url": "3hXPoj9SLWaHmnyxkUP_9sbjxv4oWxyt82Q5d6EOWbs",
+  "ed25519_private_key_b64url": "9Dm4N-uTe23yEl8BHA1CNQOIPN3Gpy3RwwviPEaF6Q4",
+  "purpose": "DEV-ONLY trust anchor for MS-5 PR#3. Must NEVER be used in production. Real production keys are generated via 3-of-5 Shamir ceremony in an air-gapped Tails environment per D3 closure in bridge_system_design.md.",
+  "generated_at": "2026-05-17T00:00:00Z",
+  "rotation_policy": "regenerate any time MS-5 reopens; never leaves the repo"
+}

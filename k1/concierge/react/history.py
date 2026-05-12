@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 def build_chat_history(
     history_active: list[Any],
     window: int = 3,
+    *,
+    include_weave: bool = False,
 ) -> list[ModelMessage]:
     """Extract last N user/assistant turn pairs as real chat messages.
 
@@ -44,20 +46,28 @@ def build_chat_history(
             So window=3 means up to 6 messages (3 user + 3 assistant).
             Front: varies by mode (SS_READ_CONFIGS).
             Back: fixed at 5 entries.
+        include_weave: M6 E6.2 (C10) -- when True, also include prior
+            ``weave`` entries as assistant messages.  Used by the front
+            handler in WEAVE mode so the LLM sees previously-injected
+            async results when generating the next weave response.
 
     Returns:
         List of ModelMessage with role="user" or role="assistant".
     """
-    recent = [e for e in history_active if e.entry_type in ("user", "final", "proactive")]
+    allowed_types = ("user", "final", "proactive")
+    if include_weave:
+        allowed_types = allowed_types + ("weave",)
+    recent = [e for e in history_active if e.entry_type in allowed_types]
     messages: list[ModelMessage] = []
     for entry in recent[-(window * 2) :]:
         role = "user" if entry.entry_type == "user" else "assistant"
         messages.append(ModelMessage(role=role, content=entry.text))
     logger.debug(
-        "build_chat_history: window=%d, candidates=%d, returned=%d messages",
+        "build_chat_history: window=%d, candidates=%d, returned=%d messages, include_weave=%s",
         window,
         len(recent),
         len(messages),
+        include_weave,
     )
     return messages
 

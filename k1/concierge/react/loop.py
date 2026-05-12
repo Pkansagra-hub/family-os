@@ -418,10 +418,35 @@ async def react_loop(
 
     # Per-iteration LLM call timeout (prevents hangs from API stalls)
     _iter_timeout_s: float = get_config().llm.default_timeout_ms / 1000.0
+    # M6 E6.2 (C03): Per-tool dispatch timeout -- prevents a hung tool call
+    # from blocking the whole ReAct loop indefinitely.  On timeout we
+    # synthesize an error ToolResult so the LLM gets a real observation.
+    _raw_tool_timeout = getattr(get_config().react, "tool_timeout_ms", 30_000)
+    try:
+        _tool_timeout_s: float = max(0.001, float(_raw_tool_timeout) / 1000.0)
+    except (TypeError, ValueError):
+        # Defensive: if config is mocked/non-numeric, use sane default
+        _tool_timeout_s = 30.0
 
     # Hoist _run_tool outside the loop to avoid re-creating the closure
     async def _run_tool(tc: Any) -> tuple[Any, ToolResult]:
-        result = await tool_dispatcher.dispatch(tc)
+        try:
+            result = await asyncio.wait_for(tool_dispatcher.dispatch(tc), timeout=_tool_timeout_s)
+        except asyncio.TimeoutError:
+            tool_name = getattr(tc, "name", "unknown")
+            logger.error(
+                "react_loop: tool TIMED OUT tool=%s (timeout=%.1fs) "
+                "actor=%s trace=%s -- synthesizing error result",
+                tool_name,
+                _tool_timeout_s,
+                actor,
+                trace_id[:8] if trace_id else "",
+            )
+            result = ToolResult(
+                tool_name=tool_name,
+                status="error",
+                error=f"tool_timeout after {_tool_timeout_s:.1f}s",
+            )
         return tc, result
 
     logger.info(
@@ -508,6 +533,7 @@ async def react_loop(
                 messages=_k1_msgs,
                 tools=_to_k1_tools(effective_tools),
                 tool_choice=_tc,
+                system_prompt=system_prompt,
             )
         else:
             _payload = ChatPayload(
@@ -921,7 +947,9 @@ async def react_loop(
             sequential_tcs = non_terminal
 
         for tc in sequential_tcs:
-            result = await tool_dispatcher.dispatch(tc)
+            # M6 E6.2 (C03): Use the timeout-wrapped helper so sequential
+            # tool dispatch shares the same hang protection as parallel.
+            _tc, result = await _run_tool(tc)
             paired_results.append((tc, result))
             _sequential_count += 1
 

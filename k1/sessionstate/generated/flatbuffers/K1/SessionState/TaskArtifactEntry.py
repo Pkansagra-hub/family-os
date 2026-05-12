@@ -128,5 +128,3 @@ def TaskArtifactEntryAddMetadata(builder, metadata):
 
 def TaskArtifactEntryEnd(builder):
     return builder.EndObject()
-    return builder.EndObject()
-    return builder.EndObject()

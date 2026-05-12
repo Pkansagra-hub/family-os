@@ -18,8 +18,17 @@ import uuid
 import pytest
 
 from k1.concierge.events.base import CanonicalEventMeta, validate_canonical_metadata
-from k1.concierge.events.conversation import DeadLettered, IntentArbitrated, UserInputReceived
-from k1.concierge.events.hitl import HILRequested, HILResolved, TaskResumed, TaskSuspended
+from k1.concierge.events.conversation import (
+    DeadLettered,
+    IntentArbitrated,
+    UserInputReceived,
+)
+from k1.concierge.events.hitl import (
+    HILRequested,
+    HILResolved,
+    TaskResumed,
+    TaskSuspended,
+)
 from k1.concierge.events.registry import EVENT_TYPE_REGISTRY
 from k1.concierge.events.task import (
     TaskCancelled,
@@ -34,7 +43,11 @@ from k1.concierge.events.validator import (
     validate_event,
     validate_event_chain,
 )
-from k1.concierge.events.weave import WeaveCandidateArrived, WeaveDecisionMade, WeaveEmitted
+from k1.concierge.events.weave import (
+    WeaveCandidateArrived,
+    WeaveDecisionMade,
+    WeaveEmitted,
+)
 
 # =========================================================================
 # Fixtures
@@ -61,7 +74,13 @@ ALL_16_EVENT_CLASSES: list[type[CanonicalEventMeta]] = [
 
 # E-0.5.23 added 6 previously unregistered event types (27th-32nd)
 # M2 E2.5.4 added ResponseFinalDecided (17th event type)
-from k1.concierge.events.conversation import Phase1Classified, ResponseFinalDecided, TaskRouted
+# M6 E6.3 (C04) added ResponseDelivered (33rd event type)
+from k1.concierge.events.conversation import (
+    Phase1Classified,
+    ResponseDelivered,
+    ResponseFinalDecided,
+    TaskRouted,
+)
 from k1.concierge.events.hitl import (
     HITLBlockedRedEvent,
     HITLRequestedEvent,
@@ -88,6 +107,7 @@ from k1.concierge.events.weave import WeaveMetricsEvent
 
 ALL_EVENT_CLASSES: list[type[CanonicalEventMeta]] = ALL_16_EVENT_CLASSES + [
     ResponseFinalDecided,
+    ResponseDelivered,
     TurnMutationSummary,
     BackPoolWorkerAcquiredEvent,
     BackPoolWorkerReleasedEvent,

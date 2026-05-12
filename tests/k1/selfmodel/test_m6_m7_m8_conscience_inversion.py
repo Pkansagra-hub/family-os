@@ -298,7 +298,7 @@ class TestTypedL3WritersAndComposer:
         from k1.selfmodel.adapters.memory_projection_store import (
             InMemoryProjectionStore,
         )
-        from k1.selfmodel.contracts.family_model import RoutineRef
+        from k1.selfmodel.contracts.space_graph import RoutineRef
         from k1.selfmodel.service.self_model import SelfModelService
 
         store = InMemoryProjectionStore()

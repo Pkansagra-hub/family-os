@@ -39,7 +39,7 @@ code:
     - path: "k1/memory_writer/ports/bridge_command_port.py"
       description: "IBridgeCommandPort (fire-and-forget to K0)"
     - path: "k1/memory_writer/ports/event_subscription_port.py"
-      description: "IEventSubscriptionPort (turn.complete.v1)"
+      description: "IEventSubscriptionPort (turn.completed.v1)"
     - path: "k1/memory_writer/ports/model_hub_port.py"
       description: "IModelHubPort (LLM extraction call)"
     - path: "k1/memory_writer/ports/health_port.py"
@@ -256,7 +256,7 @@ events:
   # Events consumed (1) -- MW listens for turn completion only
   # ---------------------------------------------------------------------------
   subscribes:
-    - topic: "k1.session.turn.complete.v1"
+    - topic: "k1.session.turn.completed.v1"
       schema: "k1/contracts/schemas/memory_writer/events/consumed/turn_complete.v1.json"
       handler: "k1.memory_writer.pipeline.turn_dispatcher:TurnDispatcher.on_turn_complete"
 

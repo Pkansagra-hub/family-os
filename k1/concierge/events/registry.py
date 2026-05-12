@@ -22,6 +22,7 @@ from k1.concierge.events.conversation import (
     DeadLettered,
     IntentArbitrated,
     Phase1Classified,
+    ResponseDelivered,
     ResponseFinalDecided,
     TaskRouted,
     UserInputReceived,
@@ -69,6 +70,8 @@ EVENT_TYPE_REGISTRY: dict[str, type[CanonicalEventMeta]] = {
     "conversation.dead_lettered": DeadLettered,
     # M2 E2.5.4: Response-final decision audit trail
     "conversation.response_final.decided": ResponseFinalDecided,
+    # M6 E6.3 (C04): Response delivery confirmation (duplicate-delivery guard)
+    "conversation.response.delivered.v1": ResponseDelivered,
     # Task lifecycle (6)
     "task.created": TaskCreated,
     "task.leased": TaskLeased,
