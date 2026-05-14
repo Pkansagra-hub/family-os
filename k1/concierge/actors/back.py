@@ -596,6 +596,17 @@ async def back_handler(
         validator=validator,
     )
 
+    # 6b. needs_human → task.suspended (no in-process bypass).
+    # When react_loop returns status="suspended" (Back called
+    # submit_result(needs_human, ...)), _emit_back_result below publishes
+    # TOPIC_TASK_SUSPENDED. The FSM transitions COMPANIONING →
+    # CLARIFYING_WORKER, Front runs in HITL_RELAY mode to translate the
+    # structured request to natural-language prose, the user replies via
+    # ordinary chat, and Front (HITL_RESOLVE) emits TOPIC_TASK_RESUME
+    # which back_resume_handler picks up to continue the ReAct loop.
+    # This preserves the Front-owns-user-channel invariant (see
+    # _scan_temp/04_actors.md and _scan_temp/11_diagram.md §8.3).
+
     # 7. Emit result to bus (Epic 7.3)
     # M3 E3.3.4: Pass react history + original task for suspended payloads
     # Phase P: Extract tool call summaries for MW persistence

@@ -1146,13 +1146,33 @@ class CapabilityFabric:
         duration_ms: int,
         success: bool,
     ) -> None:
-        """Update registry metrics (fault-isolated)."""
+        """Update registry metrics (fault-isolated).
+
+        ``CapabilityRegistry.update_metrics`` declares ``success`` /
+        ``latency_ms`` as keyword-only, but the legacy ``IRegistry``
+        protocol used positional args. Try the keyword-only signature
+        first (production path), then fall back to positional for
+        tests / alt registries.
+        """
         try:
             self._registry.update_metrics(
                 capability_name,
-                float(duration_ms),
-                success,
+                latency_ms=int(duration_ms),
+                success=success,
             )
+        except TypeError:
+            try:
+                self._registry.update_metrics(  # type: ignore[call-arg]
+                    capability_name,
+                    float(duration_ms),
+                    success,
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to update metrics for '%s' (positional fallback)",
+                    capability_name,
+                    exc_info=True,
+                )
         except Exception:
             logger.warning(
                 "Failed to update metrics for '%s'",
@@ -1445,6 +1465,48 @@ class FabricRetrieval:
             safety_band=safety_band,
             top_k=top_k,
         )
+
+    # ------------------------------------------------------------------
+    # Diagnostics (observability-only; never called from production code)
+    # ------------------------------------------------------------------
+
+    def describe_capabilities(self) -> list[dict]:
+        """Return a snapshot of all registered capabilities and their CB state.
+
+        Intended exclusively for PORT-IDENTITY / SUBSCRIPTION-TOPOLOGY probes
+        in ``tests/integration/k1/live/``.  Never call from production code.
+
+        Returns:
+            List of dicts with keys:
+                name:          Capability name (str).
+                contract_type: Type prefix or None.
+                provider_id:   Provider identifier (str).
+                availability:  Availability string (e.g. "ONLINE").
+                cb_state:      CircuitBreaker state string or None.
+        """
+        results: list[dict] = []
+        for contract in self._registry.list_all():
+            name = getattr(contract, "name", "") or ""
+            provider_id: str = getattr(contract, "provider_id", "") or ""
+            contract_type = getattr(contract, "type", None) or getattr(
+                contract, "contract_type", None
+            )
+            availability = getattr(contract, "availability", None)
+            cb = self._circuit_breakers.get(provider_id)
+            if cb is not None:
+                cb_state = str(getattr(cb, "state", getattr(cb, "get_state", lambda: cb)()))
+            else:
+                cb_state = None
+            results.append(
+                {
+                    "name": name,
+                    "contract_type": str(contract_type) if contract_type else None,
+                    "provider_id": provider_id,
+                    "availability": str(availability) if availability else None,
+                    "cb_state": cb_state,
+                }
+            )
+        return results
 
 
 # ---------------------------------------------------------------------------

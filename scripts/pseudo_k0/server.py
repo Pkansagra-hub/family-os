@@ -57,11 +57,18 @@ def create_app(
     The app holds no module-level state; ``store`` and ``connector_host``
     are closed over via ``app.state`` so tests can spin multiple
     independent instances against in-memory databases.
+
+    ``app.state.sse_broker`` is a dict mapping topic → list of
+    ``asyncio.Queue`` objects.  Tool routes call
+    ``broadcast_sse(app, topic, payload)`` after each successful write;
+    all connected ``GET /k0/sse/{topic}`` streams receive the event.
     """
     app = FastAPI(title="pseudo-K0", version="0.1.0")
     app.state.store = store
     app.state.connector_host = connector_host or ConnectorHost()
     app.state.sse_heartbeat_s = sse_heartbeat_s
+    # topic → list[asyncio.Queue]  (one queue per active SSE subscriber)
+    app.state.sse_broker: Dict[str, list] = {}
 
     @app.get("/healthz")
     async def healthz() -> Dict[str, Any]:
@@ -81,6 +88,36 @@ def create_app(
         return _build_sse_response(app, topic)
 
     return app
+
+
+def broadcast_sse(app: FastAPI, topic: str, payload: Dict[str, Any]) -> None:
+    """Push a JSON payload to all active SSE subscribers on *topic*.
+
+    Called by tool routes (and tests) after a successful write so that
+    ``GET /k0/sse/tool_state.changed.v1`` subscribers receive a real
+    event instead of only heartbeats.
+
+    Best-effort: queues that are full (queue_size=256) drop the oldest
+    frame so slow consumers do not block writers.
+    """
+    import json
+
+    broker: Dict[str, list] = getattr(app.state, "sse_broker", {})
+    queues = broker.get(topic, [])
+    frame = f"data: {json.dumps(payload)}\n\n"
+    for q in list(queues):
+        try:
+            q.put_nowait(frame)
+        except asyncio.QueueFull:
+            # Drain oldest frame then re-enqueue (slow consumer, best-effort)
+            try:
+                q.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+            try:
+                q.put_nowait(frame)
+            except asyncio.QueueFull:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +153,15 @@ async def _handle_command_submit(app: FastAPI, request: Request) -> JSONResponse
 
     # All other topics: persist the envelope verbatim and ack.
     row_id = store.write_envelope(envelope)
+
+    # E15.10: fan-out tool-state changes to SSE subscribers so K1 can
+    # reflect them in the browser in real-time.
+    if topic.startswith("k1.tool_state"):
+        body_payload: Dict[str, Any] = dict(body)
+        body_payload.setdefault("topic", topic)
+        body_payload.setdefault("trace_id", trace_id)
+        broadcast_sse(app, "tool_state.changed.v1", body_payload)
+
     return JSONResponse(
         {"ok": True, "topic": topic, "wal_row_id": row_id, "trace_id": trace_id},
         status_code=200,
@@ -194,17 +240,49 @@ async def _handle_obs_emit(app: FastAPI, request: Request) -> JSONResponse:
 
 
 def _build_sse_response(app: FastAPI, topic: str) -> StreamingResponse:
+    """Return a streaming SSE response for *topic*.
+
+    Each subscriber gets its own ``asyncio.Queue`` registered in
+    ``app.state.sse_broker[topic]``.  The queue is drained on every
+    wake-up; heartbeat comments are emitted on each sleep cycle so the
+    HTTP connection stays alive.
+    """
     heartbeat_s: float = app.state.sse_heartbeat_s
 
     async def _stream() -> Any:
+        q: asyncio.Queue = asyncio.Queue(maxsize=256)
+        broker: Dict[str, list] = app.state.sse_broker
+        if topic not in broker:
+            broker[topic] = []
+        broker[topic].append(q)
+
         # Initial comment frame so the client knows the stream is open.
         yield f": pseudo-k0 sse open topic={topic}\n\n".encode()
         try:
             while True:
-                await asyncio.sleep(heartbeat_s)
-                yield b": heartbeat\n\n"
+                # Drain all frames that arrived since the last cycle.
+                drained = False
+                while True:
+                    try:
+                        frame: str = q.get_nowait()
+                        yield frame.encode()
+                        drained = True
+                    except asyncio.QueueEmpty:
+                        break
+                if not drained:
+                    # No pending frames — emit heartbeat to keep connection alive.
+                    await asyncio.sleep(heartbeat_s)
+                    yield b": heartbeat\n\n"
+                else:
+                    # Yield control so other tasks can produce more frames.
+                    await asyncio.sleep(0)
         except asyncio.CancelledError:
             return
+        finally:
+            try:
+                broker[topic].remove(q)
+            except ValueError:
+                pass
 
     return StreamingResponse(
         _stream(),

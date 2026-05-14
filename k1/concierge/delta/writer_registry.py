@@ -48,7 +48,6 @@ class WriterRole(str, Enum):
     """
 
     FRONT_LLM = "front_llm"
-    PHASE1 = "phase1"
     FSM = "fsm"
     EXPERIENCE_LAYER = "experience_layer"
     SESSION_INIT = "session_init"
@@ -80,16 +79,15 @@ class SingleWriterViolation(Exception):
 SECTION_WRITERS: dict[str, list[WriterRole]] = {
     # Front-LLM cognitive sections
     "beliefs_active": [WriterRole.FRONT_LLM],
-    "scoreboard": [WriterRole.PHASE1, WriterRole.FRONT_LLM],
+    "scoreboard": [WriterRole.FRONT_LLM],
     "affective_now": [
-        WriterRole.PHASE1,
         WriterRole.FRONT_LLM,
         WriterRole.EXPERIENCE_LAYER,
     ],
     "clarifications": [WriterRole.FRONT_LLM],
     "narrative_active": [WriterRole.FRONT_LLM],
     # FSM-managed sections
-    "control": [WriterRole.FSM, WriterRole.PHASE1],
+    "control": [WriterRole.FSM],
     "history_active": [WriterRole.FSM],
     "meta": [WriterRole.FSM],
     # Immutable after init

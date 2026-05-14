@@ -24,6 +24,22 @@ def is_running(self) -> bool
 | `health_check()` | any state | returns `HealthStatus` reflecting current liveness | never raises |
 | `is_running` | — | `True` after `startup()` completes; `False` before or after `shutdown()` | — |
 
+### 1.1.1 Diagnostics API
+
+These methods are observability-only and are not part of production control flow:
+
+```python
+def describe_wiring(self) -> dict[str, Any]
+def lifecycle_events(self) -> list[dict[str, Any]]
+```
+
+`describe_wiring()` returns a plain dict snapshot of Tier 1 component types,
+selected Tier 1 port adapter types, selected PORT-IDENTITY booleans, per-session
+component types, bridge mode, running state, and planner task name.
+`lifecycle_events()` returns append-only phase-completion records with `phase`,
+`component`, and monotonic timestamp `ts`. Live-kernel tests use these methods for
+PORT-IDENTITY and LIFECYCLE-ORDER probes; production code must not branch on them.
+
 ### 1.2 `ISessionManagerPort`
 
 ```python

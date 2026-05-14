@@ -111,7 +111,7 @@ def _parse_capability_name(name: str) -> tuple[str, str]:
 class NativeToolProvider(BaseProvider):
     """In-process provider for every K1-native family-tool capability."""
 
-    __slots__ = ("_registry", "_default_user_id")
+    __slots__ = ("_registry", "_default_user_id", "_default_space_id")
 
     def __init__(
         self,
@@ -119,6 +119,7 @@ class NativeToolProvider(BaseProvider):
         *,
         registry: IToolRegistryReader,
         default_user_id: str = "system",
+        default_space_id: str = "",
     ) -> None:
         """
         Args
@@ -141,6 +142,7 @@ class NativeToolProvider(BaseProvider):
         super().__init__(config)
         self._registry: IToolRegistryReader = registry
         self._default_user_id: str = default_user_id
+        self._default_space_id: str = default_space_id
 
     # ------------------------------------------------------------------ #
     # CapabilityProvider surface
@@ -299,10 +301,10 @@ class NativeToolProvider(BaseProvider):
 
         user_id = request.caller_id or request.caller or self._default_user_id
 
-        # space_id: caller frame > control section > "" (no-scope).
+        # space_id: caller frame > control section > provider default ("" if unset).
         space_id_raw = control.get("space_id")
-        if not isinstance(space_id_raw, str):
-            space_id_raw = ""
+        if not isinstance(space_id_raw, str) or not space_id_raw:
+            space_id_raw = self._default_space_id
 
         # face: Fabric requests originate from the LLM/planner pipeline; default "llm"
         # when not provided.  Adapter authors building synthetic requests can override

@@ -278,6 +278,19 @@ class ToolDispatcher:
         self.call_count: int = 0
         self.call_history: list[DispatchRecord] = []
         self._budget_limit = get_config().tools.budget_limits.get(tier, 5)
+        # Per-tool call count: state-mutation tools (update_scoreboard,
+        # update_beliefs, etc.) are capped at 2 per turn to prevent the
+        # model from spiralling through internal bookkeeping instead of
+        # progressing the task.
+        self._per_tool_counts: dict[str, int] = {}
+        self._per_tool_limits: dict[str, int] = {
+            "update_scoreboard": 2,
+            "update_beliefs": 2,
+            "update_clarifications": 2,
+            "update_narrative": 2,
+            "refine_affect": 1,
+            "promote_belief": 2,
+        }
         logger.info(
             "ToolDispatcher initialized (actor=%s, tier=%s, budget=%d, allowlist=%d tools)",
             actor,
@@ -403,6 +416,56 @@ class ToolDispatcher:
                 error="Tool budget exhausted",
             )
 
+        # Step 2b: Per-tool call limit (state-mutation tools only).
+        # Prevents the model from burning the shared budget on repeated
+        # bookkeeping calls (update_scoreboard x4, etc.).
+        _per_limit = self._per_tool_limits.get(name)
+        if _per_limit is not None:
+            _tool_uses = self._per_tool_counts.get(name, 0)
+            if _tool_uses >= _per_limit:
+                logger.warning(
+                    "dispatch REJECTED (per-tool limit)  actor=%s tool=%s uses=%d limit=%d",
+                    self.actor,
+                    name,
+                    _tool_uses,
+                    _per_limit,
+                )
+                return ToolResult(
+                    tool_name=name,
+                    status="error",
+                    error=f"{name} already called {_tool_uses} times this turn (limit={_per_limit}); stop calling it",
+                )
+
+        # Step 2c: Back-actor guard — reject submit_result(complete) if no
+        # invoke_capability / batch_invoke_capabilities has been called yet.
+        # Prevents the model from declaring success without doing any work.
+        # Only applies when budget is still healthy (>= 2 remaining), so the
+        # last-resort submit on a nearly-exhausted budget is still allowed.
+        if (
+            self.actor == "back"
+            and name == "submit_result"
+            and args.get("result_type") == "complete"
+            and self._per_tool_counts.get("invoke_capability", 0) == 0
+            and self._per_tool_counts.get("batch_invoke_capabilities", 0) == 0
+            and self.call_count <= self._budget_limit - 2
+        ):
+            logger.warning(
+                "dispatch REJECTED (no-work guard)  actor=back submit_result(complete) "
+                "attempted before any invoke_capability call (budget_remaining=%d/%d)",
+                self._budget_limit - self.call_count,
+                self._budget_limit,
+            )
+            return ToolResult(
+                tool_name=name,
+                status="error",
+                error=(
+                    "submit_result(complete) rejected: you have not called invoke_capability yet. "
+                    "You MUST: 1) discover_capabilities(intent, domain), "
+                    "2) invoke_capability(capability_name, params), "
+                    "3) THEN submit_result with the actual result."
+                ),
+            )
+
         # Step 3: Schema validation
         schema_obj = self.tool_schemas.get(name)
         if schema_obj and schema_obj.parameters:
@@ -479,6 +542,7 @@ class ToolDispatcher:
 
         # Step 6: Record
         self.call_count += 1
+        self._per_tool_counts[name] = self._per_tool_counts.get(name, 0) + 1
         self.call_history.append(
             DispatchRecord(
                 tool_name=name,

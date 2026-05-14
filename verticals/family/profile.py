@@ -25,6 +25,10 @@ class FamilyMember:
     grade: str = ""
     access_level: str = "full_adult"  # "full_adult" | "limited" | "child" | ...
     preferences: Dict[str, Any] = field(default_factory=dict)
+    # Nicknames / aliases the family uses for this member. Surfaced into the
+    # actor's [family] capsule block so the LLM can resolve casual references
+    # (e.g. "little demon of house" -> Riley) without having to guess.
+    aliases: List[str] = field(default_factory=list)
 
     def role(self) -> str:
         """Map ``relation`` → selfmodel ``ActorRef.role`` vocabulary."""
@@ -59,6 +63,7 @@ class FamilyMember:
             "grade": self.grade,
             "access_level": self.access_level,
             "preferences": dict(self.preferences),
+            "aliases": list(self.aliases),
         }
 
 
@@ -158,6 +163,7 @@ class FamilyProfile:
                 grade=m.get("grade", ""),
                 access_level=m.get("access_level", "full_adult"),
                 preferences=dict(m.get("preferences", {})),
+                aliases=list(m.get("aliases", [])),
             )
             for m in raw.get("members", [])
         ]

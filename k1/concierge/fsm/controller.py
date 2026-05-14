@@ -56,12 +56,11 @@ from k1.concierge.bus.setup import ACTOR_BACK, ACTOR_FRONT
 from k1.concierge.bus.topics import (
     TOPIC_AFFECT_UPDATE,
     TOPIC_ARTIFACT_CREATED,
-    TOPIC_CLARIFICATION_REQUEST,
-    TOPIC_CLARIFICATION_RESPONSE,
     TOPIC_CONCIERGE_CONFIG_UPDATE,
     TOPIC_DAG_COMPLETED,
     TOPIC_FINAL_RESPONSE,
     TOPIC_FINDINGS_READY,
+    TOPIC_HIL_REQUEST,
     TOPIC_PROACTIVE_FILL,
     TOPIC_TASK_CANCEL,
     TOPIC_TASK_COMPLETE,
@@ -78,6 +77,7 @@ from k1.concierge.bus.topics import (
 from k1.concierge.config import get_config
 from k1.concierge.fsm.arbiter import (
     ArbiterDecision,
+    ArbiterInput,
     ArbiterResult,
     ConversationArbiter,
     build_inflight_context,
@@ -88,7 +88,6 @@ from k1.concierge.fsm.errors import IllegalTransitionError
 from k1.concierge.fsm.front_lock import FrontLock
 from k1.concierge.fsm.idempotency import IdempotencyLedger
 from k1.concierge.fsm.interrupt_handler import InterruptClassifier, ProactiveWakeHandler
-from k1.concierge.fsm.phase1 import Phase1Result, StubPhase1Pipeline, TurnLock
 from k1.concierge.fsm.response_final_table import (
     ResponseFinalAction,
     decide_response_final,
@@ -128,7 +127,6 @@ from k1.concierge.task.intent import TaskIntent
 # E4.M1.5: SuspensionManager relocated to k1.hil.suspension.
 from k1.hil.suspension import SuspensionManager
 from k1.sessionstate.public_types import (
-    IntentClassification,
     PrivacyBand,
     compute_temporal_anchor,
 )
@@ -398,6 +396,12 @@ class ConciergeController:
         self._router = router
         self._state = ConciergeState.LISTENING
         self._turn_number = 0
+        # MW-dedup guard: track turn_ids for which `_emit_turn_completed`
+        # has already published `k1.session.turn.completed.v1`.  Without
+        # this, same-turn dispatch+complete followed by proactive
+        # delivery emits the same turn_id twice and MW's
+        # SessionBatchDispatcher logs a noisy duplicate-skip.
+        self._emitted_turn_ids: set[str] = set()
         cfg = get_config().fsm
         self._turn_state = FSMTurnState(
             max_depth=cfg.pending_results_max_depth,
@@ -408,8 +412,6 @@ class ConciergeController:
         self._suspension_manager = SuspensionManager()
         self._control_ext = ConciergeControlExtension()
         self._task_bridge = TaskBridge()
-        self._phase1_pipeline = StubPhase1Pipeline()
-        self._turn_lock = TurnLock()
         self._interrupt_classifier = InterruptClassifier()
         self._arbiter = ConversationArbiter()
         self._proactive_wake = ProactiveWakeHandler()
@@ -459,7 +461,7 @@ class ConciergeController:
         logger.info(
             "ConciergeController.__init__: assembling sub-components "
             "(FrontLock, CancelHandler, SuspensionManager, ControlExtension, "
-            "TaskBridge, Phase1Pipeline, TurnLock, InterruptClassifier, ProactiveWake)",
+            "TaskBridge, InterruptClassifier, ProactiveWake)",
         )
         self._subscribe_all()
 
@@ -521,16 +523,6 @@ class ConciergeController:
     def task_bridge(self) -> TaskBridge:
         """TaskBridge -- SOT for task lifecycle in SessionState (Epic 3)."""
         return self._task_bridge
-
-    @property
-    def phase1_pipeline(self) -> StubPhase1Pipeline:
-        """Phase 1 classification pipeline (Epic 3.1)."""
-        return self._phase1_pipeline
-
-    @property
-    def turn_lock(self) -> TurnLock:
-        """TurnLock -- sequencing gate for Phase 1 (Epic 3.1)."""
-        return self._turn_lock
 
     @property
     def interrupt_classifier(self) -> InterruptClassifier:
@@ -807,9 +799,11 @@ class ConciergeController:
             (TOPIC_TASK_CANCEL, self._on_task_cancel),
             (TOPIC_TASK_SUSPENDED, self._on_task_suspended),
             (TOPIC_TASK_RESUME, self._on_task_resume),
+            # HIL Unification (E4): unified HIL request topic delivered to FSM,
+            # which sets pending_hil_data + transitions to CLARIFYING_WORKER
+            # + delivers to Front for HITL_RELAY rendering.
+            (TOPIC_HIL_REQUEST, self._on_hil_request),
             (TOPIC_FINDINGS_READY, self._on_findings_ready),
-            (TOPIC_CLARIFICATION_REQUEST, self._on_clarification_request),
-            (TOPIC_CLARIFICATION_RESPONSE, self._on_clarification_response),
             (TOPIC_ARTIFACT_CREATED, self._on_artifact_created),
             (TOPIC_AFFECT_UPDATE, self._on_affect_update),
             (TOPIC_PROACTIVE_FILL, self._on_proactive_fill),
@@ -1079,7 +1073,6 @@ class ConciergeController:
     def _emit_intent_arbitrated_ledger(
         self,
         arbiter_result: Any,
-        phase1_result: Any,
         inflight: Any,
         envelope: Envelope,
         device_id: str = "",
@@ -1087,7 +1080,7 @@ class ConciergeController:
         """M5 E5.5.1: Record IntentArbitrated canonical event in ledger.
 
         Called immediately after bus.publish(intent.arbitrated) in both
-        _handle_interrupt and _run_phase1_with_arbiter.
+        _handle_interrupt and the normal-turn router.
         """
         if self._ledger is None:
             return
@@ -1099,6 +1092,7 @@ class ConciergeController:
 
             meta = from_envelope(envelope, "fsm") if envelope else {"actor": "fsm"}
             meta["session_id"] = getattr(self._ledger, "session_id", "")
+            inputs = arbiter_result.inputs
             event = IntentArbitrated(
                 event_id=meta.get("event_id", "") or str(uuid.uuid4()),
                 session_id=meta.get("session_id", ""),
@@ -1110,8 +1104,8 @@ class ConciergeController:
                 confidence=arbiter_result.confidence,
                 target_task_id=arbiter_result.target_task_id or "",
                 routing_metadata={
-                    "domain": phase1_result.domain_context,
-                    "safety_band": phase1_result.safety_band,
+                    "domain": inputs.domain_context,
+                    "safety_band": inputs.safety_band,
                     "inflight_task_count": len(inflight.tasks),
                     "device_id": device_id or "",
                     **(arbiter_result.routing_metadata or {}),
@@ -1244,8 +1238,8 @@ class ConciergeController:
             # Update activity tracker on user input
             if self._activity_tracker is not None:
                 self._activity_tracker.on_user_input()
-            # Phase 1 + Arbiter -> DISPATCHING (M5 E5.3.1)
-            self._run_phase1_with_arbiter(envelope, text, device_id=device_id)
+            # Route normal turn through Arbiter -> DISPATCHING (M5 E5.3.1)
+            self._route_user_turn(envelope, text, device_id=device_id)
             return
 
         # States where user input should be queued, not dropped.
@@ -1277,18 +1271,16 @@ class ConciergeController:
     def _handle_interrupt(self, envelope: Envelope, text: str, *, device_id: str = "") -> None:
         """M5 E5.2.1: Arbiter-based interrupt handler for COMPANIONING/PROGRESSING.
 
-        Replaces the keyword-based InterruptClassifier with context-aware
-        ConversationArbiter. Phase 1 runs exactly once (inside Arbiter input).
-
+        Builds a minimal ArbiterInput (with safety_band derived from cheap
+        crisis-keyword check) and routes through the deterministic Arbiter.
         Steps:
-        1. Run Phase 1 classification (deterministic)
-        2. Build inflight context snapshot
-        3. Arbiter classifies user intent against inflight work
-        4. Emit intent.arbitrated event BEFORE acting
-        5. Branch on Arbiter decision (4 paths)
+          1. Build ArbiterInput (crisis check -> safety_band)
+          2. Snapshot inflight context
+          3. Arbiter classifies user intent against inflight work
+          4. Emit intent.arbitrated event BEFORE acting
+          5. Branch on Arbiter decision (4 paths)
         """
-        # Phase 1 -- runs exactly once per user input
-        phase1_result = self._phase1_pipeline.classify(text)
+        inputs = self._build_arbiter_input(text)
 
         # Build inflight context from M4-bound SS sections (M5 E5.4.1: device_id)
         inflight = build_inflight_context(
@@ -1302,7 +1294,7 @@ class ConciergeController:
         )
 
         # Arbiter classification (deterministic, no LLM)
-        arbiter_result = self._arbiter.classify(text, phase1_result, inflight)
+        arbiter_result = self._arbiter.classify(text, inputs, inflight)
         logger.info(
             "FSM._handle_interrupt: arbiter=%s conf=%.2f target=%s (envelope_id=%d)",
             arbiter_result.decision.value,
@@ -1318,9 +1310,9 @@ class ConciergeController:
                     "decision": arbiter_result.decision.value,
                     "confidence": arbiter_result.confidence,
                     "target_task_id": arbiter_result.target_task_id,
-                    "intent_class": phase1_result.intent_classification,
-                    "domain": phase1_result.domain_context,
-                    "safety_band": phase1_result.safety_band,
+                    "intent_class": inputs.intent_classification,
+                    "domain": inputs.domain_context,
+                    "safety_band": inputs.safety_band,
                     "inflight_task_count": len(inflight.tasks),
                     "routing_metadata": arbiter_result.routing_metadata,
                 },
@@ -1331,7 +1323,6 @@ class ConciergeController:
         # M5 E5.5.1: Record IntentArbitrated in ledger
         self._emit_intent_arbitrated_ledger(
             arbiter_result,
-            phase1_result,
             inflight,
             envelope,
             device_id,
@@ -1607,7 +1598,7 @@ class ConciergeController:
 
         This is the equivalent of the old "chat" path: increment turn,
         write history, INTERRUPT_HANDLING -> DISPATCHING, emit turn.started,
-        deliver to Front. Phase 1 is already done (by Arbiter).
+        deliver to Front. Arbiter classification has already run.
         """
         self._turn_number += 1
         self._current_turn_user_text = text
@@ -1619,7 +1610,7 @@ class ConciergeController:
             envelope=envelope,
             metadata={
                 "arbiter_decision": "parallel_new",
-                "phase1": arbiter_result.phase1.to_metadata(),
+                "arbiter_inputs": arbiter_result.inputs.to_metadata(),
             },
         )
         self._transition(
@@ -1642,15 +1633,11 @@ class ConciergeController:
             )
         )
 
-        # Phase 1 already ran -- update history metadata
-        result = arbiter_result.phase1
-        # P3.4a: complexity_tier removed from Phase1Result.
-        self._turn_lock.acquire("phase1")
+        # Annotate the user history entry with the arbiter input snapshot.
         if self._history:
             last = self._history[-1]
             if last.entry_type == "user":
-                last.metadata.update(result.to_metadata())
-        self._turn_lock.release()
+                last.metadata.update(arbiter_result.inputs.to_metadata())
 
         # Enrich envelope with arbiter metadata + interrupt origin marker
         # so determine_mode() can detect the interrupt even though
@@ -1659,15 +1646,30 @@ class ConciergeController:
         arbiter_result.routing_metadata["interrupt_origin"] = True
         enriched = self._enrich_envelope_with_arbiter(envelope, arbiter_result)
 
-        # Deliver to Front via FrontLock (Phase 1 done, skip _run_phase1)
+        # Deliver to Front via FrontLock
         if self._front_lock.try_deliver(enriched):
             self._deliver_to_front(enriched)
 
     # ------------------------------------------------------------------
-    # M10 E10.2: Phase 1 -> SessionState three-section write helper
+    # Crisis safety keyword check (replaces UltraBERT RED-band detection)
     # ------------------------------------------------------------------
 
-    # Safety band string -> PrivacyBand mapping
+    # Lightweight regex keywords for life-safety escalation. Matches the
+    # former Phase1 `_RED_SAFETY_KEYWORDS` set. Lowercased substring match.
+    _CRISIS_KEYWORDS: tuple[str, ...] = (
+        "suicide",
+        "kill myself",
+        "kill yourself",
+        "end my life",
+        "hurt myself",
+        "hurt someone",
+        "self-harm",
+        "self harm",
+        "want to die",
+    )
+
+    # Safety band string -> PrivacyBand mapping (used for CRISIS escalation
+    # on the Control SessionState section).
     _SAFETY_BAND_MAP: dict[str, PrivacyBand] = {
         "GREEN": PrivacyBand.GREEN,
         "AMBER": PrivacyBand.AMBER,
@@ -1675,214 +1677,115 @@ class ConciergeController:
         "CRISIS": PrivacyBand.RED,  # CRISIS maps to RED (highest PrivacyBand)
     }
 
-    def _write_phase1_to_ss(self, result: Phase1Result) -> None:
-        """Write Phase 1 classification results to 3 SessionState sections.
+    def _check_crisis_keywords(self, text: str) -> bool:
+        """Return True if ``text`` contains any life-safety crisis keyword."""
+        if not text:
+            return False
+        lower = text.lower()
+        return any(kw in lower for kw in self._CRISIS_KEYWORDS)
 
-        M10 E10.2: Called inside TurnLock from both ``_run_phase1()`` and
-        ``_run_phase1_with_arbiter()``. Each section write is guarded
-        individually so a failure in one does not block the others.
+    def _build_arbiter_input(self, text: str) -> ArbiterInput:
+        """Construct a minimal ArbiterInput for the deterministic Arbiter.
 
-        Sections written:
-          - control: intent, domain, safety band, complexity tier
-          - scoreboard: user intent, entity referents
-          - affective_now: emotion, valence, arousal, confidence
+        Safety band is derived from the cheap crisis-keyword scan; richer
+        semantic signals (intent/domain/affect/entities) are owned by the
+        Front LLM via its cognitive tools.
+        """
+        safety_band = "RED" if self._check_crisis_keywords(text) else "GREEN"
+        return ArbiterInput(safety_band=safety_band)
+
+    def _write_session_context_to_ss(self, envelope: Envelope) -> None:
+        """Write per-turn session context (temporal anchor + safety band).
+
+        Replaces the former ``_write_phase1_to_ss``. Carries only the
+        clock-derived temporal anchor and (when CRISIS keywords match) a
+        safety-band escalation on the Control section. All richer
+        intent/affect/entity writes are owned by Front LLM cognitive tools.
         """
         if self._ss is None:
             return
-
-        t0 = time.perf_counter()
-
-        # --- control section ---
         try:
             control = self._ss.get_section("control")
-            if control is not None:
-                control.set_intent(
-                    IntentClassification(
-                        primary=result.intent_classification,
-                        all_intents=list(result.intents),
-                        classifier="ultrabert",
-                    )
-                )
-                control.set_primary_domain(result.domain_context)
-                band = self._SAFETY_BAND_MAP.get(result.safety_band, PrivacyBand.GREEN)
-                control.escalate_safety(
-                    band=band,
-                    reason="phase1_classification",
-                )
-                # P3.4a: complexity_tier write removed; SS shim retained
-                # for backward-compat reads (cognitive_load_routing).
-                # Temporal Resolution Engine: compute + write anchor (skeleton.mmd -> TIME_RESOLUTION)
-                self._write_temporal_anchor(control)
         except Exception:
-            logger.exception("_write_phase1_to_ss: control section write failed")
+            logger.debug("_write_session_context_to_ss: control unavailable", exc_info=True)
+            return
+        if control is None:
+            return
 
-        # --- scoreboard section ---
-        try:
-            scoreboard = self._ss.get_section("scoreboard")
-            if scoreboard is not None:
-                scoreboard.set_user_intent(
-                    result.intent_classification,
-                    result.emotion_confidence,
-                )
-                for i, entity in enumerate(result.entities):
-                    entity_id = entity.get("entity_id", f"phase1-ent-{i}")
-                    scoreboard.add_referent(
-                        text=entity.get("text", ""),
-                        entity_id=entity_id,
-                        entity_type=entity.get("label", ""),
-                        salience=entity.get("confidence", 0.8),
-                    )
-                # M10 E10.5.1: temporal expressions as referents
-                for j, temporal in enumerate(result.temporal_expressions):
-                    scoreboard.add_referent(
-                        text=temporal.get("text", ""),
-                        entity_id=f"temporal-{temporal.get('start', j)}",
-                        entity_type=temporal.get("label", "TEMPORAL"),
-                        salience=0.7,
-                    )
-        except Exception:
-            logger.exception("_write_phase1_to_ss: scoreboard section write failed")
-
-        # --- affective_now section ---
-        try:
-            affective = self._ss.get_section("affective_now")
-            if affective is not None:
-                affective.update(
-                    emotion=result.primary_emotion,
-                    intensity=result.emotion_confidence,
-                    valence=result.valence,
-                    arousal=result.arousal,
-                    confidence=result.emotion_confidence,
-                    source="ultrabert",
-                )
-        except Exception:
-            logger.exception("_write_phase1_to_ss: affective_now section write failed")
-
-        elapsed_ms = (time.perf_counter() - t0) * 1000
-        logger.debug(
-            "_write_phase1_to_ss: 3-section write completed in %.2fms",
-            elapsed_ms,
-        )
-
-    def _write_temporal_anchor(self, control: Any) -> None:
-        """Compute and write temporal anchor to Control sub-field.
-
-        Architecture ref: skeleton.mmd -> ACKING_CORE -> TIME_RESOLUTION
-          TIMEZONE_CONTEXT reads from Persona preferences (family timezone).
-          TEMPORAL_ANCHOR = {local_time, day, time_of_day, weekend, tz}.
-
-        Reads timezone from Persona section (set by family profile during
-        bootstrap). Falls back to UTC if Persona unavailable.
-        """
+        # Temporal anchor (skeleton.mmd -> TIME_RESOLUTION). Reads tz from
+        # Persona preferences if available, falls back to UTC.
         tz_name = "UTC"
-        if self._ss is not None:
+        try:
+            persona = self._ss.get_section("persona")
+            if persona is not None and hasattr(persona, "get_all_preferences"):
+                prefs = persona.get_all_preferences()
+                tz_name = prefs.get("timezone", "UTC") or "UTC"
+        except Exception:
+            pass
+        try:
+            anchor = compute_temporal_anchor(tz_name)
+            if hasattr(control, "set_temporal_anchor"):
+                control.set_temporal_anchor(anchor.to_dict())
+        except Exception:
+            logger.debug("_write_session_context_to_ss: temporal anchor failed", exc_info=True)
+
+        # Crisis-band escalation (kernel keyword check; LLM-derived nuance
+        # comes via cognitive tools later in the turn).
+        payload = _parse_payload(envelope)
+        text = payload.get("text", "") or ""
+        if self._check_crisis_keywords(text):
             try:
-                persona = self._ss.get_section("persona")
-                if persona is not None and hasattr(persona, "get_all_preferences"):
-                    prefs = persona.get_all_preferences()
-                    tz_name = prefs.get("timezone", "UTC") or "UTC"
+                control.escalate_safety(
+                    band=PrivacyBand.RED,
+                    reason="crisis_keyword_match",
+                )
             except Exception:
-                pass
-        anchor = compute_temporal_anchor(tz_name)
-        if hasattr(control, "set_temporal_anchor"):
-            control.set_temporal_anchor(anchor.to_dict())
+                logger.debug(
+                    "_write_session_context_to_ss: crisis escalation failed",
+                    exc_info=True,
+                )
 
-    def _run_phase1(self, envelope: Envelope) -> None:
-        """Run Phase 1 (deterministic classification) within DISPATCHING.
+    # ------------------------------------------------------------------
+    # M5 E5.3.1/5.3.2: Route normal user turn via Arbiter
+    # ------------------------------------------------------------------
 
-        Phase 1 writes scoreboard, affective_now, control to SessionState.
-        Uses TurnLock to guarantee writes complete before Front LLM reads.
-        Delegates to StubPhase1Pipeline for classification (Epic 3.1).
+    def _route_user_turn(self, envelope: Envelope, text: str, *, device_id: str = "") -> None:
+        """Route LISTENING/CLARIFYING_USER turns through the Arbiter.
 
-        NOTE: For LISTENING/CLARIFYING_USER paths, use
-        _run_phase1_with_arbiter() which also runs the Arbiter and
-        enriches the envelope. This method is retained for backward
-        compatibility with _handle_arbiter_parallel_new() (E5.2).
+        Replaces the former ``_run_phase1`` + ``_run_phase1_with_arbiter``
+        pair. The Arbiter receives a minimal ArbiterInput (safety band
+        only); richer semantics are derived by the Front LLM in-loop.
+
+        Steps:
+          1. Write session context (temporal anchor, crisis escalation)
+          2. Build ArbiterInput (crisis -> RED)
+          3. Short-circuit on crisis (canned response, no LLM)
+          4. Build inflight context snapshot
+          5. Arbiter classify
+          6. Emit intent.arbitrated
+          7. Record ledger entry
+          8. Enrich envelope; deliver to Front
         """
         logger.info(
-            "FSM._run_phase1: envelope_id=%d state=%s",
+            "FSM._route_user_turn: envelope_id=%d state=%s",
             envelope.envelope_id,
             self._state.name,
         )
-        payload = _parse_payload(envelope)
-        text = payload.get("text", "")
 
-        # Acquire TurnLock -- Phase 1 must complete before Front reads
-        self._turn_lock.acquire("phase1")
+        # 1. Session context writes (temporal anchor; crisis-band escalation)
+        self._write_session_context_to_ss(envelope)
 
-        # Run Phase 1 classification
-        result: Phase1Result = self._phase1_pipeline.classify(text)
-
-        # P3.4a: complexity_tier removed from Phase1Result.
-
-        # M10 E10.2: Write Phase 1 results to 3 SS sections
-        self._write_phase1_to_ss(result)
-
-        # Attach Phase 1 metadata to the user history entry (last entry)
-        if self._history:
-            last = self._history[-1]
-            if last.entry_type == "user":
-                last.metadata.update(result.to_metadata())
-
-        # Release TurnLock -- Phase 1 writes committed
-        self._turn_lock.release()
-
-        # M10 E10.3.3: CRISIS short-circuit (after SS writes, after TurnLock release)
-        if result.safety_band == "CRISIS":
+        # 2/3. Crisis short-circuit (cheap regex match, no LLM dispatch)
+        inputs = self._build_arbiter_input(text)
+        if inputs.safety_band == "RED":
             logger.critical(
-                "Phase 1 CRISIS detected, skipping LLM dispatch (envelope_id=%d)",
+                "Crisis keyword detected, skipping LLM dispatch (envelope_id=%d)",
                 envelope.envelope_id,
             )
             self._deliver_crisis_response(envelope)
             return
 
-        # Already in DISPATCHING -- deliver to Front via FrontLock
-        if self._front_lock.try_deliver(envelope):
-            self._deliver_to_front(envelope)
-
-    # ------------------------------------------------------------------
-    # M5 E5.3.1/5.3.2: Phase 1 + Arbiter for LISTENING/CLARIFYING paths
-    # ------------------------------------------------------------------
-
-    def _run_phase1_with_arbiter(
-        self, envelope: Envelope, text: str, *, device_id: str = ""
-    ) -> None:
-        """Run Phase 1 + Arbiter classification for LISTENING/CLARIFYING_USER.
-
-        M5 E5.3.1: Arbiter runs even for LISTENING (inflight always empty).
-        The result is always PARALLEL_NEW -- no behavioral change.
-        The value is in the routing_metadata that enriches the envelope.
-
-        M5 E5.3.2: Both Phase 1 and Arbiter metadata are attached to
-        the user history entry and the envelope payload for Front.
-
-        Steps:
-        1. Run Phase 1 classification (deterministic)
-        2. Build inflight context (empty for LISTENING)
-        3. Arbiter classify (always PARALLEL_NEW for LISTENING)
-        4. Emit intent.arbitrated event
-        5. Attach metadata to history entry
-        6. Enrich envelope with Arbiter data
-        7. Deliver enriched envelope to Front
-        """
-        logger.info(
-            "FSM._run_phase1_with_arbiter: envelope_id=%d state=%s",
-            envelope.envelope_id,
-            self._state.name,
-        )
-
-        # Acquire TurnLock -- Phase 1 must complete before Front reads
-        self._turn_lock.acquire("phase1")
-
-        # 1. Phase 1 classification
-        phase1_result: Phase1Result = self._phase1_pipeline.classify(text)
-
-        # P3.4a: complexity_tier removed from Phase1Result.
-
-        # M10 E10.2: Write Phase 1 results to 3 SS sections
-        self._write_phase1_to_ss(phase1_result)
-
-        # 2. Build inflight context (empty for LISTENING, M5 E5.4.1: device_id)
+        # 4. Build inflight context (M5 E5.4.1: device_id)
         inflight = build_inflight_context(
             ss=self._ss,
             suspension_manager=self._suspension_manager,
@@ -1893,29 +1796,26 @@ class ConciergeController:
             back_pool=self._back_pool,
         )
 
-        # 3. Arbiter classification
-        arbiter_result = self._arbiter.classify(text, phase1_result, inflight)
+        # 5. Arbiter classification (deterministic, no LLM)
+        arbiter_result = self._arbiter.classify(text, inputs, inflight)
 
-        # 5. Attach Phase 1 + Arbiter metadata to history entry
+        # Annotate user history entry with arbiter snapshot
         if self._history:
             last = self._history[-1]
             if last.entry_type == "user":
-                last.metadata.update(phase1_result.to_metadata())
+                last.metadata.update(inputs.to_metadata())
                 last.metadata["arbiter"] = arbiter_result.to_dict()
 
-        # Release TurnLock -- Phase 1 + Arbiter writes committed
-        self._turn_lock.release()
-
-        # 4. Emit intent.arbitrated BEFORE delivering to Front
+        # 6. Emit intent.arbitrated BEFORE delivering to Front
         self._bus.publish(
             build_intent_arbitrated(
                 payload={
                     "decision": arbiter_result.decision.value,
                     "confidence": arbiter_result.confidence,
                     "target_task_id": arbiter_result.target_task_id,
-                    "intent_class": phase1_result.intent_classification,
-                    "domain": phase1_result.domain_context,
-                    "safety_band": phase1_result.safety_band,
+                    "intent_class": inputs.intent_classification,
+                    "domain": inputs.domain_context,
+                    "safety_band": inputs.safety_band,
                     "inflight_task_count": len(inflight.tasks),
                     "routing_metadata": arbiter_result.routing_metadata,
                 },
@@ -1923,19 +1823,16 @@ class ConciergeController:
             )
         )
 
-        # M5 E5.5.1: Record IntentArbitrated in ledger
+        # 7. Record IntentArbitrated in ledger
         self._emit_intent_arbitrated_ledger(
             arbiter_result,
-            phase1_result,
             inflight,
             envelope,
             device_id,
         )
 
-        # 6. Enrich envelope with Arbiter data for Front (5.3.2)
+        # 8. Enrich envelope with arbiter metadata; deliver via FrontLock
         enriched = self._enrich_envelope_with_arbiter(envelope, arbiter_result)
-
-        # 7. Deliver enriched envelope to Front via FrontLock
         if self._front_lock.try_deliver(enriched):
             self._deliver_to_front(enriched)
 
@@ -1946,7 +1843,6 @@ class ConciergeController:
 
         M5 E5.3.2: Front can read arbiter_decision, routing_metadata,
         and safety_band from the enriched payload.
-        # P3.4a: complexity_tier removed from payload.
 
         M8 E8.5.4: Injects async_results_context from deferred results
         so the Front STANDARD prompt can weave background task results
@@ -1955,8 +1851,7 @@ class ConciergeController:
         payload = _parse_payload(envelope)
         payload["arbiter_decision"] = arbiter_result.decision.value
         payload["routing_metadata"] = arbiter_result.routing_metadata
-        # P3.4a: complexity_tier no longer attached to envelope.
-        payload["safety_band"] = arbiter_result.phase1.safety_band
+        payload["safety_band"] = arbiter_result.inputs.safety_band
 
         # M8 E8.5.4: Inject deferred async results context so Front LLM
         # can weave background task results into conversational response.
@@ -2786,6 +2681,23 @@ class ConciergeController:
     def _on_task_suspended(self, envelope: Envelope) -> None:
         """Handle k1.orchestration.task.suspended.v1 (HITL entry point).
 
+        **E4 HIL Unification — crash-recovery / legacy path only.**
+        Live `needs_human` requests are now resolved in-process inside
+        `back_handler` via `IHILPort.needs_human()` (see
+        `_resolve_needs_human_in_process`). This handler exists to
+        service the residual flows:
+
+        - Kernel-restart crash recovery: HumanInTheLoopService.needs_human
+          persists the suspension to SQLite BEFORE publishing the request
+          envelope; on restart the suspension is replayed and
+          back_resume_handler picks up via TOPIC_TASK_RESUME.
+        - Legacy tests / fixtures that still publish TOPIC_TASK_SUSPENDED
+          directly.
+        - Back fallbacks when no `_hil_port` is wired or `needs_human`
+          times out / hits round budget — back_handler falls back to
+          publishing TOPIC_TASK_SUSPENDED so observers still see a
+          suspended trail.
+
         Back needs human input. Transition to CLARIFYING_WORKER and
         deliver to Front for natural language translation of the HIL request.
 
@@ -2943,6 +2855,16 @@ class ConciergeController:
 
     def _on_task_resume(self, envelope: Envelope) -> None:
         """Handle k1.orchestration.task.resume.v1 (HITL exit point).
+
+        **E4 HIL Unification — crash-recovery / legacy path only.**
+        Live `needs_human` resolutions are injected into the React loop
+        in-process inside `back_handler` (see
+        `_resolve_needs_human_in_process`); they never round-trip through
+        TOPIC_TASK_RESUME. This handler runs only for:
+
+        - Kernel-restart crash recovery (replays stored suspension).
+        - Front fallback when an incoming HITL envelope is absent
+          (legacy `emit_task_resume` in `actors/front.py`).
 
         Front relayed user's HITL answer. Build structured ResumeContext
         from the stored suspension state, enrich the envelope, deliver
@@ -3301,6 +3223,181 @@ class ConciergeController:
         self._suspension_manager.cleanup_task(task_id)
         self._hitl_responded_tasks.pop(task_id, None)
 
+    def _on_hil_request(self, envelope: Envelope) -> None:
+        """Handle k1.hil.request.v1 (HIL Unification E4 unified entry point).
+
+        This is the unified successor to ``_on_task_suspended``.  Any
+        subsystem -- Fabric (capability_gate), Back (needs_human),
+        Planner (clarification/approval), Orchestrator (override) --
+        that needs a human decision publishes a ``HILEnvelope`` on this
+        topic via ``HumanInTheLoopService``.  The FSM owns the session
+        state side of the flow:
+
+          1. Parse the envelope (kind-agnostic; ``front_hil_envelope``
+             unwraps kind-specific payloads inside Front).
+          2. Determine the task slot.  When the envelope carries a
+             back-task ``task_id`` (NEEDS_HUMAN), bind to that task.
+             Otherwise (CAPABILITY_GATE / CLARIFICATION / APPROVAL /
+             OVERRIDE) synthesise a transient SUSPENDED slot keyed by
+             ``hil:{hil_request_id}`` so Front's existing pending-HIL
+             lookup keeps working.
+          3. Persist ``pending_hil_data`` containing the full envelope
+             dict; Front reads it back via ``pending_hil.envelope`` and
+             builds the correlated ``HILResponseEnvelope``.
+          4. Transition to CLARIFYING_WORKER when state-compatible and
+             deliver the envelope to Front for HITL_RELAY rendering.
+
+        Timeout + Future resolution are owned by
+        ``HumanInTheLoopService`` itself, so this handler does NOT start
+        a watcher.  Crash recovery is owned by the service's
+        ``SuspensionManager``.  Legacy ``HILSubTask`` lifecycle stays
+        bound to ``_on_task_suspended`` until E4 Back migration retires
+        ``TOPIC_TASK_SUSPENDED`` for live requests.
+        """
+        # Topic + idempotency guards (mirrors _on_task_suspended).
+        if not self._topic_guard(envelope, TOPIC_HIL_REQUEST):
+            return
+        if not self._idempotency.check_and_mark(envelope.envelope_id, self._turn_number):
+            logger.debug(
+                "FSM._on_hil_request: duplicate envelope_id=%d skipped",
+                envelope.envelope_id,
+            )
+            return
+
+        env_payload = _parse_payload(envelope)
+        hil_request_id = str(env_payload.get("hil_request_id") or "")
+        kind = str(env_payload.get("kind") or "")
+        inner = env_payload.get("payload") or {}
+        if not hil_request_id or not kind:
+            logger.warning(
+                "FSM._on_hil_request: malformed envelope id=%d kind=%s hil_id=%s",
+                envelope.envelope_id,
+                kind,
+                hil_request_id,
+            )
+            return
+
+        # Bind to an existing back task when present (NEEDS_HUMAN path);
+        # otherwise synthesise a transient slot so Front's suspended-task
+        # lookup finds the pending HIL.
+        bound_task_id = str(inner.get("task_id") or "")
+        synthetic = False
+        task_id = bound_task_id or f"hil:{hil_request_id}"
+        task_state = self._ss.get_section("task_state") if self._ss else None
+        if task_state is not None and not bound_task_id:
+            # Synthesise a SUSPENDED entry; Front reads pending_hil.envelope
+            # off it and `determine_mode` resolves to HITL_RELAY via topic.
+            try:
+                from k1.sessionstate.sections.task_state import TaskStatus
+
+                task_state.add_task(
+                    action=f"hil:{kind}",
+                    task_id=task_id,
+                    status=TaskStatus.SUSPENDED,
+                )
+                synthetic = True
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "FSM._on_hil_request: synthetic task creation failed hil=%s err=%s",
+                    hil_request_id,
+                    exc,
+                )
+
+        # Persist the full envelope so Front can build a correlated
+        # HILResponseEnvelope via build_hil_response_envelope_dict.
+        pending_hil_data = {
+            "envelope": dict(env_payload),
+            "hil_request_id": hil_request_id,
+            "kind": kind,
+            "synthetic": synthetic,
+        }
+        try:
+            self._task_bridge.set_pending_hil_data(task_id, pending_hil_data)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "FSM._on_hil_request: set_pending_hil_data failed task=%s err=%s",
+                task_id,
+                exc,
+            )
+
+        logger.info(
+            "FSM._on_hil_request: hil_id=%s kind=%s task=%s synthetic=%s state=%s",
+            hil_request_id[:8],
+            kind,
+            task_id,
+            synthetic,
+            self._state.name,
+        )
+
+        # Observability: emit hitl.requested.v1 so dashboards / ledger
+        # see a unified lifecycle entry alongside k1.hil.audit.v1.
+        try:
+            self._bus.publish(
+                build_hitl_requested(
+                    payload={
+                        "pending_hil_id": hil_request_id,
+                        "hil_type": kind,
+                        "parent_task_id": task_id,
+                        "safety_band": (inner.get("contract") or {}).get(
+                            "safety_band_min", "AMBER"
+                        ),
+                        "hil_deadline_ms": int(env_payload.get("timeout_ms", 0) or 0),
+                        "resume_token": hil_request_id,
+                        "device_id": "",
+                        "task_id": task_id,
+                    },
+                    parent_id=envelope.envelope_id,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("FSM._on_hil_request: observability emit failed err=%s", exc)
+
+        # Only transition when in a compatible state; otherwise the
+        # envelope is still delivered below so Front can render whenever
+        # the lock allows it (mirrors _on_task_suspended semantics).
+        #
+        # CLARIFYING_WORKER models a free-text clarification dialog with
+        # the user (kinds: needs_human / clarification).  For inline
+        # approval gates (capability_gate / approval / override) the
+        # resolution is consumed in-process by Fabric (gate future) and
+        # NO task.resume envelope is ever emitted -- so transitioning
+        # into CLARIFYING_WORKER would strand the FSM there and cause
+        # downstream tool.completed.v1 events to dead-letter.  Stay in
+        # the current state for inline gates; determine_mode still routes
+        # the hil.request envelope to Front via HITL_RELAY by topic.
+        _INLINE_GATE_KINDS = ("capability_gate", "approval", "override")
+        if kind not in _INLINE_GATE_KINDS and self._state in (
+            ConciergeState.COMPANIONING,
+            ConciergeState.PROGRESSING,
+        ):
+            self._transition(
+                ConciergeState.CLARIFYING_WORKER,
+                TOPIC_HIL_REQUEST,
+                envelope,
+            )
+
+        # History entry (BEFORE delivery so order is final -> hitl_request -> resolve).
+        try:
+            from k1.concierge.actors.front_hil_envelope import (
+                unwrap_hil_request_payload,
+            )
+
+            flat = unwrap_hil_request_payload(env_payload)
+            self._write_history(
+                entry_type="hitl_request",
+                role="assistant",
+                text=flat.get("question", "") or "",
+                source="front",
+                task_id=task_id,
+                envelope=envelope,
+                metadata={"hil_type": flat.get("hil_type", kind), "hil_request_id": hil_request_id},
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("FSM._on_hil_request: history write skipped err=%s", exc)
+
+        if self._front_lock.try_deliver(envelope):
+            self._deliver_to_front(envelope)
+
     def _on_response_final(self, envelope: Envelope) -> None:
         """Handle k1.response.final.v1 -- the turn exit point.
 
@@ -3559,20 +3656,32 @@ class ConciergeController:
         # Stable, dedup-friendly turn_id (session-scoped, monotonic).
         turn_id = f"{session_id}:{self._turn_number}" if session_id else f"turn:{self._turn_number}"
 
-        self._bus.publish(
-            build_turn_completed(
-                payload={
-                    "turn_id": turn_id,
-                    "session_id": session_id,
-                    "cognitive_trace_id": cognitive_trace_id,
-                    "user_message": self._current_turn_user_text,
-                    "assistant_response": assistant_response,
-                    "timestamp_ms": int(time.time() * 1000),
-                    "turn_number": self._turn_number,
-                },
-                parent_id=envelope.envelope_id,
+        # MW-dedup guard: skip publishing if we already emitted this
+        # turn_id (same-turn dispatch+complete followed by proactive
+        # delivery would otherwise publish the same turn_id twice).
+        # Narrative arc + deferred-HITL still run below.
+        already_emitted = turn_id in self._emitted_turn_ids
+        if already_emitted:
+            logger.debug(
+                "FSM._emit_turn_completed: already emitted turn_id=%s, skipping publish",
+                turn_id,
             )
-        )
+        else:
+            self._emitted_turn_ids.add(turn_id)
+            self._bus.publish(
+                build_turn_completed(
+                    payload={
+                        "turn_id": turn_id,
+                        "session_id": session_id,
+                        "cognitive_trace_id": cognitive_trace_id,
+                        "user_message": self._current_turn_user_text,
+                        "assistant_response": assistant_response,
+                        "timestamp_ms": int(time.time() * 1000),
+                        "turn_number": self._turn_number,
+                    },
+                    parent_id=envelope.envelope_id,
+                )
+            )
         # Advance narrative arc position for this turn (Gap 5, Section 5.1).
         # record_turn updates primary_thread.last_active_turn and the arc
         # position so the Front LLM's narrative context stays current.
@@ -4053,14 +4162,14 @@ class ConciergeController:
                 candidate_event_id=str(envelope.envelope_id),
                 decision=decision.decision.name,
                 reason=decision.reasoning,
-                window_ms=decision.window_ms,
+                batch_window_ms=decision.window_ms,
                 fsm_state=self._state.name,
                 signal_snapshot=signal.to_dict(),
                 urgency_override=decision.urgency_override,
                 emotional_gate_applied=decision.emotional_gate_applied,
                 fallback_used=fallback_used,
             )
-            self._ledger.append(event)
+            self._ledger.append_sync(event)
 
     # ------------------------------------------------------------------
     # M8 E8.5.4: Deferred results injection on user input
@@ -4255,30 +4364,6 @@ class ConciergeController:
         if self._front_lock.try_deliver(envelope):
             self._deliver_to_front(envelope)
 
-    def _on_clarification_request(self, envelope: Envelope) -> None:
-        """Handle k1.orchestration.clarification.request.v1."""
-        # M2 E2.1.2: Guard gate
-        guard = self._guard_dispatch(envelope)
-        if guard == GuardAction.DEAD_LETTER:
-            self._publish_dead_letter(envelope, "clarification_request_invalid_state")
-            return
-
-        # Routed through task.suspended in most cases.
-        # Direct clarification requests are forwarded to Front.
-        if self._front_lock.try_deliver(envelope):
-            self._deliver_to_front(envelope)
-
-    def _on_clarification_response(self, envelope: Envelope) -> None:
-        """Handle k1.orchestration.clarification.response.v1."""
-        # M2 E2.1.2: Guard gate
-        guard = self._guard_dispatch(envelope)
-        if guard == GuardAction.DEAD_LETTER:
-            self._publish_dead_letter(envelope, "clarification_response_invalid_state")
-            return
-
-        # Front -> Back clarification response. Forward to Back.
-        self._deliver_to_back(envelope)
-
     def _on_artifact_created(self, envelope: Envelope) -> None:
         """Handle k1.session.artifact.created.v1."""
         # M2 E2.1.2: Guard gate
@@ -4413,7 +4498,6 @@ class ConciergeController:
         self._cancel_handler.reset()
         self._control_ext.reset()
         self._task_bridge.reset()
-        self._turn_lock.reset()
         self._interrupt_classifier.reset()
         self._proactive_wake.reset()
 
@@ -4433,7 +4517,6 @@ class ConciergeController:
         self._cancel_handler.reset()
         self._control_ext.reset()
         self._task_bridge.reset()
-        self._turn_lock.reset()
         self._interrupt_classifier.reset()
         self._proactive_wake.reset()
 

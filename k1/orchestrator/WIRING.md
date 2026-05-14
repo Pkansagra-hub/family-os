@@ -235,9 +235,16 @@ state_port   = StateReadAdapter(ssm)                                   # wraps S
 delta_port   = DeltaEmitAdapter(bus)                                   # wraps IBus publish
 bridge_port  = BridgeWriteAdapter(bridge_client)                       # wraps K0 bridge client
 event_port   = EventSubscriptionAdapter(bus)                           # wraps IBus subscribe/emit
-storage_port = SQLiteWorkflowAdapter(config.workflow_db_path)          # SQLite WAL
+storage_port = WorkflowStorageAdapter(                                 # adapter boundary
+    SQLiteWorkflowAdapter(config.workflow_db_path)                      # SQLite WAL
+)
 admin_port   = AdminHttpAdapter(config)                                # HTTP admin server
 ```
+
+`WorkflowStorageAdapter.close()` delegates to `SQLiteWorkflowAdapter.close()` when
+the construction root owns a real SQLite adapter. In `KernelService`, the S5
+construction root keeps this adapter as `_orch_storage` and closes it immediately
+after `orchestrator.shutdown()` during reverse-S5 teardown.
 
 ---
 
@@ -292,6 +299,10 @@ The orchestrator may start before the planner is ready (kernel startup order S6b
 HIGH-tier tasks arriving before `bind_planner()` is called fail immediately with
 `ProcessResult.FAILED` (no planner → no plan).
 
+Live coverage: `tests/integration/k1/live/m2/test_m2_l2_planner_orchestrator_crosswire.py`
+asserts `_planner_port` is the real `PlannerAdapter` and that its `_mailbox` is the
+live `PlannerAgent` mailbox.
+
 ---
 
 ## 12. Shutdown sequence
@@ -307,7 +318,8 @@ async def shutdown():
     7. mailbox_loop_task.cancel(); await asyncio.gather(mailbox_loop_task, ...)
     8. reaper_task.cancel(); await asyncio.gather(reaper_task, ...)
     9. await asyncio.wait_for(drain(), timeout=config.drain_timeout_ms/1000)
-    10. bridge_port.close() if applicable
+    10. construction root closes WorkflowStorageAdapter if applicable
+    11. bridge_port.close() if applicable
 ```
 
 ---

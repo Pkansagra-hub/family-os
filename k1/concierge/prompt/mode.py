@@ -231,11 +231,22 @@ def get_max_iterations(mode: PromptMode, affect_band: str = "neutral") -> int:
 # V3 E0.1.4: replaced inline string literals with canonical imports.
 # =========================================================================
 
-from k1.concierge.bus.topics import TOPIC_TASK_COMPLETE as _TOPIC_TASK_COMPLETE  # noqa: E402
-from k1.concierge.bus.topics import TOPIC_TASK_FAILED as _TOPIC_TASK_FAILED  # noqa: E402
-from k1.concierge.bus.topics import TOPIC_TASK_SUSPENDED as _TOPIC_TASK_SUSPENDED  # noqa: E402
+from k1.concierge.bus.topics import (
+    TOPIC_HIL_REQUEST as _TOPIC_HIL_REQUEST,  # noqa: E402
+)
+from k1.concierge.bus.topics import (
+    TOPIC_TASK_COMPLETE as _TOPIC_TASK_COMPLETE,  # noqa: E402
+)
+from k1.concierge.bus.topics import (
+    TOPIC_TASK_FAILED as _TOPIC_TASK_FAILED,  # noqa: E402
+)
+from k1.concierge.bus.topics import (
+    TOPIC_TASK_SUSPENDED as _TOPIC_TASK_SUSPENDED,  # noqa: E402
+)
 from k1.concierge.bus.topics import TOPIC_USER_INPUT as _TOPIC_USER_INPUT  # noqa: E402
-from k1.concierge.bus.topics import TOPIC_WEAVE_BATCH as _TOPIC_WEAVE_BATCH  # noqa: E402
+from k1.concierge.bus.topics import (
+    TOPIC_WEAVE_BATCH as _TOPIC_WEAVE_BATCH,  # noqa: E402
+)
 
 # =========================================================================
 # determine_mode() -- Mode Resolution (V2 Section 4, 16.3)
@@ -343,6 +354,15 @@ def determine_mode(
         return PromptMode.WEAVE
     if envelope_topic == _TOPIC_TASK_SUSPENDED:
         logger.info("determine_mode  topic=%s -> HITL_RELAY", envelope_topic)
+        return PromptMode.HITL_RELAY
+    if envelope_topic == _TOPIC_HIL_REQUEST:
+        # HIL Unification (E4): unified HIL request topic always renders
+        # via HITL_RELAY.  Kind discrimination (capability_gate vs.
+        # needs_human vs. clarification vs. approval vs. override) is
+        # handled inside front_hil_envelope.unwrap_hil_request_payload,
+        # not at the mode level -- the mode only selects tool allowlist
+        # + iteration budget, both of which are correct for all kinds.
+        logger.info("determine_mode  topic=%s -> HITL_RELAY (unified)", envelope_topic)
         return PromptMode.HITL_RELAY
 
     # 4. SS-signal-driven fallbacks (only for user input)

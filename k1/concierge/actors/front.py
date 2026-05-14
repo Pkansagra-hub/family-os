@@ -26,6 +26,8 @@ from __future__ import annotations
 
 import json
 import logging
+import time
+from pathlib import Path
 from typing import Any
 
 from k1.bus.envelope import Envelope
@@ -56,6 +58,8 @@ from k1.model_hub.ports import IModelHubPort
 
 logger = logging.getLogger(__name__)
 
+_PROMPT_DUMP_DIR = Path(__file__).resolve().parents[3] / "data" / "prompt_dumps"
+
 # Reasoning-leak detection patterns.  Flash Lite (and other non-thinking
 # models) sometimes prefix their response text with chain-of-thought
 # reasoning that should never reach the user.  These patterns detect
@@ -76,6 +80,58 @@ _REASONING_PREFIXES = re.compile(
     r"(?=\n[A-Z]|\n\n)",
     re.DOTALL,
 )
+
+
+def _write_runtime_prompt_dump(
+    *,
+    envelope: Envelope,
+    mode: PromptMode,
+    context: Any,
+    domain: str | None,
+    tier: str,
+    clarify_depth: int,
+    trace_id: str,
+) -> None:
+    """Persist the exact Front prompt payload for postmortem debugging."""
+    try:
+        _PROMPT_DUMP_DIR.mkdir(parents=True, exist_ok=True)
+        timestamp_ms = int(time.time() * 1000)
+        payload = {
+            "timestamp_ms": timestamp_ms,
+            "topic": envelope.topic,
+            "envelope_id": envelope.envelope_id,
+            "parent_id": envelope.parent_id,
+            "trace_id": trace_id,
+            "mode": mode.value,
+            "domain": domain,
+            "tier": tier,
+            "clarify_depth": clarify_depth,
+            "affect_band": context.affect_band,
+            "max_iterations": context.max_iterations,
+            "tool_names": [t.name for t in context.tools],
+            "messages": [
+                {
+                    "role": m.role,
+                    "content": m.content,
+                }
+                for m in context.messages
+            ],
+            "system_prompt": context.system_prompt,
+        }
+        stem = f"front_prompt_env{envelope.envelope_id}_{timestamp_ms}"
+        stamped_path = _PROMPT_DUMP_DIR / f"{stem}.json"
+        latest_path = _PROMPT_DUMP_DIR / "front_prompt_latest.json"
+        serialized = json.dumps(payload, ensure_ascii=False, indent=2)
+        stamped_path.write_text(serialized, encoding="utf-8")
+        latest_path.write_text(serialized, encoding="utf-8")
+        logger.info(
+            "front_handler: prompt dump written envelope_id=%d file=%s latest=%s",
+            envelope.envelope_id,
+            stamped_path,
+            latest_path,
+        )
+    except Exception:
+        logger.warning("front_handler: prompt dump write failed", exc_info=True)
 
 
 def _strip_leaked_reasoning(text: str) -> str:
@@ -145,6 +201,29 @@ def _strip_leaked_reasoning(text: str) -> str:
             )
         return clean
     return text
+
+
+def _build_dispatch_ack(dispatches: list[dict[str, Any]]) -> str:
+    """Return a deterministic in-progress acknowledgement for dispatched work."""
+    if len(dispatches) > 1:
+        return "I'm working on those now."
+    if not dispatches:
+        return "I'm working on that now."
+
+    first = dispatches[0]
+    intents = first.get("intents", []) if isinstance(first, dict) else []
+    first_intent = intents[0] if intents and isinstance(intents[0], dict) else {}
+    action = str(first_intent.get("action", "")).lower()
+
+    if "task" in action:
+        return "I'm adding that task now."
+    if any(token in action for token in ("calendar", "event", "appointment")):
+        return "I'm adding that to the calendar now."
+    if "reminder" in action:
+        return "I'm setting that reminder now."
+    if "chore" in action:
+        return "I'm setting that up now."
+    return "I'm working on that now."
 
 
 # Patterns matching raw system/HIL blocks that LLMs sometimes pass through
@@ -916,8 +995,33 @@ async def front_handler(
         "front_handler: LLM INPUT tools=%s",
         [t.name for t in context.tools],
     )
+    _write_runtime_prompt_dump(
+        envelope=envelope,
+        mode=mode,
+        context=context,
+        domain=domain,
+        tier=tier,
+        clarify_depth=clarify_depth,
+        trace_id=trace_id,
+    )
+
+    async def _publish_final_text(text: str) -> None:
+        logger.info(
+            "front_handler._on_text_response: publishing FINAL text=%s parent_id=%d",
+            text[:60],
+            parent_id,
+        )
+        env = build_final_response(
+            payload={"text": text, "trace_id": trace_id},
+            parent_id=parent_id,
+        )
+        bus.publish(env)
+        logger.info(
+            "front_handler._on_text_response: FINAL published (envelope_id=%d)", env.envelope_id
+        )
 
     # Build output validator with the FULL tool schema set (Epic 4.1).
+
     # Uses all_tool_schemas (not mode-filtered context.tools) so valid Front
     # tools aren't rejected -- validator catches truly hallucinated names.
     validator = LLMOutputValidator(all_tool_schemas) if all_tool_schemas else None
@@ -957,19 +1061,7 @@ async def front_handler(
 
     async def _on_text_response(text: str) -> None:
         """Emit k1.response.final.v1 on bus -- Epic 6.3.3."""
-        logger.info(
-            "front_handler._on_text_response: publishing FINAL text=%s parent_id=%d",
-            text[:60],
-            parent_id,
-        )
-        env = build_final_response(
-            payload={"text": text, "trace_id": trace_id},
-            parent_id=parent_id,
-        )
-        bus.publish(env)
-        logger.info(
-            "front_handler._on_text_response: FINAL published (envelope_id=%d)", env.envelope_id
-        )
+        await _publish_final_text(text)
 
     result = await react_loop(
         actor="front",
@@ -1063,8 +1155,39 @@ async def front_handler(
 
     # 10c. Emit response.final AFTER all dispatches (correct FSM ordering)
     #      For STANDARD/PRESENT modes, emit stream chunks first (Epic 4.2).
-    if result.text:
-        clean_text = _strip_leaked_reasoning(result.text)
+    _final_text = result.text or ""
+    if mode == PromptMode.STANDARD and normal_dispatches:
+        _final_text = _build_dispatch_ack(normal_dispatches)
+        logger.info("front_handler: replaced post-dispatch text with deterministic ack")
+    # WEAVE degenerate guard: if the LLM produced the generic fallback
+    # ("Let me think about that for a moment.") during a WEAVE/proactive
+    # delivery, replace it with a deterministic summary built from the
+    # Back worker's final_answer.  This prevents useless "thinking" phrases
+    # leaking to the user after routine task completions.
+    if mode == PromptMode.WEAVE:
+        _degenerate_fallback = get_config().react.front_degenerate_fallback
+        if not _final_text or _final_text.strip() == _degenerate_fallback.strip():
+            _weave_payload = _parse_payload(envelope)
+            _weave_pending = _weave_payload.get("results") or []
+            _weave_lines: list[str] = []
+            for _r in _weave_pending:
+                _inner = _r.get("result", _r) if isinstance(_r, dict) else {}
+                _fa = _inner.get("final_answer", "") if isinstance(_inner, dict) else ""
+                if _fa:
+                    _weave_lines.append(_fa)
+            if _weave_lines:
+                _final_text = " ".join(_weave_lines)
+                logger.info(
+                    "front_handler: WEAVE degenerate suppressed, "
+                    "using Back final_answer (%d chars)",
+                    len(_final_text),
+                )
+            else:
+                # Nothing useful from Back either — suppress entirely.
+                _final_text = ""
+                logger.info("front_handler: WEAVE degenerate suppressed, no final_answer available")
+    if _final_text:
+        clean_text = _strip_leaked_reasoning(_final_text)
         clean_text = _strip_leaked_system_blocks(clean_text)
         if mode in (PromptMode.STANDARD, PromptMode.PRESENT):
             await _emit_streaming_response(
@@ -1086,21 +1209,19 @@ async def front_handler(
                 {},
             )
         suspended_task_id = suspended_task.get("task_id", "")
-        resolution = _build_resolution(scenario_data) if suspended_task_id else None
-        if suspended_task_id and resolution is not None:
-            emit_task_resume(
-                bus=bus,
-                task_id=suspended_task_id,
-                user_answer=json.dumps(resolution),
-                resolution=resolution,
-                parent_id=parent_id,
-                trace_id=trace_id,
-            )
-        # E1.M2.1: also emit unified HIL response if the suspended task
-        # was created by the unified HumanInTheLoopService (carries the
-        # original HILEnvelope under pending_hil.envelope).
+        # E1.M2.1 / E4: when the suspension was created by the unified
+        # HumanInTheLoopService, ``pending_hil.envelope`` carries the
+        # original HILEnvelope.  In that case we publish ONLY the
+        # unified TOPIC_HIL_RESPONSE -- the service resolves the Future
+        # and the caller (Fabric / Back / Planner / Orchestrator)
+        # continues in-process.  We must NOT also emit the legacy
+        # TOPIC_TASK_RESUME or downstream Back would attempt a double
+        # resume.  Legacy emission is only correct for legacy task
+        # suspensions (no envelope under pending_hil).
         pending_hil = (suspended_task.get("pending_hil") or {}) if suspended_task else {}
         incoming_envelope = pending_hil.get("envelope")
+        resolution = _build_resolution(scenario_data) if suspended_task_id else None
+
         if incoming_envelope:
             from k1.concierge.actors.front_hil_envelope import (
                 build_hil_response_envelope_dict,
@@ -1128,6 +1249,19 @@ async def front_handler(
                         else type(incoming_envelope).__name__
                     ),
                 )
+        elif suspended_task_id and resolution is not None:
+            # Legacy path: no unified envelope -- emit TOPIC_TASK_RESUME so
+            # Back's back_resume_handler can pick up the resolution.  Once
+            # E4 Back migration retires the bus round-trip this branch can
+            # be deleted along with back_resume_handler.
+            emit_task_resume(
+                bus=bus,
+                task_id=suspended_task_id,
+                user_answer=json.dumps(resolution),
+                resolution=resolution,
+                parent_id=parent_id,
+                trace_id=trace_id,
+            )
 
     logger.info(
         "front_handler complete: status=%s dispatched=%d cancel=%d trace=%s",

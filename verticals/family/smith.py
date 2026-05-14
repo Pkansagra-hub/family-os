@@ -56,6 +56,7 @@ _MEMBERS = [
                 "lights_out": "20:40",
             },
         },
+        aliases=["little demon of house", "little demon", "the kiddo"],
     ),
     FamilyMember(
         actor_id="nana_liz",

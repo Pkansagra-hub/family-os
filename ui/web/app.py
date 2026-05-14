@@ -18,13 +18,13 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from ui.web.coordinator import UiCoordinator, get_web_coordinator, reset_coordinator
+from ui.web.routes.family_tools import build_family_tools_api
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +37,9 @@ STATIC_DIR = Path(__file__).parent / "static"
 app = FastAPI(title="FamilyOS K1 Concierge")
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+# Family-tool adapter discovery API (lazy: coordinator resolved per-request).
+app.include_router(build_family_tools_api(lambda: _coordinator))
 
 # Process-wide shared state (lazy-init on first WebSocket connection)
 _coordinator: UiCoordinator | None = None
@@ -343,6 +346,8 @@ async def websocket_endpoint(ws: WebSocket) -> None:
                 await _handle_command(coord, ws, msg)
             elif msg_type == "get_timeline":
                 await _send_timeline(coord, ws, msg)
+            elif msg_type == "hil_response":
+                await _handle_hil_response(coord, ws, msg)
             else:
                 logger.debug("WEB: unknown message type=%r", msg_type)
 
@@ -415,6 +420,35 @@ async def _handle_user_message(coord: UiCoordinator, ws: WebSocket, msg: dict) -
                 }
             )
         )
+
+
+async def _handle_hil_response(coord: UiCoordinator, ws: WebSocket, msg: dict) -> None:
+    """Publish a HIL response from the browser back onto the bus."""
+    import time as _time
+
+    from k1.hil.topics import TOPIC_HIL_RESPONSE as _TOPIC_HIL_RESPONSE
+
+    hil_request_id = msg.get("hil_request_id", "")
+    kind = msg.get("kind", "")
+    payload = dict(msg.get("payload", {}))
+
+    envelope_payload = {
+        "hil_request_id": hil_request_id,
+        "kind": kind,
+        "responded_at_ms": int(_time.time() * 1000),
+        "payload": payload,
+        "timed_out": False,
+    }
+
+    try:
+        from k1.bus import Envelope
+
+        coord.get_bus().publish(
+            Envelope(topic=_TOPIC_HIL_RESPONSE, payload=json.dumps(envelope_payload).encode())
+        )
+        logger.info("WEB: hil_response published hil_request_id=%s kind=%s", hil_request_id, kind)
+    except Exception as exc:
+        logger.error("WEB: hil_response publish failed: %s", exc, exc_info=True)
 
 
 def _handle_switch_member(msg: dict) -> None:

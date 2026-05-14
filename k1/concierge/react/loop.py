@@ -40,26 +40,20 @@ from k1.model_hub.types import (
     CapabilityType,
     ChatPayload,
     ChatResult,
-)
-from k1.model_hub.types import FinishReason as K1FinishReason
-from k1.model_hub.types import (
     HubChunk,
     HubRequest,
     HubResponse,
-)
-from k1.model_hub.types import Message as K1Message
-from k1.model_hub.types import (
     ReasonResult,
     RequestConstraints,
     ResponseMetadata,
     StructuredResult,
     TokenUsage,
     ToolCallPayload,
-)
-from k1.model_hub.types import ToolCallResult as K1ToolCallResult
-from k1.model_hub.types import (
     ToolCallResultSet,
 )
+from k1.model_hub.types import FinishReason as K1FinishReason
+from k1.model_hub.types import Message as K1Message
+from k1.model_hub.types import ToolCallResult as K1ToolCallResult
 from k1.model_hub.types import ToolDefinition as K1ToolDefinition
 
 logger = logging.getLogger(__name__)
@@ -284,17 +278,18 @@ class ReactResult:
 # =========================================================================
 
 
-def _resolve_tool_choice(iteration: int, actor: str, tools: list[ToolSchema]) -> str:
+def _resolve_tool_choice(
+    iteration: int, actor: str, tools: list[ToolSchema]
+) -> str:  # noqa: ARG001 -- signature retained for caller stability
     """Determine tool_choice for this iteration.
 
-    Rules (V2 Section 7.5, ITEM #13):
-      - Front, iteration 0, tools available: "required"
-        Forces the first tool call.
-      - All other cases: "auto"
-        Let the model decide whether to call a tool or respond with text.
+    Policy: always ``"auto"``. The model decides whether to call a tool or
+    respond with text. Forcing ``"required"`` on iteration 0 produces
+    spurious tool calls on simple greetings or low-stakes turns where text
+    is the right output. The Front prompt continues to instruct the model
+    on when tools are appropriate; this matches the wider production
+    pattern of trusting model judgment over hard kernel gating.
     """
-    if iteration == 0 and actor == "front" and tools:
-        return "required"
     return "auto"
 
 
@@ -428,24 +423,41 @@ async def react_loop(
         # Defensive: if config is mocked/non-numeric, use sane default
         _tool_timeout_s = 30.0
 
+    # HIL-aware override: invoke_capability may block while awaiting human
+    # approval (capability_gate_timeout_ms = 120 s by default).  Use
+    # max(tool_timeout, hil_timeout + 30 s) so the gate can resolve before
+    # the react loop cancels the tool call.
+    _raw_hil_timeout = getattr(get_config(), "hil_capability_gate_timeout_ms", 120_000)
+    try:
+        _hil_tool_timeout_s: float = max(_tool_timeout_s, float(_raw_hil_timeout) / 1000.0 + 30.0)
+    except (TypeError, ValueError):
+        _hil_tool_timeout_s = max(_tool_timeout_s, 150.0)
+
     # Hoist _run_tool outside the loop to avoid re-creating the closure
     async def _run_tool(tc: Any) -> tuple[Any, ToolResult]:
+        _effective_timeout = (
+            _hil_tool_timeout_s
+            if getattr(tc, "name", "") in ("invoke_capability", "batch_invoke_capabilities")
+            else _tool_timeout_s
+        )
         try:
-            result = await asyncio.wait_for(tool_dispatcher.dispatch(tc), timeout=_tool_timeout_s)
+            result = await asyncio.wait_for(
+                tool_dispatcher.dispatch(tc), timeout=_effective_timeout
+            )
         except asyncio.TimeoutError:
             tool_name = getattr(tc, "name", "unknown")
             logger.error(
                 "react_loop: tool TIMED OUT tool=%s (timeout=%.1fs) "
                 "actor=%s trace=%s -- synthesizing error result",
                 tool_name,
-                _tool_timeout_s,
+                _effective_timeout,
                 actor,
                 trace_id[:8] if trace_id else "",
             )
             result = ToolResult(
                 tool_name=tool_name,
                 status="error",
-                error=f"tool_timeout after {_tool_timeout_s:.1f}s",
+                error=f"tool_timeout after {_effective_timeout:.1f}s",
             )
         return tc, result
 
@@ -651,6 +663,23 @@ async def react_loop(
                             sequential_tool_calls=_sequential_count,
                             iteration_durations_ms=_iteration_durations,
                         )
+                    # Back actor: inject feedback so the model knows WHY its
+                    # call was rejected and what it must do before submit_result.
+                    messages.append(
+                        ModelMessage(
+                            role="user",
+                            content=(
+                                f"Your tool call was INVALID and was rejected: "
+                                f"{'; '.join(vr.issues)}. "
+                                "You MUST complete the work before submitting: "
+                                "1) call discover_capabilities to find the right capability, "
+                                "2) call invoke_capability to execute it, "
+                                "3) THEN call submit_result with the actual outcome."
+                            ),
+                        )
+                    )
+                    _iter_dur = int((time.monotonic() - _iter_start) * 1000)
+                    _iteration_durations.append(_iter_dur)
                     continue
 
         # ---- MALFORMED TOOL CALL: model tried a tool call but JSON was invalid ----

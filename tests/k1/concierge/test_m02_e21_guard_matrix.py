@@ -121,8 +121,8 @@ class TestSubscribedTopics:
         assert isinstance(SUBSCRIBED_TOPICS, frozenset)
 
     def test_has_20_topics(self) -> None:
-        """30 unique subscribed topics (18 original + 2 M5 arbiter + 4 M6 HITL + 3 M7 pool + 1 M8 typing + 1 M8 weave_decided + 1 M8 weave_metrics)."""
-        assert len(SUBSCRIBED_TOPICS) == 30
+        """28 unique subscribed topics (original set minus 2 dead E5 clarification topics retired in E4 cleanup)."""
+        assert len(SUBSCRIBED_TOPICS) == 28
 
     def test_all_are_valid_bus_topics(self) -> None:
         """Every member of SUBSCRIBED_TOPICS is a known ALL_TOPICS member."""
@@ -433,15 +433,16 @@ class TestNoDuplicateDagSubscription:
     def test_no_bare_string_dag_subscription(self) -> None:
         """Subscription count confirms bare string DAG duplicate removed."""
         fsm, bus = self._make_fsm()
-        # With dup removed + M6 E6.4 config-update topic: 20 subscriptions
+        # With dup removed + M6 E6.4 config-update topic + E4 HIL unification
+        # (_on_hil_request) - 2 dead E5 clarification subs retired: 19 subscriptions
         assert (
-            len(fsm._subscription_handles) == 20
-        ), f"Expected 20 subscriptions (dup removed), got {len(fsm._subscription_handles)}"
+            len(fsm._subscription_handles) == 19
+        ), f"Expected 19 subscriptions (dup removed, +HIL unified, -2 clarification), got {len(fsm._subscription_handles)}"
 
     def test_dag_completed_subscription_via_constant(self) -> None:
         """Subscription count confirms no bare string duplicate."""
         fsm, bus = self._make_fsm()
-        assert len(fsm._subscription_handles) == 20
+        assert len(fsm._subscription_handles) == 19
 
 
 # =============================================================================

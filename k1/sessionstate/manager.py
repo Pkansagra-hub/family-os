@@ -494,6 +494,8 @@ class SessionStateManager:
         "_last_mutation_ms",
         "_started_at_ms",
         "_mutation_count",
+        # Diagnostics: mutations since last successful checkpoint (never resets to < 0).
+        "_mutations_since_checkpoint",
     )
 
     def __init__(
@@ -534,6 +536,7 @@ class SessionStateManager:
         self._last_mutation_ms = 0
         self._started_at_ms = 0
         self._mutation_count = 0
+        self._mutations_since_checkpoint = 0
 
         # Initialize kernel services first
         self._size_tracker = SizeTracker()
@@ -601,6 +604,19 @@ class SessionStateManager:
     def is_running(self) -> bool:
         """Whether manager is in RUNNING state."""
         return self._state == ManagerState.RUNNING
+
+    def pending_writes(self) -> int:
+        """Return count of mutations since the last successful checkpoint.
+
+        Intended exclusively for LIFECYCLE-ORDER probes in
+        ``tests/integration/k1/live/``.  Never call from production code.
+
+        Returns 0 immediately after a successful ``checkpoint()`` call.
+        Increments by 1 for every accepted ``mutate()`` call since then.
+        A returned value > 0 means those mutations have not yet been
+        persisted to LOCAL COLD.
+        """
+        return self._mutations_since_checkpoint
 
     @property
     def hot(self) -> HotTier:
@@ -896,6 +912,7 @@ class SessionStateManager:
             self._size_tracker.update(section, actual_bytes)
             self._last_mutation_ms = int(time.time() * 1000)
             self._mutation_count += 1
+            self._mutations_since_checkpoint += 1
 
             # Step 4: Check pressure and trigger engines if needed
             pressure = self._size_tracker.get_pressure()
@@ -1462,6 +1479,7 @@ class SessionStateManager:
                     sla_met,
                     trace_id,
                 )
+                self._mutations_since_checkpoint = 0
                 return CheckpointResult(
                     success=True,
                     checkpoint_id=checkpoint_id,

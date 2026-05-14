@@ -278,8 +278,8 @@ class TestUpdateOperations:
 
     def test_update_with_source(self, section):
         """Test update with source."""
-        section.update(emotion="frustrated", source="ultrabert")
-        assert section.source == "ultrabert"
+        section.update(emotion="frustrated", source="front_llm")
+        assert section.source == "front_llm"
 
     def test_update_with_confidence(self, section):
         """Test update with confidence."""

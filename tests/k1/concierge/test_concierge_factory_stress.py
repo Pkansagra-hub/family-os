@@ -226,10 +226,6 @@ class TestRapidStartStop:
 class TestConciergeConfigValidation:
     """ConciergeConfig rejects invalid field values."""
 
-    def test_invalid_phase1_pipeline_raises(self):
-        with pytest.raises(ValueError, match="phase1_pipeline"):
-            ConciergeConfig(phase1_pipeline="gpt4")
-
     def test_zero_delta_batch_window_raises(self):
         with pytest.raises(ValueError, match="delta_batch_window_ms"):
             ConciergeConfig(delta_batch_window_ms=0)
@@ -237,11 +233,6 @@ class TestConciergeConfigValidation:
     def test_negative_delta_batch_window_raises(self):
         with pytest.raises(ValueError, match="delta_batch_window_ms"):
             ConciergeConfig(delta_batch_window_ms=-1)
-
-    def test_valid_pipelines_accepted(self):
-        for pipeline in ("stub", "ultrabert"):
-            cfg = ConciergeConfig(phase1_pipeline=pipeline)
-            assert cfg.phase1_pipeline == pipeline
 
 
 # ---------------------------------------------------------------------------
@@ -276,13 +267,3 @@ class TestConciergeConfigMethods:
         c1 = ConciergeConfig.from_kernel_config(kc)
         c2 = ConciergeConfig.from_legacy(kc)
         assert c1.enable_delta == c2.enable_delta
-
-    def test_from_dict_validates(self):
-        with pytest.raises(ValueError, match="phase1_pipeline"):
-            ConciergeConfig.from_dict({"phase1_pipeline": "INVALID"})
-
-    def test_with_overrides_validates(self):
-        cfg = ConciergeConfig()
-        with pytest.raises(ValueError, match="phase1_pipeline"):
-            cfg.with_overrides(phase1_pipeline="INVALID")
-

@@ -68,6 +68,18 @@ class WorkflowStorageAdapter:
     def __init__(self, storage: IWorkflowStoragePort) -> None:
         self._storage = storage
 
+    def close(self) -> None:
+        """Close the underlying storage if it exposes a close hook."""
+        close = getattr(self._storage, "close", None)
+        if close is None:
+            return
+        try:
+            close()
+        except AdapterException:
+            raise
+        except Exception as exc:
+            raise self._wrap("close", exc) from exc
+
     # ------------------------------------------------------------------
     # helpers
     # ------------------------------------------------------------------

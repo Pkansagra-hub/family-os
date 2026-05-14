@@ -68,11 +68,6 @@ class KernelConfig:
     # M2 E2.5.1: Create DeadLetterConsumer at boot
     enable_dead_letter_consumer: bool = True
     seed_memories: list[dict[str, Any]] = field(default_factory=list)
-    # Issue 2.0.5: Config values previously fetched via get_config()
-    phase1_pipeline: str = "ultrabert"
-    # P4B.8: default False so lazy_load (~10ms boot) is honored.
-    # Set True to pay the ~20s model load cost up-front during boot.
-    phase1_warmup_on_startup: bool = False
     delta_batch_window_ms: int = 500
     dead_letter_enabled: bool = True
     poll_interval_s: float = 0.05

@@ -418,34 +418,6 @@ class LedgerConfig:
 
 
 # =========================================================================
-# M10: Phase 1 / UltraBERT config
-# =========================================================================
-
-
-@dataclass
-class Phase1Config:
-    """Knobs from fsm/ultrabert_phase1.py (M10: UltraBERT Integration)."""
-
-    pipeline: str = "stub"  # "ultrabert" | "stub" -- default stub for tests
-    intent_confidence_threshold: float = 0.3
-    complexity_thresholds: dict[str, int] = field(
-        default_factory=lambda: {"low_max": 0, "medium_max": 2}
-    )
-    degradation_fallback_enabled: bool = True
-    # Lazy load defers the ~20s familyos_ultrabert model load until first
-    # analyze() call. Combined with warmup_on_startup=False this means the
-    # process boots fast and only pays the load cost on first user input.
-    lazy_load: bool = True
-    warmup_on_startup: bool = False
-    warmup_rounds: int = 3
-    backend: str = "auto"
-    device: str = "auto"
-    cache_size: int = 64
-    cache_ttl_s: float = 30.0
-    target_latency_ms: int = 25
-
-
-# =========================================================================
 # M11: Observability config
 # =========================================================================
 
@@ -747,8 +719,6 @@ class PocConfig:
     weave_policy: WeavePolicyConfig = field(default_factory=WeavePolicyConfig)
     # M9: Protocol Lifecycle Migration
     ledger: LedgerConfig = field(default_factory=LedgerConfig)
-    # M10: UltraBERT Integration
-    phase1: Phase1Config = field(default_factory=Phase1Config)
     # M11: Observability & Telemetry
     obs: ObsConfig = field(default_factory=ObsConfig)
 
@@ -1119,36 +1089,6 @@ def _build_ledger(raw: dict[str, Any]) -> LedgerConfig:
 # -- M10: Phase 1 builder ------------------------------------------------
 
 
-def _build_phase1(raw: dict[str, Any]) -> Phase1Config:
-    cfg = Phase1Config()
-    if not raw:
-        return cfg
-    if "pipeline" in raw:
-        cfg.pipeline = str(raw["pipeline"]).lower()
-    if "intent_confidence_threshold" in raw:
-        cfg.intent_confidence_threshold = float(raw["intent_confidence_threshold"])
-    if "complexity_thresholds" in raw and isinstance(raw["complexity_thresholds"], dict):
-        cfg.complexity_thresholds = {
-            str(k): int(v) for k, v in raw["complexity_thresholds"].items()
-        }
-    for attr in ("degradation_fallback_enabled", "warmup_on_startup", "lazy_load"):
-        if attr in raw:
-            setattr(cfg, attr, bool(raw[attr]))
-    if "warmup_rounds" in raw:
-        cfg.warmup_rounds = int(raw["warmup_rounds"])
-    if "backend" in raw:
-        cfg.backend = str(raw["backend"])
-    if "device" in raw:
-        cfg.device = str(raw["device"])
-    if "cache_size" in raw:
-        cfg.cache_size = int(raw["cache_size"])
-    if "cache_ttl_s" in raw:
-        cfg.cache_ttl_s = float(raw["cache_ttl_s"])
-    if "target_latency_ms" in raw:
-        cfg.target_latency_ms = int(raw["target_latency_ms"])
-    return cfg
-
-
 # -- M11: Observability builders ------------------------------------------
 
 
@@ -1414,7 +1354,6 @@ def _build_config(raw: dict[str, Any]) -> PocConfig:
         arbiter=_build_arbiter(raw.get("arbiter", {})),
         weave_policy=_build_weave_policy(raw.get("weave_policy", {})),
         ledger=_build_ledger(raw.get("ledger", {})),
-        phase1=_build_phase1(raw.get("phase1", {})),
         obs=_build_obs(raw.get("obs", {})),
     )
 

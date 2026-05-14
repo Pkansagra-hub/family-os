@@ -941,8 +941,17 @@ def _construct_fabric(
             )
 
     # ===== STEP 20: Bootstrap + assemble Fabric =====
-    # Scan contracts directory if it exists
-    if effective_contracts_dir.exists():
+    # Scan contracts directory if it exists.
+    # SIM-D-36 follow-up: when a pre-built capability_registry was
+    # injected (per-session Fabric on shared registry), all contracts
+    # are already loaded — re-scanning yields 24 noisy "duplicate
+    # contract" warnings and loaded=0. Skip the scan in that case.
+    if capability_registry is not None:
+        logger.debug(
+            "Skipping contract scan: capability_registry was injected "
+            "(per-session Fabric reuses shared registry)."
+        )
+    elif effective_contracts_dir.exists():
         try:
             module_loader.start(watch=False)
             logger.info("Module loader scanned %s", effective_contracts_dir)

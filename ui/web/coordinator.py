@@ -474,6 +474,20 @@ class UiCoordinator:
                 if self.family_profile_obj is not None
                 else "family:smith"
             ),
+            # M15: K1-native family apps — always enabled in the web shell.
+            # bootstrap_family_tools(fabric=self._shared_fabric, ...) runs at
+            # S8 of _startup_tier1; register_definition is called per-action,
+            # placing each CapabilityContract into the shared Fabric so the
+            # Concierge planner can dispatch calendar/tasks/reminders/chores/
+            # family_settings natively (no K0 round-trip needed).
+            enable_family_tools=True,
+            family_tool_service_paths=(
+                "k1.tools.family.calendar.service:CalendarToolService",
+                "k1.tools.family.tasks.service:TasksToolService",
+                "k1.tools.family.reminders.service:RemindersToolService",
+                "k1.tools.family.chores.service:ChoresToolService",
+                "k1.tools.family.family_settings.service:FamilySettingsService",
+            ),
         )
 
         self._runtime = await start_kernel(config)
@@ -481,6 +495,27 @@ class UiCoordinator:
             logger.info("Phase 2: kernel connected to K0 at %s", k0_endpoint)
         else:
             logger.info("Phase 2: kernel in offline bridge mode (outbox)")
+
+        # M15: record Fabric auto-registration outcome in the boot timeline.
+        _service = getattr(self._runtime, "_service", None)
+        _bundle = getattr(_service, "family_tools", None) if _service is not None else None
+        if _bundle is not None:
+            _adapter_ids = list(_bundle.tool_registry.adapter_ids())
+            self._record(
+                "phase2",
+                "fabric",
+                "family_tools.fabric_registered",
+                f"M15: {len(_adapter_ids)} family-tool adapters registered in Fabric "
+                f"({', '.join(_adapter_ids)})",
+                payload={"adapters": _adapter_ids},
+            )
+        else:
+            self._record(
+                "phase2",
+                "fabric",
+                "family_tools.skipped",
+                "M15: family_tools bundle is None — enable_family_tools may have failed",
+            )
 
         # Copy runtime references for direct attribute access by app.py
         rt = self._runtime
@@ -678,7 +713,9 @@ class UiCoordinator:
             TOPIC_STATE_UPDATED,
             TOPIC_TOOL_COMPLETED,
             TOPIC_TOOL_STARTED,
+            TOPIC_TOOL_STATE_CHANGED,  # E15.10
         )
+        from k1.hil.topics import TOPIC_HIL_REQUEST as _TOPIC_HIL_REQUEST
 
         renderer = self.renderer
 
@@ -732,6 +769,35 @@ class UiCoordinator:
         self._web_subscriptions.append(bus.subscribe(TOPIC_AFFECT_UPDATE, _on_affect))
         self._web_subscriptions.append(bus.subscribe(TOPIC_TOOL_STARTED, _on_tool))
         self._web_subscriptions.append(bus.subscribe(TOPIC_TOOL_COMPLETED, _on_tool))
+
+        # E15.10: refresh browser adapter views when a tool's state changes
+        def _on_tool_state(envelope: Envelope) -> None:
+            p = _safe_payload(envelope)
+            try:
+                renderer.send_tool_refresh(
+                    adapter_id=p.get("tool", p.get("adapter_id", "")),
+                    space_id=p.get("space_id", ""),
+                )
+            except Exception:
+                logger.debug("Tool state web hook failed", exc_info=True)
+
+        self._web_subscriptions.append(bus.subscribe(TOPIC_TOOL_STATE_CHANGED, _on_tool_state))
+
+        # HIL gate: forward requests to browser so user can approve/deny
+        def _on_hil_request(envelope: Envelope) -> None:
+            p = _safe_payload(envelope)
+            try:
+                logger.info(
+                    "WEB: hil_request forwarded hil_request_id=%s kind=%s caller_key=%s",
+                    p.get("hil_request_id", ""),
+                    p.get("kind", ""),
+                    p.get("caller_key", ""),
+                )
+                renderer.send_hil_request(p)
+            except Exception:
+                logger.debug("HIL request web hook failed", exc_info=True)
+
+        self._web_subscriptions.append(bus.subscribe(_TOPIC_HIL_REQUEST, _on_hil_request))
 
     # =================================================================
     # PHASE 4 — Health check

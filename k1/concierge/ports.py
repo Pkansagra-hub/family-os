@@ -5,7 +5,6 @@ Every signature below was traced from ACTUAL call sites in the codebase.
 4 ports are re-exports of existing Protocols; 4 are new thin wrappers.
 
 Existing (re-exported as aliases):
-    IClassificationPort = Phase1Pipeline   (k1.concierge.fsm.phase1)
     ILLMPort            = IModelHubPort    (k1.model_hub.ports.hub_port)
     IDeltaPort          = IBus             (k1.bus.ports.bus)
     IFabricPort         (k1.concierge.fabric.ports) -- not aliased, re-exported
@@ -28,7 +27,6 @@ from typing import Any, Protocol, runtime_checkable
 from k1.bus.envelope import Envelope
 from k1.bus.ports.bus import IBus
 from k1.concierge.fabric.ports import IFabricPort
-from k1.concierge.fsm.phase1 import Phase1Pipeline, Phase1Result
 from k1.concierge.orchestrator.types import AggregatedResult, TaskEnvelope
 from k1.fabric.types import CapabilityRequest, CapabilityResult
 from k1.model_hub.ports.hub_port import IModelHubPort
@@ -37,11 +35,6 @@ from k1.model_hub.types import HubChunk, HubRequest, HubResponse
 # ===================================================================
 # Re-exported Protocols (ALREADY EXIST — just aliased)
 # ===================================================================
-
-#: Classification port -- Phase1Pipeline Protocol from k1.concierge.fsm.phase1.
-#: Method: classify(text: str) -> Phase1Result
-#: Production: UltraBERTPhase1Pipeline | Test: StubPhase1Pipeline
-IClassificationPort = Phase1Pipeline
 
 #: LLM port -- IModelHubPort Protocol from k1.model_hub.ports.hub_port.
 #: Methods: execute(HubRequest)->HubResponse, stream_execute()->AsyncIterator[HubChunk]
@@ -153,7 +146,6 @@ class IMemoryPort(Protocol):
 
 __all__ = [
     # Re-exported existing Protocols
-    "IClassificationPort",
     "ILLMPort",
     "IDeltaPort",
     "IFabricPort",
@@ -165,7 +157,6 @@ __all__ = [
     "IMemoryPort",
     # Re-exported types used in signatures
     "Envelope",
-    "Phase1Result",
     "HubRequest",
     "HubResponse",
     "HubChunk",

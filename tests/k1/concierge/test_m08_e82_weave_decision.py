@@ -758,8 +758,8 @@ class TestWeaveDecidedTopicWiring:
         assert TOPIC_WEAVE_DECIDED in SUBSCRIBED_TOPICS
 
     def test_subscribed_topics_count(self) -> None:
-        """SUBSCRIBED_TOPICS has 30 topics after E8.5.1."""
-        assert len(SUBSCRIBED_TOPICS) == 30
+        """SUBSCRIBED_TOPICS has 28 topics after E4 retirement of dead TOPIC_CLARIFICATION_* topics."""
+        assert len(SUBSCRIBED_TOPICS) == 28
 
     def test_guard_table_all_states(self) -> None:
         """TOPIC_WEAVE_DECIDED has OBSERVE action in all 11 FSM states."""

@@ -16,7 +16,7 @@ from __future__ import annotations
 import pytest
 
 from k1.concierge.events.base import CanonicalEventMeta
-from k1.concierge.events.conversation import Phase1Classified, TaskRouted
+from k1.concierge.events.conversation import TaskRouted
 from k1.concierge.events.hitl import (
     HITLBlockedRedEvent,
     HITLRequestedEvent,
@@ -89,57 +89,6 @@ class TestRegistryCompleteness:
 # =========================================================================
 # 2. Round-trip: deserialize_event(evt.to_payload()) preserves all fields
 # =========================================================================
-
-
-class TestPhase1ClassifiedRoundTrip:
-    """Phase1Classified domain fields survive serialize → deserialize."""
-
-    @pytest.fixture
-    def evt(self) -> Phase1Classified:
-        return Phase1Classified(
-            session_id="s-1",
-            correlation_id="c-1",
-            causation_id="cause-1",
-            actor="classifier",
-            turn_number=5,
-            intent_primary="book_flight",
-            domain_primary="travel",
-            safety_band="GREEN",
-            emotion_primary="neutral",
-            classification_latency_ms=12.5,
-            is_degraded=False,
-            derived_plan=False,
-        )
-
-    def test_roundtrip_type(self, evt: Phase1Classified) -> None:
-        result = deserialize_event(evt.to_payload())
-        assert isinstance(result, Phase1Classified)
-
-    def test_roundtrip_domain_fields(self, evt: Phase1Classified) -> None:
-        result = deserialize_event(evt.to_payload())
-        assert result is not None
-        assert result.turn_number == 5
-        assert result.derived_plan is False
-        assert result.intent_primary == "book_flight"
-        assert result.domain_primary == "travel"
-        assert result.safety_band == "GREEN"
-        assert result.emotion_primary == "neutral"
-        assert result.classification_latency_ms == 12.5
-        assert result.is_degraded is False
-
-    def test_roundtrip_canonical_fields(self, evt: Phase1Classified) -> None:
-        result = deserialize_event(evt.to_payload())
-        assert result is not None
-        assert result.session_id == "s-1"
-        assert result.correlation_id == "c-1"
-        assert result.actor == "classifier"
-
-    def test_double_roundtrip_idempotent(self, evt: Phase1Classified) -> None:
-        p1 = evt.to_payload()
-        r1 = deserialize_event(p1)
-        assert r1 is not None
-        p2 = r1.to_payload()
-        assert p1 == p2
 
 
 class TestTaskRoutedRoundTrip:

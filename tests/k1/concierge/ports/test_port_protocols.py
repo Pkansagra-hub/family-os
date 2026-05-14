@@ -18,7 +18,6 @@ from k1.concierge.adapters.bus_output import BusOutputAdapter
 from k1.concierge.adapters.fabric_dispatch import FabricDispatchAdapter
 from k1.concierge.adapters.recall_memory import RecallMemoryAdapter
 from k1.concierge.adapters.ssm_state import SSMStateAdapter
-from k1.concierge.adapters.test_classification import StubPhase1Pipeline
 from k1.concierge.adapters.test_dispatch import MockDispatchAdapter
 
 # --- Test adapters ---
@@ -29,7 +28,6 @@ from k1.concierge.adapters.test_state import InMemoryStateAdapter
 
 # --- Ports ---
 from k1.concierge.ports import (
-    IClassificationPort,
     IDeltaPort,
     IDispatchPort,
     IInputPort,
@@ -52,20 +50,6 @@ class TestTestAdapterProtocolCompliance:
 
     def test_test_output_adapter_satisfies_ioutputport(self) -> None:
         assert isinstance(TestOutputAdapter(), IOutputPort)
-
-    def test_stub_phase1_satisfies_iclassificationport(self) -> None:
-        """Phase1Pipeline is not @runtime_checkable — verify structurally."""
-        stub = StubPhase1Pipeline()
-        assert hasattr(stub, "classify")
-        assert callable(stub.classify)
-        from k1.concierge.fsm.phase1 import Phase1Result
-
-        result = stub.classify("hello")
-        assert isinstance(result, Phase1Result)
-        # Alias check
-        from k1.concierge.fsm.phase1 import Phase1Pipeline
-
-        assert IClassificationPort is Phase1Pipeline
 
     def test_model_hub_bridge_satisfies_illmport(self) -> None:
         """ILLMPort = IModelHubPort — verify alias is correct."""
@@ -112,12 +96,6 @@ class TestProductionAdapterProtocolCompliance:
 
         bus = BusFactory.create_local()
         assert isinstance(BusOutputAdapter(bus), IOutputPort)
-
-    def test_ultrabert_satisfies_iclassificationport(self) -> None:
-        """UltraBERTPhase1Pipeline implements Phase1Pipeline Protocol structurally."""
-        from k1.concierge.adapters.ultrabert_classification import UltraBERTPhase1Pipeline
-
-        assert hasattr(UltraBERTPhase1Pipeline, "classify")
 
     def test_ssm_state_adapter_satisfies_istateport(self) -> None:
         inner = InMemoryStateAdapter()

@@ -6,7 +6,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from k1.concierge.task.complexity import ComplexityTier
 from k1.concierge.tools.dispatcher import create_back_dispatcher
 from k1.concierge.tools.implementations import ToolContext, execute_dispatch_task
 
@@ -169,29 +168,6 @@ class TestKernelConfigToolTierRemoved:
 
         with pytest.raises(TypeError):
             KernelConfig(tool_tier="LOW")  # type: ignore[call-arg]
-
-
-# =========================================================================
-# Phase1Classified.derived_plan
-# =========================================================================
-
-
-class TestPhase1ClassifiedDerivedPlan:
-    """P3.4c: Phase1Classified gains a `derived_plan: bool` field."""
-
-    def test_default_derived_plan_false(self):
-        from k1.concierge.events.conversation import Phase1Classified
-
-        evt = Phase1Classified()
-        assert evt.derived_plan is False
-
-    def test_derived_plan_in_payload(self):
-        from k1.concierge.events.conversation import Phase1Classified
-
-        evt = Phase1Classified(derived_plan=True)
-        payload = evt.to_payload()
-        assert "derived_plan" in payload
-        assert payload["derived_plan"] is True
 
 
 # =========================================================================

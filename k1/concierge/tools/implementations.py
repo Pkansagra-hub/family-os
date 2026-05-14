@@ -110,6 +110,7 @@ class ToolContext:
     # capability gate (E3). `active_task_id` is preserved for telemetry /
     # future per-task observability use.
     active_task_id: str | None = None  # M6 E6.1.3: task_id for per-task L2 checks
+    session_id: str = ""  # bound session id -- fallback for invoke_capability
     dispatch: IDispatchPort | None = None  # P4B.3: typed IDispatchPort (Fabric + Orchestrator)
     recall_fn: Callable | None = None
     capability_cache: dict | None = None  # Per-session cache for discover_capabilities results
@@ -1079,6 +1080,34 @@ async def execute_discover_capabilities(args: dict, ctx: ToolContext) -> ToolRes
             error="intent is required",
         )
 
+    # Intent-keyword domain inference: if the LLM omits domain or passes a
+    # vague umbrella domain (family/productivity/etc.), override to the
+    # structurally correct Fabric domain so the registry index search is
+    # constrained before embedding ranking fires.
+    _intent_lower = intent.lower()
+    _inferred_domain: str | None = None
+    if any(kw in _intent_lower for kw in ("task", "todo", "to-do", "assign task", "action item")):
+        _inferred_domain = "tasks"
+    elif any(kw in _intent_lower for kw in ("chore", "recurring", "weekly duty", "daily duty")):
+        _inferred_domain = "chores"
+    elif any(kw in _intent_lower for kw in ("reminder", "alert", "notify at", "fire at")):
+        _inferred_domain = "reminders"
+    elif any(kw in _intent_lower for kw in ("calendar", "appointment", "event", "meeting")):
+        _inferred_domain = "calendar"
+    elif any(kw in _intent_lower for kw in ("grocery", "shopping list", "buy", "purchase")):
+        _inferred_domain = "shopping"
+
+    _broad_domains = {"", "family", "general", "productivity", "household"}
+    if _inferred_domain and (not domain or str(domain).strip().lower() in _broad_domains):
+        if domain and str(domain).strip().lower() != _inferred_domain:
+            logger.info(
+                "discover_capabilities: normalizing broad domain %s -> %s for intent=%s",
+                domain,
+                _inferred_domain,
+                intent[:60],
+            )
+        domain = _inferred_domain
+
     # Per-session cache: avoid redundant capability lookups
     if ctx.capability_cache is None:
         ctx.capability_cache = {}
@@ -1098,6 +1127,7 @@ async def execute_discover_capabilities(args: dict, ctx: ToolContext) -> ToolRes
                 intent=intent,
                 domain=[domain] if domain else None,
                 top_k=10,
+                safety_band="AMBER",
             )
             caps = []
             for sc in retrieval.capabilities:
@@ -1108,6 +1138,32 @@ async def execute_discover_capabilities(args: dict, ctx: ToolContext) -> ToolRes
                     "score": sc.score,
                 }
                 caps.append(cap_dict)
+
+            # Fallback: if domain was specified but returned nothing, retry
+            # without domain filter so cross-domain tools (e.g. calendar
+            # events that cover health/school/etc.) are still discoverable.
+            if not caps and domain:
+                logger.info(
+                    "discover_capabilities: no match with domain=%s, retrying without domain filter",
+                    domain,
+                )
+                retrieval_fallback = await ctx.dispatch.discover_capabilities(
+                    intent=intent,
+                    domain=None,
+                    top_k=10,
+                    safety_band="AMBER",
+                )
+                for sc in retrieval_fallback.capabilities:
+                    cap_dict = {
+                        "name": sc.contract.name if sc.contract else "",
+                        "description": sc.contract.description if sc.contract else "",
+                        "domain": (
+                            sc.contract.domain[0] if sc.contract and sc.contract.domain else ""
+                        ),
+                        "score": sc.score,
+                    }
+                    caps.append(cap_dict)
+
             data = {"capabilities": caps, "count": len(caps)}
             if not caps:
                 logger.warning(
@@ -1158,7 +1214,8 @@ async def execute_invoke_capability(args: dict, ctx: ToolContext) -> ToolResult:
     """
     capability_name = args.get("capability_name", "")
     params = args.get("params", {})
-    session_id = args.get("session_id")
+    # session_id: prefer LLM-provided arg, fall back to context-bound session
+    session_id = args.get("session_id") or ctx.session_id
 
     # E4.M1.3: legacy `ctx.hil_coordinator` L2 blocking removed. The fabric
     # capability gate (E3) now enforces HIL pre-execution for every
@@ -1215,6 +1272,7 @@ async def execute_invoke_capability(args: dict, ctx: ToolContext) -> ToolResult:
                 trace_id=ctx.cognitive_trace_id or "",
                 caller="concierge",
                 caller_id=f"concierge.{ctx.actor}",
+                safety_band="AMBER",
             )
             k1_result = await ctx.dispatch.dispatch_direct(k1_request)
             duration = int(time.time() * 1000) - start_ms

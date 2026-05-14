@@ -24,10 +24,12 @@ cleared implicitly by `shutdown()`.
 | `_session_routing_reader` | `SessionRoutingStateReader` | pre-S3 | (not explicitly closed) |
 | `_shared_fabric` | `CapabilityFabric` | S3 | `fabric.shutdown()` in shutdown |
 | `_orchestrator` | `OrchestratorService` | S5 | `orchestrator.shutdown()` in shutdown |
+| `_orch_storage` | `WorkflowStorageAdapter \| None` | S5 | `orch_storage.close()` in shutdown |
 | `_planner` | `PlannerAgent` | S6 | `planner.stop()` + `planner_task.cancel()` in shutdown |
 | `_planner_task` | `asyncio.Task` | S7 | cancelled in shutdown |
 | `_phase1_pipeline` | `UltraBERTPhase1Pipeline \| StubPhase1Pipeline` | S7 | (not explicitly stopped) |
 | `_running` | `bool` | S7 | set `False` in `finally` block of shutdown |
+| `_lifecycle_log` | `list[dict]` | every Tier 1 phase completion | retained for diagnostics |
 
 ### 1.2 Per-session fields (one entry per active session in `_sessions`)
 
@@ -176,8 +178,19 @@ state and can be started again (though factory state from partial teardown may d
 4. `_shared_fabric.retrieval` must be accessible before `_planner` is constructed (S6
    depends on it).
 5. `_orchestrator._planner_port` is `MockPlannerAdapter` between S5 and S6b; after S6b
-   it is `PlannerAdapter`.
+   it is `PlannerAdapter`, and its `_mailbox` is `self._planner.get_mailbox()`.
 6. `_hil_service` is the exact same instance shared across Fabric, Orchestrator, Planner,
    and every per-session Concierge. Mutations to HIL state are globally visible.
 7. `bridge_client` (`bridge.get_client()`) is the same object shared across all per-session
    adapters. It is not session-scoped; all sessions write to the same bridge outbox.
+
+---
+
+## 7. Lifecycle diagnostics
+
+`lifecycle_events()` returns a copy of `_lifecycle_log`. Each event is a plain dict
+with `phase`, `component`, and monotonic timestamp `ts`. The log records Tier 1
+startup completion markers (`S1_complete` ... `S7_complete`, plus `S6b_complete`
+and optional `S8_*`) and shutdown markers (`S7_shutdown_complete` ...
+`S1_shutdown_complete`). It is observability-only; production control flow must not
+depend on it.

@@ -185,24 +185,6 @@ class TestParallelNewPath:
         assert last.text == "hello world"
         assert last.metadata.get("arbiter_decision") == "parallel_new"
 
-    def test_parallel_new_phase1_runs_once(self) -> None:
-        """Phase 1 runs exactly once (inside Arbiter, not again in _run_phase1)."""
-        fsm, bus = _make_fsm()
-        fsm._state = ConciergeState.COMPANIONING
-        # Track Phase 1 calls
-        call_count = 0
-        original_classify = fsm._phase1_pipeline.classify
-
-        def counting_classify(text):
-            nonlocal call_count
-            call_count += 1
-            return original_classify(text)
-
-        fsm._phase1_pipeline.classify = counting_classify
-        env = build_user_input({"text": "plan my vacation"})
-        fsm._on_user_input(env)
-        assert call_count == 1, f"Phase 1 should run exactly once, got {call_count}"
-
     def test_cancel_keyword_no_inflight_routes_parallel_new(self) -> None:
         """Cancel keyword with no inflight tasks -> PARALLEL_NEW (not CANCEL)."""
         fsm, bus = _make_fsm()
@@ -239,7 +221,7 @@ class TestCancelPath:
                     target_task_id=target_task_id,
                     modification_params=None,
                     routing_metadata={"arbiter_reason": "cancel_intent"},
-                    phase1=phase1,
+                    inputs=phase1,
                 )
 
         fsm._arbiter = CancelArbiter()
@@ -262,7 +244,7 @@ class TestCancelPath:
                     target_task_id=None,
                     modification_params=None,
                     routing_metadata={"arbiter_reason": "cancel_intent"},
-                    phase1=phase1,
+                    inputs=phase1,
                 )
 
         fsm._arbiter = CancelAllArbiter()
@@ -344,7 +326,7 @@ class TestCancelPath:
                     target_task_id="task-1",
                     modification_params=None,
                     routing_metadata={"arbiter_reason": "cancel_intent"},
-                    phase1=phase1,
+                    inputs=phase1,
                 )
 
         fsm._arbiter = CancelArbiter()
@@ -391,7 +373,7 @@ class TestModifyInflightPath:
                     target_task_id="task-hotel",
                     modification_params={"nights": "2", "raw_text": text},
                     routing_metadata={"arbiter_reason": "domain_entity_overlap"},
-                    phase1=phase1,
+                    inputs=phase1,
                 )
 
         fsm._arbiter = ModifyArbiter()
@@ -490,7 +472,7 @@ class TestDeferPath:
                     target_task_id=None,
                     modification_params=None,
                     routing_metadata={"arbiter_reason": "defer_pattern"},
-                    phase1=phase1,
+                    inputs=phase1,
                 )
 
         fsm._arbiter = DeferArbiter()

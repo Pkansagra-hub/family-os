@@ -70,6 +70,8 @@ DEFAULT_RULES: dict[str, DeliveryMode] = {
     # BEST_EFFORT: fire-and-forget
     "k1.k0.sse": DeliveryMode.BEST_EFFORT,
     "k1.fabric.learning": DeliveryMode.BEST_EFFORT,
+    # M15 E15.10: family-tool state change notifications (fan-out, droppable)
+    "k1.tool_state": DeliveryMode.BEST_EFFORT,
 }
 
 DEFAULT_MODE = DeliveryMode.RELAXED

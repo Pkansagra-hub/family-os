@@ -1654,13 +1654,18 @@ class TestBusSubscriptionRoutingInvariant:
         """Verify expected count of FSM-routed topics."""
         from k1.concierge.bus.topics import FSM_ROUTED_TOPICS
 
-        assert len(FSM_ROUTED_TOPICS) == 9
+        # E4 HIL Unification: TOPIC_HIL_REQUEST joined the FSM-routed set so
+        # the controller can own pending_hil_data + CLARIFYING_WORKER
+        # transition for the unified HIL path (capability_gate /
+        # needs_human / clarification / approval / override).
+        assert len(FSM_ROUTED_TOPICS) == 10
 
     def test_front_subscriptions_count(self):
         """Verify expected count of front subscriptions (should be small)."""
         from k1.concierge.bus.topics import FRONT_SUBSCRIPTIONS
 
-        assert len(FRONT_SUBSCRIPTIONS) == 4
+        # E4 HIL Unification: TOPIC_HIL_REQUEST moved to FSM_ROUTED_TOPICS.
+        assert len(FRONT_SUBSCRIPTIONS) == 3
 
 
 # =========================================================================

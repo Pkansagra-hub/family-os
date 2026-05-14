@@ -5,14 +5,12 @@ under ``tmp_path``. Each test creates a session and drives a real user
 message through the per-session bus.
 
 Test mode wiring:
-    - ``test_mode=True``        -> StubPhase1Pipeline (fast classification, no
-                                   ULTRABERT model load).
     - ``model_mode='test'``     -> StubProviderPlugin registered for every
                                    capability (returns canned ``"OK"``).
     - ``bridge_enabled=False``  -> no K0 connection required.
     - ``auto_start_consumer=True`` (default) -> FSM consumer task runs.
 
-Both Phase1 and the LLM are real plugins (just deterministic) -- there are
+The LLM is a real plugin (just deterministic) -- there are
 no ``unittest.mock`` objects in the wire path.
 """
 

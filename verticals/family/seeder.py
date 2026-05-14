@@ -252,9 +252,7 @@ class SpaceDataSeeder:
                 # L3: rich profile data that fills [preferences]/[hobbies]/[space] blocks
                 if member.preferences:
                     # Stringify values so capsule builder can render them safely
-                    l3["preferences"] = {
-                        k: str(v) for k, v in member.preferences.items()
-                    }
+                    l3["preferences"] = {k: str(v) for k, v in member.preferences.items()}
                 if getattr(member, "hobbies", None):
                     l3["hobbies"] = list(member.hobbies)
                 if getattr(member, "likes", None):
@@ -263,11 +261,21 @@ class SpaceDataSeeder:
                     l3["dislikes"] = list(member.dislikes)
                 # Family members visible to this actor
                 others = [
-                    {"member_id": m.actor_id, "display_name": m.name, "role": m.relation}
-                    for m in profile.members if m.actor_id != actor_id
+                    {
+                        "member_id": m.actor_id,
+                        "display_name": m.name,
+                        "role": m.relation,
+                        "aliases": list(getattr(m, "aliases", []) or []),
+                    }
+                    for m in profile.members
+                    if m.actor_id != actor_id
                 ]
                 if others:
                     l3["family_members"] = others
+                # Also surface the active actor's own aliases (for use by
+                # the [actor] / [self] capsule renderers).
+                if getattr(member, "aliases", None):
+                    l3["aliases"] = list(member.aliases)
             snapshot = K1SelfModelSnapshot(
                 actor_id=actor_id,
                 L1_core=l1,

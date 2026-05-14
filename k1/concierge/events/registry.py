@@ -21,7 +21,6 @@ from k1.concierge.events.base import CanonicalEventMeta
 from k1.concierge.events.conversation import (
     DeadLettered,
     IntentArbitrated,
-    Phase1Classified,
     ResponseDelivered,
     ResponseFinalDecided,
     TaskRouted,
@@ -92,8 +91,7 @@ EVENT_TYPE_REGISTRY: dict[str, type[CanonicalEventMeta]] = {
     "metrics.weave.session": WeaveMetricsEvent,
     # Mutation audit (1) -- M4 E4.5.4
     "mutation.turn_summary": TurnMutationSummary,
-    # M10 E10.3.4: Phase 1 + routing observability (2)
-    "k1.phase1.classified.v1": Phase1Classified,
+    # M10 E10.3.4: routing observability (1)
     "k1.task.routed.v1": TaskRouted,
     # M6 E6.3: HITL lifecycle observability/audit (4)
     "hitl.lifecycle.requested": HITLRequestedEvent,

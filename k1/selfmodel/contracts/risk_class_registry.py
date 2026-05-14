@@ -60,6 +60,17 @@ RISK_CLASS_BY_TOOL: dict[str, RiskClass] = {
     "create_reminder": RiskClass.LOW,
     "complete_task": RiskClass.LOW,
     "set_preference": RiskClass.LOW,
+    # ---- Self-model / scoreboard / beliefs (low-impact self-writes) -
+    "update_scoreboard": RiskClass.LOW,
+    "update_beliefs": RiskClass.LOW,
+    # ---- Concierge orchestration / discovery (medium) ---------------
+    "dispatch_task": RiskClass.MEDIUM,
+    "discover_capabilities": RiskClass.LOW,
+    # ---- Tasks vertical (namespaced) --------------------------------
+    "tasks.create_task": RiskClass.MEDIUM,
+    "tasks.complete_task": RiskClass.LOW,
+    "tasks.list_tasks": RiskClass.LOW,
+    "tasks.update_task": RiskClass.MEDIUM,
     # ---- Cross-member writes (medium) -------------------------------
     "update_persona": RiskClass.MEDIUM,
     "assign_task": RiskClass.MEDIUM,

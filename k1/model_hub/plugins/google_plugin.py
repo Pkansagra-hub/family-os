@@ -225,6 +225,23 @@ class GooglePlugin:
                 continue
             candidate = chunk.candidates[0]
             if not candidate.content or not candidate.content.parts:
+                # No content parts, but check if this is the final chunk
+                # (finish_reason set without content — common in Gemini streaming)
+                if candidate.finish_reason is not None:
+                    prompt_tokens = 0
+                    completion_tokens = 0
+                    if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
+                        um = chunk.usage_metadata
+                        prompt_tokens = int(getattr(um, "prompt_token_count", 0) or 0)
+                        completion_tokens = int(getattr(um, "candidates_token_count", 0) or 0)
+                    yield ProviderChunk(
+                        text="",
+                        done=True,
+                        tool_calls=None,
+                        metadata=None,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                    )
                 continue
 
             text_parts = []

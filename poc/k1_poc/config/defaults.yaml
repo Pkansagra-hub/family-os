@@ -221,13 +221,17 @@ llm:
   batch_max_concurrency: 5
 
   # Hint string -> model name overrides (model_selection.py)
+  #   fast/cheap  -> 3.1 Flash-Lite preview (frontier-class, low cost)
+  #   flash       -> 3.1 Flash-Lite preview (latest lite preview)
+  #   smart       -> 3 Flash preview        (frontier performance, mid tier)
+  #   thinking/pro -> 3.1 Pro preview       (highest capability, agentic)
   model_hint_overrides:
     fast: "gemini-3.1-flash-lite-preview"
-    smart: "gemini-3.1-flash-lite-preview"
     cheap: "gemini-3.1-flash-lite-preview"
-    thinking: "gemini-3.1-flash-lite-preview"
-    pro: "gemini-3.1-flash-lite-preview"                # best we use — no pro models
-    flash: "gemini-3.1-flash-lite-preview"
+    flash: "gemini-3-flash-preview"
+    smart: "gemini-3-flash-preview"
+    thinking: "gemini-3.1-pro-preview"
+    pro: "gemini-3.1-pro-preview"
 
   # Default max output tokens for LLM requests (llm/types.py)
   default_max_tokens: 65536
@@ -240,24 +244,29 @@ llm:
 
   # Capability + actor -> model routing table (model_selection.py)
   # Nested as capability -> actor -> model
-  # Routing: 2.5 flash for tools/reasoning/conversation, 2.5 lite for speed
-  # Moved from Gemini 3.x due to persistent latency spikes
+  #
+  # Tier strategy (May 2026):
+  #   Gemini 3.1 Flash-Lite (preview)  -- cost-optimised speed paths
+  #   Gemini 3 Flash (preview)         -- Front/Back TOOL_CALL + STRUCTURED
+  #                                       (frontier perf at fraction of cost)
+  #   Gemini 3.1 Pro (preview)         -- REASON paths + Planner
+  #                                       (advanced agentic & problem-solving)
   model_selection_table:
     CHAT:
-      front: "gemini-3.1-flash-lite-preview"                # conversational warmth
-      back: "gemini-3.1-flash-lite-preview"            # internal error reports
+      front: "gemini-3.1-flash-lite-preview"            # conversational warmth, latest lite
+      back: "gemini-3.1-flash-lite-preview"             # internal reports (cheap)
     TOOL_CALL:
-      front: "gemini-3.1-flash-lite-preview"                # cognitive tool selection
-      back: "gemini-3.1-flash-lite-preview"                 # action tool execution
-      planner: "gemini-3.1-flash-lite-preview"              # planner reasoning
+      front: "gemini-3-flash-preview"                   # cognitive tool selection (frontier)
+      back: "gemini-3-flash-preview"                    # action tool execution (frontier)
+      planner: "gemini-3.1-pro-preview"                 # planner: needs strong agentic skills
     STRUCTURED:
-      front: "gemini-3.1-flash-lite-preview"                # dispatch intent parsing
-      back: "gemini-3.1-flash-lite-preview"                 # final answer formatting
+      front: "gemini-3-flash-preview"                   # dispatch intent parsing
+      back: "gemini-3-flash-preview"                    # final answer formatting
     REASON:
-      front: "gemini-3.1-flash-lite-preview"                # complex reasoning
-      back: "gemini-3.1-flash-lite-preview"                 # multi-step planning
+      front: "gemini-3.1-pro-preview"                   # complex reasoning + weave decisions
+      back: "gemini-3.1-pro-preview"                    # multi-step planning
     STREAM:
-      front: "gemini-3.1-flash-lite-preview"           # speed-first streaming
+      front: "gemini-3.1-flash-lite-preview"            # speed-first streaming
 
 
 # ── orchestrator/ ───────────────────────────────────────────────────────

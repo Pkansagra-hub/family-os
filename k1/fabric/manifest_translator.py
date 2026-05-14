@@ -40,10 +40,15 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from k1.fabric.types import CapabilityContract, InputSpec, SafetyBand
-from k1.tools.family.definition import ActionKind, ActionSpec, FieldSpec, ToolDefinition
 
 if TYPE_CHECKING:  # pragma: no cover -- typing only
     from k1.fabric.core.registry import CapabilityRegistry
+    from k1.tools.family.definition import (
+        ActionKind,
+        ActionSpec,
+        FieldSpec,
+        ToolDefinition,
+    )
 
 # ---------------------------------------------------------------------------
 # Constants -- shared with NativeToolProvider
@@ -70,20 +75,20 @@ NATIVE_PROVIDER_ENDPOINT: str = "local://k1_native_tools"
 # ---------------------------------------------------------------------------
 
 
-def _capability_name(adapter_id: str, action: ActionSpec) -> str:
+def _capability_name(adapter_id: str, action: "ActionSpec") -> str:
     """Return the canonical Fabric capability name for ``action``."""
 
     prefix = "tool.read" if action.kind == "read" else "tool.execute"
     return f"{prefix}.{adapter_id}.{action.name}"
 
 
-def _kind_to_capability_prefix(kind: ActionKind) -> str:
+def _kind_to_capability_prefix(kind: "ActionKind") -> str:
     """Public helper: return the Fabric capability prefix for an action kind."""
 
     return "tool.read" if kind == "read" else "tool.execute"
 
 
-def _field_to_input_spec(f: FieldSpec) -> InputSpec:
+def _field_to_input_spec(f: "FieldSpec") -> InputSpec:
     """Convert a family ``FieldSpec`` to a Fabric ``InputSpec``."""
 
     return InputSpec(
@@ -93,7 +98,7 @@ def _field_to_input_spec(f: FieldSpec) -> InputSpec:
     )
 
 
-def _risk_class_for_action(action: ActionSpec) -> str:
+def _risk_class_for_action(action: "ActionSpec") -> str:
     """Map action kind + safety band to a Fabric ``risk_class`` value.
 
     The Fabric defaults to ``"safety_sensitive"`` for unmigrated
@@ -108,7 +113,7 @@ def _risk_class_for_action(action: ActionSpec) -> str:
     return "benign" if action.min_band == "GREEN" else "safety_sensitive"
 
 
-def _description_for_action(action: ActionSpec) -> str:
+def _description_for_action(action: "ActionSpec") -> str:
     """Choose the contract ``description`` field.
 
     Order of preference: the first ``llm.use_when`` hint (LLM-facing
@@ -127,8 +132,8 @@ def _description_for_action(action: ActionSpec) -> str:
 
 
 def build_contract(
-    definition: ToolDefinition,
-    action: ActionSpec,
+    definition: "ToolDefinition",
+    action: "ActionSpec",
 ) -> CapabilityContract:
     """Construct the Fabric ``CapabilityContract`` for a single action.
 
@@ -176,7 +181,7 @@ def build_contract(
 
 
 def register_definition(
-    definition: ToolDefinition,
+    definition: "ToolDefinition",
     registry: "CapabilityRegistry",
     *,
     skip_validation: bool = True,

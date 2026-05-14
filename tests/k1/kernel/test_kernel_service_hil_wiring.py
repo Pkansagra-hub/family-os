@@ -105,11 +105,19 @@ class TestHILPortPropagation:
         await svc.startup()
         try:
             session = await svc.create_session("s1")
-            # ConciergeRuntime.hil_port now returns the hil_port
-            # directly (E7.M1.1 fix in concierge/factory.py).
-            assert session.concierge.hil_port is svc.hil_service
-            # And the FSM has it bound too.
-            assert session.concierge.fsm._hil_port is svc.hil_service  # type: ignore[attr-defined]
+            # P1.5: per-session HIL service is bound to the session bus
+            # (NOT the kernel singleton). The kernel-level svc.hil_service
+            # is reserved for kernel-bus-scoped callers (Orchestrator,
+            # Planner, shared Fabric). Session-scoped callers (Concierge,
+            # per-session Fabric, SelfModelHandle) get their own HIL
+            # service so their publish/subscribe lands on the same bus
+            # that the FSM and UI coordinator are subscribed to.
+            from k1.hil.service import HumanInTheLoopService
+
+            assert isinstance(session.concierge.hil_port, HumanInTheLoopService)
+            assert session.concierge.hil_port is not svc.hil_service
+            # And the FSM has the same per-session instance bound.
+            assert session.concierge.fsm._hil_port is session.concierge.hil_port  # type: ignore[attr-defined]
         finally:
             await svc.shutdown()
 

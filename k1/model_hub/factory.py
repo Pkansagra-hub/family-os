@@ -172,6 +172,45 @@ class _HubCore:
         report = self._health.check_health()
         return HubHealthReport(status=report.status)
 
+    def describe_routes(self) -> list[dict]:
+        """Return a snapshot of registered model providers and circuit-breaker states.
+
+        Intended exclusively for PORT-IDENTITY probes in
+        ``tests/integration/k1/live/``.  Never call from production code.
+
+        Returns:
+            List of dicts with keys:
+                provider_id:  Provider identifier (str).
+                capabilities: List of CapabilityType enum/string values.
+                models:       List of model id strings.
+                cb_state:     CircuitBreaker state string or None.
+                plugin_class: Runtime plugin type name or None.
+        """
+        results: list[dict] = []
+        dispatcher = self._router._dispatcher
+        circuit_mgr = getattr(dispatcher, "_circuit_mgr", None)
+        plugins: dict = getattr(dispatcher, "_plugins", {})
+
+        for info in self._registry.list_providers():
+            pid = info.provider_id
+            cb_state: str | None = None
+            if circuit_mgr is not None:
+                try:
+                    cb_state = str(circuit_mgr.get_state(pid))
+                except Exception:
+                    cb_state = None
+            plugin = plugins.get(pid)
+            results.append(
+                {
+                    "provider_id": pid,
+                    "capabilities": [str(c) for c in (info.capabilities or [])],
+                    "models": [m.id for m in (info.models or [])],
+                    "cb_state": cb_state,
+                    "plugin_class": type(plugin).__name__ if plugin is not None else None,
+                }
+            )
+        return results
+
     async def shutdown(self) -> None:
         """Drain registered plugins. Idempotent. Never raises.
 
