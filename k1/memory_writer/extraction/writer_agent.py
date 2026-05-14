@@ -36,7 +36,7 @@ class MemoryWriterAgent:
       MW-10: trace_id propagated to every Model Hub call
     """
 
-    __slots__ = ("_model_hub", "_config", "_system_prompt")
+    __slots__ = ("_model_hub", "_config", "_system_prompt", "_last_error")
 
     def __init__(
         self,
@@ -47,6 +47,12 @@ class MemoryWriterAgent:
         self._model_hub = model_hub
         self._config = config
         self._system_prompt: str = prompt_loader.load("memory_writer_persona")
+        self._last_error: str = ""
+
+    @property
+    def last_error(self) -> str:
+        """Most recent model-edge failure from extract/extract_session."""
+        return self._last_error
 
     async def extract(
         self,
@@ -67,6 +73,8 @@ class MemoryWriterAgent:
             Nothing -- errors are caught, logged, and return empty list.
             Pipeline continues (best-effort extraction per Architecture §24).
         """
+        self._last_error = ""
+
         # MW-06: enforce budget before call
         assert_mw06_token_budget(self._config.llm_token_budget, self._config)
 
@@ -85,6 +93,7 @@ class MemoryWriterAgent:
                 model_hint=self._config.model_hint,
             )
         except Exception as exc:
+            self._last_error = f"{type(exc).__name__}: {exc}"
             log.warning(
                 "MW: LLM extraction failed",
                 extra={
@@ -116,6 +125,8 @@ class MemoryWriterAgent:
         Returns:
             List of RawExtraction objects (not yet validated). Empty on LLM error.
         """
+        self._last_error = ""
+
         # MW-06: enforce session-mode budget
         budget = self._config.llm_token_budget_session
         if budget < self._config.llm_token_budget:
@@ -135,6 +146,7 @@ class MemoryWriterAgent:
                 model_hint=self._config.model_hint,
             )
         except Exception as exc:
+            self._last_error = f"{type(exc).__name__}: {exc}"
             log.warning(
                 "MW: session LLM extraction failed",
                 extra={
@@ -171,9 +183,7 @@ class MemoryWriterAgent:
                 transcript_lines.append(f"  Turn {t.turn_number} User: {user_text}")
             assistant_text = (t.assistant_response or "").strip()
             if assistant_text:
-                transcript_lines.append(
-                    f"  Turn {t.turn_number} Assistant: {assistant_text[:200]}"
-                )
+                transcript_lines.append(f"  Turn {t.turn_number} Assistant: {assistant_text[:200]}")
         transcript_text = "\n".join(transcript_lines) if transcript_lines else "  (empty)"
 
         entities_text = (
@@ -192,9 +202,7 @@ class MemoryWriterAgent:
                 f"arousal={context.current_affect.arousal:.1f}"
             )
 
-        topics_text = (
-            ", ".join(context.active_topics[:5]) if context.active_topics else "none"
-        )
+        topics_text = ", ".join(context.active_topics[:5]) if context.active_topics else "none"
 
         band = (
             context.control_context.get("safety_band", "GREEN")

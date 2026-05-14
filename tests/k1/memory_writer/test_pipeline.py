@@ -18,11 +18,11 @@ import pytest
 
 from k1.memory_writer.config import MWConfig
 from k1.memory_writer.events import TurnCompletePayload
-from k1.memory_writer.pipeline.pipeline import MemoryWriterPipeline, PipelineResult
+from k1.memory_writer.pipeline.pipeline import MemoryWriterPipeline
+from k1.memory_writer.place_resolver import PlaceResolver
 from k1.memory_writer.types import (
     ExtractionContext,
     FilterDecision,
-    MemoryAtom,
     SkipReason,
     Subscription,
 )
@@ -137,15 +137,16 @@ class FakeWriterAgent:
 
 
 class FakeExtractionValidator:
-    """Returns canned MemoryAtom list."""
+    """Returns canned MemoryAtom list and dropped-confidence count."""
 
-    def __init__(self, atoms: Optional[List[Any]] = None) -> None:
+    def __init__(self, atoms: Optional[List[Any]] = None, dropped_confidence: int = 0) -> None:
         self.atoms = atoms if atoms is not None else []
+        self.dropped_confidence = dropped_confidence
         self.call_count = 0
 
-    def validate(self, extractions: List[Any], context: Any) -> List[Any]:
+    def validate(self, extractions: List[Any], context: Any) -> tuple[List[Any], int]:
         self.call_count += 1
-        return self.atoms
+        return self.atoms, self.dropped_confidence
 
 
 class FakeCircuitBreaker:
@@ -348,6 +349,7 @@ def _pipeline(
         relevance_filter=f,  # type: ignore[arg-type]
         session_reader=sr,  # type: ignore[arg-type]
         context_builder=cb_ctx,  # type: ignore[arg-type]
+        place_resolver=PlaceResolver([]),
         writer_agent=wa,  # type: ignore[arg-type]
         extraction_validator=ev,  # type: ignore[arg-type]
         circuit_breaker=circuit,

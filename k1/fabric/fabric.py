@@ -1617,6 +1617,7 @@ class Fabric:
     health_checker: Any = None
     event_port: Any = None
     event_emitter: Optional[EventEmitter] = None
+    gap_detector: Any = None
 
     # ------------------------------------------------------------------
     # Convenience delegates
@@ -1732,6 +1733,12 @@ class Fabric:
                 self.module_loader.stop()
             except Exception:
                 logger.warning("Module loader stop failed", exc_info=True)
+
+        if self.gap_detector is not None:
+            try:
+                self.gap_detector.stop()
+            except Exception:
+                logger.warning("Proactive gap detector stop failed", exc_info=True)
 
 
 # ---------------------------------------------------------------------------

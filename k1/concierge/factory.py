@@ -754,6 +754,7 @@ class ConciergeFactory:
             back_mailbox=back_mailbox,
             fsm=fsm,
             model=ports.llm,
+            input_port=ports.input_,
             session_state=ports.state,
             front_dispatcher=front_dispatcher,
             back_dispatcher=back_dispatcher,

@@ -28,7 +28,10 @@ from k1.concierge.bus.topics import (
     TOPIC_USER_INPUT,
 )
 from k1.concierge.fsm.idempotency import IdempotencyLedger
-from k1.concierge.fsm.response_final_table import ResponseFinalAction, decide_response_final
+from k1.concierge.fsm.response_final_table import (
+    ResponseFinalAction,
+    decide_response_final,
+)
 from k1.concierge.fsm.states import ConciergeState
 
 # =========================================================================
@@ -40,6 +43,7 @@ def _make_envelope(
     topic: str = TOPIC_FINAL_RESPONSE,
     payload: dict | None = None,
     envelope_id: int = 1,
+    session_id: str = "unit-session",
 ) -> Envelope:
     """Build a minimal Envelope for testing."""
     data = payload or {}
@@ -49,6 +53,7 @@ def _make_envelope(
         payload_format=PayloadFormat.JSON,
         priority=Priority.INTERACTIVE,
         envelope_id=envelope_id,
+        session_id=session_id,
     )
 
 

@@ -3,14 +3,14 @@
 Translates:
   MW  async snapshot(sections) -> Dict[str, Any]
   MW  async read_section(name) -> Optional[Dict[str, Any]]
-  SS  sync  get_section(name)  -> section_obj  (with .to_dict())
+    SS  sync  get_section(name)  -> section_obj  (with .to_dict() or zero-arg .get())
 
 The adapter wraps SessionStateManager directly (not through Fabric's
 ISessionStateReader) to minimize latency for MW-02 (<1ms P99).
 
 Design:
   - Lock-free reads: SSM guarantees multi-reader concurrency.
-  - Sections returned as dicts via ``section.to_dict()``.
+    - Sections returned as dicts via ``section.to_dict()`` or zero-arg ``section.get()``.
   - SectionNotFoundError -> omit (snapshot) / None (read_section).
     This handles phantom sections (affective_baseline, ifl) that MW
     config references but do not exist in SessionState.
@@ -32,6 +32,7 @@ References:
 from __future__ import annotations
 
 import logging
+from inspect import Parameter, signature
 from typing import Any, Dict, FrozenSet, List, Optional, Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
@@ -48,8 +49,8 @@ class SessionReadAdapter:
     """Implements MW's ISessionReadPort by wrapping SessionStateManager.
 
     Translation:
-        snapshot(sections) -> loop get_section(name) -> to_dict() -> collect
-        read_section(name) -> get_section(name) -> to_dict() -> return
+        snapshot(sections) -> loop get_section(name) -> dict conversion -> collect
+        read_section(name) -> get_section(name) -> dict conversion -> return
 
     MW-01 enforced: this class exposes NO write methods.
     MW-02 target: all hot reads lock-free, <1ms P99.
@@ -84,7 +85,7 @@ class SessionReadAdapter:
             sections: List of section names to retrieve.
 
         Returns:
-            Dict mapping section name -> section data (via to_dict()).
+            Dict mapping section name -> section data.
             Missing or unavailable sections are omitted from the result.
             Phantom sections (affective_baseline, ifl) are silently skipped.
         """
@@ -123,7 +124,7 @@ class SessionReadAdapter:
 
     @staticmethod
     def _section_to_dict(section_obj: Any) -> Optional[Dict[str, Any]]:
-        """Convert a section object to dict via to_dict().
+        """Convert a section object to dict via to_dict() or zero-arg get().
 
         Args:
             section_obj: Section instance from SessionStateManager.
@@ -133,13 +134,30 @@ class SessionReadAdapter:
         """
         if hasattr(section_obj, "to_dict"):
             return section_obj.to_dict()
+        get_fn = getattr(section_obj, "get", None)
+        if callable(get_fn) and SessionReadAdapter._callable_without_args(get_fn):
+            data = get_fn()
+            if isinstance(data, dict):
+                return data
         if isinstance(section_obj, dict):
             return section_obj
         logger.warning(
-            "Section object %s has no to_dict() method",
+            "Section object %s has no snapshot dict method",
             type(section_obj).__name__,
         )
         return None
+
+    @staticmethod
+    def _callable_without_args(func: Any) -> bool:
+        try:
+            params = signature(func).parameters.values()
+        except (TypeError, ValueError):
+            return False
+        return all(
+            param.default is not Parameter.empty
+            or param.kind in (Parameter.VAR_POSITIONAL, Parameter.VAR_KEYWORD)
+            for param in params
+        )
 
     async def list_sections(self) -> FrozenSet[str]:
         """Return the authoritative set of all SessionState section names.
@@ -191,9 +209,7 @@ class SessionReadAdapter:
             return []
 
         try:
-            results = self._cold_archive.restore_all(
-                "history_active", session_id, limit=limit
-            )
+            results = self._cold_archive.restore_all("history_active", session_id, limit=limit)
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning(
                 "read_archived_history: restore_all failed for session %s: %s",

@@ -992,6 +992,7 @@ def _construct_fabric(
         health_checker=health_checker,
         event_port=event_port,
         event_emitter=event_emitter,
+        gap_detector=gap_detector,
     )
 
     logger.info("Fabric construction complete (production_mode=%s)", production_mode)

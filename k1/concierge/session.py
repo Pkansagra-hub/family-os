@@ -53,6 +53,7 @@ class ConciergeRuntime:
         front_dispatcher: Any,
         back_dispatcher: Any,
         front_subscriptions: list[Any],
+        input_port: Any | None = None,
         front_ctx: Any | None = None,
         back_ctx: Any | None = None,
         experience_layer: Any | None = None,
@@ -70,6 +71,7 @@ class ConciergeRuntime:
         self._back_mailbox = back_mailbox
         self._fsm = fsm
         self._model = model
+        self._input_port = input_port
         self._session_state = session_state
         self._front_dispatcher = front_dispatcher
         self._back_dispatcher = back_dispatcher
@@ -151,6 +153,19 @@ class ConciergeRuntime:
                 self._fsm.teardown()
             except Exception:
                 logger.debug("FSM teardown failed", exc_info=True)
+
+        for handle in list(self._front_subscriptions):
+            try:
+                self._bus.unsubscribe(handle)
+            except Exception:
+                logger.debug("Front subscription cleanup failed", exc_info=True)
+        self._front_subscriptions.clear()
+
+        if self._input_port is not None and hasattr(self._input_port, "close"):
+            try:
+                self._input_port.close()
+            except Exception:
+                logger.debug("Input port close failed", exc_info=True)
 
         # 6. Close session state
         if self._session_state is not None and hasattr(self._session_state, "close"):

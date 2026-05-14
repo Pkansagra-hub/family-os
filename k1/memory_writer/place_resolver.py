@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
@@ -53,15 +53,15 @@ class PlaceResolver:
         self._entries: list[tuple[str, ResolvedPlace]] = []
 
         for entity in location_entities:
-            etype = getattr(entity, "type", None)
+            etype = _entity_value(entity, "type")
             if etype != "LOCATION":
                 continue
-            canonical = getattr(entity, "display_name", "") or ""
+            canonical = _entity_value(entity, "display_name", "") or ""
             if not canonical.strip():
                 continue
 
             place_id = _to_place_id(canonical)
-            confidence = float(getattr(entity, "confidence", 1.0))
+            confidence = float(_entity_value(entity, "confidence", 1.0))
             resolved = ResolvedPlace(
                 place_id=place_id,
                 canonical_name=canonical.strip(),
@@ -81,14 +81,14 @@ class PlaceResolver:
         self._exact_map.clear()
         self._entries.clear()
         for entity in location_entities:
-            etype = getattr(entity, "type", None)
+            etype = _entity_value(entity, "type")
             if etype != "LOCATION":
                 continue
-            canonical = getattr(entity, "display_name", "") or ""
+            canonical = _entity_value(entity, "display_name", "") or ""
             if not canonical.strip():
                 continue
             place_id = _to_place_id(canonical)
-            confidence = float(getattr(entity, "confidence", 1.0))
+            confidence = float(_entity_value(entity, "confidence", 1.0))
             resolved = ResolvedPlace(
                 place_id=place_id,
                 canonical_name=canonical.strip(),
@@ -185,6 +185,12 @@ class PlaceResolver:
 def _normalize_key(name: str) -> str:
     """Normalize a location name for case-insensitive lookup."""
     return name.strip().lower()
+
+
+def _entity_value(entity: Any, field: str, default: Any = None) -> Any:
+    if isinstance(entity, dict):
+        return entity.get(field, default)
+    return getattr(entity, field, default)
 
 
 def _to_place_id(canonical_name: str) -> str:

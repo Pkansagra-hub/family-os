@@ -3635,8 +3635,19 @@ class ConciergeController:
         # ── Build a payload that MemoryWriter's SessionBatchDispatcher
         # can actually consume. Without these fields the MW dispatcher
         # logs "missing turn_id" and drops every turn.
-        session_id = getattr(self._ledger, "session_id", "") if self._ledger else ""
+        ledger_session_id = getattr(self._ledger, "session_id", "") if self._ledger else ""
+        envelope_session_id = getattr(envelope, "session_id", "") or ""
+        session_id = ledger_session_id or envelope_session_id
         cognitive_trace_id = getattr(envelope, "cognitive_trace_id", "") or ""
+
+        if not session_id:
+            logger.warning(
+                "FSM._emit_turn_completed: refusing publish without session-scoped id "
+                "(ledger missing or empty, envelope_id=%d)",
+                envelope.envelope_id,
+            )
+            self._publish_dead_letter(envelope, "turn_completed_missing_session_id")
+            return
 
         # Extract assistant text from the response_final envelope payload.
         assistant_response = ""
@@ -3654,7 +3665,7 @@ class ConciergeController:
             assistant_response = ""
 
         # Stable, dedup-friendly turn_id (session-scoped, monotonic).
-        turn_id = f"{session_id}:{self._turn_number}" if session_id else f"turn:{self._turn_number}"
+        turn_id = f"{session_id}:{self._turn_number}"
 
         # MW-dedup guard: skip publishing if we already emitted this
         # turn_id (same-turn dispatch+complete followed by proactive

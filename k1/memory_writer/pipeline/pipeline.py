@@ -156,7 +156,7 @@ class MemoryWriterPipeline:
             snapshot = await self._session_reader.read_snapshot()
             # MW-04-A: refresh PlaceResolver with current snapshot entities
             beliefs = snapshot.get("beliefs_active", {}) or {}
-            location_entities = beliefs.get("mentioned_entities", [])
+            location_entities = beliefs.get("mentioned_entities") or beliefs.get("entities", [])
             if not location_entities and payload.mentioned_location_raw:
                 log.debug(
                     "MW: place_resolver has no entities but location present in turn "
@@ -203,6 +203,11 @@ class MemoryWriterPipeline:
                 "MW: extraction failed",
                 extra={"trace_id": trace_id, "error": str(exc)},
             )
+            self._circuit_breaker.record_failure()
+            return PipelineResult(trace_id=trace_id, error="extraction_failed")
+
+        agent_error = getattr(self._writer_agent, "last_error", "")
+        if agent_error:
             self._circuit_breaker.record_failure()
             return PipelineResult(trace_id=trace_id, error="extraction_failed")
 
@@ -309,7 +314,7 @@ class MemoryWriterPipeline:
             )
             # MW-04-A: refresh PlaceResolver with current snapshot entities
             beliefs = snapshot.get("beliefs_active", {}) or {}
-            location_entities = beliefs.get("mentioned_entities", [])
+            location_entities = beliefs.get("mentioned_entities") or beliefs.get("entities", [])
             if not location_entities and anchor.mentioned_location_raw:
                 log.debug(
                     "MW: place_resolver has no entities but location present in turn "
@@ -351,6 +356,11 @@ class MemoryWriterPipeline:
                 "MW: session extraction failed",
                 extra={"trace_id": trace_id, "error": str(exc)},
             )
+            self._circuit_breaker.record_failure()
+            return PipelineResult(trace_id=trace_id, error="extraction_failed")
+
+        agent_error = getattr(self._writer_agent, "last_error", "")
+        if agent_error:
             self._circuit_breaker.record_failure()
             return PipelineResult(trace_id=trace_id, error="extraction_failed")
 

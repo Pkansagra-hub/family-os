@@ -76,12 +76,18 @@ Below is the construction order. Each step is numbered as in the factory code.
           Capability: "tool.write.build_agent"
 (20) ModuleLoader(registry, contracts_dir, event_port, validator, poll_interval_s=2.0)
      → scan_directory() → start_watching()
+(20b) ProactiveGapDetector(event_port, event_emitter, module_loader)
+     → wire_subscriptions() subscribes four Fabric/MCP discovery topics
 (21) HealthChecker(provider_registry, availability_tracker, provider_instances,
                    circuit_breakers, event_port, config)
      → start() (async, called by Fabric.start_health_checker())
 (22) Fabric(facade, retrieval, registry_api, registry, module_loader, health_checker,
-            event_port, event_emitter)
+            event_port, event_emitter, gap_detector)
 ```
+
+`Fabric.shutdown()` stops the health checker and module loader, then calls
+`gap_detector.stop()` so every subscription created by `wire_subscriptions()` is
+unsubscribed from the injected `IEventPort` before the owning session bus closes.
 
 ---
 

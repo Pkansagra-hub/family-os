@@ -114,36 +114,36 @@ These hooks must exist before any live test can be written. Check them off first
 
 | Step | Probe type | Target | Tracing refs | Status | Verdict | Test file | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| M5-L1 | SUBSCRIPTION | **MW01 killer test** — Concierge publish topic == MW subscribe topic (topic typo `complete` vs `completed`) | ISSUE-MW01 | `[ ]` | | | |
-| M5-L2 | MESSAGE-FLOW | TTL: publish with ttl=100ms, consume at t+200ms → must be dropped | ISSUE-B01 | `[ ]` | | | |
-| M5-L3 | LIFECYCLE | MW.stop() completes **before** SSM.stop() begins | I-5.11.4 | `[ ]` | | | |
-| M5-L4 | MESSAGE-FLOW | `PlaceResolver` resolves known place name to non-zero coords | ISSUE-MW04 | `[ ]` | | | |
-| M5-L5 | PORT-IDENTITY | Per-session bus isolation: session A's subscribers don't see session B's envelopes | E5.x | `[ ]` | | | |
-| M5-L6 | LIFECYCLE | SS write-flush on session destroy: every pending mutation lands in SQLite | E5.x | `[ ]` | | | |
+| M5-L1 | SUBSCRIPTION | **MW01 killer test** — Concierge publish topic == MW subscribe topic (topic typo `complete` vs `completed`) | ISSUE-MW01 | `[x]` | green | `tests/integration/k1/live/m5/test_m5_l1_l6_bus_ss_mw.py` | Live Recipe A session proves `Concierge` builder topic, MW event constant, `TurnDispatcher.TOPIC`, default `SessionBatchDispatcher.TOPIC`, dispatcher subscription, and `session.bus.list_subscriptions()` all agree on `k1.session.turn.completed.v1`; stop unsubscribes it. |
+| M5-L2 | MESSAGE-FLOW | TTL: publish with ttl=100ms, consume at t+200ms → must be dropped | ISSUE-B01 | `[x]` | green | `tests/integration/k1/live/m5/test_m5_l1_l6_bus_ss_mw.py` | Live per-session bus publish with `ttl_ms=100` and dispatch-time age of 200ms delivers zero handlers and increments `ttl_drops`. |
+| M5-L3 | LIFECYCLE | MW.stop() completes **before** SSM.stop() begins | I-5.11.4 | `[x]` | green | `tests/integration/k1/live/m5/test_m5_l1_l6_bus_ss_mw.py` | `destroy_session()` spy captures strict order: `mw_stop_begin`, `mw_stop_end`, `ssm_stop_begin`, `ssm_stop_end`. |
+| M5-L4 | MESSAGE-FLOW | `PlaceResolver` resolves known place name to non-zero geohash seed | ISSUE-MW04 | `[x]` | green | `tests/integration/k1/live/m5/test_m5_l1_l6_bus_ss_mw.py` | Live MW session reader now reads `beliefs_active` via zero-arg `get()` fallback; `mentioned_entities` reaches the pipeline, context `place_id=place_olive_garden`, and known seed geohash resolves to `c23nb6` instead of `000000`. |
+| M5-L5 | PORT-IDENTITY | Per-session bus isolation: session A's subscribers don't see session B's envelopes | E5.x | `[x]` | green | `tests/integration/k1/live/m5/test_m5_l1_l6_bus_ss_mw.py` | Two live sessions subscribe to the same topic; session A publish reaches only session A handler. Bus wrapper and inner bus identities differ between sessions. |
+| M5-L6 | LIFECYCLE | SS write-flush on session destroy: every pending mutation lands in SQLite | E5.x | `[x]` | green | `tests/integration/k1/live/m5/test_m5_l1_l6_bus_ss_mw.py` | Direct writer mutation leaves pending writes; `destroy_session()` checkpoints to SQLite `st_session_checkpoints`, and decoded `beliefs_active` contains the pending fact. |
 
 ### M5 — Cross-component integration probes
 
 | Step | Probe type | Target | Tracing refs | Status | Verdict | Test file | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| M5-X1 | SUBSCRIPTION | `session.bus.list_subscriptions()` after P1..P6 contains one subscriber per CONTRACT topic, no orphans | I-5.X.1 | `[ ]` | | | |
-| M5-X2 | LIFECYCLE | After `destroy_session`, bus has zero subscriptions and no handler refs leak | I-5.X.2 | `[ ]` | | | |
+| M5-X1 | SUBSCRIPTION | `session.bus.list_subscriptions()` after P1..P6 contains one subscriber per CONTRACT topic, no orphans | I-5.X.1 | `[x]` | green | `tests/integration/k1/live/m5/test_m5_x1_x5_subscription_identity.py` | Live Recipe A P1..P6 topology has 28 owned subscriptions; `k1.session.user.input.v1` has two intentional owners (FSM + `BusInputAdapter`), MW owns one `k1.session.turn.completed.v1`, Fabric gap detector owns four Fabric/MCP topics, and raw bus subscription IDs equal component-owned handles. |
+| M5-X2 | LIFECYCLE | After `destroy_session`, bus has zero subscriptions and no handler refs leak | I-5.X.2 | `[x]` | green | `tests/integration/k1/live/m5/test_m5_x1_x5_subscription_identity.py` | Production cleanup added: `ConciergeRuntime.stop()` now closes `BusInputAdapter` and front subscriptions; `Fabric.shutdown()` stops owned `ProactiveGapDetector` subscriptions. Live destroy leaves `bus.list_subscriptions()==[]`, `subscription_count==0`, and no retained `_sub_patterns`. |
 | M5-X3 | NEGATIVE | `BridgeAwareLocalBus` raises `UnknownContractError` on bridge-reserved direct publish (extends M2-L8) | I-5.X.3 | `[x]` | green | `tests/integration/k1/live/m2/test_m2_l8_bridge_aware_bus_guard.py` | Covered by M2-L8. |
-| M5-X4 | PORT-IDENTITY | Concierge `_state_port._manager` and `_state_writer._manager` are the session SSM | I-5.X.4 | `[ ]` | | | |
-| M5-X5 | PORT-IDENTITY | MW `_session_read_port._manager` is the session SSM | I-5.X.5 | `[ ]` | | | |
-| M5-X6 | NEGATIVE | MW has no write port (single-writer invariant; `ssm.mutate` spy must not see MW caller) | I-5.X.6 | `[ ]` | | | |
-| M5-X7 | LIFECYCLE | Pre-start `DirectWriterAdapter.mutate()` raises `LifecycleError`; post-start accepts | I-5.X.7 | `[ ]` | | | |
-| M5-X8 | NEGATIVE | SSM eviction publishes only on `LocalEventAdapter`, not on `session_bus` (diagram-vs-code lock-in) | I-5.X.8 | `[ ]` | | | |
-| M5-X9 | PORT-IDENTITY | MW cold-archive view is `ssm.get_local_cold_archive()` identity | I-5.X.9 | `[ ]` | | | |
-| M5-X10 | MESSAGE-FLOW | Live turn → `k1.session.turn.completed.v1` published with full payload by `ConciergeController._emit_turn_completed` | I-5.X.10 | `[ ]` | | | |
-| M5-X11 | SUBSCRIPTION | After `mw.start()`, session bus subscriber list includes `TurnDispatcher._on_turn_complete` on `k1.session.turn.completed.v1` | I-5.X.11 | `[ ]` | | | |
-| M5-X12 | NEGATIVE | **MW01-A**: `TurnDispatcher.TOPIC == TOPIC_TURN_COMPLETED` (`completed`) — today stale `complete`; xfail strict | I-5.X.12 / ISSUE-MW01 | `[ ]` | xfail | | |
-| M5-X13 | MESSAGE-FLOW | Concierge→MW end-to-end: turn published → `MWSessionReader.snapshot()` reads it back | I-5.X.13 | `[ ]` | | | |
-| M5-X14 | NEGATIVE | Same `turn_id` published twice → MW `_processed_ids` dedups → `pipeline.process()` called once | I-5.X.14 | `[ ]` | | | |
-| M5-X15 | MESSAGE-FLOW | After complete turn → `IBridgeCommandPort.submit_batch()` called with `memory.delta` + non-empty `cognitive_trace_id` | I-5.X.15 | `[ ]` | | | |
-| M5-X16 | NEGATIVE | 3 LLM failures → MW CB OPEN; 4th turn skips agent; `k1.mw.circuit.open.v1` fired | I-5.X.16 | `[ ]` | | | |
-| M5-X17 | LIFECYCLE | `_emitted_turn_ids` on controller prevents double-publish on dispatch+complete race | I-5.X.17 | `[ ]` | | | |
-| M5-X18 | NEGATIVE | `_ledger==None` degenerate `turn_id == "turn:{N}"` path rejected before publish | I-5.X.18 | `[ ]` | | | |
-| M5-X19 | NEGATIVE | Duplicate `dag.completed` subscription fires controller handler exactly once per event | I-5.X.19 | `[ ]` | | | |
+| M5-X4 | PORT-IDENTITY | Concierge `_state_port._manager` and `_state_writer._manager` are the session SSM | I-5.X.4 | `[x]` | green | `tests/integration/k1/live/m5/test_m5_x1_x5_subscription_identity.py` | Corrected live paths: Concierge read adapter is `SSMStateAdapter._ss is session.session_state`, FSM and tool contexts share that state port, and `DirectWriterAdapter._manager is session.session_state`. |
+| M5-X5 | PORT-IDENTITY | MW `_session_read_port._manager` is the session SSM | I-5.X.5 | `[x]` | green | `tests/integration/k1/live/m5/test_m5_x1_x5_subscription_identity.py` | `MemoryWriterService._pipeline._session_reader` is `MWSessionReader`; its `SessionReadAdapter._manager is session.session_state` and `_cold_archive is session.session_state.get_local_cold_archive()`. |
+| M5-X6 | NEGATIVE | MW has no write port (single-writer invariant; `ssm.mutate` spy must not see MW caller) | I-5.X.6 | `[x]` | green | `tests/integration/k1/live/m5/test_m5_x6_x10_ss_mw_turn_flow.py` | Live MW uses `SessionReadAdapter` only; adapter exposes no mutation APIs, and a class-level `SessionStateManager.mutate` spy sees zero calls while MW consumes and flushes a `turn.completed` event. |
+| M5-X7 | LIFECYCLE | Pre-start `DirectWriterAdapter.request_mutation()` raises `LifecycleError`; post-start accepts | I-5.X.7 | `[x]` | green | `tests/integration/k1/live/m5/test_m5_x6_x10_ss_mw_turn_flow.py` | Production guard added in `DirectWriterAdapter.request_mutation()` for unbound/not-running managers. Test proves pre-start raises `LifecycleError`, then a live Recipe A session writer applies a telemetry mutation after `ssm.start()`. |
+| M5-X8 | NEGATIVE | SSM eviction publishes only on `LocalEventAdapter`, not on `session_bus` (diagram-vs-code lock-in) | I-5.X.8 | `[x]` | green | `tests/integration/k1/live/m5/test_m5_x6_x10_ss_mw_turn_flow.py` | Live SSM event port is `LocalEventAdapter(capture_mode=False)` and not the session bus; eviction emits `sessionstate.eviction.triggered/completed` through that event port while the session-bus publish spy sees no `sessionstate.eviction.*` topic. |
+| M5-X9 | PORT-IDENTITY | MW cold-archive view is `ssm.get_local_cold_archive()` identity | I-5.X.9 | `[x]` | green | `tests/integration/k1/live/m5/test_m5_x6_x10_ss_mw_turn_flow.py` | `SessionReadAdapter._cold_archive is session.session_state.get_local_cold_archive()` and the same object as `session.session_state._local_cold_archive`. |
+| M5-X10 | MESSAGE-FLOW | Live turn -> `k1.session.turn.completed.v1` published with full payload by `ConciergeController._emit_turn_completed` | I-5.X.10 | `[x]` | green | `tests/integration/k1/live/m5/test_m5_x6_x10_ss_mw_turn_flow.py` | Live user input drives FSM to DISPATCHING, controlled final response returns to LISTENING, and captured `turn.completed` payload contains `turn_id`, ledger `session_id`, `cognitive_trace_id`, `user_message`, `assistant_response`, positive `timestamp_ms`, and `turn_number`. |
+| M5-X11 | SUBSCRIPTION | After `mw.start()`, session bus subscriber list includes the default `SessionBatchDispatcher` subscription on `k1.session.turn.completed.v1` | I-5.X.11 | `[x]` | green | `tests/integration/k1/live/m5/test_m5_l1_l6_bus_ss_mw.py` | Covered by M5-L1; live subscriber list contains exactly one `k1.session.turn.completed.v1` entry after MW start and zero after MW stop. |
+| M5-X12 | NEGATIVE | **MW01-A closed:** `TurnDispatcher.TOPIC == TOPIC_TURN_COMPLETED` (`completed`) | I-5.X.12 / ISSUE-MW01 | `[x]` | green | `tests/integration/k1/live/m5/test_m5_l1_l6_bus_ss_mw.py` | Covered by M5-L1; legacy per-turn and default session-batch dispatcher constants both use `k1.session.turn.completed.v1`. |
+| M5-X13 | MESSAGE-FLOW | Concierge→MW end-to-end: turn published → `MWSessionReader.snapshot()` reads it back | I-5.X.13 | `[x]` | green | `tests/integration/k1/live/m5/test_m5_x13_x15_concierge_mw_e2e.py` | Live Recipe A turn writes `history_active` before publish; MW session-batch flush calls the real `MWSessionReader.read_snapshot_enriched()` and the captured snapshot contains the just-published user/assistant turn. |
+| M5-X14 | NEGATIVE | Same `turn_id` published twice → MW `_processed_ids` dedups → `pipeline.process()` called once | I-5.X.14 | `[x]` | green | `tests/integration/k1/live/m5/test_m5_x13_x15_concierge_mw_e2e.py` | Two duplicate `k1.session.turn.completed.v1` envelopes on the live session bus leave one `_processed_ids` entry, one buffered turn, and one `process_session()` call on stop. |
+| M5-X15 | MESSAGE-FLOW | After complete turn → `IBridgeCommandPort.submit_batch()` called with `memory.delta` + non-empty `cognitive_trace_id` | I-5.X.15 | `[x]` | green | `tests/integration/k1/live/m5/test_m5_x13_x15_concierge_mw_e2e.py` | Live Concierge turn drives the real MW session-batch pipeline; model/bridge are controlled external edges, and `submit_batch()` receives `memory.delta` envelopes whose `trace_id`, headers, and body carry the non-empty cognitive trace id. |
+| M5-X16 | NEGATIVE | 3 LLM failures → MW CB OPEN; 4th turn skips agent; `k1.mw.circuit.open.v1` fired | I-5.X.16 | `[x]` | green | `tests/integration/k1/live/m5/test_m5_x16_x19_mw_cb_concierge_guards.py` | Production fix surfaces model-edge failures from `MemoryWriterAgent` to `MemoryWriterPipeline` while preserving the agent's `[]` return contract; live Recipe A test forces three external LLM failures, observes CB OPEN, then proves the fourth turn publishes `k1.mw.circuit.open.v1` without a fourth model call. |
+| M5-X17 | LIFECYCLE | `_emitted_turn_ids` on controller prevents double-publish on dispatch+complete race | I-5.X.17 | `[x]` | green | `tests/integration/k1/live/m5/test_m5_x16_x19_mw_cb_concierge_guards.py` | Live Concierge turn publishes one ledger-scoped `turn.completed`; a second same-turn `_emit_turn_completed()` call with the same final envelope is skipped because the `turn_id` is already in `_emitted_turn_ids`. |
+| M5-X18 | NEGATIVE | `_ledger==None` degenerate `turn_id == "turn:{N}"` path rejected before publish | I-5.X.18 | `[x]` | green | `tests/integration/k1/live/m5/test_m5_x16_x19_mw_cb_concierge_guards.py` | Production fix requires a session-scoped id from ledger or envelope before publish; live Recipe A with `enable_ledger=False` and an unscoped final response emits no `turn.completed` and never records `turn:1`. |
+| M5-X19 | NEGATIVE | Duplicate `dag.completed` subscription fires controller handler exactly once per event | I-5.X.19 | `[x]` | green | `tests/integration/k1/live/m5/test_m5_x16_x19_mw_cb_concierge_guards.py` | Live session bus has exactly one `TOPIC_DAG_COMPLETED` subscription and zero bare `k1.orchestration.dag.completed` subscriptions; one `dag.completed.v1` envelope produces exactly one normalized `task.complete.v1`. |
 
 ---
 
@@ -155,10 +155,10 @@ These hooks must exist before any live test can be written. Check them off first
 
 | Step | Probe type | Target | Tracing refs | Status | Verdict | Test file | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| M3-L1 | MESSAGE-FLOW | `execute()` STEP 1–9 emits `k1.capability.invoked.v1` and `k1.capability.completed.v1` with matching `cognitive_trace_id` | I3.1.1 | `[ ]` | | | |
-| M3-L2 | NEGATIVE | `safety_band` missing on request → defaults to GREEN (silent escalation confirms GAP) | M3 cross-cutting | `[ ]` | xfail | | |
-| M3-L3 | NEGATIVE | CB CLOSED→OPEN at threshold; OPEN→HALF_OPEN→CLOSED on probe | I3.2.6/.7 | `[ ]` | | | |
-| M3-L4 | PORT-IDENTITY | Fabric never gets a write call on `state_reader` (read-only proxy wrap) | E3.6 | `[ ]` | | | |
+| M3-L1 | MESSAGE-FLOW | `execute()` STEP 1–9 emits `k1.capability.invoked.v1` and `k1.capability.completed.v1` with matching `cognitive_trace_id` | I3.1.1 | `[x]` | green | `tests/integration/k1/live/m3/test_m3_l1_l4_fabric_modelhub.py` | Live Recipe A per-session Fabric executes a deterministic `LOCAL_STUB` contract through registry, resolver, policy, context build, provider factory, CB path, validation, and event emission; captured session-bus envelopes and payloads both carry the request `cognitive_trace_id`. |
+| M3-L2 | NEGATIVE | `safety_band` missing on request → defaults to GREEN (silent escalation confirms GAP) | M3 cross-cutting | `[x]` | xfail | `tests/integration/k1/live/m3/test_m3_l1_l4_fabric_modelhub.py` | Strict-xfail GAP probe uses `CapabilityRequest.from_dict()` with no `safety_band`, confirms the API object defaults to `GREEN`, then expects the future desired rejection; current live Fabric executes instead. |
+| M3-L3 | NEGATIVE | CB CLOSED→OPEN at threshold; OPEN→HALF_OPEN→CLOSED on probe | I3.2.6/.7 | `[x]` | green | `tests/integration/k1/live/m3/test_m3_l1_l4_fabric_modelhub.py` | Live per-session Fabric installs a real `CircuitBreaker` for a test provider; two controlled provider failures open it, OPEN blocks without provider call, `allow_probe()` moves HALF_OPEN, and a successful probe closes and clears failure count. |
+| M3-L4 | PORT-IDENTITY | Fabric never gets a write call on `state_reader` (read-only proxy wrap) | E3.6 | `[x]` | green | `tests/integration/k1/live/m3/test_m3_l1_l4_fabric_modelhub.py` | Live per-session Fabric state-reader holders are wrapped with a read-only proxy; execution reads expected SS sections through `read_section` and records no write-method lookup (`write_section`/`request_mutation` absent). |
 | M3-L5 | MESSAGE-FLOW | ModelHub 9-step on CHAT request — all 10 bus topics fire | I3.7.1, ISSUE-M01 | `[ ]` | | | |
 | M3-L6 | NEGATIVE | `from_config` injected ports stored but disconnected → 0 events on all 10 topics (confirms ISSUE-M01) | ISSUE-M01 | `[ ]` | xfail | | |
 | M3-L7 | MESSAGE-FLOW | Cache hit on identical CHAT, miss on TOOL_CALL | I3.7.2/.3 | `[ ]` | | | |
@@ -319,9 +319,9 @@ These are not in K1_FLOWS.md but are covered by the SOP and require live coverag
 | X2 | LocalOutbox durability under 5xx | E2.7.4 + E7.2.4 → M7-L5 | `[ ]` | |
 | X3 | Bridge mode selection at S4 | E2.10 → M7-L6 | `[ ]` | |
 | X4 | MW pipeline → K0 outbox (SINK mode) | MW + outbox | `[ ]` | |
-| X5 | Per-session bus isolation (E2.2 P1) | M5-L5 | `[ ]` | |
+| X5 | Per-session bus isolation (E2.2 P1) | M5-L5 | `[x]` | Covered by `tests/integration/k1/live/m5/test_m5_l1_l6_bus_ss_mw.py`. |
 | X6 | S6b Mock→real planner swap | E2.3 → M2-L2 | `[x]` | Covered by `tests/integration/k1/live/m2/test_m2_l2_planner_orchestrator_crosswire.py`. |
-| X7 | Lifecycle teardown order | E2.4.7, E5.11.4 → M2-L1, M5-L3 | `[ ]` | |
+| X7 | Lifecycle teardown order | E2.4.7, E5.11.4 → M2-L1, M5-L3 | `[x]` | M2 teardown was covered by M2-X7; MW-before-SSM teardown is covered by M5-L3. |
 | X8 | `BridgeAwareLocalBus` bridge-reserved topic guard (R10) | E2.7.5 → M2-L8 | `[x]` | Covered by M2-L8; production fix applied (wrapped per-session bus at P1). |
 | X9 | Pseudo-K0 gap matrix: flows that pass pseudo-K0 but need real K0 policy | E7.6 → M7 series | `[ ]` | |
 
@@ -334,7 +334,7 @@ These are not in K1_FLOWS.md but are covered by the SOP and require live coverag
 | F60–F64, F68, F90, F94, F131, F140, F148, F153 | **I3.4.5** AgentProvider `mailbox=None` | AgentProvider | `[ ]` |
 | F06, F09 (HIGH leg) | **I1.5.1** K1 Orchestrator not wired on HIGH path | Orchestrator | `[ ]` |
 | F41 | **I6.11.C5** IEmbeddingPort not wired in shared Fabric | Fabric S4 | `[ ]` |
-| F78 (default path) | **ISSUE-MW01** topic typo `complete` vs `completed` | MemoryWriter | `[ ]` |
+| F78 (default path) | **ISSUE-MW01** topic typo `complete` vs `completed` | MemoryWriter | `[x]` |
 | F108 + planner LLM path | **GAP-P02** `build_payload` private import | Planner | `[ ]` |
 | F07 (safety, full) | **I6.11.H5** MockStateReadAdapter in prod | Orchestrator | `[ ]` |
 | ~22 M6 stub flows | **M6 stub cluster** | M6 (future milestone) | `[ ]` |
@@ -377,9 +377,9 @@ To stamp a milestone **production-grade**, all five must be `[x]`:
 | Prerequisites (hooks) | 6 | 6 | — | 0 | 100% |
 | M2 Kernel + Bridge (L1–L10) | 10 | 10 | 2 | 0 | 100% |
 | M2 Cross-component (X1–X8) | 8 | 8 | 1 | 0 | 100% |
-| M5 Bus + SS + MW (L1–L6) | 6 | 0 | 0 | 0 | 0% |
-| M5 Cross-component (X1–X19) | 19 | 1 | 0 | 0 | 5% |
-| M3 Fabric + ModelHub (L1–L8) | 8 | 0 | 0 | 0 | 0% |
+| M5 Bus + SS + MW (L1–L6) | 6 | 6 | 0 | 0 | 100% |
+| M5 Cross-component (X1–X19) | 19 | 19 | 0 | 0 | 100% |
+| M3 Fabric + ModelHub (L1–L8) | 8 | 4 | 1 | 0 | 50% |
 | M3 Cross-component (X1–X9) | 9 | 0 | 0 | 0 | 0% |
 | M1 Concierge (L1–L9) | 9 | 0 | 0 | 0 | 0% |
 | M1 Cross-component (X1–X12) | 12 | 0 | 0 | 0 | 0% |
@@ -388,9 +388,9 @@ To stamp a milestone **production-grade**, all five must be `[x]`:
 | M6 Cross-cutting (L1–L5) | 5 | 0 | 0 | 0 | 0% |
 | M6 Cross-component (X1–X15) | 15 | 0 | 0 | 0 | 0% |
 | M7 Pseudo-K0 | 6 | 0 | 0 | 0 | 0% |
-| Cross-cutting (X1–X9) | 9 | 2 | — | 0 | 22% |
+| Cross-cutting (X1–X9) | 9 | 4 | — | 0 | 44% |
 | LLM-COVERED contracts | 5 | 0 | — | 0 | 0% |
-| **TOTAL** | **146** | **28** | **3** | **0** | **19%** |
+| **TOTAL** | **146** | **58** | **4** | **0** | **40%** |
 
 ---
 

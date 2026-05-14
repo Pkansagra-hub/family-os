@@ -18,7 +18,7 @@ ConciergeFactory.create_with_ports(
     back_mailbox=back_mailbox,                    # router.register(ACTOR_BACK)
     ports=PortBundle(
         delta=DeltaPortAdapter(delta_bus),        # IDeltaPort  → IBus
-        input_=BusInputAdapter(front_mailbox),    # IInputPort  → ACTOR_FRONT mailbox
+        input_=BusInputAdapter(session_bus),      # IInputPort  → k1.session.user.input.v1 subscriber
         output=BusOutputAdapter(back_mailbox),    # IOutputPort → ACTOR_BACK mailbox
         state=SSMStateAdapter(ssm),               # IStatePort  → SessionStateManager
         llm=model_hub,                            # ILLMPort    → shared ModelHub
@@ -294,11 +294,23 @@ Recovery order (dependency-safe):
 
 ---
 
-## 6. Dependency graph (construction)
+## 6. Runtime teardown ownership
+
+`ConciergeRuntime.stop()` owns every subscription created during Concierge construction:
+
+1. `ConciergeController.teardown()` unsubscribes controller FSM topic handles.
+2. Runtime unsubscribes `subscribe_front_events(...)` front actor handles.
+3. Runtime calls `BusInputAdapter.close()` to remove the input-port subscriber on `k1.session.user.input.v1`.
+
+Kernel session teardown calls this before closing the per-session bus, so `destroy_session()` can leave no Concierge handler refs in `LocalBus._sub_patterns`.
+
+---
+
+## 7. Dependency graph (construction)
 
 ```
 IBus (session bus)
-  └─ BusInputAdapter     → IInputPort  → Front mailbox consumer
+  └─ BusInputAdapter     → IInputPort  → k1.session.user.input.v1 subscriber
   └─ BusOutputAdapter    → IOutputPort → Front response emitter
   └─ DeltaPortAdapter    → IDeltaPort  → FSM event bus
   └─ ConciergeController.subscribe_all() [20 topic subscriptions]
