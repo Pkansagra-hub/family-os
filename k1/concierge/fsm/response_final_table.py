@@ -79,7 +79,7 @@ def decide_response_final(
     | 8 | WEAVING          | no pending                         | turn done              | LISTENING     |
     | 9 | COMPANIONING     | has_active_tasks                   | stay, wait             | COMPANIONING  |
     |10 | COMPANIONING     | no active tasks                    | race-safe exit         | LISTENING     |
-    |11 | CLARIFYING_WORKER| has_active_tasks                   | resume companion wait  | COMPANIONING  |
+    |11 | CLARIFYING_WORKER| has_active_tasks                   | wait for HITL answer    | CLARIFYING_WORKER |
     |12 | CLARIFYING_WORKER| no active tasks                    | turn done              | LISTENING     |
     |13 | LISTENING        | spurious final                     | ignore                 | LISTENING     |
 
@@ -217,10 +217,10 @@ def decide_response_final(
     # -- CLARIFYING_WORKER ---------------------------------------------
     if fsm_state == ConciergeState.CLARIFYING_WORKER:
         if has_active_tasks:
-            # Branch 11: resume companion wait
+            # Branch 11: HITL question delivered; stay open for the user's answer.
             return ResponseFinalDecision(
-                action=ResponseFinalAction.TRANSITION_COMPANIONING,
-                target_state=ConciergeState.COMPANIONING,
+                action=ResponseFinalAction.STAY,
+                target_state=None,
                 emit_turn_completed=False,
                 drain_front_lock=False,
                 schedule_weave=False,

@@ -133,6 +133,10 @@ class _HubCore:
         """
         self._registry.register(manifest, plugin)
         self._router._dispatcher.register_plugin(manifest.provider_id, plugin)
+        self._router._dispatcher._circuit_mgr.register_provider(
+            manifest.provider_id,
+            manifest.circuit_breaker,
+        )
 
     async def execute(self, request: HubRequest) -> HubResponse:
         return await self._router.route(request)
@@ -385,7 +389,7 @@ class ModelHubFactory:
 
         # Wire services
         registry = ProviderRegistry(cfg)
-        circuit_mgr = CircuitBreakerManager()
+        circuit_mgr = CircuitBreakerManager(event_port=event_port)
         rate_limiter = RateLimiter(
             default_headroom_pct=cfg.rate_limit_headroom_pct,
         )
@@ -407,6 +411,7 @@ class ModelHubFactory:
             rate_limiter=rate_limiter,
             credential_port=credential_port,
             plugins=plugins,
+            event_port=event_port,
         )
 
         audit_logger = AuditLogger()
@@ -490,7 +495,7 @@ class ModelHubFactory:
         )
 
         registry = ProviderRegistry(cfg)
-        circuit_mgr = CircuitBreakerManager()
+        circuit_mgr = CircuitBreakerManager(event_port=event_port)
         rate_limiter = RateLimiter(
             default_headroom_pct=cfg.rate_limit_headroom_pct,
         )
@@ -508,6 +513,7 @@ class ModelHubFactory:
             rate_limiter=rate_limiter,
             credential_port=credential_port,
             plugins=plugins or {},
+            event_port=event_port,
         )
 
         router = RequestRouter(

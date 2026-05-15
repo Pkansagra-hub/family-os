@@ -2,31 +2,36 @@
 
 ---
 
-## ISSUE-M01 — Four ports accepted by `from_config` but never wired into any service
+## ISSUE-M01 — `create_standalone()` still has no event-port wiring
 
 **Severity:** High
-**Location:** `factory.py:512`, comment "not addressed by P2.2"
+**Location:** `factory.py:create_standalone()`
 
 **Current behavior:**
-`ModelHubFactory.from_config()` accepts `event_port`, `state_read_port`, `config_port`,
-and `health_port` in the `ports` dict. These are stored but never injected into any
-internal service. In particular:
+`ModelHubFactory.create_with_ports()` and `from_config(..., ports=...)` now wire
+`event_port` into `RequestRouter`, `ProviderDispatcher`, `CircuitBreakerManager`, and
+`ProviderLoader`. The live kernel path uses this wiring and emits request, response,
+fallback, and circuit-state events.
 
-- `event_port` is never connected to `RequestRouter` — no events are published on
-  `k1.model_hub.request.received.v1` etc. when going through the `from_config` path.
-- `state_read_port` (MH-01 read-only SS) is passed but `RequestRouter` never reads it;
-  neither do any plugins. The capability to read SessionState is declared but not used.
-- `config_port` is never connected to `ConfigAdapter` in the production flow.
-- `health_port` is never connected to `HealthReportAdapter`.
+`ModelHubFactory.create_standalone()` still accepts no `event_port` and constructs
+`RequestRouter`, `ProviderDispatcher`, and `CircuitBreakerManager` with `event_port=None`.
+Standalone hubs therefore suppress all ModelHub bus publications.
 
-**Failure mode:** Callers passing production ports to `from_config` assume events are
-published and health is reported. Neither happens. All 10 bus topics documented in
-CONTRACT.md §13 are silently suppressed. Monitoring dashboards that subscribe to
-`k1.model_hub.response.complete.v1` receive zero events.
+Remaining related gaps:
 
-**Fix:** In `from_config`, wire injected ports into their target services:
-`router._event_port = event_port`; `router._health_port = health_port`;
-`config_adapter = ConfigAdapter(...)` with `config_port`; resolve at P2.3.
+- `config_port` is validated by `create_with_ports()` but not connected to a live
+  `ConfigAdapter`.
+- `state_read_port` reaches `RequestRouter` but is currently held for future routing or
+  policy logic; `route()` does not read SessionState yet.
+
+**Failure mode:** Callers using `create_standalone()` assume documented topics such as
+`k1.model_hub.request.received.v1`, `k1.model_hub.response.complete.v1`, and
+`k1.model_hub.circuit.state.v1` are emitted. They receive zero events unless they use
+`create_with_ports()` / `from_config(..., ports=...)` or patch private fields manually.
+
+**Fix:** Add optional `event_port`, `metrics_port`, and `state_read_port` parameters to
+`create_standalone()` or route standalone construction through `create_with_ports()` with
+default production adapters. Preserve the explicit no-bus mode for isolated scripts.
 
 ---
 
@@ -229,14 +234,15 @@ usage floats through `metadata: Dict[str, Any]` with no schema.
 
 **Current behavior:**
 `loader.py:214-215` returns `("skipped", f"env var {env_var!r} not set")` on missing
-credentials. Zero bus emission, zero WARNING log — completely silent. The skip is only
+credentials. A warning log is emitted, but there is no bus emission. The skip is also
 visible if the caller explicitly inspects `ProviderLoadResult.skipped`.
 
 **Additional context from code audit:**
-- `ProviderRegisteredPayload` (`events.py:140-144`) has only `provider_id`, `capabilities`,
+
+- `ProviderRegisteredPayload` (`events.py`) has only `provider_id`, `capabilities`,
   `model_count` — no `status` or `reason` fields.
-- `ProviderLoader.__init__` (`loader.py:106-112`) has no `event_port` param. Full bus
-  emission is blocked until ISSUE-M01 (event_port wiring) is resolved.
+- `ProviderLoader` now accepts `event_port` for registered providers, but skipped providers
+  still only appear in `ProviderLoadResult.skipped` plus a warning log.
 
 **Failure mode:** A production deployment misconfigures `ANTHROPIC_API_KEY` environment
 variable (typo, secret not mounted). Anthropic provider is silently skipped. If no other
@@ -245,15 +251,33 @@ provider supports `REASON`, `NoEligibleProviderError` is raised at runtime with 
 **Fix (M10-A — no dependencies):** Add `logger.warning("ProviderLoader: skipping %s — %s",
 provider_id, reason)` at `loader.py:214`. XS fix, immediately actionable.
 
-**Fix (M10-B — depends on M01):** Add `status: str = "registered"` and `reason: str = ""`
-to `ProviderRegisteredPayload`; add `event_port` param to `ProviderLoader`; emit
-`TOPIC_PROVIDER_REGISTERED` with `status="skipped"` on credential-missing skip.
-Do M10-A first; add M10-B after M01.
+**Fix (M10-B):** Add `status: str = "registered"` and `reason: str = ""`
+to `ProviderRegisteredPayload`; emit `TOPIC_PROVIDER_REGISTERED` with `status="skipped"`
+on credential-missing skip.
 
 **Fix:** Emit `k1.model_hub.provider.registered.v1` with `status="skipped"` and reason
 when a provider is skipped. Or emit a `WARNING`-level structured log at the kernel/hub
 startup boundary. At minimum, expose `ProviderLoadResult.skipped` to the kernel startup
 log.
+
+---
+
+## ISSUE-M11 — `budget.alert.v1` exists only in diagrams; `cost_limit` is not enforced
+
+**Severity:** Medium
+**Location:** `types.py:RequestConstraints.cost_limit`, `events.py`, `services/request_router.py`
+
+**Current behavior:**
+`RequestConstraints.cost_limit` is accepted and carried through `HubRequest`, but the
+router has no budget-enforcement step. `events.py` does not define
+`k1.model_hub.budget.alert.v1`, and no service emits that topic.
+
+**Failure mode:** Callers can pass `cost_limit=0.0` and still receive a normal response.
+Budget dashboards subscribing to `k1.model_hub.budget.alert.v1` receive zero events.
+
+**Fix:** Add a budget/cost guard before provider dispatch, define a typed budget-alert
+payload, and decide whether budget rejection is a hard `ValidationError`, a typed
+`BudgetExceededError`, or a soft fallback to cheaper provider selection.
 
 ---
 

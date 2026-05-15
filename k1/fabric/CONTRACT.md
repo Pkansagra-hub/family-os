@@ -224,6 +224,8 @@ OutputValidationPipeline.validate(result, contract, provider_type, ...):
         - Validates result.data against contract.output (JSON Schema Draft-7 subset)
         - Coercion on failure (fill defaults, cast string→numeric)
         - Re-validate after coercion; REJECT if still failing
+                - REJECT returns CapabilityResult(success=False, error_code="output_validation_failed")
+                    and emits OUTPUT_VALIDATION_FAILED with request/capability/provider/trace context
 
     Tier 3 — SemanticValidator (AGENT/WORKFLOW only, soft):
         - HallucinationDetector: uncertainty markers, fabrication markers, belief consistency
@@ -324,7 +326,7 @@ All emitted via `EventEmitter` → `IEventPort`.
 | `k1.fabric.capability.unregistered.v1` | On contract removal |
 | `k1.fabric.capability.version.conflict.v1` | On semver conflict during registration |
 | `k1.fabric.contract.validation.failed.v1` | On hot-reload YAML parse failure |
-| `k1.fabric.output.validation.failed.v1` | On output validation REJECT |
+| `k1.fabric.output.validation.failed.v1` | On output validation REJECT; enriched Fabric payload includes capability, request, provider, tier, rejection reason, and `cognitive_trace_id` |
 | `k1.fabric.provider.health.changed.v1` | On health status change |
 | `k1.fabric.pressure.warning.v1` | On dispatcher WARNING level entry |
 | `k1.fabric.pressure.shedding.v1` | On dispatcher SHEDDING level entry |

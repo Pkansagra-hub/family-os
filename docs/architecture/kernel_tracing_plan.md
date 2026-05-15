@@ -1006,7 +1006,7 @@ I6.11.C6 (systemic session-state blindness) + I6.11.C5 (IEmbeddingPort) + I6.11.
 | M1 | C10 | Med | WEAVE history window 5-turn |
 | M1 | Finding N1 | Med | bootstrap duplicates factory wiring |
 | M1 | Finding N5 | High | `_FabricGatewayAdapter` field translation |
-| M1 | Finding N6 | High | HIGH-tier path NOT WIRED to K1 Orchestrator |
+| M1 | Finding N6 | High | CLOSED by M1-L5: HIGH-tier path is wired through Planner, K1 Orchestrator, shared Fabric, and `task.complete.v1` result bridge |
 | M1 | factory race | Low | `set_self_model()` before `start()` no guard |
 | M1 | I1.10.5 | Med | `chat_repl` uses legacy bootstrap |
 | M2 | I2.1.5 | Low | `health_check()` aggregation unspecified |
@@ -1179,7 +1179,7 @@ The M5 milestone is the most under-specified in the original plan — its existi
 | **I1.X.2** | SUBSCRIPTION | FSM subscribes exactly to the topic set in CONTRACT §4 — no extra subscriptions, no missing subscriptions | `ConciergeController._subscribe_topics` |
 | **I1.X.3** | MESSAGE-FLOW | LOW-tier happy path: `k1.session.user.input.v1` → Front ReAct → `IDispatchPort.dispatch_direct(CapabilityRequest)` → `FabricDispatchAdapter` → `session_fabric.execute()` (single call, no `dispatch_envelope`) | LOW-tier short circuit |
 | **I1.X.4** | MESSAGE-FLOW | MED-tier dispatch flow: Front emits `k1.orchestration.task.dispatch.v1` on session bus → BackHandler enters ReAct loop → emits `k1.orchestration.task.complete.v1` → Front DELIVERING | actors/front.py + actors/back.py |
-| **I1.X.5** | MESSAGE-FLOW | HIGH-tier path: `dispatch_envelope(TaskEnvelope)` → `OrchestratorService.process()` → if HIGH: `PlannerAdapter.request_plan()` → DAG → `AggregatedResult` → Back → `task.complete.v1`. Today this path is **not wired end-to-end** (I1.5.1) — assert xfail strict=True | I1.5.1 / Finding N6 |
+| **I1.X.5** | MESSAGE-FLOW | HIGH-tier path: `dispatch_envelope(TaskEnvelope)` → `OrchestratorService.process()` → if HIGH: Planner SKETCH/EXPAND/VALIDATE → committed DAG → shared Fabric execution → `task.complete.v1`. Covered by M1-L5 live probe; Finding N6 is closed for this path. | `tests/integration/k1/live/m1/test_m1_l3_low_tier_message_flow.py` |
 | **I1.X.6** | MESSAGE-FLOW | `task.complete.v1` on session bus → FSM transition to DELIVERING; final response emitted via `k1.response.final.v1`; FSM returns to LISTENING | controller.py state machine |
 | **I1.X.7** | MESSAGE-FLOW | `turn_end()` → `k1.session.turn.completed.v1` published; `_emitted_turn_ids` records the id; same turn cannot be re-emitted | controller.py L3630–3693 |
 | **I1.X.8** | NEGATIVE | CRISIS safety_band turn → FSM stays LISTENING, response is hardcoded `CRISIS_STATIC` constant, no LLM call, no Fabric dispatch | Front guard logic |

@@ -159,61 +159,61 @@ These hooks must exist before any live test can be written. Check them off first
 | M3-L2 | NEGATIVE | `safety_band` missing on request → defaults to GREEN (silent escalation confirms GAP) | M3 cross-cutting | `[x]` | xfail | `tests/integration/k1/live/m3/test_m3_l1_l4_fabric_modelhub.py` | Strict-xfail GAP probe uses `CapabilityRequest.from_dict()` with no `safety_band`, confirms the API object defaults to `GREEN`, then expects the future desired rejection; current live Fabric executes instead. |
 | M3-L3 | NEGATIVE | CB CLOSED→OPEN at threshold; OPEN→HALF_OPEN→CLOSED on probe | I3.2.6/.7 | `[x]` | green | `tests/integration/k1/live/m3/test_m3_l1_l4_fabric_modelhub.py` | Live per-session Fabric installs a real `CircuitBreaker` for a test provider; two controlled provider failures open it, OPEN blocks without provider call, `allow_probe()` moves HALF_OPEN, and a successful probe closes and clears failure count. |
 | M3-L4 | PORT-IDENTITY | Fabric never gets a write call on `state_reader` (read-only proxy wrap) | E3.6 | `[x]` | green | `tests/integration/k1/live/m3/test_m3_l1_l4_fabric_modelhub.py` | Live per-session Fabric state-reader holders are wrapped with a read-only proxy; execution reads expected SS sections through `read_section` and records no write-method lookup (`write_section`/`request_mutation` absent). |
-| M3-L5 | MESSAGE-FLOW | ModelHub 9-step on CHAT request — all 10 bus topics fire | I3.7.1, ISSUE-M01 | `[ ]` | | | |
-| M3-L6 | NEGATIVE | `from_config` injected ports stored but disconnected → 0 events on all 10 topics (confirms ISSUE-M01) | ISSUE-M01 | `[ ]` | xfail | | |
-| M3-L7 | MESSAGE-FLOW | Cache hit on identical CHAT, miss on TOOL_CALL | I3.7.2/.3 | `[ ]` | | | |
-| M3-L8 | NEGATIVE | All providers' CBs OPEN → `NoEligibleProviderError`, not silent fallback | I3.7.5 | `[ ]` | | | |
+| M3-L5 | MESSAGE-FLOW | ModelHub CHAT request → `k1.model_hub.request.completed.v1` fires on bus with matching `trace_id` | I3.7.1 | `[x]` | green | `tests/integration/k1/live/m3/test_m3_l5_l8_modelhub.py` | Live Recipe A boots with StubProviderPlugin; subscribes to `k1.model_hub.request.completed.v1` on raw `svc._bus`; CHAT execute → event captured synchronously via MHEventBusAdapter; payload carries expected `trace_id`, `request_id`, and `capability` fields. Note: RequestRouter publishes 2 topics (completed + failed), not 10; events.py constants are forward-declarations. |
+| M3-L6 | NEGATIVE | `create_standalone()` leaves `event_port=None` in RequestRouter → all bus-topic publications silently suppressed (confirms ISSUE-M01) | ISSUE-M01 | `[x]` | xfail | `tests/integration/k1/live/m3/test_m3_l5_l8_modelhub.py` | Strict-xfail GAP probe calls `ModelHubFactory.create_standalone()`; asserts `hub._router._event_port is not None`; assertion FAILS confirming `event_port` is never wired; live kernel uses `create_with_ports(mh_ports)` with `MHEventBusAdapter` at service.py:1324. Fix: `create_standalone()` should accept optional `event_port` param. |
+| M3-L7 | MESSAGE-FLOW | Cache hit on identical CHAT (`r1 is r2`), miss on TOOL_CALL (`tc1 is not tc2`) | I3.7.2/.3 | `[x]` | green | `tests/integration/k1/live/m3/test_m3_l5_l8_modelhub.py` | Live Recipe A; same `HubRequest` object executed twice for CHAT → second returns identical Python object (LRU hit); same TOOL_CALL payload executed twice → distinct objects; confirms `_SKIP_CAPABILITIES = frozenset({TOOL_CALL, BATCH, MODERATE})` in ResponseCache. |
+| M3-L8 | NEGATIVE | All providers' CBs OPEN → `NoEligibleProviderError`, not silent fallback | I3.7.5 | `[x]` | green | `tests/integration/k1/live/m3/test_m3_l5_l8_modelhub.py` | Live Recipe A; reach into `svc._model_hub._router._dispatcher._circuit_mgr`; register stub provider with `failure_threshold=3`; record 3 failures → CB OPEN; CHAT request → `CapabilityRouter` Step 3 filters OPEN providers → 0 eligible → `NoEligibleProviderError` raised (not silent). |
 
 ### M3 — Cross-component integration probes
 
 | Step | Probe type | Target | Tracing refs | Status | Verdict | Test file | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| M3-X1 | MESSAGE-FLOW | One LLM-backed `fabric.execute()` → both `k1.capability.completed.v1` (session bus) and `k1.model_hub.response.complete.v1` (shared bus) with matching `trace_id` | I3.X.1 | `[ ]` | | | |
-| M3-X2 | SUBSCRIPTION | `k1.fabric.learning.signal.v1` emitted on session bus after every `execute()` (success and failure paths) | I3.X.2 | `[ ]` | | | |
-| M3-X3 | SUBSCRIPTION | `k1.model_hub.circuit.state.v1` fires on shared bus per CB transition (CLOSED↔OPEN↔HALF_OPEN) | I3.X.3 | `[ ]` | | | |
-| M3-X4 | MESSAGE-FLOW | Provider failure cascade: `provider.failure.v1` → `fallback.triggered.v1` → `response.complete.v1` in order | I3.X.4 | `[ ]` | | | |
-| M3-X5 | NEGATIVE | Malformed capability output → `k1.fabric.output.validation.failed.v1` + `CapabilityResult.success=False` | I3.X.5 | `[ ]` | | | |
-| M3-X6 | MESSAGE-FLOW | Planner LLM call → `k1.model_hub.request.received.v1` with `consumer_id="planner"`, no `k1.capability.*` topics | I3.X.6 | `[ ]` | | | |
-| M3-X7 | MESSAGE-FLOW | MW LLM call → `k1.model_hub.request.received.v1` with `consumer_id="memory_writer"` | I3.X.7 | `[ ]` | | | |
-| M3-X8 | NEGATIVE | Lock in undocumented topics: `k1.model_hub.request.completed.v1` and `k1.model_hub.request.failed.v1` ARE emitted (code-vs-events.py drift) | I3.X.8 | `[ ]` | | | |
-| M3-X9 | NEGATIVE | `k1.model_hub.budget.alert.v1` is NEVER emitted (mmd-vs-code drift); xfail strict | I3.X.9 | `[ ]` | xfail | | |
+| M3-X1 | MESSAGE-FLOW | One LLM-backed `fabric.execute()` → both `k1.capability.completed.v1` (session bus) and `k1.model_hub.response.complete.v1` (shared bus) with matching `trace_id` | I3.X.1 | `[x]` | green | `tests/integration/k1/live/m3/test_m3_x1_x9_cross_component.py` | Live Recipe A AGENT contract drives Fabric `AgentProvider` → `ModelGatewayBridgeAdapter` → ModelHub; completed and response.complete payloads carry the same trace. |
+| M3-X2 | SUBSCRIPTION | `k1.fabric.learning.signal.v1` emitted on session bus after every `execute()` (success and failure paths) | I3.X.2 | `[x]` | green | `tests/integration/k1/live/m3/test_m3_x1_x9_cross_component.py` | Live per-session Fabric emits learning signals for deterministic LOCAL_STUB success and controlled provider failure; payloads preserve trace and success/error_code. |
+| M3-X3 | SUBSCRIPTION | `k1.model_hub.circuit.state.v1` fires on shared bus per CB transition (CLOSED↔OPEN↔HALF_OPEN) | I3.X.3 | `[x]` | green | `tests/integration/k1/live/m3/test_m3_x1_x9_cross_component.py` | `CircuitBreakerManager(event_port=MHEventBusAdapter)` publishes CLOSED→OPEN, OPEN→HALF_OPEN, HALF_OPEN→CLOSED for the live stub provider. |
+| M3-X4 | MESSAGE-FLOW | Provider failure cascade: `provider.failure.v1` → `fallback.triggered.v1` → `response.complete.v1` in order | I3.X.4 | `[x]` | green | `tests/integration/k1/live/m3/test_m3_x1_x9_cross_component.py` | Live ModelHub registers controlled failing and fallback plugins; dispatcher emits provider.failure and fallback.triggered before router emits response.complete. |
+| M3-X5 | NEGATIVE | Malformed capability output → `k1.fabric.output.validation.failed.v1` + `CapabilityResult.success=False` | I3.X.5 | `[x]` | green | `tests/integration/k1/live/m3/test_m3_x1_x9_cross_component.py` | Controlled LOCAL_STUB output violates strict JSON schema; Fabric returns `output_validation_failed` and emits output.validation.failed with trace/provider/capability evidence. |
+| M3-X6 | MESSAGE-FLOW | Planner LLM call → `k1.model_hub.request.received.v1` with `consumer_id="planner"`, no `k1.capability.*` topics | I3.X.6 | `[x]` | green | `tests/integration/k1/live/m3/test_m3_x1_x9_cross_component.py` | Live Planner `LLMGatewayAdapter` sends HubRequest with `consumer_id="planner"`; ModelHub emits request.received and no Fabric capability topics fire. |
+| M3-X7 | MESSAGE-FLOW | MW LLM call → `k1.model_hub.request.received.v1` with `consumer_id="memory_writer"` | I3.X.7 | `[x]` | green | `tests/integration/k1/live/m3/test_m3_x1_x9_cross_component.py` | Live MemoryWriter agent uses its ModelHub adapter; request.received carries `consumer_id="memory_writer"` and CHAT capability. |
+| M3-X8 | NEGATIVE | Lock in undocumented topics: `k1.model_hub.request.completed.v1` and `k1.model_hub.request.failed.v1` ARE emitted (code-vs-events.py drift) | I3.X.8 | `[x]` | green | `tests/integration/k1/live/m3/test_m3_x1_x9_cross_component.py` | Live ModelHub success emits request.completed; forced no-eligible-provider path emits request.failed. These legacy topics remain emitted even though they are absent from `events.py`. |
+| M3-X9 | NEGATIVE | `k1.model_hub.budget.alert.v1` is NEVER emitted (mmd-vs-code drift); xfail strict | I3.X.9 | `[x]` | xfail | `tests/integration/k1/live/m3/test_m3_x1_x9_cross_component.py` | Strict xfail confirms `cost_limit=0.0` is accepted but not enforced; no budget enforcer or `budget.alert.v1` constant exists (MH-04 gap). |
 
 ---
 
 ## M1 — Concierge
 
 **Boot recipe:** A (B for M1-L8)
-**Issues covered:** 30 (18 L + 12 X) | **GAPs covered:** 6
+**Issues covered:** 30 (18 L + 12 X) | **GAPs covered:** 8
 **Production-grade stamp:** `[ ]`
 
 | Step | Probe type | Target | Tracing refs | Status | Verdict | Test file | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| M1-L1 | PORT-IDENTITY | `concierge._input_port`, `_output_port`, `_state_port`, `_llm_port`, `_dispatch_port` are non-None and wired to per-session bus | E1.10, M2 P1/P2 | `[ ]` | | | |
-| M1-L2 | SUBSCRIPTION | FSM subscribes to exactly the topics in CONTRACT.md §4 | E1.3 | `[ ]` | | | |
-| M1-L3 | MESSAGE-FLOW | **LOW-tier happy path** (F04+F08+F138+F142+F145–F147+F149/F152) | E1.1, E1.3, E1.6 | `[ ]` | | | |
-| M1-L4 | MESSAGE-FLOW | **MED-tier dispatch flow** (F05+F33+F36–F38+F132–F133+F136–F137) | E1.4, E1.5 | `[ ]` | | | |
-| M1-L5 | NEGATIVE | **HIGH-tier — orchestrator path NOT wired today** (xfail I1.5.1 Finding N6) | I1.5.1 (N6) | `[ ]` | xfail | | |
-| M1-L6 | LIFECYCLE | `set_self_model()` after `start()` → guarded error, not data race | I1.10.2 | `[ ]` | xfail | | |
-| M1-L7 | NEGATIVE | EpisodicCompressor unwired — 16-turn conversation, history grows unbounded (confirms ISSUE-C02) | I1.1.5 | `[ ]` | xfail | | |
-| M1-L8 | MESSAGE-FLOW | HITL relay: pause → external resolve → `back_resume_handler` | E1.8 | `[ ]` | | | |
-| M1-L9 | LIFECYCLE | Crash-recovery priority order | I1.10.4 | `[ ]` | | | |
+| M1-L1 | PORT-IDENTITY | `concierge._input_port`, `_output_port`, `_state_port`, `_llm_port`, `_dispatch_port` are non-None and wired to per-session bus | E1.10, M2 P1/P2 | `[x]` | green | `tests/integration/k1/live/m1/test_m1_l1_l2_concierge_wiring.py` | Live Recipe A with two sessions; production fix preserves required `PortBundle.output` and dispatch/state/LLM aliases on `ConciergeRuntime`; asserts per-session bus/SSM/Fabric isolation, shared ModelHub, `BusInputAdapter`/`BusOutputAdapter`, and `FabricDispatchAdapter` identity. |
+| M1-L2 | SUBSCRIPTION | FSM subscribes to exactly the topics in CONTRACT.md §4 | E1.3 | `[x]` | green | `tests/integration/k1/live/m1/test_m1_l1_l2_concierge_wiring.py` | Live Recipe A asserts the 19 controller-owned `ConciergeController._subscription_handles` topics exactly match the contract set; front actor subscriptions are only `FRONT_SUBSCRIPTIONS`; `k1.session.user.input.v1` has the expected FSM + input-port subscribers. |
+| M1-L3 | MESSAGE-FLOW | **LOW-tier happy path** (F04+F08+F138+F142+F145–F147+F149/F152) | E1.1, E1.3, E1.6 | `[x]` | green | `tests/integration/k1/live/m1/test_m1_l3_low_tier_message_flow.py` | Live Recipe A with `ScriptedProviderPlugin`; drives real `k1.session.user.input.v1` through FSM/Front to stream, final, and `turn.completed`; asserts ordering, no task dispatch/dead-letter, LISTENING final state, and trace/session continuity. Production fix: Front now copies source envelope correlation headers onto emitted stream/final/dispatch envelopes. |
+| M1-L4 | MESSAGE-FLOW | **MED-tier dispatch flow** (F05+F33+F36–F38+F132–F133+F136–F137) | E1.4, E1.5 | `[x]` | green | `tests/integration/k1/live/m1/test_m1_l3_low_tier_message_flow.py` | Live Recipe A dispatches `plan=True` to registered MED capability `tool.read.find_prompts`; Front emits correlated `task.dispatch`, FSM routes `TaskEnvelope` through `IDispatchPort.dispatch_envelope`, Orchestrator resolves/executes via shared Fabric with controlled MCP edge, and session bus receives correlated `task.complete` with no task.failed/dead-letter. Production fixes: Front/FSM/Back/orchestrator preserve trace/session headers; MED/HIGH routing copies `TaskIntent.params` into `TaskEnvelope.context["params"]`; same-turn task completion preserves ack text in `turn.completed`; teardown cancels deferred proactive timer. |
+| M1-L5 | MESSAGE-FLOW | **HIGH-tier planner/orchestrator/Fabric flow** (F06+F09 HIGH) | I1.5.1 (N6) | `[x]` | green | `tests/integration/k1/live/m1/test_m1_l3_low_tier_message_flow.py` | Live Recipe A dispatches `plan=True` / `complexity=HIGH` to registered capability `tool.read.find_prompts`; Front emits correlated `task.dispatch`, FSM routes `TaskEnvelope` through `IDispatchPort.dispatch_envelope`, Orchestrator requests Planner SKETCH/EXPAND/VALIDATE, executes the committed DAG through shared Fabric with controlled MCP edge, and session bus receives correlated `task.complete`. Production fix: `LLMGatewayAdapter` now backfills planner `result["content"]` from plain ModelHub CHAT string results. |
+| M1-L6 | LIFECYCLE | `set_self_model()` after `start()` → guarded error, not data race | I1.10.2 | `[x]` | green | `tests/integration/k1/live/m1/test_m1_l6_l9_concierge_lifecycle.py` | Production guard added in `ConciergeRuntime.set_self_model()`; post-start calls raise `RuntimeError`, preserve the existing handle, and leave FSM state unchanged. |
+| M1-L7 | NEGATIVE | EpisodicCompressor unwired — 16-turn conversation, history grows unbounded (confirms ISSUE-C02) | I1.1.5 | `[x]` | xfail strict | `tests/integration/k1/live/m1/test_m1_l6_l9_concierge_lifecycle.py` | Strict xfail confirms live `ExperienceLayer` still has only EP/AM/NW/AR/PA/RC and no `episodic_compressor`; 16-turn tick sequence never records compression. |
+| M1-L8 | MESSAGE-FLOW | HITL relay: pause → external resolve → `back_resume_handler` | E1.8 | `[x]` | green | `tests/integration/k1/live/m1/test_m1_l6_l9_concierge_lifecycle.py` | Recipe B live path: Back `submit_result(needs_human)` emits `task.suspended`; FSM stays in `CLARIFYING_WORKER`; user answer runs Front `HITL_RESOLVE`, emits correlated `task.resume`, and Back resume invokes Fabric then emits correlated `task.complete`. Production fixes normalize live `TaskStateEntry`/dict shapes and keep HITL relay state open. |
+| M1-L9 | LIFECYCLE | Crash-recovery priority order | I1.10.4 | `[x]` | green | `tests/integration/k1/live/m1/test_m1_l6_l9_concierge_lifecycle.py` | Direct priority probe validates `SUSPENDED -> CLARIFYING_WORKER`, pending results -> `WEAVING`, active tasks -> `COMPANIONING`, unresponded user input -> `DISPATCHING`, delivered response -> `LISTENING`. |
 
 ### M1 — Cross-component integration probes
 
 | Step | Probe type | Target | Tracing refs | Status | Verdict | Test file | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| M1-X1 | PORT-IDENTITY | All 5 Concierge ports non-None and bound to session-local objects (bus, SSM) / shared ModelHub | I1.X.1 | `[ ]` | | | |
-| M1-X2 | SUBSCRIPTION | FSM subscribes to exactly the CONTRACT §4 topic set — no extras, no missing | I1.X.2 | `[ ]` | | | |
-| M1-X3 | MESSAGE-FLOW | LOW-tier short-circuit: `dispatch_direct` only, no `dispatch_envelope`, one `session_fabric.execute()` | I1.X.3 | `[ ]` | | | |
-| M1-X4 | MESSAGE-FLOW | MED-tier: Front emits `task.dispatch.v1` → BackHandler ReAct → `task.complete.v1` → Front DELIVERING | I1.X.4 | `[ ]` | | | |
-| M1-X5 | NEGATIVE | HIGH-tier full DAG path NOT wired end-to-end (Finding N6); xfail strict | I1.X.5 / I1.5.1 | `[ ]` | xfail | | |
-| M1-X6 | MESSAGE-FLOW | `task.complete.v1` → FSM DELIVERING → `k1.response.final.v1` → FSM LISTENING | I1.X.6 | `[ ]` | | | |
-| M1-X7 | MESSAGE-FLOW | `turn_end()` → `k1.session.turn.completed.v1`; `_emitted_turn_ids` blocks re-emit | I1.X.7 | `[ ]` | | | |
-| M1-X8 | NEGATIVE | CRISIS safety_band turn → FSM stays LISTENING, hardcoded CRISIS_STATIC reply, zero Fabric/LLM calls | I1.X.8 | `[ ]` | | | |
-| M1-X9 | NEGATIVE | `WriteElisionGate` on backchannel turn → only `control.safety_band` mutated; other 5 sections elided | I1.X.9 | `[ ]` | | | |
-| M1-X10 | MESSAGE-FLOW | HITL suspend → `hil.response.v1` → `task.resume.v1` → Back resumes with remaining budget | I1.X.10 | `[ ]` | | | |
-| M1-X11 | NEGATIVE | `set_self_model()` after `start()` raises guarded error; FSM unchanged | I1.X.11 / I1.10.2 | `[ ]` | xfail | | |
-| M1-X12 | NEGATIVE | Duplicate `dag.completed` subscription fires handler once per event | I1.X.12 | `[ ]` | | | |
+| M1-X1 | PORT-IDENTITY | All 5 Concierge ports non-None and bound to session-local objects (bus, SSM) / shared ModelHub | I1.X.1 | `[x]` | green | `tests/integration/k1/live/m1/test_m1_l1_l2_concierge_wiring.py` | Covered with M1-L1; verifies runtime port aliases plus front/back dispatcher contexts point at the same live `FabricDispatchAdapter`. |
+| M1-X2 | SUBSCRIPTION | FSM subscribes to exactly the CONTRACT §4 topic set — no extras, no missing | I1.X.2 | `[x]` | green | `tests/integration/k1/live/m1/test_m1_l1_l2_concierge_wiring.py` | Covered with M1-L2; exact FSM handle set is 19 topics and is disjoint from `FRONT_SUBSCRIPTIONS`. |
+| M1-X3 | MESSAGE-FLOW | LOW-tier short-circuit: `dispatch_direct` only, no `dispatch_envelope`, one `session_fabric.execute()` | I1.X.3 | `[x]` | green | `tests/integration/k1/live/m1/test_m1_x3_x12_concierge_cross_component.py` | Recipe A live path: Front dispatches LOW task, FSM routes canonical `task.dispatch.v1` to Back, Back ReAct invokes one capability through the per-session Fabric, and a monkeypatched `dispatch_envelope()` spy stays unused. Production fix: Back tool context now binds envelope `cognitive_trace_id`, `session_id`, and task id before direct Fabric calls. |
+| M1-X4 | MESSAGE-FLOW | MED-tier: Front emits `task.dispatch.v1` → Orchestrator/Fabric → `task.complete.v1` → turn completion | I1.X.4 | `[x]` | green | `tests/integration/k1/live/m1/test_m1_l3_low_tier_message_flow.py` | Covered by M1-L4; row wording corrected from BackHandler to Orchestrator path. Live MED flow emits correlated `task.dispatch`, routes through `dispatch_envelope`, executes shared Fabric, emits correlated orchestrator `task.complete`, and closes the same turn without task.failed/dead-letter. |
+| M1-X5 | MESSAGE-FLOW | HIGH-tier full DAG path: `dispatch_envelope` → Planner → Orchestrator DAG → shared Fabric → `task.complete.v1` | I1.X.5 / I1.5.1 | `[x]` | green | `tests/integration/k1/live/m1/test_m1_l3_low_tier_message_flow.py` | Covered by M1-L5; strict-xfail expectation retired because the live path now reaches Planner SKETCH/EXPAND/VALIDATE, executes the Fabric capability, and bridges the correlated orchestrator result back to the session bus. |
+| M1-X6 | MESSAGE-FLOW | same-turn `task.complete.v1` closes from LISTENING; older/asynchronous completions use DELIVERING | I1.X.6 | `[x]` | green | `tests/integration/k1/live/m1/test_m1_l3_low_tier_message_flow.py`; `k1/concierge/WIRING.md` | Live M1-L4 records FSM state when `task.complete.v1` is observed: current MED same-turn branch stores a deferred proactive result and returns to `LISTENING` before `turn.completed`; docs updated to distinguish this from the older DELIVERING branch. |
+| M1-X7 | MESSAGE-FLOW | `turn_end()` → `k1.session.turn.completed.v1`; `_emitted_turn_ids` blocks re-emit | I1.X.7 | `[x]` | green | `tests/integration/k1/live/m1/test_m1_l3_low_tier_message_flow.py` | Live M1-L4 publishes one ledger-scoped `turn.completed`; a second `_emit_turn_completed()` call with the same final envelope is skipped by `_emitted_turn_ids`. |
+| M1-X8 | NEGATIVE | CRISIS safety_band turn → FSM stays LISTENING, hardcoded CRISIS_STATIC reply, zero Fabric/LLM calls | I1.X.8 | `[x]` | green | `tests/integration/k1/live/m1/test_m1_x3_x12_concierge_cross_component.py` | Recipe A crisis turn short-circuits before arbiter/Front LLM/Fabric, emits static `crisis_protocol` final with `988`, transitions back to LISTENING, and escalates control safety to RED. Production fix: crisis final response now copies source trace/session headers. |
+| M1-X9 | NEGATIVE | `WriteElisionGate` on backchannel turn → only `control.safety_band` mutated; other 5 sections elided | I1.X.9 | `[x]` | xfail strict | `tests/integration/k1/live/m1/test_m1_x3_x12_concierge_cross_component.py` | Strict xfail confirms live backchannel turns can complete, but the desired `WriteElisionGate` module/FSM gate is absent from production code; scan docs remain design-only for this row. |
+| M1-X10 | MESSAGE-FLOW | HITL suspend → `hil.response.v1` → `task.resume.v1` → Back resumes with remaining budget | I1.X.10 | `[x]` | xfail strict | `tests/integration/k1/live/m1/test_m1_x3_x12_concierge_cross_component.py`; `tests/integration/k1/live/m1/test_m1_l6_l9_concierge_lifecycle.py` | Strict xfail documents protocol drift: current legacy HITL path is green through `task.suspended` → Front relay/resolve → correlated `task.resume` → Back resume, but it does not emit protocol-level `hil.response.v1` before resume. |
+| M1-X11 | NEGATIVE | `set_self_model()` after `start()` raises guarded error; FSM unchanged | I1.X.11 / I1.10.2 | `[x]` | green | `tests/integration/k1/live/m1/test_m1_l6_l9_concierge_lifecycle.py` | Covered by M1-L6; stale xfail expectation retired because the runtime now has an explicit post-start guard. |
+| M1-X12 | NEGATIVE | Duplicate `dag.completed` subscription fires handler once per event | I1.X.12 | `[x]` | green | `tests/integration/k1/live/m5/test_m5_x16_x19_mw_cb_concierge_guards.py` | Covered by M5-X19; live session bus has exactly one `TOPIC_DAG_COMPLETED` subscription and zero bare `k1.orchestration.dag.completed` subscriptions; one event produces one normalized `task.complete.v1`. |
 
 ---
 
@@ -225,12 +225,12 @@ These hooks must exist before any live test can be written. Check them off first
 
 | Step | Probe type | Target | Tracing refs | Status | Verdict | Test file | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| M4-L1 | PORT-IDENTITY | `_state_adapter` is **NOT** `MockStateReadAdapter` | I6.11.H5 | `[ ]` | | | |
-| M4-L2 | MESSAGE-FLOW | End-to-end T3 plan: `plan.submit.v1` → step events → `plan.complete.v1` (F45+F95+F96) | E4.x | `[ ]` | | | |
-| M4-L3 | NEGATIVE | `ConcurrencyGuard` depth limit: enqueue N=1000 same plan; assert hard cap | GAP-O02 | `[ ]` | xfail | | |
-| M4-L4 | NEGATIVE | `PlanStep.to_dict()` round-trip preserves `safety_band_min` | I6.11.C1 | `[ ]` | | | |
-| M4-L5 | NEGATIVE | `IEmbeddingPort` unwired → `fabric_search` returns error, not silent empty | I6.11.C5 | `[ ]` | xfail | | |
-| M4-L6 | PORT-IDENTITY | Planner's `IFabricRetrievalPort` is the shared fabric, not None | E4.x | `[ ]` | | | |
+| M4-L1 | PORT-IDENTITY | `_state_port` is real `StateReadAdapter`, **NOT** `MockStateReadAdapter` | I6.11.H5 | `[x]` | green | `tests/integration/k1/live/m4/test_m4_l1_l6_orchestrator_planner.py` | Live Recipe A `KernelService`; corrected stale row wording from `_state_adapter` to production `_state_port`; asserts `_state_port._reader is svc._session_routing_reader`. |
+| M4-L2 | MESSAGE-FLOW | End-to-end T3/HIGH plan: `ORCH_PLAN_REQUESTED` → `k1.planner.plan.ready.v1` → step events → `k1.orchestration.dag.completed.v1` (F45+F95+F96) | E4.x | `[x]` | green | `tests/integration/k1/live/m4/test_m4_l1_l6_orchestrator_planner.py` | Live Recipe A direct `OrchestratorService.handle_task()` with real Planner mailbox and shared Fabric; spy captures production `PlanRequest` shape (`intent`, `trace_id`, `SessionSnapshot.context`, `request_id`); Planner emits `CommittedPlan` with matching `request_id`; DAG executes `tool.read.find_prompts` via controlled MCP edge and emits correlated step/dag completion. |
+| M4-L3 | NEGATIVE | `ConcurrencyGuard` depth limit: enqueue N=1000 same plan; assert hard cap | GAP-O02 | `[x]` | xfail strict | `tests/integration/k1/live/m4/test_m4_l1_l6_orchestrator_planner.py` | Strict xfail confirms current `ConcurrencyGuard` exposes only `_active`/`_lock` and has no `max_depth` constructor/property. |
+| M4-L4 | NEGATIVE | `PlanStep.to_dict()` round-trip preserves `safety_band_min` | I6.11.C1 | `[x]` | green | `tests/integration/k1/live/m4/test_m4_l1_l6_orchestrator_planner.py` | Direct production contract round-trip through `PlanStep.to_dict()` and `CommittedPlan.from_dict()` preserves non-None `safety_band_min`. |
+| M4-L5 | NEGATIVE | `IEmbeddingPort` unwired → `fabric_search` returns error, not silent empty | I6.11.C5 | `[x]` | xfail strict | `tests/integration/k1/live/m4/test_m4_l1_l6_orchestrator_planner.py` | Strict xfail confirms shared Fabric still substitutes `_StubEmbeddingPort` when no embedding port is injected; desired `EmbeddingUnavailableError` is not raised. |
+| M4-L6 | PORT-IDENTITY | Planner's `IFabricRetrievalPort` is the shared fabric, not None | E4.x | `[x]` | green | `tests/integration/k1/live/m4/test_m4_l1_l6_orchestrator_planner.py` | Live Recipe A; Planner `ValidateService` and `SketchService` `ToolCallRouter` share the same `FabricRetrievalAdapter`, and its `_fabric is svc._shared_fabric.retrieval`. |
 
 ### M4 — Cross-component integration probes
 
@@ -332,11 +332,11 @@ These are not in K1_FLOWS.md but are covered by the SOP and require live coverag
 | Flow(s) | Blocker | Blocker owner | Cleared? |
 | --- | --- | --- | --- |
 | F60–F64, F68, F90, F94, F131, F140, F148, F153 | **I3.4.5** AgentProvider `mailbox=None` | AgentProvider | `[ ]` |
-| F06, F09 (HIGH leg) | **I1.5.1** K1 Orchestrator not wired on HIGH path | Orchestrator | `[ ]` |
+| F06, F09 (HIGH leg) | **I1.5.1** K1 Orchestrator not wired on HIGH path | Orchestrator | `[x]` |
 | F41 | **I6.11.C5** IEmbeddingPort not wired in shared Fabric | Fabric S4 | `[ ]` |
 | F78 (default path) | **ISSUE-MW01** topic typo `complete` vs `completed` | MemoryWriter | `[x]` |
 | F108 + planner LLM path | **GAP-P02** `build_payload` private import | Planner | `[ ]` |
-| F07 (safety, full) | **I6.11.H5** MockStateReadAdapter in prod | Orchestrator | `[ ]` |
+| F07 (safety, full) | **I6.11.H5** MockStateReadAdapter in prod | Orchestrator | `[x]` |
 | ~22 M6 stub flows | **M6 stub cluster** | M6 (future milestone) | `[ ]` |
 
 ---
@@ -379,18 +379,18 @@ To stamp a milestone **production-grade**, all five must be `[x]`:
 | M2 Cross-component (X1–X8) | 8 | 8 | 1 | 0 | 100% |
 | M5 Bus + SS + MW (L1–L6) | 6 | 6 | 0 | 0 | 100% |
 | M5 Cross-component (X1–X19) | 19 | 19 | 0 | 0 | 100% |
-| M3 Fabric + ModelHub (L1–L8) | 8 | 4 | 1 | 0 | 50% |
-| M3 Cross-component (X1–X9) | 9 | 0 | 0 | 0 | 0% |
-| M1 Concierge (L1–L9) | 9 | 0 | 0 | 0 | 0% |
-| M1 Cross-component (X1–X12) | 12 | 0 | 0 | 0 | 0% |
-| M4 Orch + Planner (L1–L6) | 6 | 0 | 0 | 0 | 0% |
+| M3 Fabric + ModelHub (L1–L8) | 8 | 8 | 2 | 0 | 100% |
+| M3 Cross-component (X1–X9) | 9 | 9 | 1 | 0 | 100% |
+| M1 Concierge (L1–L9) | 9 | 9 | 1 | 0 | 100% |
+| M1 Cross-component (X1–X12) | 12 | 12 | 2 | 0 | 100% |
+| M4 Orch + Planner (L1–L6) | 6 | 6 | 2 | 0 | 100% |
 | M4 Cross-component (X1–X13) | 13 | 1 | 0 | 0 | 8% |
 | M6 Cross-cutting (L1–L5) | 5 | 0 | 0 | 0 | 0% |
 | M6 Cross-component (X1–X15) | 15 | 0 | 0 | 0 | 0% |
 | M7 Pseudo-K0 | 6 | 0 | 0 | 0 | 0% |
 | Cross-cutting (X1–X9) | 9 | 4 | — | 0 | 44% |
 | LLM-COVERED contracts | 5 | 0 | — | 0 | 0% |
-| **TOTAL** | **146** | **58** | **4** | **0** | **40%** |
+| **TOTAL** | **146** | **98** | **11** | **0** | **67%** |
 
 ---
 

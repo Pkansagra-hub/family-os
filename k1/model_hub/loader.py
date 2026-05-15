@@ -257,20 +257,21 @@ class ProviderLoader:
         if self._event_port is not None:
             from k1.model_hub.events import (  # local import: avoid cycle
                 TOPIC_PROVIDER_REGISTERED,
-                ProviderRegisteredPayload,
             )
 
             all_caps = set(manifest.capabilities)
             for model in manifest.models:
                 all_caps.update(model.capabilities)
             try:
-                self._event_port.emit(
+                await self._event_port.publish(
                     TOPIC_PROVIDER_REGISTERED,
-                    ProviderRegisteredPayload(
-                        provider_id=manifest.provider_id,
-                        capabilities=sorted(all_caps, key=lambda c: c.value),
-                        model_count=len(manifest.models),
-                    ),
+                    {
+                        "provider_id": manifest.provider_id,
+                        "capabilities": [
+                            cap.value for cap in sorted(all_caps, key=lambda c: c.value)
+                        ],
+                        "model_count": len(manifest.models),
+                    },
                 )
             except Exception:  # pragma: no cover -- event emission must not block load
                 pass

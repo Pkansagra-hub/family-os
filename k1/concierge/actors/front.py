@@ -26,7 +26,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -60,12 +62,18 @@ logger = logging.getLogger(__name__)
 
 _PROMPT_DUMP_DIR = Path(__file__).resolve().parents[3] / "data" / "prompt_dumps"
 
-# Reasoning-leak detection patterns.  Flash Lite (and other non-thinking
-# models) sometimes prefix their response text with chain-of-thought
-# reasoning that should never reach the user.  These patterns detect
-# common prefixes so _strip_leaked_reasoning can remove them.
-import re
 
+def _correlate_envelope(env: Envelope, source: Envelope, trace_id: str) -> Envelope:
+    """Copy source correlation headers onto a Front-emitted envelope."""
+    return replace(
+        env,
+        cognitive_trace_id=trace_id or source.cognitive_trace_id,
+        session_id=source.session_id,
+        request_id=source.request_id,
+    )
+
+
+# Detect common reasoning prefixes so they never leak to the user.
 _REASONING_PREFIXES = re.compile(
     r"^("
     # "The user is asking..." / "The user's request..."
@@ -441,12 +449,13 @@ def _extract_scenario_data(
         if task_state and hasattr(task_state, "get_all"):
             tasks = task_state.get_all()
             suspended = next(
-                (t for t in tasks if t.get("status") == "SUSPENDED"),
+                (t for t in tasks if _task_has_status(t, "SUSPENDED")),
                 {},
             )
+        pending_hil = _task_pending_hil_payload(suspended)
         return {
-            "suspended_task_summary": suspended.get("action", ""),
-            "original_question": (suspended.get("pending_hil") or {}).get("question", ""),
+            "suspended_task_summary": _task_field(suspended, "action", ""),
+            "original_question": pending_hil.get("question", ""),
             "user_answer": payload.get("text", ""),
         }
 
@@ -679,6 +688,26 @@ def _get_task_state_dict(ss: Any) -> dict[str, Any]:
     if hasattr(section, "get_all"):
         return {"tasks": section.get_all()}
     return {"tasks": []}
+
+
+def _task_field(task: Any, key: str, default: Any = None) -> Any:
+    if isinstance(task, dict):
+        return task.get(key, default)
+    return getattr(task, key, default)
+
+
+def _task_has_status(task: Any, status: str) -> bool:
+    return str(_task_field(task, "status", "")).upper() == status.upper()
+
+
+def _task_pending_hil_payload(task: Any) -> dict[str, Any]:
+    pending_hil_data = _task_field(task, "pending_hil_data")
+    if isinstance(pending_hil_data, dict):
+        return pending_hil_data
+    pending_hil = _task_field(task, "pending_hil")
+    if isinstance(pending_hil, dict):
+        return pending_hil
+    return {}
 
 
 def _get_fsm_state(ss: Any) -> str:
@@ -1015,6 +1044,7 @@ async def front_handler(
             payload={"text": text, "trace_id": trace_id},
             parent_id=parent_id,
         )
+        env = _correlate_envelope(env, envelope, trace_id)
         bus.publish(env)
         logger.info(
             "front_handler._on_text_response: FINAL published (envelope_id=%d)", env.envelope_id
@@ -1043,6 +1073,7 @@ async def front_handler(
                 },
                 parent_id=parent_id,
             )
+            env = _correlate_envelope(env, envelope, trace_id)
             bus.publish(env)
             _stream_chunk_idx += 1
         elif chunk.chunk_type == "text_delta" and chunk.text:
@@ -1056,6 +1087,7 @@ async def front_handler(
                 },
                 parent_id=parent_id,
             )
+            env = _correlate_envelope(env, envelope, trace_id)
             bus.publish(env)
             _stream_chunk_idx += 1
 
@@ -1151,6 +1183,7 @@ async def front_handler(
             },
             parent_id=parent_id,
         )
+        env = _correlate_envelope(env, envelope, trace_id)
         bus.publish(env)
 
     # 10c. Emit response.final AFTER all dispatches (correct FSM ordering)
@@ -1195,6 +1228,7 @@ async def front_handler(
                 text=clean_text,
                 trace_id=trace_id,
                 parent_id=parent_id,
+                source_envelope=envelope,
             )
         await _on_text_response(clean_text)
 
@@ -1205,10 +1239,10 @@ async def front_handler(
         if task_state_section and hasattr(task_state_section, "get_all"):
             tasks = task_state_section.get_all()
             suspended_task = next(
-                (t for t in tasks if t.get("status") == "SUSPENDED"),
+                (t for t in tasks if _task_has_status(t, "SUSPENDED")),
                 {},
             )
-        suspended_task_id = suspended_task.get("task_id", "")
+        suspended_task_id = _task_field(suspended_task, "task_id", "")
         # E1.M2.1 / E4: when the suspension was created by the unified
         # HumanInTheLoopService, ``pending_hil.envelope`` carries the
         # original HILEnvelope.  In that case we publish ONLY the
@@ -1218,7 +1252,7 @@ async def front_handler(
         # TOPIC_TASK_RESUME or downstream Back would attempt a double
         # resume.  Legacy emission is only correct for legacy task
         # suspensions (no envelope under pending_hil).
-        pending_hil = (suspended_task.get("pending_hil") or {}) if suspended_task else {}
+        pending_hil = _task_pending_hil_payload(suspended_task) if suspended_task else {}
         incoming_envelope = pending_hil.get("envelope")
         resolution = _build_resolution(scenario_data) if suspended_task_id else None
 
@@ -1261,6 +1295,7 @@ async def front_handler(
                 resolution=resolution,
                 parent_id=parent_id,
                 trace_id=trace_id,
+                source_envelope=envelope,
             )
 
     logger.info(
@@ -1350,6 +1385,7 @@ def emit_task_resume(
     resolution: dict[str, Any] | None = None,
     parent_id: int = 0,
     trace_id: str = "",
+    source_envelope: Envelope | None = None,
 ) -> Envelope:
     """Emit k1.orchestration.task.resume.v1 on bus -- Epic 6.3.5.
 
@@ -1382,6 +1418,8 @@ def emit_task_resume(
         },
         parent_id=parent_id,
     )
+    if source_envelope is not None:
+        env = _correlate_envelope(env, source_envelope, trace_id)
     bus.publish(env)
     logger.info("emit_task_resume: task_id=%s answer_len=%d", task_id, len(user_answer))
     return env
@@ -1397,6 +1435,7 @@ async def _emit_streaming_response(
     text: str,
     trace_id: str,
     parent_id: int,
+    source_envelope: Envelope | None = None,
 ) -> None:
     """Emit text as stream chunks before final response (Epic 4.2).
 
@@ -1449,4 +1488,6 @@ async def _emit_streaming_response(
             },
             parent_id=parent_id,
         )
+        if source_envelope is not None:
+            env = _correlate_envelope(env, source_envelope, trace_id)
         bus.publish(env)

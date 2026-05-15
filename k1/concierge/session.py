@@ -54,6 +54,8 @@ class ConciergeRuntime:
         back_dispatcher: Any,
         front_subscriptions: list[Any],
         input_port: Any | None = None,
+        output_port: Any | None = None,
+        dispatch_port: Any | None = None,
         front_ctx: Any | None = None,
         back_ctx: Any | None = None,
         experience_layer: Any | None = None,
@@ -72,7 +74,11 @@ class ConciergeRuntime:
         self._fsm = fsm
         self._model = model
         self._input_port = input_port
+        self._output_port = output_port
+        self._llm_port = model
         self._session_state = session_state
+        self._state_port = session_state
+        self._dispatch_port = dispatch_port
         self._front_dispatcher = front_dispatcher
         self._back_dispatcher = back_dispatcher
         self._front_subscriptions = front_subscriptions
@@ -214,6 +220,14 @@ class ConciergeRuntime:
         return self._session_state
 
     @property
+    def output_port(self) -> Any | None:
+        return self._output_port
+
+    @property
+    def dispatch_port(self) -> Any | None:
+        return self._dispatch_port
+
+    @property
     def started(self) -> bool:
         return self._started
 
@@ -261,9 +275,11 @@ class ConciergeRuntime:
     def set_self_model(self, handle: Any) -> None:
         """Attach a SelfModelHandle for stage 9.5 grounding capsules.
 
-        Idempotent. Safe to call before or after ``start()`` because
-        ``front_handler`` reads it per envelope.
+        Must be called before ``start()`` so the runtime cannot race a
+        mailbox turn that is already reading the handle.
         """
+        if self._started:
+            raise RuntimeError("set_self_model() must be called before start()")
         self._self_model = handle
 
     @property

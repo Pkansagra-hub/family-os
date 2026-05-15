@@ -755,6 +755,8 @@ class ConciergeFactory:
             fsm=fsm,
             model=ports.llm,
             input_port=ports.input_,
+            output_port=ports.output,
+            dispatch_port=ports.dispatch,
             session_state=ports.state,
             front_dispatcher=front_dispatcher,
             back_dispatcher=back_dispatcher,

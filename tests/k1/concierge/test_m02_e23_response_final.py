@@ -238,7 +238,7 @@ class TestDecideResponseFinalTruthTable:
         assert d.emit_turn_completed is True
 
     def test_branch_11_clarifying_worker_has_active(self):
-        """CLARIFYING_WORKER + active_tasks -> COMPANIONING."""
+        """CLARIFYING_WORKER + active_tasks -> stay open for HITL answer."""
         d = decide_response_final(
             ConciergeState.CLARIFYING_WORKER,
             has_pending_results=False,
@@ -246,8 +246,8 @@ class TestDecideResponseFinalTruthTable:
             is_fallback=False,
             weave_flush_running=False,
         )
-        assert d.action == ResponseFinalAction.TRANSITION_COMPANIONING
-        assert d.target_state == ConciergeState.COMPANIONING
+        assert d.action == ResponseFinalAction.STAY
+        assert d.target_state is None
         assert d.release_front_lock is True
 
     def test_branch_12_clarifying_worker_no_active(self):
@@ -418,14 +418,14 @@ class TestControllerResponseFinal:
         turn_completed = [e for e in bus.captured if e.topic == TOPIC_TURN_COMPLETED]
         assert len(turn_completed) >= 1
 
-    def test_clarifying_worker_with_active_tasks_transitions_to_companioning(self):
-        """CLARIFYING_WORKER + active tasks -> COMPANIONING."""
+    def test_clarifying_worker_with_active_tasks_stays_open(self):
+        """CLARIFYING_WORKER + active tasks waits for HITL answer."""
         ctrl, bus = _make_controller()
         ctrl._state = ConciergeState.CLARIFYING_WORKER
         ctrl._turn_number = 1
         ctrl._active_task_ids.add("t1")
         ctrl._on_response_final(_final_response_env())
-        assert ctrl._state == ConciergeState.COMPANIONING
+        assert ctrl._state == ConciergeState.CLARIFYING_WORKER
         turn_completed = [e for e in bus.captured if e.topic == TOPIC_TURN_COMPLETED]
         assert len(turn_completed) == 0
 

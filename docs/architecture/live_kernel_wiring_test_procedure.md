@@ -179,7 +179,7 @@ does the envelope graph match the contract from origin to destination?"*
 
 **Reference flow — LOW-tier happy path** (T1, Front-only):
 
-```
+```text
 k1.input.user.v1
    → fsm.phase1_complete
    → fsm.state=DISPATCHING
@@ -192,7 +192,7 @@ k1.input.user.v1
 
 **Reference flow — MED-tier with dispatch** (T2):
 
-```
+```text
 k1.input.user.v1
    → k1.task.dispatch.v1                  (← Front emits)
    → k1.capability.invoked.v1             (← Fabric STEP 1)
@@ -203,9 +203,21 @@ k1.input.user.v1
    → k1.session.turn.complete.v1
 ```
 
-**Reference flow — HIGH-tier with planner** (T3): currently **broken**, see
-M1 I1.5.1 (Finding N6) — orchestrator dispatch path not wired. Live test should
-assert this fails today and is the gate for "T3 live".
+**Reference flow — HIGH-tier with planner** (T3):
+
+```text
+k1.input.user.v1
+   → k1.task.dispatch.v1                  (← Front emits plan=True / HIGH)
+   → IDispatchPort.dispatch_envelope      (← FSM canonical TaskEnvelope)
+   → OrchestratorService.process()
+   → Planner SKETCH / EXPAND / VALIDATE
+   → committed DAG execution via shared Fabric
+   → k1.capability.invoked.v1             (← Fabric STEP 1)
+   → k1.capability.completed.v1           (← Fabric STEP 9)
+   → k1.task.complete.v1                  (← Orchestrator result bridge)
+   → k1.front.response.final.v1           (← same-turn deterministic ack)
+   → k1.session.turn.complete.v1
+```
 
 ### 3.4 LIFECYCLE-ORDER probe
 
@@ -282,7 +294,7 @@ For each milestone, the SOP is:
 | M1-L2 | SUBSCRIPTION | FSM subscribes to exactly the topics in CONTRACT.md §4 | E1.3 |
 | M1-L3 | MESSAGE-FLOW | LOW-tier flow (§3.3 reference) | E1.1, E1.3, E1.6 |
 | M1-L4 | MESSAGE-FLOW | MED-tier dispatch flow | E1.4, E1.5 |
-| M1-L5 | NEGATIVE | HIGH-tier dispatch — assert orchestrator path is **not** wired today (failure expected) | I1.5.1 (N6) |
+| M1-L5 | MESSAGE-FLOW | HIGH-tier dispatch — Planner SKETCH/EXPAND/VALIDATE → Orchestrator DAG → shared Fabric → `task.complete.v1` | I1.5.1 (N6) |
 | M1-L6 | LIFECYCLE | `set_self_model()` after `start()` → guarded error, not data race | I1.10.2 |
 | M1-L7 | NEGATIVE | EpisodicCompressor unwired — drive 16-turn conversation, assert history grows unbounded (confirms ISSUE-C02) | I1.1.5 |
 | M1-L8 | MESSAGE-FLOW | HITL relay: pause → external resolve → `back_resume_handler` | E1.8 |

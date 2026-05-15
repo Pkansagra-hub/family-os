@@ -368,7 +368,13 @@ def determine_mode(
     # 4. SS-signal-driven fallbacks (only for user input)
     if envelope_topic == _TOPIC_USER_INPUT:
         tasks = task_state.get("tasks", [])
-        suspended = [t for t in tasks if t.status == "SUSPENDED"]
+
+        def _status(task: Any) -> str:
+            if isinstance(task, dict):
+                return str(task.get("status", ""))
+            return str(getattr(task, "status", ""))
+
+        suspended = [t for t in tasks if _status(t).upper() == "SUSPENDED"]
         if suspended:
             logger.info(
                 "determine_mode  topic=user_input suspended_tasks=%d -> HITL_RESOLVE",

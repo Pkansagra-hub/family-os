@@ -1056,6 +1056,18 @@ class CapabilityFabric:
             return result
 
         if outcome.rejected:
+            tier = ""
+            if outcome.tier_results:
+                tier_value = outcome.tier_results[-1].tier
+                tier = getattr(tier_value, "value", str(tier_value))
+            self._event_emitter.emit_output_validation_failed(
+                capability_name=request.capability_name,
+                request_id=request.request_id,
+                provider_id=result.provider_id,
+                validation_tier=tier,
+                rejection_reason=outcome.rejection_reason,
+                trace_id=request.trace_id,
+            )
             return CapabilityResult.failure_result(
                 request_id=result.request_id,
                 error_code="output_validation_failed",

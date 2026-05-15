@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import replace
 from typing import Any
 
 from k1.bus.envelope import Envelope
@@ -63,6 +64,33 @@ from k1.concierge.tools.schemas_back import BACK_TIER_ALLOWLISTS, BACK_TOOL_SCHE
 from k1.model_hub.ports import IModelHubPort
 
 logger = logging.getLogger(__name__)
+
+
+def _correlate_envelope(env: Envelope, source: Envelope) -> Envelope:
+    """Copy source correlation headers onto a Back-emitted envelope."""
+    return replace(
+        env,
+        cognitive_trace_id=source.cognitive_trace_id,
+        session_id=source.session_id,
+        request_id=source.request_id,
+    )
+
+
+def _bind_tool_context(
+    tool_dispatcher: ToolDispatcher,
+    *,
+    trace_id: str,
+    session_id: str,
+    task_id: str,
+) -> None:
+    """Bind Back tool calls to the current envelope correlation scope."""
+    ctx = getattr(tool_dispatcher, "ctx", None)
+    if ctx is None:
+        return
+    ctx.cognitive_trace_id = trace_id
+    ctx.session_id = session_id
+    ctx.active_task_id = task_id
+
 
 # Compatibility export -- max ReAct iterations per tier
 # (mirrors config default: BackActorConfig.max_iterations)
@@ -403,6 +431,7 @@ def _emit_back_result(
             payload=complete_payload,
             parent_id=parent_id,
         )
+        env = _correlate_envelope(env, envelope)
         bus.publish(env)
 
     elif result.status == "suspended":
@@ -425,6 +454,7 @@ def _emit_back_result(
             payload=suspended_payload,
             parent_id=parent_id,
         )
+        env = _correlate_envelope(env, envelope)
         bus.publish(env)
 
     elif result.status in ("cancelled", "budget_exhausted"):
@@ -438,6 +468,7 @@ def _emit_back_result(
             },
             parent_id=parent_id,
         )
+        env = _correlate_envelope(env, envelope)
         bus.publish(env)
 
 
@@ -499,6 +530,12 @@ async def back_handler(
     tier = task.get("tier", "LOW")
     # P3.4c: Per-task tier rebind for the back dispatcher.
     tool_dispatcher = _maybe_rebind_back_dispatcher(tool_dispatcher, tier, bus)
+    _bind_tool_context(
+        tool_dispatcher,
+        trace_id=trace_id,
+        session_id=envelope.session_id,
+        task_id=task_id,
+    )
 
     logger.info(
         "back_handler: task_id=%s tier=%s trace=%s",
@@ -695,6 +732,12 @@ async def back_resume_handler(
     task_id = payload.get("task_id", "")
     resolution = payload.get("resolution", {})
     resume_context = payload.get("resume_context", {})
+    _bind_tool_context(
+        tool_dispatcher,
+        trace_id=trace_id,
+        session_id=envelope.session_id,
+        task_id=task_id,
+    )
 
     # If this is a clarification.response, map to resolution structure
     if not resolution and payload.get("response"):

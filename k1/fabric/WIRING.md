@@ -487,6 +487,14 @@ ValidationFallback:
     _event_port = event_port
     _schema_validator = SchemaValidator
 
+CapabilityFabric._validate_output:
+    on PipelineOutcome.rejected:
+        event_emitter.emit_output_validation_failed(
+            capability_name, request_id, provider_id, validation_tier,
+            rejection_reason, trace_id
+        )
+        return CapabilityResult.failure_result(error_code="output_validation_failed")
+
 Tier 3 (semantic):
     SemanticValidator → HallucinationDetector
     state_reader used to read beliefs_active for belief consistency check

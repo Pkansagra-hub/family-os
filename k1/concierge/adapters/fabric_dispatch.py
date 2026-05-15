@@ -8,6 +8,7 @@ behind the single IDispatchPort Protocol.
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from typing import Any
 
 from k1.concierge.bus.builders import build_task_complete, build_task_failed
@@ -297,17 +298,24 @@ class FabricDispatchAdapter:
         try:
             outcome = getattr(result, "value", str(result)).upper()
             task_id = getattr(envelope, "task_id", "") or getattr(envelope, "envelope_id", "")
-            trace_id = getattr(envelope, "trace_id", "") or ""
+            trace_id = (
+                getattr(envelope, "trace_id", "")
+                or getattr(envelope, "cognitive_trace_id", "")
+                or ""
+            )
+            session_id = getattr(envelope, "session_id", "") or ""
             if outcome in ("COMPLETED", "DEGRADED"):
                 env = build_task_complete(
                     payload={
                         "task_id": task_id,
                         "result_type": "complete",
                         "trace_id": trace_id,
+                        "session_id": session_id,
                         "source": "orchestrator",
                         "process_result": outcome,
                     },
                 )
+                env = replace(env, cognitive_trace_id=trace_id, session_id=session_id)
                 self._bus.publish(env)
             else:
                 env = build_task_failed(
@@ -317,8 +325,10 @@ class FabricDispatchAdapter:
                         "error_code": f"ORCH_{outcome}",
                         "error_message": f"orchestrator returned {outcome}",
                         "trace_id": trace_id,
+                        "session_id": session_id,
                     },
                 )
+                env = replace(env, cognitive_trace_id=trace_id, session_id=session_id)
                 self._bus.publish(env)
         except Exception:
             logger.exception(

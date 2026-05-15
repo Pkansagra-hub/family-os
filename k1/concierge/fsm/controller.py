@@ -28,6 +28,7 @@ import json
 import logging
 import time
 from collections import deque
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -132,6 +133,16 @@ from k1.sessionstate.public_types import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _correlate_envelope(env: Envelope, source: Envelope) -> Envelope:
+    """Copy source correlation headers onto an FSM-emitted envelope."""
+    return replace(
+        env,
+        cognitive_trace_id=source.cognitive_trace_id,
+        session_id=source.session_id,
+        request_id=source.request_id,
+    )
 
 
 class OrchestratorNotWired(RuntimeError):
@@ -437,6 +448,7 @@ class ConciergeController:
         self._history_sink: Any | None = None  # Optional SS history_active section
         self._ss: Any | None = None  # Optional SessionStateManager for SS reads
         self._current_turn_user_text: str = ""  # Tracks user text for turn pairing
+        self._current_turn_assistant_response: str = ""
         self._ledger: Any = None  # V3 M1 E1.2: Optional LedgerWriter for event sourcing
         self._hitl_responded_tasks: dict[str, str] = {}  # M5 E5.4.4: task_id -> device_id dedup
         self._pending_hil_subtasks: dict[str, HILSubTask] = (
@@ -1211,6 +1223,7 @@ class ConciergeController:
             # Normal turn start or clarification answer
             self._turn_number += 1
             self._current_turn_user_text = text
+            self._current_turn_assistant_response = ""
             self._write_history(
                 entry_type="user",
                 role="user",
@@ -1602,6 +1615,7 @@ class ConciergeController:
         """
         self._turn_number += 1
         self._current_turn_user_text = text
+        self._current_turn_assistant_response = ""
         self._write_history(
             entry_type="user",
             role="user",
@@ -1945,6 +1959,7 @@ class ConciergeController:
             },
             parent_id=envelope.envelope_id,
         )
+        final_env = _correlate_envelope(final_env, envelope)
         self._bus.publish(final_env)
         logger.info(
             "FSM._deliver_crisis_response: canned response emitted (envelope_id=%d)",
@@ -1971,6 +1986,10 @@ class ConciergeController:
 
         payload = _parse_payload(envelope)
         dispatch = _task_dispatch_from_payload(payload)
+        trace_id = envelope.cognitive_trace_id or str(payload.get("trace_id", "") or "")
+        session_id = envelope.session_id or str(payload.get("session_id", "") or "")
+        setattr(dispatch, "trace_id", trace_id)
+        setattr(dispatch, "session_id", session_id)
         task_id = dispatch.task_id
         tier = dispatch.tier
         logger.info(
@@ -2103,6 +2122,10 @@ class ConciergeController:
         # Build a canonical dispatch envelope with task_id guaranteed
         canonical_payload = dispatch.to_dict()
         canonical_payload["task_id"] = dispatch.task_id
+        if getattr(dispatch, "trace_id", ""):
+            canonical_payload["trace_id"] = getattr(dispatch, "trace_id")
+        if getattr(dispatch, "session_id", ""):
+            canonical_payload["session_id"] = getattr(dispatch, "session_id")
 
         # Inject scoreboard referents if Front didn't include them.
         # This is the fallback mechanism (Section 6.2): even if the LLM
@@ -2136,6 +2159,7 @@ class ConciergeController:
             payload=canonical_payload,
             parent_id=envelope.envelope_id,
         )
+        canonical_env = _correlate_envelope(canonical_env, envelope)
 
         if record.tier in (ComplexityTier.MEDIUM, ComplexityTier.HIGH):
             if self._orchestrator is None or record.envelope is None:
@@ -3411,6 +3435,8 @@ class ConciergeController:
 
         payload = _parse_payload(envelope)
         text = payload.get("text", "")
+        if text:
+            self._current_turn_assistant_response = text
         logger.info(
             "FSM._on_response_final: state=%s envelope_id=%d text=%s",
             self._state.name,
@@ -3663,6 +3689,8 @@ class ConciergeController:
                 assistant_response = str(raw.get("text", "") or "")
         except (json.JSONDecodeError, ValueError, TypeError, AttributeError):
             assistant_response = ""
+        if not assistant_response:
+            assistant_response = self._current_turn_assistant_response
 
         # Stable, dedup-friendly turn_id (session-scoped, monotonic).
         turn_id = f"{session_id}:{self._turn_number}"
@@ -4497,6 +4525,10 @@ class ConciergeController:
         if self._digest_flush_task and not self._digest_flush_task.done():
             self._digest_flush_task.cancel()
         self._digest_flush_task = None
+
+        if self._deferred_proactive_task and not self._deferred_proactive_task.done():
+            self._deferred_proactive_task.cancel()
+        self._deferred_proactive_task = None
 
         # Reset all components to initial state
         self._reset_all_components()
