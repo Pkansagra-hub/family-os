@@ -1,3 +1,4 @@
+PS D:\familyos> $env:GOOGLE_API_KEY = "AIzaSyB0ThkKf8KCyFZHoddRJs2YPqIpcn54PUs"
 PS D:\familyos> D:\familyos\scripts\boot_web.ps1
 
   FamilyOS K1 Concierge -- Web UI
@@ -9,367 +10,206 @@ PS D:\familyos> D:\familyos\scripts\boot_web.ps1
   Open http://127.0.0.1:8765 in your browser
   Mode: PRODUCTION
 
-INFO:     Started server process [41376]
+INFO:     Started server process [12720]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://127.0.0.1:8765 (Press CTRL+C to quit)
-INFO:     127.0.0.1:55643 - "GET / HTTP/1.1" 200 OK
-INFO:     127.0.0.1:55643 - "GET /static/app.js?v=7 HTTP/1.1" 304 Not Modified
-INFO:     127.0.0.1:52236 - "WebSocket /ws" [accepted]
-2026-05-13 11:34:33,032 ui.web.coordinator INFO ======================================================================
-2026-05-13 11:34:33,033 ui.web.coordinator INFO INIT: UiCoordinator starting (test_mode=False)
-2026-05-13 11:34:33,033 ui.web.coordinator INFO ======================================================================
-2026-05-13 11:34:33,033 ui.web.coordinator INFO [     0.7ms] boot       ui              system.init.start              UiCoordinator initializing
-2026-05-13 11:34:33,033 ui.web.coordinator INFO [     0.8ms] phase1     ui              phase1.start                   Loading web data
-2026-05-13 11:34:33,061 ui.web.coordinator INFO [    28.5ms] phase1     config          config.family_loaded           Loaded Smith family (4 members)
-2026-05-13 11:34:33,061 ui.web.coordinator INFO [    28.7ms] phase1     ui              phase1.complete                Phase 1 complete in 0.028s
-2026-05-13 11:34:33,061 ui.web.coordinator INFO [    28.8ms] phase2     ui              phase2.start                   Starting K1 kernel via start_kernel()
-2026-05-13 11:34:33,362 ui.web.coordinator INFO [   329.2ms] phase2     config          seed_memories.built            Built 23 seed_memories for KernelConfig
-2026-05-13 11:34:33,738 k1.model_hub.loader WARNING ProviderLoader: openai skipped — env var 'OPENAI_API_KEY' not set
-2026-05-13 11:34:33,741 k1.model_hub.loader WARNING ProviderLoader: anthropic skipped — env var 'ANTHROPIC_API_KEY' not set
-2026-05-13 11:34:33,741 k1.model_hub.loader INFO ProviderLoader: registered=('google',) skipped=(('openai', "env var 'OPENAI_API_KEY' not set"), ('anthropic', "env var 'ANTHROPIC_API_KEY' not set")) failed=()
-2026-05-13 11:34:33,741 k1.kernel.service INFO ModelHub provider load: registered=('google',) skipped=(('openai', "env var 'OPENAI_API_KEY' not set"), ('anthropic', "env var 'ANTHROPIC_API_KEY' not set")) failed=()
-2026-05-13 11:34:33,741 k1.kernel.service INFO HIL: HumanInTheLoopService constructed (clarification_rounds=2)
-2026-05-13 11:34:33,746 k1.selfmodel.service.bootstrap_constitution INFO bootstrap_constitution: wrote k1.selfmodel.bootstrap.v1 version=v1:bootstrap
-2026-05-13 11:34:33,748 k1.selfmodel.kernel.bootstrap INFO selfmodel bundle: ready (store=InMemoryProjectionStore, version=v1:bootstrap, safe_mode=False)
-2026-05-13 11:34:33,748 k1.kernel.service INFO selfmodel: bundle ready (db=<memory>, space=family:smith, safe_mode=False)
-2026-05-13 11:34:33,880 bridge.core.health INFO K0 health: forced OFFLINE (SinkBridgeClient: K0 not connected)
-2026-05-13 11:34:33,880 k1.kernel.service INFO K1 Kernel S4: bridge=OFFLINE (SinkBridgeClient / outbox mode). K0 ops will queue to ./data/bridge_outbox.db. Live K0 requires HttpBridgeClient.
-2026-05-13 11:34:33,881 k1.fabric.adapters.prompt_system_prod WARNING PromptSystemProdAdapter: prompts directory does not exist: k1\contracts\prompts
-2026-05-13 11:34:33,881 k1.fabric.factory INFO Constructing Fabric (production_mode=True, contracts_dir=k1\contracts)
-2026-05-13 11:34:33,881 k1.fabric.adapters.auto_mcp_transport INFO [AutoDiscoveryMCPTransport] Discovered 0 JSON-RPC tools, 0 FastMCP tools, 0 handler tools
-2026-05-13 11:34:33,968 faiss.loader INFO Loading faiss with AVX512 support.
-2026-05-13 11:34:33,969 faiss.loader INFO Could not load library with AVX512 support due to:
+INFO:     127.0.0.1:50439 - "WebSocket /ws" [accepted]
+2026-05-15 21:57:16,009 ui.web.coordinator INFO ======================================================================
+2026-05-15 21:57:16,021 ui.web.coordinator INFO INIT: UiCoordinator starting (test_mode=False)
+2026-05-15 21:57:16,021 ui.web.coordinator INFO ======================================================================
+2026-05-15 21:57:16,021 ui.web.coordinator INFO [    12.5ms] boot       ui              system.init.start              UiCoordinator initializing
+2026-05-15 21:57:16,021 ui.web.coordinator INFO [    12.7ms] phase1     ui              phase1.start                   Loading web data
+2026-05-15 21:57:16,048 ui.web.coordinator INFO [    39.0ms] phase1     config          config.family_loaded           Loaded Smith family (4 members)
+2026-05-15 21:57:16,048 ui.web.coordinator INFO [    39.2ms] phase1     ui              phase1.complete                Phase 1 complete in 0.026s
+2026-05-15 21:57:16,048 ui.web.coordinator INFO [    39.4ms] phase2     ui              phase2.start                   Starting K1 kernel via start_kernel()
+2026-05-15 21:57:16,406 ui.web.coordinator INFO [   396.9ms] phase2     config          seed_memories.built            Built 23 seed_memories for KernelConfig
+2026-05-15 21:57:16,825 k1.model_hub.loader WARNING ProviderLoader: openai skipped — env var 'OPENAI_API_KEY' not set
+2026-05-15 21:57:16,829 k1.model_hub.loader WARNING ProviderLoader: anthropic skipped — env var 'ANTHROPIC_API_KEY' not set
+2026-05-15 21:57:16,829 k1.model_hub.loader INFO ProviderLoader: registered=('google',) skipped=(('openai', "env var 'OPENAI_API_KEY' not set"), ('anthropic', "env var 'ANTHROPIC_API_KEY' not set")) failed=()
+2026-05-15 21:57:16,829 k1.kernel.service INFO ModelHub provider load: registered=('google',) skipped=(('openai', "env var 'OPENAI_API_KEY' not set"), ('anthropic', "env var 'ANTHROPIC_API_KEY' not set")) failed=()
+2026-05-15 21:57:16,830 k1.kernel.service INFO HIL: HumanInTheLoopService constructed (clarification_rounds=2)
+2026-05-15 21:57:16,837 k1.selfmodel.service.bootstrap_constitution INFO bootstrap_constitution: wrote k1.selfmodel.bootstrap.v1 version=v1:bootstrap
+2026-05-15 21:57:16,840 k1.selfmodel.kernel.bootstrap INFO selfmodel bundle: ready (store=InMemoryProjectionStore, version=v1:bootstrap, safe_mode=False)
+2026-05-15 21:57:16,841 k1.kernel.service INFO selfmodel: bundle ready (db=<memory>, space=family:smith, safe_mode=False)
+2026-05-15 21:57:17,108 bridge.core.health INFO K0 health: forced OFFLINE (SinkBridgeClient: K0 not connected)
+2026-05-15 21:57:17,109 k1.kernel.service INFO K1 Kernel S4: bridge=OFFLINE (SinkBridgeClient / outbox mode). K0 ops will queue to ./data/bridge_outbox.db. Live K0 requires HttpBridgeClient.
+2026-05-15 21:57:17,109 k1.fabric.adapters.prompt_system_prod WARNING PromptSystemProdAdapter: prompts directory does not exist: k1\contracts\prompts
+2026-05-15 21:57:17,109 k1.fabric.factory INFO Constructing Fabric (production_mode=True, contracts_dir=k1\contracts)
+2026-05-15 21:57:17,110 k1.fabric.adapters.auto_mcp_transport INFO [AutoDiscoveryMCPTransport] Discovered 0 JSON-RPC tools, 0 FastMCP tools, 0 handler tools
+2026-05-15 21:57:17,120 faiss.loader INFO Loading faiss with AVX512 support.
+2026-05-15 21:57:17,120 faiss.loader INFO Could not load library with AVX512 support due to:
 ModuleNotFoundError("No module named 'faiss.swigfaiss_avx512'")
-2026-05-13 11:34:33,969 faiss.loader INFO Loading faiss with AVX2 support.
-2026-05-13 11:34:33,985 faiss.loader INFO Successfully loaded faiss with AVX2 support.
-2026-05-13 11:34:33,991 k1.fabric.factory INFO F4: Registered tool.write.build_agent handler with MCP transport (provider=build_agent_handler)
-2026-05-13 11:34:34,017 k1.fabric.core.module_loader INFO scan_directory complete: loaded=6, failed=0, dir=k1\contracts
-2026-05-13 11:34:34,017 k1.fabric.factory INFO Module loader scanned k1\contracts
-2026-05-13 11:34:34,018 k1.fabric.events.event_emitter INFO ProactiveGapDetector wired 4 subscriptions
-2026-05-13 11:34:34,018 k1.fabric.factory INFO Fabric construction complete (production_mode=True)
-2026-05-13 11:34:34,020 k1.orchestrator.orchestration.orchestrator_service INFO init.ports_validated
-2026-05-13 11:34:34,020 k1.orchestrator.orchestration.orchestrator_service INFO crash_recovery.no_pending_wals
-2026-05-13 11:34:34,020 k1.orchestrator.orchestration.orchestrator_service INFO init.crash_recovery
-2026-05-13 11:34:34,020 k1.orchestrator.connectors.mcp_discovery ERROR Failed to load MCP config: MCP config not found: k1\connectors\mcp_servers.yaml
-2026-05-13 11:34:34,020 k1.orchestrator.connectors.connector_lifecycle INFO No tools discovered (servers_ok=0, servers_failed=0)
-2026-05-13 11:34:34,020 k1.orchestrator.orchestration.orchestrator_service INFO init.mcp_discovery
+2026-05-15 21:57:17,120 faiss.loader INFO Loading faiss with AVX2 support.
+2026-05-15 21:57:17,143 faiss.loader INFO Successfully loaded faiss with AVX2 support.
+2026-05-15 21:57:17,151 k1.fabric.factory INFO F4: Registered tool.write.build_agent handler with MCP transport (provider=build_agent_handler)
+2026-05-15 21:57:17,191 k1.fabric.core.module_loader INFO scan_directory complete: loaded=6, failed=0, dir=k1\contracts
+2026-05-15 21:57:17,191 k1.fabric.factory INFO Module loader scanned k1\contracts
+2026-05-15 21:57:17,192 k1.fabric.events.event_emitter INFO ProactiveGapDetector wired 4 subscriptions
+2026-05-15 21:57:17,192 k1.fabric.factory INFO Fabric construction complete (production_mode=True)
+2026-05-15 21:57:17,202 k1.orchestrator.orchestration.orchestrator_service INFO init.ports_validated
+2026-05-15 21:57:17,203 k1.orchestrator.orchestration.orchestrator_service INFO crash_recovery.no_pending_wals
+2026-05-15 21:57:17,203 k1.orchestrator.orchestration.orchestrator_service INFO init.crash_recovery
+2026-05-15 21:57:17,203 k1.orchestrator.connectors.mcp_discovery ERROR Failed to load MCP config: MCP config not found: k1\connectors\mcp_servers.yaml
+2026-05-15 21:57:17,203 k1.orchestrator.connectors.connector_lifecycle INFO No tools discovered (servers_ok=0, servers_failed=0)
+2026-05-15 21:57:17,204 k1.orchestrator.orchestration.orchestrator_service INFO init.mcp_discovery
 INFO:     connection open
-2026-05-13 11:34:34,023 k1.orchestrator.orchestration.orchestrator_service INFO init.workflows_loaded
-2026-05-13 11:34:34,023 k1.orchestrator.workflows.workflow_scheduler INFO WorkflowScheduler started (tick_interval=1.0s)
-2026-05-13 11:34:34,024 k1.orchestrator.workflows.gap_detector INFO ProactiveGapDetector: started (subscribed to k1.fabric.capability.contract_updated.v1)
-2026-05-13 11:34:34,024 k1.orchestrator.connectors.connector_lifecycle INFO Lifecycle monitoring started (health event subscription active)
-2026-05-13 11:34:34,024 k1.orchestrator.orchestration.orchestrator_service INFO init.complete
-2026-05-13 11:34:34,024 k1.orchestrator.factory INFO OrchestratorFactory.create_production: service initialized (config=OrchestratorConfig)
-2026-05-13 11:34:34,025 k1.planner.factory INFO planner_factory.create_production.start
-2026-05-13 11:34:34,025 k1.planner.factory INFO planner_factory.wiring_complete
-2026-05-13 11:34:34,025 k1.planner.factory INFO planner_factory.create_production.complete
-2026-05-13 11:34:34,051 k1.tools.family.storage INFO K1FamilyStore: opened sqlite at ./data/k1_family.db (WAL, FK=ON)
-2026-05-13 11:34:34,053 k1.tools.family.registry INFO ToolRegistry: registered 10 Fabric capabilities for adapter calendar: ['tool.execute.calendar.create_event', 'tool.execute.calendar.update_event', 'tool.execute.calendar.delete_event', 'tool.read.calendar.list_events', 'tool.read.calendar.get_event', 'tool.execute.calendar.respond_to_invite', 'tool.execute.calendar.set_visibility', 'tool.execute.calendar.connect_feed', 'tool.execute.calendar.disconnect_feed', 'tool.read.calendar.list_feeds']
-2026-05-13 11:34:34,053 k1.tools.family.registry INFO ToolRegistry: registered family adapter calendar
-2026-05-13 11:34:34,055 k1.tools.family.registry INFO ToolRegistry: registered 10 Fabric capabilities for adapter tasks: ['tool.execute.tasks.create_task', 'tool.execute.tasks.update_task', 'tool.execute.tasks.complete_task', 'tool.execute.tasks.reopen_task', 'tool.execute.tasks.reassign_task', 'tool.execute.tasks.delete_task', 'tool.read.tasks.list_tasks', 'tool.read.tasks.get_task', 'tool.execute.tasks.create_list', 'tool.read.tasks.list_lists']
-2026-05-13 11:34:34,055 k1.tools.family.registry INFO ToolRegistry: registered family adapter tasks
-2026-05-13 11:34:34,056 k1.tools.family.registry INFO ToolRegistry: registered 8 Fabric capabilities for adapter reminders: ['tool.execute.reminders.create_reminder', 'tool.execute.reminders.update_reminder', 'tool.execute.reminders.snooze_reminder', 'tool.execute.reminders.dismiss_reminder', 'tool.execute.reminders.fire_reminder', 'tool.execute.reminders.delete_reminder', 'tool.read.reminders.list_reminders', 'tool.read.reminders.get_reminder']
-2026-05-13 11:34:34,056 k1.tools.family.registry INFO ToolRegistry: registered family adapter reminders
-2026-05-13 11:34:34,057 k1.tools.family.registry INFO ToolRegistry: registered 9 Fabric capabilities for adapter chores: ['tool.execute.chores.create_template', 'tool.execute.chores.update_template', 'tool.execute.chores.delete_template', 'tool.execute.chores.assign_chore', 'tool.execute.chores.complete_chore', 'tool.execute.chores.skip_chore', 'tool.execute.chores.reopen_chore', 'tool.read.chores.list_chores', 'tool.read.chores.chore_summary']
-2026-05-13 11:34:34,057 k1.tools.family.registry INFO ToolRegistry: registered family adapter chores
-2026-05-13 11:34:34,058 k1.tools.family.registry INFO ToolRegistry: registered 4 Fabric capabilities for adapter family_settings: ['tool.read.family_settings.get_visibility_policy', 'tool.execute.family_settings.update_visibility_policy', 'tool.read.family_settings.list_feature_flags', 'tool.execute.family_settings.set_feature_flag']
-2026-05-13 11:34:34,058 k1.tools.family.registry INFO ToolRegistry: registered family adapter family_settings
-2026-05-13 11:34:34,058 k1.tools.family.bootstrap INFO Family-tools bootstrap complete: adapters=['calendar', 'chores', 'family_settings', 'reminders', 'tasks'] capabilities=41 db_path=./data/k1_family.db
-2026-05-13 11:34:34,058 k1.kernel.service INFO S8: family-tools bundle ready (adapters=['calendar', 'chores', 'family_settings', 'reminders', 'tasks'])
-2026-05-13 11:34:34,059 k1.kernel.service INFO Tier 1 startup complete — all shared components wired
-2026-05-13 11:34:34,059 k1.kernel.service INFO HIL (session=web-1b71ee6f): HumanInTheLoopService bound to session_bus
-2026-05-13 11:34:34,069 k1.sessionstate.adapters.sqlite_storage INFO SQLiteStorageAdapter initialized (path=data\k1\sessionstate.db)
-2026-05-13 11:34:34,070 k1.sessionstate.adapters.local_events INFO LocalEventAdapter initialized (capture_mode=False)
-2026-05-13 11:34:34,070 k1.sessionstate.factory INFO Creating wired SessionStateManager (session=web-1b71ee6f, storage=local, db_path=data\k1\sessionstate.db)
-2026-05-13 11:34:34,079 k1.sessionstate.local_cold INFO LocalColdArchive initialized (path=data\k1\sessionstate.db, tables=7)
-2026-05-13 11:34:34,079 k1.sessionstate.sizetracker INFO SizeTracker initialized: 15 sections tracked
-2026-05-13 11:34:34,079 k1.sessionstate.guard INFO MutationGuard initialized (sections=15, emergency=False)
-2026-05-13 11:34:34,080 k1.sessionstate.tiers.hot INFO HotTier initialized: 10 sections, budget=52KB (session=web-1b71)
-2026-05-13 11:34:34,080 k1.sessionstate.tiers.warm INFO WarmTier initialized: 5 sections, budget=48KB (session=web-1b71)
-2026-05-13 11:34:34,080 k1.sessionstate.eviction INFO EvictionEngine initialized (session=web-1b71, target_util=70%)
-2026-05-13 11:34:34,080 k1.sessionstate.migration INFO MigrationEngine initialized (session=web-1b71, pairs=beliefs_active->beliefs_history, history_active->history_recent)
-2026-05-13 11:34:34,080 k1.sessionstate.manager INFO SessionStateManager initialized (session=web-1b71, state=created, sections=hot:10+warm)
-2026-05-13 11:34:34,081 k1.sessionstate.adapters.direct_writer INFO DirectWriterAdapter bound (writer_id=direct, session=web-1b71)
-2026-05-13 11:34:34,081 k1.sessionstate.adapters.standalone_lifecycle INFO StandaloneLifecycle bound (session=web-1b71, checkpoint_interval=30000ms)
-2026-05-13 11:34:34,081 k1.sessionstate.manager INFO SessionState state transition: CREATED -> STARTING (session=web-1b71)
-2026-05-13 11:34:34,081 k1.sessionstate.manager INFO SessionStateManager started (session=web-1b71, restored=False, source=fresh, took=0.48ms, trace_id=)
-2026-05-13 11:34:34,082 k1.fabric.adapters.prompt_system_prod WARNING PromptSystemProdAdapter: prompts directory does not exist: k1\contracts\prompts
-2026-05-13 11:34:34,082 k1.fabric.factory INFO Constructing Fabric (production_mode=True, contracts_dir=k1\contracts)
-2026-05-13 11:34:34,082 k1.fabric.adapters.auto_mcp_transport INFO [AutoDiscoveryMCPTransport] Discovered 0 JSON-RPC tools, 0 FastMCP tools, 0 handler tools
-2026-05-13 11:34:34,082 k1.fabric.factory INFO F4: Registered tool.write.build_agent handler with MCP transport (provider=build_agent_handler)
-2026-05-13 11:34:34,083 k1.fabric.events.event_emitter INFO ProactiveGapDetector wired 4 subscriptions
-2026-05-13 11:34:34,083 k1.fabric.factory INFO Fabric construction complete (production_mode=True)
-2026-05-13 11:34:34,083 k1.kernel.service INFO P3.1: registering NativeToolProvider on session fabric (session=web-1b71ee6f)
-2026-05-13 11:34:34,083 k1.concierge.fsm.front_lock INFO FrontLock initialized (max_queue_depth=8)
-2026-05-13 11:34:34,083 k1.concierge.protocols.cancel_handler INFO CancellationHandler initialised  has_callback=False ledger=no
-2026-05-13 11:34:34,083 k1.hil.suspension INFO SuspensionManager initialised  has_timeout_fn=False has_resume_fn=False
-2026-05-13 11:34:34,084 k1.concierge.fsm.control_extension INFO ConciergeControlExtension initialized (initial_state=LISTENING)
-2026-05-13 11:34:34,084 k1.concierge.fsm.task_bridge INFO TaskBridge initialized (task_state=TaskStateSection, task_artifacts=TaskArtifactsSection, ledger=no)
-2026-05-13 11:34:34,084 k1.concierge.fsm.interrupt_handler INFO InterruptClassifier initialized (9 cancel keywords)
-2026-05-13 11:34:34,084 k1.concierge.fsm.arbiter INFO ConversationArbiter initialized (domain_thresh=0.70, entity_thresh=0.50, cancel_kw=9, defer_kw=14)
-2026-05-13 11:34:34,084 k1.concierge.fsm.interrupt_handler INFO ProactiveWakeHandler initialized
-2026-05-13 11:34:34,084 k1.concierge.fsm.controller INFO ConciergeController.__init__: assembling sub-components (FrontLock, CancelHandler, SuspensionManager, ControlExtension, TaskBridge, InterruptClassifier, ProactiveWake)
-2026-05-13 11:34:34,084 k1.concierge.fsm.controller INFO ConciergeController._subscribe_all: wiring FSM event handlers
-2026-05-13 11:34:34,084 k1.concierge.fsm.controller INFO ConciergeController._subscribe_all: complete (19 handlers wired, initial_state=LISTENING)
-2026-05-13 11:34:34,087 k1.concierge.ledger.writer INFO LedgerWriter created for session=web-1b71ee6f
-2026-05-13 11:34:34,088 k1.concierge.fsm.controller INFO ConciergeController.set_ledger: attached for session=web-1b71ee6f
-2026-05-13 11:34:34,088 k1.concierge.factory INFO Ledger created for session=web-1b71ee6f
-2026-05-13 11:34:34,088 k1.concierge.fsm.controller INFO ConciergeController.set_history_sink: attached
-2026-05-13 11:34:34,088 k1.concierge.fsm.task_bridge INFO TaskBridge rebound to real SS sections (copied 0 tasks, 0 artifacts)
-2026-05-13 11:34:34,088 k1.concierge.fsm.control_extension INFO ConciergeControlExtension bound to ControlSection
-2026-05-13 11:34:34,088 k1.concierge.fsm.controller INFO ConciergeController.set_session_state: attached + M4 binding complete
-2026-05-13 11:34:34,088 k1.concierge.tools.dispatcher INFO ToolDispatcher initialized (actor=front, tier=simple, budget=5, allowlist=10 tools)
-2026-05-13 11:34:34,088 k1.concierge.tools.dispatcher INFO ToolDispatcher initialized (actor=back, tier=simple, budget=5, allowlist=5 tools)
-2026-05-13 11:34:34,094 k1.concierge.experience.layer INFO ExperienceLayer initialized (6 components: EP, AM, NW, AR, PA, RC)
-2026-05-13 11:34:34,099 k1.concierge.delta.applicator INFO DeltaApplicator initialized (preflight=True, write=True, evict=False, notify=True)
-2026-05-13 11:34:34,099 k1.concierge.delta.aggregator INFO DeltaAggregator initialized (batch_window_ms=100, flush_fn=DeltaApplicator.apply)
-2026-05-13 11:34:34,099 k1.concierge.fsm.controller INFO ConciergeController.set_hil_port: attached HumanInTheLoopService
-2026-05-13 11:34:34,100 k1.concierge.factory INFO ConciergeFactory: attached unified HIL port HumanInTheLoopService to FSM
-2026-05-13 11:34:34,100 k1.concierge.protocols.weave_batcher INFO WeaveBatcher initialised  batch_window_ms=500 max_queued_depth=16
-2026-05-13 11:34:34,100 k1.concierge.fsm.controller INFO ConciergeController.set_weave_batcher: attached WeaveBatcher
-2026-05-13 11:34:34,100 k1.concierge.fsm.controller INFO ConciergeController.set_weave_policy: attached
-2026-05-13 11:34:34,100 k1.concierge.fsm.controller INFO ConciergeController.set_activity_tracker: attached
-2026-05-13 11:34:34,100 k1.concierge.fsm.controller INFO ConciergeController.set_orchestrator: attached _DispatchPortFSMAdapter
-2026-05-13 11:34:34,100 k1.concierge.fsm.controller INFO ConciergeController.set_allow_planner_passthrough: False
-2026-05-13 11:34:34,107 k1.concierge.actors.front INFO subscribe_front_events: wiring 3 topics to front handler
-2026-05-13 11:34:34,107 k1.concierge.actors.front INFO subscribe_front_events: complete (3 handles)
-2026-05-13 11:34:34,108 k1.concierge.session INFO ConciergeRuntime.start: consumer task created
-2026-05-13 11:34:34,109 k1.memory_writer.pipeline.session_batch_dispatcher INFO MW: SessionBatchDispatcher started, topic=k1.session.turn.completed.v1, threshold=20, idle=300s
-2026-05-13 11:34:34,109 k1.memory_writer.service INFO MW: MemoryWriterService started
-2026-05-13 11:34:34,109 k1.kernel.bootstrap INFO start_kernel: session web-1b71ee6f ready (via KernelService)
-2026-05-13 11:34:34,109 ui.web.coordinator INFO Phase 2: kernel in offline bridge mode (outbox)
-2026-05-13 11:34:34,109 ui.web.coordinator INFO [  1076.8ms] phase2     fabric          family_tools.fabric_registered M15: 5 family-tool adapters registered in Fabric (calendar, chores, family_settings, reminders, tasks)
-2026-05-13 11:34:34,109 ui.web.coordinator INFO [  1076.9ms] phase2     kernel          kernel.started                 Kernel started (adapter=_HubCore, session_id=web-1b71ee6f, test_mode=False)
-2026-05-13 11:34:34,110 verticals.family.seeder INFO seed_space_projection: wrote SpaceGraphSnapshot space='family:smith' members=4 edges=2
-2026-05-13 11:34:34,110 ui.web.coordinator INFO [  1077.3ms] phase2     selfmodel       space_graph.seeded             seed_space_projection wrote=True space='family:smith'
-2026-05-13 11:34:34,110 verticals.family.seeder INFO seed_self_projections: seeded actor_id=alex
-2026-05-13 11:34:34,110 verticals.family.seeder INFO seed_self_projections: seeded actor_id=jordan
-2026-05-13 11:34:34,110 verticals.family.seeder INFO seed_self_projections: seeded actor_id=riley
-2026-05-13 11:34:34,110 verticals.family.seeder INFO seed_self_projections: seeded actor_id=nana_liz
-2026-05-13 11:34:34,110 ui.web.coordinator INFO [  1078.0ms] phase2     selfmodel       self_projections.seeded        seed_self_projections wrote=4 actors
-2026-05-13 11:34:34,111 ui.web.coordinator INFO [  1078.2ms] phase2     ui              phase2.complete                Phase 2 complete in 1.049s
-2026-05-13 11:34:34,111 ui.web.coordinator INFO [  1078.3ms] phase3     ui              phase3.start                   Wiring web output channel + hooks
-2026-05-13 11:34:34,119 ui.web.coordinator INFO [  1086.7ms] phase3     output          output_channel.subscribed      OutputChannel subscribed to bus topics
-2026-05-13 11:34:34,119 ui.web.coordinator INFO [  1087.0ms] phase3     bus             web_hooks.subscribed           Wired 6 web-only bus subscriptions
-2026-05-13 11:34:34,120 ui.web.coordinator INFO [  1087.2ms] phase3     ui              phase3.complete                Phase 3 complete in 0.009s
-2026-05-13 11:34:34,120 ui.web.coordinator INFO [  1087.3ms] phase4     ui              phase4.start                   Running health check
-2026-05-13 11:34:34,120 ui.web.coordinator INFO [  1087.4ms] phase4     health          check.bus_alive                bus_alive: OK
-2026-05-13 11:34:34,120 ui.web.coordinator INFO [  1087.5ms] phase4     health          check.fsm_alive                fsm_alive: OK
-2026-05-13 11:34:34,120 ui.web.coordinator INFO [  1087.7ms] phase4     health          check.model_alive              model_alive: OK
-2026-05-13 11:34:34,120 ui.web.coordinator INFO [  1087.7ms] phase4     health          check.session_state_alive      session_state_alive: OK
-2026-05-13 11:34:34,120 ui.web.coordinator INFO [  1087.9ms] phase4     health          check.output_channel_wired     output_channel_wired: OK
-2026-05-13 11:34:34,120 ui.web.coordinator INFO [  1088.0ms] phase4     health          check.consumer_running         consumer_running: OK
-2026-05-13 11:34:34,120 ui.web.coordinator INFO [  1088.1ms] phase4     health          check.front_ctx_alive          front_ctx_alive: OK
-2026-05-13 11:34:34,121 ui.web.coordinator INFO [  1088.2ms] phase4     health          check.back_ctx_alive           back_ctx_alive: OK
-2026-05-13 11:34:34,121 ui.web.coordinator INFO [  1088.3ms] phase4     ui              phase4.complete                Phase 4 complete in 0.001s (OK)
-2026-05-13 11:34:34,121 ui.web.coordinator INFO [  1088.5ms] boot       ui              system.init.complete           4 phases complete in 1.087s
-2026-05-13 11:34:34,121 ui.web.coordinator INFO INIT: UiCoordinator READY
-2026-05-13 11:34:34,121 ui.web.app INFO WEB: UiCoordinator initialized (test_mode=False)
-2026-05-13 11:34:34,184 ui.web.app INFO WEB: mounted family-tool routers: ['/k1/tools/calendar', '/k1/tools/tasks', '/k1/tools/reminders', '/k1/tools/chores', '/k1/tools/family_settings']
-2026-05-13 11:34:34,186 k1.planner.planner_agent INFO planner_agent.init_started
-2026-05-13 11:34:34,186 k1.planner.planner_agent INFO planner_agent.wiring_validated
-2026-05-13 11:34:34,186 k1.planner.planner_agent INFO planner_agent.subscriptions_created
-2026-05-13 11:34:34,186 k1.planner.planner_agent INFO planner_agent.crash_recovery_complete
-2026-05-13 11:34:34,187 k1.planner.planner_agent INFO planner_agent.init_complete
-INFO:     127.0.0.1:55643 - "GET /k1/tools/tasks/list_tasks HTTP/1.1" 200 OK
-INFO:     127.0.0.1:63906 - "GET /k1/tools/reminders/list_reminders HTTP/1.1" 200 OK
-INFO:     127.0.0.1:60498 - "GET /k1/tools/calendar/list_events?start_date=2026-05-13&end_date=2026-05-27 HTTP/1.1" 200 OK
-INFO:     127.0.0.1:61959 - "GET /k1/tools/chores/list_chores HTTP/1.1" 200 OK
-2026-05-13 11:35:07,263 k1.concierge.fsm.controller INFO FSM._on_user_input: state=LISTENING envelope_id=8 text=hello make task for rileyu to clean her bedroom by today device=none
-2026-05-13 11:35:07,264 k1.concierge.fsm.controller INFO FSM LISTENING -> DISPATCHING on k1.session.user.input.v1 [envelope_id=8]
-2026-05-13 11:35:07,264 k1.concierge.fsm.controller INFO FSM._route_user_turn: envelope_id=8 state=DISPATCHING
-2026-05-13 11:35:07,267 k1.concierge.fsm.controller INFO FSM._deliver_to_front: envelope_id=8 topic=k1.session.user.input.v1 state=DISPATCHING
-2026-05-13 11:35:07,267 poc.k1_poc.demo.output_channel INFO OUTPUT [ 33148.3ms] input      bus        env_id=8      parent=0      User input: hello make task for rileyu to clean her bedroom by today
-2026-05-13 11:35:07,267 poc.k1_poc.demo.output_channel INFO OUTPUT [ 33148.4ms] state      fsm        env_id=9      parent=8      FSM: LISTENING -> DISPATCHING (trigger=k1.session.user.input.v1)
-2026-05-13 11:35:07,268 poc.k1_poc.demo.output_channel INFO OUTPUT [ 33149.4ms] state      fsm        env_id=10     parent=8      Turn 1 started
-2026-05-13 11:35:07,269 poc.k1_poc.demo.output_channel INFO OUTPUT: wait_for_response called (timeout=180.0s)
-2026-05-13 11:35:07,300 k1.concierge.prompt.mode INFO determine_mode  fsm=DISPATCHING topic=k1.session.user.input.v1 -> STANDARD (default)
-2026-05-13 11:35:07,301 k1.concierge.actors.front INFO front_handler: mode=standard fsm=DISPATCHING topic=k1.session.user.input.v1 trace=
-2026-05-13 11:35:07,301 k1.concierge.prompt.affect INFO compute_affect_band  valence=0.00 arousal=0.50 -> neutral
-2026-05-13 11:35:07,301 k1.concierge.actors.front INFO front_handler: appended current user turn to messages: hello make task for rileyu to clean her bedroom by today
-2026-05-13 11:35:07,302 k1.concierge.prompt.builder INFO DynamicPromptBuilder.build START  mode=standard affect=neutral domain=None tier=hot depth=0
-2026-05-13 11:35:07,303 k1.concierge.prompt.builder INFO DynamicPromptBuilder.build DONE  mode=standard tools=10 max_iter=6 tokens=7485 affect=neutral
-2026-05-13 11:35:07,303 k1.concierge.actors.front INFO front_handler: LLM INPUT  prompt_len=29941 messages=1 tools=10 max_iter=6 affect=neutral
-2026-05-13 11:35:07,304 k1.concierge.actors.front INFO front_handler: prompt dump written envelope_id=8 file=D:\familyos\data\prompt_dumps\front_prompt_env8_1778690107303.json latest=D:\familyos\data\prompt_dumps\front_prompt_latest.json
-2026-05-13 11:35:07,304 k1.concierge.llm.validator INFO LLMOutputValidator initialised  schema_count=12 schemas=['update_beliefs', 'update_scoreboard', 'update_clarifications', 'update_narrative', 'refine_affect', 'promote_belief', 'update_session_bundle', 'recall_memory', 'summarize_context', 'dispatch_task', 'discover_capabilities', 'invoke_capability']
-2026-05-13 11:35:07,304 k1.concierge.react.loop INFO react_loop START: actor=front max_iter=6 tools=10 scenario=standard trace=
-2026-05-13 11:35:09,749 httpx INFO HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:streamGenerateContent?alt=sse "HTTP/1.1 200 OK"
-2026-05-13 11:35:09,755 k1.concierge.react.loop INFO react_loop: iter=0 actor=front has_text=False has_tools=True finish=tool_calls streamed=True text=
-2026-05-13 11:35:09,755 k1.concierge.react.loop INFO react_loop: tool_batch_classified  parallel=[] sequential=['dispatch_task'] parallel_enabled=True trace=
-2026-05-13 11:35:09,755 k1.concierge.tools.dispatcher INFO dispatch START  actor=front tool=dispatch_task budget_remaining=5/5
-2026-05-13 11:35:09,758 k1.concierge.fsm.controller INFO FSM._on_tool_started: state=DISPATCHING envelope_id=12 task_id= tool=dispatch_task
-2026-05-13 11:35:09,759 poc.k1_poc.demo.output_channel INFO OUTPUT [ 35639.6ms] tool       front      env_id=12     parent=0      Tool started: dispatch_task
-2026-05-13 11:35:09,759 k1.concierge.tools.implementations INFO tool:dispatch_task  intents=1 urgency=normal tier=LOW plan=False safety=AMBER
-2026-05-13 11:35:09,759 k1.concierge.fsm.controller INFO FSM._on_tool_completed: state=DISPATCHING envelope_id=13 tool=dispatch_task duration_ms=0 success=True
-2026-05-13 11:35:09,759 poc.k1_poc.demo.output_channel INFO OUTPUT [ 35640.1ms] tool       front      env_id=13     parent=0      Tool done: dispatch_task (ok, 0ms)
-2026-05-13 11:35:09,759 k1.concierge.tools.dispatcher INFO dispatch DONE  actor=front tool=dispatch_task status=ok duration_ms=0 budget_remaining=4
-2026-05-13 11:35:17,857 httpx INFO HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:streamGenerateContent?alt=sse "HTTP/1.1 200 OK"
-2026-05-13 11:35:17,862 k1.concierge.react.loop INFO react_loop: iter=1 actor=front has_text=False has_tools=True finish=tool_calls streamed=True text=
-2026-05-13 11:35:17,862 k1.concierge.react.loop INFO react_loop: tool_batch_classified  parallel=['update_scoreboard'] sequential=[] parallel_enabled=True trace=
-2026-05-13 11:35:17,862 k1.concierge.tools.dispatcher INFO dispatch START  actor=front tool=update_scoreboard budget_remaining=4/5
-2026-05-13 11:35:17,867 k1.concierge.fsm.controller INFO FSM._on_tool_started: state=DISPATCHING envelope_id=14 task_id= tool=update_scoreboard
-2026-05-13 11:35:17,867 poc.k1_poc.demo.output_channel INFO OUTPUT [ 43748.2ms] tool       front      env_id=14     parent=0      Tool started: update_scoreboard
-2026-05-13 11:35:17,867 k1.concierge.tools.implementations INFO tool:update_scoreboard  qud_push=False qud_pop=True referents=0 topic_shift=False commitment_add=False commitment_fulfill=False
-2026-05-13 11:35:17,868 k1.sessionstate.manager INFO Mutation applied: section=scoreboard, op=pop_question, delta=0B, new_size=60B, pressure=normal, trace_id=
-2026-05-13 11:35:17,869 k1.concierge.fsm.controller INFO FSM._on_tool_completed: state=DISPATCHING envelope_id=15 tool=update_scoreboard duration_ms=1 success=True
-2026-05-13 11:35:17,869 poc.k1_poc.demo.output_channel INFO OUTPUT [ 43749.8ms] tool       front      env_id=15     parent=0      Tool done: update_scoreboard (ok, 1ms)
-2026-05-13 11:35:17,869 k1.concierge.tools.dispatcher INFO dispatch DONE  actor=front tool=update_scoreboard status=ok duration_ms=1 budget_remaining=3
-2026-05-13 11:35:24,193 httpx INFO HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:streamGenerateContent?alt=sse "HTTP/1.1 200 OK"
-2026-05-13 11:35:24,196 k1.concierge.react.loop INFO react_loop: iter=2 actor=front has_text=False has_tools=False finish=stop streamed=True text=
-2026-05-13 11:35:24,196 k1.concierge.react.loop WARNING Degenerate response from front on iteration 2
-2026-05-13 11:35:24,196 k1.concierge.react.loop INFO react_loop: front degenerate on iter=2, retrying with nudge + tools stripped
-2026-05-13 11:35:26,103 httpx INFO HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:streamGenerateContent?alt=sse "HTTP/1.1 200 OK"
-2026-05-13 11:35:26,105 poc.k1_poc.demo.output_channel INFO OUTPUT [ 51986.0ms] stream     front      env_id=16     parent=8      Stream text: 19 chars
-2026-05-13 11:35:26,123 k1.concierge.react.loop INFO react_loop: iter=3 actor=front has_text=True has_tools=False finish=stop streamed=True text=I've created a task for Riley to clean her bedroom by the en
-2026-05-13 11:35:26,123 k1.concierge.actors.front INFO front_handler: LLM OUTPUT  status=complete text_len=71 dispatched=1 tool_calls=0 trace=
-2026-05-13 11:35:26,123 k1.concierge.fsm.controller INFO FSM._on_task_dispatch: state=DISPATCHING envelope_id=17 task_id=task-e15d315e tier=LOW
-2026-05-13 11:35:26,124 k1.concierge.protocols.cancel_handler INFO CancellationHandler: token created for task=task-e15d315e (total_active=1)
-2026-05-13 11:35:26,124 k1.concierge.fsm.controller INFO FSM DISPATCHING -> COMPANIONING on k1.orchestration.task.dispatch.v1 [envelope_id=17]
-2026-05-13 11:35:26,124 k1.concierge.fsm.controller INFO FSM._route_via_orchestrator: routing LOW tier task_id=task-e15d315e to Back
-2026-05-13 11:35:26,124 k1.concierge.fsm.controller INFO FSM._deliver_to_back: envelope_id=0 topic=k1.orchestration.task.dispatch.v1 state=COMPANIONING
-2026-05-13 11:35:26,124 k1.concierge.fsm.controller INFO Task dispatched: task_id=task-e15d315e tier=LOW active_tasks=1
-2026-05-13 11:35:26,124 poc.k1_poc.demo.output_channel INFO OUTPUT [ 52005.4ms] dispatch   front      env_id=17     parent=8      Dispatched: create a task for Riley to clean her bedroom
-2026-05-13 11:35:26,124 poc.k1_poc.demo.output_channel INFO OUTPUT [ 52005.5ms] state      fsm        env_id=18     parent=17     FSM: DISPATCHING -> COMPANIONING (trigger=k1.orchestration.task.dispatch.v1)
-2026-05-13 11:35:26,125 k1.concierge.actors.front INFO front_handler: replaced post-dispatch text with deterministic ack
-2026-05-13 11:35:26,125 poc.k1_poc.demo.output_channel INFO OUTPUT [ 52006.0ms] stream     front      env_id=19     parent=8      Stream text: 25 chars
-2026-05-13 11:35:26,125 k1.concierge.actors.front INFO front_handler._on_text_response: publishing FINAL text=I'm adding that task now. parent_id=8
-2026-05-13 11:35:26,125 k1.concierge.fsm.controller INFO FSM._on_response_final: state=COMPANIONING envelope_id=20 text=I'm adding that task now.
-2026-05-13 11:35:26,125 poc.k1_poc.demo.output_channel INFO OUTPUT [ 52006.6ms] response   front      env_id=20     parent=8      Final response (25 chars, affect=calm, proactive=False)
-2026-05-13 11:35:26,126 k1.concierge.actors.front INFO front_handler._on_text_response: FINAL published (envelope_id=0)
-2026-05-13 11:35:26,126 k1.concierge.actors.front INFO front_handler complete: status=complete dispatched=1 cancel=0 trace=
-2026-05-13 11:35:26,126 k1.concierge.actors.back INFO route_back_envelope: dispatching to back_handler topic=k1.orchestration.task.dispatch.v1
-2026-05-13 11:35:26,126 k1.concierge.actors.back INFO back_handler: task_id=task-e15d315e tier=LOW trace=
-2026-05-13 11:35:26,126 k1.concierge.actors.back INFO back_handler: SS snapshot  beliefs_len=0 referents=0 safety=AMBER history=2
-2026-05-13 11:35:26,127 k1.concierge.prompt.back_prompt INFO build_back_prompt  task=create a task for Riley to clean her bedroom safety=AMBER budget=8 beliefs_len=0 prompt_len=15408
-2026-05-13 11:35:26,127 k1.concierge.fsm.controller INFO FSM.register_running_task_messages: task_id=task-e15d315e messages_len=3
-2026-05-13 11:35:26,127 k1.concierge.actors.back INFO back_handler: LLM INPUT  prompt_len=15408 messages=3 tools=5 max_iter=8 tier=LOW
-2026-05-13 11:35:26,127 k1.concierge.llm.validator INFO LLMOutputValidator initialised  schema_count=5 schemas=['recall_memory', 'discover_capabilities', 'invoke_capability', 'batch_invoke_capabilities', 'submit_result']
-2026-05-13 11:35:26,127 k1.concierge.react.loop INFO react_loop START: actor=back max_iter=8 tools=5 scenario=task_execution trace=
-2026-05-13 11:35:26,129 poc.k1_poc.demo.output_channel INFO OUTPUT: response received -- text_len=25
-2026-05-13 11:35:31,694 httpx INFO HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent "HTTP/1.1 200 OK"
-2026-05-13 11:35:31,696 k1.concierge.react.loop INFO react_loop: iter=0 actor=back has_text=False has_tools=True finish=tool_calls streamed=False text=
-2026-05-13 11:35:31,696 k1.concierge.react.loop INFO react_loop: tool_batch_classified  parallel=['discover_capabilities'] sequential=[] parallel_enabled=True trace=
-2026-05-13 11:35:31,696 k1.concierge.tools.dispatcher INFO dispatch START  actor=back tool=discover_capabilities budget_remaining=5/5
-2026-05-13 11:35:31,698 k1.concierge.fsm.controller INFO FSM._on_tool_started: state=COMPANIONING envelope_id=21 task_id= tool=discover_capabilities
-2026-05-13 11:35:31,698 k1.concierge.fsm.controller INFO FSM COMPANIONING -> PROGRESSING on k1.tool.started.v1 [envelope_id=21]
-2026-05-13 11:35:31,698 poc.k1_poc.demo.output_channel INFO OUTPUT [ 57579.0ms] tool       back       env_id=21     parent=0      Tool started: discover_capabilities
-2026-05-13 11:35:31,698 poc.k1_poc.demo.output_channel INFO OUTPUT [ 57579.1ms] state      fsm        env_id=22     parent=21     FSM: COMPANIONING -> PROGRESSING (trigger=k1.tool.started.v1)
-2026-05-13 11:35:31,698 k1.concierge.tools.implementations INFO tool:discover_capabilities  intent=create a task domain=family has_fn=True
-2026-05-13 11:35:31,698 k1.concierge.tools.implementations INFO discover_capabilities: normalizing broad domain family -> tasks for intent=create a task
-2026-05-13 11:35:31,699 k1.concierge.fsm.controller INFO FSM._on_tool_completed: state=PROGRESSING envelope_id=23 tool=discover_capabilities duration_ms=1 success=True
-2026-05-13 11:35:31,699 k1.concierge.fsm.controller INFO FSM PROGRESSING -> COMPANIONING on k1.tool.completed.v1 [envelope_id=23]
-2026-05-13 11:35:31,700 poc.k1_poc.demo.output_channel INFO OUTPUT [ 57580.7ms] tool       back       env_id=23     parent=0      Tool done: discover_capabilities (ok, 1ms)
-2026-05-13 11:35:31,700 poc.k1_poc.demo.output_channel INFO OUTPUT [ 57580.9ms] state      fsm        env_id=24     parent=23     FSM: PROGRESSING -> COMPANIONING (trigger=k1.tool.completed.v1)
-2026-05-13 11:35:31,700 k1.concierge.tools.dispatcher INFO dispatch DONE  actor=back tool=discover_capabilities status=ok duration_ms=1 budget_remaining=4
-2026-05-13 11:35:33,034 httpx INFO HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent "HTTP/1.1 200 OK"
-2026-05-13 11:35:33,036 k1.concierge.react.loop INFO react_loop: iter=1 actor=back has_text=False has_tools=False finish=stop streamed=False text=
-2026-05-13 11:35:33,036 k1.concierge.react.loop WARNING Degenerate response from back on iteration 1
-2026-05-13 11:35:33,036 k1.concierge.react.loop INFO react_loop: back degenerate on iter=1/8, nudging (gentle)
-2026-05-13 11:35:42,786 httpx INFO HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent "HTTP/1.1 200 OK"
-2026-05-13 11:35:42,787 k1.concierge.react.loop INFO react_loop: iter=2 actor=back has_text=False has_tools=True finish=tool_calls streamed=False text=
-2026-05-13 11:35:42,788 k1.concierge.react.loop INFO react_loop: tool_batch_classified  parallel=[] sequential=['invoke_capability'] parallel_enabled=True trace=
-2026-05-13 11:35:42,788 k1.concierge.tools.dispatcher INFO dispatch START  actor=back tool=invoke_capability budget_remaining=4/5
-2026-05-13 11:35:42,788 k1.selfmodel.contracts.risk_class_registry WARNING tool_risk_default_fail_closed tool=tool.execute.tasks.create_task risk=low — register_tool_risk() to override
-2026-05-13 11:35:42,789 k1.concierge.fsm.controller INFO FSM._on_tool_started: state=COMPANIONING envelope_id=25 task_id= tool=invoke_capability
-2026-05-13 11:35:42,789 k1.concierge.fsm.controller INFO FSM COMPANIONING -> PROGRESSING on k1.tool.started.v1 [envelope_id=25]
-2026-05-13 11:35:42,789 poc.k1_poc.demo.output_channel INFO OUTPUT [ 68670.5ms] tool       back       env_id=25     parent=0      Tool started: invoke_capability
-2026-05-13 11:35:42,790 poc.k1_poc.demo.output_channel INFO OUTPUT [ 68670.6ms] state      fsm        env_id=26     parent=25     FSM: COMPANIONING -> PROGRESSING (trigger=k1.tool.started.v1)
-2026-05-13 11:35:42,790 k1.concierge.tools.implementations INFO tool:invoke_capability  capability=tool.execute.tasks.create_task params_keys=['assignee', 'due_date', 'task'] has_fn=True
-{"timestamp_iso": "2026-05-13T16:35:42.791109+00:00", "level": "DEBUG", "event": "log.message", "component": "fabric", "trace_id": "", "request_id": "", "capability_name": "", "provider_id": "", "duration_ms": null, "success": null, "module": "fabric", "message": "Section 'cognitive' not found: \"Section 'cognitive' not found. Valid: affective_now, artifacts_warm, beliefs_active, beliefs_history, clarifications, control, history_active, history_recent, meta, narrative_active, persona, scoreboard, task_artifacts, task_state, telemetry\""}
-2026-05-13 11:35:42,791 k1.fabric.adapters.sessionstate_reader DEBUG Section 'cognitive' not found: "Section 'cognitive' not found. Valid: affective_now, artifacts_warm, beliefs_active, beliefs_history, clarifications, control, history_active, history_recent, meta, narrative_active, persona, scoreboard, task_artifacts, task_state, telemetry"
-{"timestamp_iso": "2026-05-13T16:35:42.791412+00:00", "level": "DEBUG", "event": "log.message", "component": "fabric", "trace_id": "", "request_id": "", "capability_name": "", "provider_id": "", "duration_ms": null, "success": null, "module": "fabric", "message": "QoS score for tool.execute.tasks.create_task: 0.0019 (budget=1.00, latency=1.00)"}
-2026-05-13 11:35:42,791 k1.fabric.policy.qos_integration DEBUG QoS score for tool.execute.tasks.create_task: 0.0019 (budget=1.00, latency=1.00)
-{"timestamp_iso": "2026-05-13T16:35:42.791743+00:00", "level": "INFO", "event": "policy_check", "component": "fabric.policy_check", "trace_id": "k-back-4bf458", "request_id": "c9ad182b-6d88-46ed-9e09-a24721c24e84", "capability_name": "tool.execute.tasks.create_task", "provider_id": "", "duration_ms": 0.59, "success": true, "module": "fabric", "message": "Policy check completed", "candidate_count": 1, "allowed_count": 1}
-2026-05-13 11:35:42,791 k1.fabric INFO Policy check completed
-{"timestamp_iso": "2026-05-13T16:35:42.791941+00:00", "level": "DEBUG", "event": "log.message", "component": "fabric", "trace_id": "", "request_id": "", "capability_name": "", "provider_id": "", "duration_ms": null, "success": null, "module": "fabric", "message": "Resolved tool.execute.tasks.create_task -> provider=k1_native_tools (score=1.002)"}
-2026-05-13 11:35:42,791 k1.fabric.provider_resolution.resolver DEBUG Resolved tool.execute.tasks.create_task -> provider=k1_native_tools (score=1.002)
-{"timestamp_iso": "2026-05-13T16:35:42.792207+00:00", "level": "INFO", "event": "resolve", "component": "fabric.resolve", "trace_id": "k-back-4bf458", "request_id": "c9ad182b-6d88-46ed-9e09-a24721c24e84", "capability_name": "tool.execute.tasks.create_task", "provider_id": "", "duration_ms": 1.233, "success": true, "module": "fabric", "message": "Resolve phase completed"}
-2026-05-13 11:35:42,792 k1.fabric INFO Resolve phase completed
-2026-05-13 11:35:42,792 k1.concierge.fsm.controller INFO FSM._on_hil_request: hil_id=d866bfd6 kind=capability_gate task=hil:d866bfd6-4b1a-4811-810f-76fa36920b63 synthetic=True state=PROGRESSING
-2026-05-13 11:35:42,793 k1.concierge.fsm.controller INFO FSM PROGRESSING -> CLARIFYING_WORKER on k1.hil.request.v1 [envelope_id=29]
-2026-05-13 11:35:42,794 k1.concierge.fsm.controller INFO FSM._deliver_to_front: envelope_id=29 topic=k1.hil.request.v1 state=CLARIFYING_WORKER
-2026-05-13 11:35:42,794 ui.web.coordinator INFO WEB: hil_request forwarded hil_request_id=d866bfd6-4b1a-4811-810f-76fa36920b63 kind=capability_gate caller_key=fabric:tool.execute.tasks.create_task
-2026-05-13 11:35:42,794 ui.web.renderer INFO WEB: broadcasting hil_request hil_request_id=d866bfd6-4b1a-4811-810f-76fa36920b63 kind=capability_gate connections=1
-2026-05-13 11:35:42,794 poc.k1_poc.demo.output_channel INFO OUTPUT [ 68675.2ms] state      fsm        env_id=31     parent=29     FSM: PROGRESSING -> CLARIFYING_WORKER (trigger=k1.hil.request.v1)
-2026-05-13 11:35:42,794 k1.hil.service INFO hil_requested hil_request_id=d866bfd6-4b1a-4811-810f-76fa36920b63 kind=capability_gate caller_key=fabric:tool.execute.tasks.create_task timeout_ms=120000
-2026-05-13 11:35:44,158 ui.web.app INFO WEB: hil_response published hil_request_id=d866bfd6-4b1a-4811-810f-76fa36920b63 kind=capability_gate
-{"timestamp_iso": "2026-05-13T16:35:44.158775+00:00", "level": "INFO", "event": "log.message", "component": "fabric", "trace_id": "", "request_id": "", "capability_name": "", "provider_id": "", "duration_ms": null, "success": null, "module": "fabric", "message": "hil_gate trace_id=k-back-4bf458 capability=tool.execute.tasks.create_task duration_ms=1366.305 decision=allow"}
-2026-05-13 11:35:44,158 k1.fabric.fabric INFO hil_gate trace_id=k-back-4bf458 capability=tool.execute.tasks.create_task duration_ms=1366.305 decision=allow
-{"timestamp_iso": "2026-05-13T16:35:44.275790+00:00", "level": "INFO", "event": "context_build", "component": "fabric.context_build", "trace_id": "k-back-4bf458", "request_id": "c9ad182b-6d88-46ed-9e09-a24721c24e84", "capability_name": "tool.execute.tasks.create_task", "provider_id": "k1_native_tools", "duration_ms": 116.709, "success": true, "module": "fabric", "message": "Context build completed"}
-2026-05-13 11:35:44,275 k1.fabric INFO Context build completed
-{"timestamp_iso": "2026-05-13T16:35:44.276086+00:00", "level": "ERROR", "event": "log.message", "component": "fabric", "trace_id": "", "request_id": "", "capability_name": "", "provider_id": "", "duration_ms": null, "success": null, "module": "fabric", "message": "Fabric execute error for 'tool.execute.tasks.create_task': No handler registered for provider type: LOCAL", "exception": "Traceback (most recent call last):\n  File \"D:\\familyos\\k1\\fabric\\fabric.py\", line 611, in _execute_impl\n    provider = self._provider_factory.create(resolved.provider_config)\n  File \"D:\\familyos\\k1\\fabric\\provider_resolution\\provider_factory.py\", line 181, in create\n    raise UnsupportedProviderTypeError(ptype)\nk1.fabric.provider_resolution.provider_factory.UnsupportedProviderTypeError: No handler registered for provider type: LOCAL"}
-2026-05-13 11:35:44,276 k1.fabric.fabric ERROR Fabric execute error for 'tool.execute.tasks.create_task': No handler registered for provider type: LOCAL
-Traceback (most recent call last):
-  File "D:\familyos\k1\fabric\fabric.py", line 611, in _execute_impl
-    provider = self._provider_factory.create(resolved.provider_config)
-  File "D:\familyos\k1\fabric\provider_resolution\provider_factory.py", line 181, in create
-    raise UnsupportedProviderTypeError(ptype)
-k1.fabric.provider_resolution.provider_factory.UnsupportedProviderTypeError: No handler registered for provider type: LOCAL
-{"timestamp_iso": "2026-05-13T16:35:44.277891+00:00", "level": "WARNING", "event": "result_return", "component": "fabric.result_return", "trace_id": "k-back-4bf458", "request_id": "c9ad182b-6d88-46ed-9e09-a24721c24e84", "capability_name": "tool.execute.tasks.create_task", "provider_id": "k1_native_tools", "duration_ms": 1485, "success": false, "module": "fabric", "message": "Result returned", "error_code": "execution_error"}
-2026-05-13 11:35:44,277 k1.fabric WARNING Result returned
-2026-05-13 11:35:44,278 k1.concierge.fsm.controller WARNING FSM DEAD-LETTER: state=CLARIFYING_WORKER topic=k1.tool.completed.v1 reason=tool_completed_invalid_state envelope_id=36
-2026-05-13 11:35:44,278 poc.k1_poc.demo.output_channel INFO OUTPUT [ 70159.1ms] tool       back       env_id=36     parent=0      Tool done: invoke_capability (FAIL, 1488ms)
-2026-05-13 11:35:44,278 k1.concierge.tools.dispatcher INFO dispatch DONE  actor=back tool=invoke_capability status=error duration_ms=1488 budget_remaining=3
-2026-05-13 11:35:44,278 k1.concierge.tools.dispatcher WARNING dispatch  tool=invoke_capability error=No handler registered for provider type: LOCAL
-2026-05-13 11:35:49,446 httpx INFO HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent "HTTP/1.1 200 OK"
-2026-05-13 11:35:49,451 k1.concierge.react.loop INFO react_loop: iter=3 actor=back has_text=False has_tools=False finish=stop streamed=False text=
-2026-05-13 11:35:49,451 k1.concierge.react.loop WARNING Degenerate response from back on iteration 3
-2026-05-13 11:35:49,451 k1.concierge.react.loop INFO react_loop: back degenerate on iter=3/8, nudging (gentle)
-2026-05-13 11:35:52,322 httpx INFO HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent "HTTP/1.1 200 OK"
-2026-05-13 11:35:52,323 k1.concierge.react.loop INFO react_loop: iter=4 actor=back has_text=False has_tools=True finish=tool_calls streamed=False text=
-2026-05-13 11:35:52,324 k1.concierge.tools.dispatcher INFO dispatch START  actor=back tool=submit_result budget_remaining=3/5
-2026-05-13 11:35:52,326 k1.concierge.fsm.controller WARNING FSM DEAD-LETTER: state=CLARIFYING_WORKER topic=k1.tool.started.v1 reason=tool_started_invalid_state envelope_id=38
-2026-05-13 11:35:52,326 poc.k1_poc.demo.output_channel INFO OUTPUT [ 78207.3ms] tool       back       env_id=38     parent=0      Tool started: submit_result
-2026-05-13 11:35:52,326 k1.concierge.tools.implementations INFO tool:submit_result  result_type=complete
-2026-05-13 11:35:52,327 k1.concierge.fsm.controller WARNING FSM DEAD-LETTER: state=CLARIFYING_WORKER topic=k1.tool.completed.v1 reason=tool_completed_invalid_state envelope_id=40
-2026-05-13 11:35:52,327 poc.k1_poc.demo.output_channel INFO OUTPUT [ 78208.0ms] tool       back       env_id=40     parent=0      Tool done: submit_result (ok, 1ms)
-2026-05-13 11:35:52,327 k1.concierge.tools.dispatcher INFO dispatch DONE  actor=back tool=submit_result status=ok duration_ms=1 budget_remaining=2
-2026-05-13 11:35:52,327 k1.concierge.fsm.controller INFO FSM._on_task_complete: state=CLARIFYING_WORKER envelope_id=42 task_id=task-e15d315e
-2026-05-13 11:35:52,328 k1.bus.middleware.topic_validation WARNING Unknown topic on bus: topic=k1.conversation.weave.decided.v1 envelope_id=43 (topic not in registry, delivering anyway)
-2026-05-13 11:35:52,328 k1.concierge.fsm.controller INFO FSM._on_task_complete_adaptive: task=task-e15d315e decision=BATCH window=200ms reason=R7: pending=1 + idle 45063ms > 3000ms -> BATCH(200ms)
-2026-05-13 11:35:52,328 poc.k1_poc.demo.output_channel INFO OUTPUT [ 78209.2ms] result     back       env_id=42     parent=0      Task complete: task-e15d315e
-2026-05-13 11:35:52,328 k1.concierge.actors.back INFO back_handler: LLM OUTPUT  status=complete text_len=0 tool_calls=0 trace=
-2026-05-13 11:35:52,328 k1.concierge.actors.back INFO back_handler complete: task_id=task-e15d315e status=complete trace=
-2026-05-13 11:35:52,329 k1.concierge.prompt.mode INFO determine_mode  fsm=CLARIFYING_WORKER topic=k1.hil.request.v1 -> HITL_RELAY
-2026-05-13 11:35:52,329 k1.concierge.actors.front INFO front_handler: mode=hitl_relay fsm=CLARIFYING_WORKER topic=k1.hil.request.v1 trace=k-back-4
-2026-05-13 11:35:52,329 k1.concierge.prompt.affect INFO compute_affect_band  valence=0.00 arousal=0.50 -> neutral
-2026-05-13 11:35:52,329 k1.concierge.prompt.builder INFO DynamicPromptBuilder.build START  mode=hitl_relay affect=neutral domain=None tier=hot depth=0
-2026-05-13 11:35:52,330 k1.concierge.prompt.builder INFO DynamicPromptBuilder.build DONE  mode=hitl_relay tools=0 max_iter=2 tokens=2683 affect=neutral
-2026-05-13 11:35:52,330 k1.concierge.actors.front INFO front_handler: LLM INPUT  prompt_len=10733 messages=2 tools=0 max_iter=2 affect=neutral
-2026-05-13 11:35:52,331 k1.concierge.actors.front INFO front_handler: prompt dump written envelope_id=29 file=D:\familyos\data\prompt_dumps\front_prompt_env29_1778690152330.json latest=D:\familyos\data\prompt_dumps\front_prompt_latest.json
-2026-05-13 11:35:52,331 k1.concierge.llm.validator INFO LLMOutputValidator initialised  schema_count=12 schemas=['update_beliefs', 'update_scoreboard', 'update_clarifications', 'update_narrative', 'refine_affect', 'promote_belief', 'update_session_bundle', 'recall_memory', 'summarize_context', 'dispatch_task', 'discover_capabilities', 'invoke_capability']
-2026-05-13 11:35:52,331 k1.concierge.react.loop INFO react_loop START: actor=front max_iter=2 tools=0 scenario=hitl_relay trace=k-back-4
-2026-05-13 11:35:52,332 google_genai.models INFO AFC is enabled with max remote calls: 10.
-2026-05-13 11:35:57,439 httpx INFO HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent "HTTP/1.1 200 OK"
-2026-05-13 11:35:57,440 k1.concierge.react.loop INFO react_loop: iter=0 actor=front has_text=False has_tools=False finish=stop streamed=False text=
-2026-05-13 11:35:57,440 k1.concierge.react.loop WARNING Degenerate response from front on iteration 0
-2026-05-13 11:35:57,441 k1.concierge.react.loop INFO react_loop: front degenerate on iter=0, retrying with nudge + tools stripped
-2026-05-13 11:35:57,441 google_genai.models INFO AFC is enabled with max remote calls: 10.
-2026-05-13 11:36:03,985 httpx INFO HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent "HTTP/1.1 200 OK"
-2026-05-13 11:36:03,987 k1.concierge.react.loop INFO react_loop: iter=1 actor=front has_text=False has_tools=False finish=stop streamed=False text=
-2026-05-13 11:36:03,987 k1.concierge.react.loop WARNING Degenerate response from front on iteration 1
-2026-05-13 11:36:03,987 k1.concierge.actors.front INFO front_handler: LLM OUTPUT  status=complete text_len=37 dispatched=0 tool_calls=0 trace=k-back-4
-2026-05-13 11:36:03,987 k1.concierge.actors.front INFO front_handler._on_text_response: publishing FINAL text=Let me think about that for a moment. parent_id=29
-2026-05-13 11:36:03,988 k1.concierge.fsm.controller INFO FSM._on_response_final: state=CLARIFYING_WORKER envelope_id=44 text=Let me think about that for a moment.
-2026-05-13 11:36:03,988 k1.concierge.fsm.controller INFO FSM CLARIFYING_WORKER -> LISTENING on k1.response.final.v1 [envelope_id=44]
-2026-05-13 11:36:03,988 k1.concierge.fsm.controller INFO FSM._drain_front_lock_queue: delivering queued envelope topic=k1.internal.weave.batch.v1 envelope_id=1000000000
-2026-05-13 11:36:03,988 k1.concierge.fsm.controller INFO FSM._deliver_to_front: envelope_id=1000000000 topic=k1.internal.weave.batch.v1 state=LISTENING
-2026-05-13 11:36:03,988 poc.k1_poc.demo.output_channel INFO OUTPUT [ 89869.5ms] response   front      env_id=44     parent=29     Final response (37 chars, affect=calm, proactive=False)
-2026-05-13 11:36:03,989 poc.k1_poc.demo.output_channel INFO OUTPUT [ 89869.8ms] state      fsm        env_id=45     parent=44     FSM: CLARIFYING_WORKER -> LISTENING (trigger=k1.response.final.v1)
-2026-05-13 11:36:03,989 poc.k1_poc.demo.output_channel INFO OUTPUT [ 89869.9ms] state      fsm        env_id=46     parent=44     Turn 1 completed
-2026-05-13 11:36:03,989 k1.concierge.actors.front INFO front_handler._on_text_response: FINAL published (envelope_id=0)
-2026-05-13 11:36:03,989 k1.concierge.actors.front INFO front_handler complete: status=complete dispatched=0 cancel=0 trace=k-back-4
-2026-05-13 11:36:03,990 k1.concierge.prompt.mode INFO determine_mode  topic=k1.internal.weave.batch.v1 -> WEAVE
-2026-05-13 11:36:03,990 k1.concierge.actors.front INFO front_handler: mode=weave fsm=LISTENING topic=k1.internal.weave.batch.v1 trace=
-2026-05-13 11:36:03,990 k1.concierge.prompt.affect INFO compute_affect_band  valence=0.00 arousal=0.50 -> neutral
-2026-05-13 11:36:03,991 k1.concierge.prompt.builder INFO DynamicPromptBuilder.build START  mode=weave affect=neutral domain=None tier=hot depth=0
-2026-05-13 11:36:03,991 k1.concierge.prompt.builder INFO DynamicPromptBuilder.build DONE  mode=weave tools=4 max_iter=3 tokens=3513 affect=neutral
-2026-05-13 11:36:03,991 k1.concierge.actors.front INFO front_handler: LLM INPUT  prompt_len=14052 messages=2 tools=4 max_iter=3 affect=neutral
-2026-05-13 11:36:03,994 k1.concierge.actors.front INFO front_handler: prompt dump written envelope_id=1000000000 file=D:\familyos\data\prompt_dumps\front_prompt_env1000000000_1778690163992.json latest=D:\familyos\data\prompt_dumps\front_prompt_latest.json
-2026-05-13 11:36:03,995 k1.concierge.llm.validator INFO LLMOutputValidator initialised  schema_count=12 schemas=['update_beliefs', 'update_scoreboard', 'update_clarifications', 'update_narrative', 'refine_affect', 'promote_belief', 'update_session_bundle', 'recall_memory', 'summarize_context', 'dispatch_task', 'discover_capabilities', 'invoke_capability']
-2026-05-13 11:36:03,995 k1.concierge.react.loop INFO react_loop START: actor=front max_iter=3 tools=4 scenario=weave trace=
-2026-05-13 11:36:06,028 httpx INFO HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:streamGenerateContent?alt=sse "HTTP/1.1 200 OK"
-2026-05-13 11:36:06,031 k1.concierge.react.loop INFO react_loop: iter=0 actor=front has_text=False has_tools=False finish=stop streamed=True text=
-2026-05-13 11:36:06,031 k1.concierge.react.loop WARNING Degenerate response from front on iteration 0
-2026-05-13 11:36:06,031 k1.concierge.react.loop INFO react_loop: front degenerate on iter=0, retrying with nudge + tools stripped
+2026-05-15 21:57:17,208 k1.orchestrator.orchestration.orchestrator_service INFO init.workflows_loaded
+2026-05-15 21:57:17,208 k1.orchestrator.workflows.workflow_scheduler INFO WorkflowScheduler started (tick_interval=1.0s)
+2026-05-15 21:57:17,208 k1.orchestrator.workflows.gap_detector INFO ProactiveGapDetector: started (subscribed to k1.fabric.capability.contract_updated.v1)
+2026-05-15 21:57:17,208 k1.orchestrator.connectors.connector_lifecycle INFO Lifecycle monitoring started (health event subscription active)
+2026-05-15 21:57:17,209 k1.orchestrator.orchestration.orchestrator_service INFO init.complete
+2026-05-15 21:57:17,209 k1.orchestrator.factory INFO OrchestratorFactory.create_production: service initialized (config=OrchestratorConfig)
+2026-05-15 21:57:17,209 k1.planner.factory INFO planner_factory.create_production.start
+2026-05-15 21:57:17,209 k1.planner.factory INFO planner_factory.wiring_complete
+2026-05-15 21:57:17,210 k1.planner.factory INFO planner_factory.create_production.complete
+2026-05-15 21:57:17,261 k1.tools.family.storage INFO K1FamilyStore: opened sqlite at ./data/k1_family.db (WAL, FK=ON)
+2026-05-15 21:57:17,263 k1.tools.family.registry INFO ToolRegistry: registered 10 Fabric capabilities for adapter calendar: ['tool.execute.calendar.create_event', 'tool.execute.calendar.update_event', 'tool.execute.calendar.delete_event', 'tool.read.calendar.list_events', 'tool.read.calendar.get_event', 'tool.execute.calendar.respond_to_invite', 'tool.execute.calendar.set_visibility', 'tool.execute.calendar.connect_feed', 'tool.execute.calendar.disconnect_feed', 'tool.read.calendar.list_feeds']
+2026-05-15 21:57:17,264 k1.tools.family.registry INFO ToolRegistry: registered family adapter calendar
+2026-05-15 21:57:17,266 k1.tools.family.registry INFO ToolRegistry: registered 10 Fabric capabilities for adapter tasks: ['tool.execute.tasks.create_task', 'tool.execute.tasks.update_task', 'tool.execute.tasks.complete_task', 'tool.execute.tasks.reopen_task', 'tool.execute.tasks.reassign_task', 'tool.execute.tasks.delete_task', 'tool.read.tasks.list_tasks', 'tool.read.tasks.get_task', 'tool.execute.tasks.create_list', 'tool.read.tasks.list_lists']
+2026-05-15 21:57:17,266 k1.tools.family.registry INFO ToolRegistry: registered family adapter tasks
+2026-05-15 21:57:17,267 k1.tools.family.registry INFO ToolRegistry: registered 8 Fabric capabilities for adapter reminders: ['tool.execute.reminders.create_reminder', 'tool.execute.reminders.update_reminder', 'tool.execute.reminders.snooze_reminder', 'tool.execute.reminders.dismiss_reminder', 'tool.execute.reminders.fire_reminder', 'tool.execute.reminders.delete_reminder', 'tool.read.reminders.list_reminders', 'tool.read.reminders.get_reminder']
+2026-05-15 21:57:17,268 k1.tools.family.registry INFO ToolRegistry: registered family adapter reminders
+2026-05-15 21:57:17,269 k1.tools.family.registry INFO ToolRegistry: registered 9 Fabric capabilities for adapter chores: ['tool.execute.chores.create_template', 'tool.execute.chores.update_template', 'tool.execute.chores.delete_template', 'tool.execute.chores.assign_chore', 'tool.execute.chores.complete_chore', 'tool.execute.chores.skip_chore', 'tool.execute.chores.reopen_chore', 'tool.read.chores.list_chores', 'tool.read.chores.chore_summary']
+2026-05-15 21:57:17,269 k1.tools.family.registry INFO ToolRegistry: registered family adapter chores
+2026-05-15 21:57:17,270 k1.tools.family.registry INFO ToolRegistry: registered 4 Fabric capabilities for adapter family_settings: ['tool.read.family_settings.get_visibility_policy', 'tool.execute.family_settings.update_visibility_policy', 'tool.read.family_settings.list_feature_flags', 'tool.execute.family_settings.set_feature_flag']
+2026-05-15 21:57:17,270 k1.tools.family.registry INFO ToolRegistry: registered family adapter family_settings
+2026-05-15 21:57:17,270 k1.tools.family.bootstrap INFO Family-tools: registered NativeToolProvider factory handler for provider_type=LOCAL
+2026-05-15 21:57:17,270 k1.tools.family.bootstrap INFO Family-tools: registered NativeToolProvider config for provider_id=k1_native_tools
+2026-05-15 21:57:17,271 k1.tools.family.bootstrap INFO Family-tools bootstrap complete: adapters=['calendar', 'chores', 'family_settings', 'reminders', 'tasks'] capabilities=41 db_path=./data/k1_family.db
+2026-05-15 21:57:17,271 k1.kernel.service INFO S8: family-tools bundle ready (adapters=['calendar', 'chores', 'family_settings', 'reminders', 'tasks'])
+2026-05-15 21:57:17,271 k1.kernel.service INFO Tier 1 startup complete — all shared components wired
+2026-05-15 21:57:17,304 k1.kernel.service INFO HIL (session=web-18c44c76): HumanInTheLoopService bound to session_bus
+2026-05-15 21:57:17,314 k1.sessionstate.adapters.sqlite_storage INFO SQLiteStorageAdapter initialized (path=data\k1\sessionstate.db)
+2026-05-15 21:57:17,314 k1.sessionstate.adapters.local_events INFO LocalEventAdapter initialized (capture_mode=False)
+2026-05-15 21:57:17,314 k1.sessionstate.factory INFO Creating wired SessionStateManager (session=web-18c44c76, storage=local, db_path=data\k1\sessionstate.db)
+2026-05-15 21:57:17,323 k1.sessionstate.local_cold INFO LocalColdArchive initialized (path=data\k1\sessionstate.db, tables=7)
+2026-05-15 21:57:17,323 k1.sessionstate.sizetracker INFO SizeTracker initialized: 15 sections tracked
+2026-05-15 21:57:17,324 k1.sessionstate.guard INFO MutationGuard initialized (sections=15, emergency=False)
+2026-05-15 21:57:17,324 k1.sessionstate.tiers.hot INFO HotTier initialized: 10 sections, budget=52KB (session=web-18c4)
+2026-05-15 21:57:17,324 k1.sessionstate.tiers.warm INFO WarmTier initialized: 5 sections, budget=48KB (session=web-18c4)
+2026-05-15 21:57:17,325 k1.sessionstate.eviction INFO EvictionEngine initialized (session=web-18c4, target_util=70%)
+2026-05-15 21:57:17,325 k1.sessionstate.migration INFO MigrationEngine initialized (session=web-18c4, pairs=beliefs_active->beliefs_history, history_active->history_recent)
+2026-05-15 21:57:17,325 k1.sessionstate.manager INFO SessionStateManager initialized (session=web-18c4, state=created, sections=hot:10+warm)
+2026-05-15 21:57:17,325 k1.sessionstate.adapters.direct_writer INFO DirectWriterAdapter bound (writer_id=direct, session=web-18c4)
+2026-05-15 21:57:17,325 k1.sessionstate.adapters.standalone_lifecycle INFO StandaloneLifecycle bound (session=web-18c4, checkpoint_interval=30000ms)
+2026-05-15 21:57:17,325 k1.sessionstate.manager INFO SessionState state transition: CREATED -> STARTING (session=web-18c4)
+2026-05-15 21:57:17,326 k1.sessionstate.manager INFO SessionStateManager started (session=web-18c4, restored=False, source=fresh, took=0.50ms, trace_id=)
+2026-05-15 21:57:17,326 k1.fabric.adapters.prompt_system_prod WARNING PromptSystemProdAdapter: prompts directory does not exist: k1\contracts\prompts
+2026-05-15 21:57:17,326 k1.fabric.factory INFO Constructing Fabric (production_mode=True, contracts_dir=k1\contracts)
+2026-05-15 21:57:17,327 k1.fabric.adapters.auto_mcp_transport INFO [AutoDiscoveryMCPTransport] Discovered 0 JSON-RPC tools, 0 FastMCP tools, 0 handler tools
+2026-05-15 21:57:17,327 k1.fabric.factory INFO F4: Registered tool.write.build_agent handler with MCP transport (provider=build_agent_handler)
+2026-05-15 21:57:17,327 k1.fabric.events.event_emitter INFO ProactiveGapDetector wired 4 subscriptions
+2026-05-15 21:57:17,327 k1.fabric.factory INFO Fabric construction complete (production_mode=True)
+2026-05-15 21:57:17,327 k1.kernel.service INFO P3.1: registering NativeToolProvider on session fabric (session=web-18c44c76)
+2026-05-15 21:57:17,328 k1.tools.family.bootstrap INFO Family-tools: registered NativeToolProvider factory handler for provider_type=LOCAL
+2026-05-15 21:57:17,328 k1.concierge.fsm.front_lock INFO FrontLock initialized (max_queue_depth=8)
+2026-05-15 21:57:17,328 k1.concierge.protocols.cancel_handler INFO CancellationHandler initialised  has_callback=False ledger=no
+2026-05-15 21:57:17,328 k1.hil.suspension INFO SuspensionManager initialised  has_timeout_fn=False has_resume_fn=False
+2026-05-15 21:57:17,328 k1.concierge.fsm.control_extension INFO ConciergeControlExtension initialized (initial_state=LISTENING)
+2026-05-15 21:57:17,328 k1.concierge.fsm.task_bridge INFO TaskBridge initialized (task_state=TaskStateSection, task_artifacts=TaskArtifactsSection, ledger=no)
+2026-05-15 21:57:17,328 k1.concierge.fsm.interrupt_handler INFO InterruptClassifier initialized (9 cancel keywords)
+2026-05-15 21:57:17,328 k1.concierge.fsm.arbiter INFO ConversationArbiter initialized (domain_thresh=0.70, entity_thresh=0.50, cancel_kw=9, defer_kw=14)
+2026-05-15 21:57:17,328 k1.concierge.fsm.interrupt_handler INFO ProactiveWakeHandler initialized
+2026-05-15 21:57:17,328 k1.concierge.fsm.controller INFO ConciergeController.__init__: assembling sub-components (FrontLock, CancelHandler, SuspensionManager, ControlExtension, TaskBridge, InterruptClassifier, ProactiveWake)
+2026-05-15 21:57:17,328 k1.concierge.fsm.controller INFO ConciergeController._subscribe_all: wiring FSM event handlers
+2026-05-15 21:57:17,329 k1.concierge.fsm.controller INFO ConciergeController._subscribe_all: complete (19 handlers wired, initial_state=LISTENING)
+2026-05-15 21:57:17,332 k1.concierge.ledger.writer INFO LedgerWriter created for session=web-18c44c76
+2026-05-15 21:57:17,332 k1.concierge.fsm.controller INFO ConciergeController.set_ledger: attached for session=web-18c44c76
+2026-05-15 21:57:17,332 k1.concierge.factory INFO Ledger created for session=web-18c44c76
+2026-05-15 21:57:17,333 k1.concierge.fsm.controller INFO ConciergeController.set_history_sink: attached
+2026-05-15 21:57:17,333 k1.concierge.fsm.task_bridge INFO TaskBridge rebound to real SS sections (copied 0 tasks, 0 artifacts)
+2026-05-15 21:57:17,333 k1.concierge.fsm.control_extension INFO ConciergeControlExtension bound to ControlSection
+2026-05-15 21:57:17,333 k1.concierge.fsm.controller INFO ConciergeController.set_session_state: attached + M4 binding complete
+2026-05-15 21:57:17,333 k1.concierge.tools.dispatcher INFO ToolDispatcher initialized (actor=front, tier=simple, budget=400, allowlist=10 tools)
+2026-05-15 21:57:17,333 k1.concierge.tools.dispatcher INFO ToolDispatcher initialized (actor=back, tier=simple, budget=400, allowlist=5 tools)
+2026-05-15 21:57:17,340 k1.concierge.experience.layer INFO ExperienceLayer initialized (6 components: EP, AM, NW, AR, PA, RC)
+2026-05-15 21:57:17,347 k1.concierge.delta.applicator INFO DeltaApplicator initialized (preflight=True, write=True, evict=False, notify=True)
+2026-05-15 21:57:17,347 k1.concierge.delta.aggregator INFO DeltaAggregator initialized (batch_window_ms=100, flush_fn=DeltaApplicator.apply)
+2026-05-15 21:57:17,348 k1.concierge.fsm.controller INFO ConciergeController.set_hil_port: attached HumanInTheLoopService
+2026-05-15 21:57:17,348 k1.concierge.factory INFO ConciergeFactory: attached unified HIL port HumanInTheLoopService to FSM
+2026-05-15 21:57:17,348 k1.concierge.protocols.weave_batcher INFO WeaveBatcher initialised  batch_window_ms=500 max_queued_depth=16
+2026-05-15 21:57:17,348 k1.concierge.fsm.controller INFO ConciergeController.set_weave_batcher: attached WeaveBatcher
+2026-05-15 21:57:17,348 k1.concierge.fsm.controller INFO ConciergeController.set_weave_policy: attached
+2026-05-15 21:57:17,348 k1.concierge.fsm.controller INFO ConciergeController.set_activity_tracker: attached
+2026-05-15 21:57:17,348 k1.concierge.fsm.controller INFO ConciergeController.set_orchestrator: attached _DispatchPortFSMAdapter
+2026-05-15 21:57:17,348 k1.concierge.fsm.controller INFO ConciergeController.set_allow_planner_passthrough: False
+2026-05-15 21:57:17,367 k1.concierge.actors.front INFO subscribe_front_events: wiring 3 topics to front handler
+2026-05-15 21:57:17,367 k1.concierge.actors.front INFO subscribe_front_events: complete (3 handles)
+2026-05-15 21:57:17,368 k1.concierge.session INFO ConciergeRuntime.start: consumer task created
+2026-05-15 21:57:17,369 k1.memory_writer.pipeline.session_batch_dispatcher INFO MW: SessionBatchDispatcher started, topic=k1.session.turn.completed.v1, threshold=20, idle=300s
+2026-05-15 21:57:17,369 k1.memory_writer.service INFO MW: MemoryWriterService started
+2026-05-15 21:57:17,369 k1.kernel.bootstrap INFO start_kernel: session web-18c44c76 ready (via KernelService)
+2026-05-15 21:57:17,369 ui.web.coordinator INFO Phase 2: kernel in offline bridge mode (outbox)
+2026-05-15 21:57:17,369 ui.web.coordinator INFO [  1360.7ms] phase2     fabric          family_tools.fabric_registered M15: 5 family-tool adapters registered in Fabric (calendar, chores, family_settings, reminders, tasks)
+2026-05-15 21:57:17,369 ui.web.coordinator INFO [  1360.8ms] phase2     kernel          kernel.started                 Kernel started (adapter=_HubCore, session_id=web-18c44c76, test_mode=False)
+2026-05-15 21:57:17,370 verticals.family.seeder INFO seed_space_projection: wrote SpaceGraphSnapshot space='family:smith' members=4 edges=2
+2026-05-15 21:57:17,370 ui.web.coordinator INFO [  1361.0ms] phase2     selfmodel       space_graph.seeded             seed_space_projection wrote=True space='family:smith'
+2026-05-15 21:57:17,370 verticals.family.seeder INFO seed_self_projections: seeded actor_id=alex
+2026-05-15 21:57:17,370 verticals.family.seeder INFO seed_self_projections: seeded actor_id=jordan
+2026-05-15 21:57:17,370 verticals.family.seeder INFO seed_self_projections: seeded actor_id=riley
+2026-05-15 21:57:17,370 verticals.family.seeder INFO seed_self_projections: seeded actor_id=nana_liz
+2026-05-15 21:57:17,370 ui.web.coordinator INFO [  1361.5ms] phase2     selfmodel       self_projections.seeded        seed_self_projections wrote=4 actors
+2026-05-15 21:57:17,370 ui.web.coordinator INFO [  1361.5ms] phase2     ui              phase2.complete                Phase 2 complete in 1.322s
+2026-05-15 21:57:17,370 ui.web.coordinator INFO [  1361.6ms] phase3     ui              phase3.start                   Wiring web output channel + hooks
+2026-05-15 21:57:17,379 ui.web.coordinator INFO [  1370.0ms] phase3     output          output_channel.subscribed      OutputChannel subscribed to bus topics
+2026-05-15 21:57:17,379 ui.web.coordinator INFO [  1370.3ms] phase3     bus             web_hooks.subscribed           Wired 6 web-only bus subscriptions
+2026-05-15 21:57:17,379 ui.web.coordinator INFO [  1370.4ms] phase3     ui              phase3.complete                Phase 3 complete in 0.009s
+2026-05-15 21:57:17,379 ui.web.coordinator INFO [  1370.6ms] phase4     ui              phase4.start                   Running health check
+2026-05-15 21:57:17,379 ui.web.coordinator INFO [  1370.6ms] phase4     health          check.bus_alive                bus_alive: OK
+2026-05-15 21:57:17,379 ui.web.coordinator INFO [  1370.7ms] phase4     health          check.fsm_alive                fsm_alive: OK
+2026-05-15 21:57:17,379 ui.web.coordinator INFO [  1370.7ms] phase4     health          check.model_alive              model_alive: OK
+2026-05-15 21:57:17,379 ui.web.coordinator INFO [  1370.8ms] phase4     health          check.session_state_alive      session_state_alive: OK
+2026-05-15 21:57:17,379 ui.web.coordinator INFO [  1370.8ms] phase4     health          check.output_channel_wired     output_channel_wired: OK
+2026-05-15 21:57:17,379 ui.web.coordinator INFO [  1370.9ms] phase4     health          check.consumer_running         consumer_running: OK
+2026-05-15 21:57:17,380 ui.web.coordinator INFO [  1370.9ms] phase4     health          check.front_ctx_alive          front_ctx_alive: OK
+2026-05-15 21:57:17,380 ui.web.coordinator INFO [  1370.9ms] phase4     health          check.back_ctx_alive           back_ctx_alive: OK
+2026-05-15 21:57:17,380 ui.web.coordinator INFO [  1371.0ms] phase4     ui              phase4.complete                Phase 4 complete in 0.000s (OK)
+2026-05-15 21:57:17,380 ui.web.coordinator INFO [  1371.2ms] boot       ui              system.init.complete           4 phases complete in 1.358s
+2026-05-15 21:57:17,380 ui.web.coordinator INFO INIT: UiCoordinator READY
+2026-05-15 21:57:17,380 ui.web.app INFO WEB: UiCoordinator initialized (test_mode=False)
+2026-05-15 21:57:17,472 ui.web.app INFO WEB: mounted family-tool routers: ['/k1/tools/calendar', '/k1/tools/tasks', '/k1/tools/reminders', '/k1/tools/chores', '/k1/tools/family_settings']
+2026-05-15 21:57:17,473 k1.planner.planner_agent INFO planner_agent.init_started
+2026-05-15 21:57:17,474 k1.planner.planner_agent INFO planner_agent.wiring_validated
+2026-05-15 21:57:17,474 k1.planner.planner_agent INFO planner_agent.subscriptions_created
+2026-05-15 21:57:17,474 k1.planner.planner_agent INFO planner_agent.crash_recovery_complete
+2026-05-15 21:57:17,474 k1.planner.planner_agent INFO planner_agent.init_complete
+INFO:     127.0.0.1:59927 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50967 - "WebSocket /ws" [accepted]
+INFO:     connection open
+INFO:     127.0.0.1:59927 - "GET /k1/tools/tasks/list_tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60888 - "GET /k1/tools/calendar/list_events?start_date=2026-05-16&end_date=2026-05-30 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58500 - "GET /k1/tools/reminders/list_reminders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59118 - "GET /k1/tools/chores/list_chores HTTP/1.1" 200 OK
+2026-05-15 21:57:26,448 k1.concierge.fsm.controller INFO FSM._on_user_input: state=LISTENING envelope_id=8 text=sup homie device=none
+2026-05-15 21:57:26,448 k1.concierge.fsm.controller INFO FSM LISTENING -> DISPATCHING on k1.session.user.input.v1 [envelope_id=8]
+2026-05-15 21:57:26,449 k1.concierge.fsm.controller INFO FSM._route_user_turn: envelope_id=8 state=DISPATCHING
+2026-05-15 21:57:26,452 k1.concierge.fsm.controller INFO FSM._deliver_to_front: envelope_id=8 topic=k1.session.user.input.v1 state=DISPATCHING
+2026-05-15 21:57:26,452 poc.k1_poc.demo.output_channel INFO OUTPUT [  9073.5ms] input      bus        env_id=8      parent=0      User input: sup homie
+2026-05-15 21:57:26,452 poc.k1_poc.demo.output_channel INFO OUTPUT [  9073.7ms] state      fsm        env_id=9      parent=8      FSM: LISTENING -> DISPATCHING (trigger=k1.session.user.input.v1)
+2026-05-15 21:57:26,452 poc.k1_poc.demo.output_channel INFO OUTPUT [  9073.8ms] state      fsm        env_id=10     parent=8      Turn 1 started
+2026-05-15 21:57:26,452 poc.k1_poc.demo.output_channel INFO OUTPUT: wait_for_response called (timeout=180.0s)
+2026-05-15 21:57:26,483 k1.concierge.prompt.mode INFO determine_mode  fsm=DISPATCHING topic=k1.session.user.input.v1 -> STANDARD (default)
+2026-05-15 21:57:26,483 k1.concierge.actors.front INFO front_handler: mode=standard fsm=DISPATCHING topic=k1.session.user.input.v1 trace=front-e6
+2026-05-15 21:57:26,483 k1.concierge.prompt.affect INFO compute_affect_band  valence=0.00 arousal=0.50 -> neutral
+2026-05-15 21:57:26,483 k1.concierge.actors.front INFO front_handler: appended current user turn to messages: sup homie
+2026-05-15 21:57:26,485 k1.concierge.prompt.builder INFO DynamicPromptBuilder.build START  mode=standard affect=neutral domain=None tier=hot depth=0
+2026-05-15 21:57:26,485 k1.concierge.prompt.builder INFO DynamicPromptBuilder.build DONE  mode=standard tools=10 max_iter=6 tokens=8182 affect=neutral
+2026-05-15 21:57:26,486 k1.concierge.actors.front INFO front_handler: LLM INPUT  prompt_len=32730 messages=1 tools=10 max_iter=6 affect=neutral
+2026-05-15 21:57:26,489 k1.concierge.actors.front INFO front_handler: prompt dump written envelope_id=8 file=D:\familyos\data\prompt_dumps\front_prompt_env8_1778900246486.json latest=D:\familyos\data\prompt_dumps\front_prompt_latest.json
+2026-05-15 21:57:26,489 k1.concierge.llm.validator INFO LLMOutputValidator initialised  schema_count=12 schemas=['update_beliefs', 'update_scoreboard', 'update_clarifications', 'update_narrative', 'refine_affect', 'promote_belief', 'update_session_bundle', 'recall_memory', 'summarize_context', 'dispatch_task', 'discover_capabilities', 'invoke_capability']
+2026-05-15 21:57:26,489 k1.concierge.react.loop INFO react_loop START: actor=front max_iter=6 tools=10 scenario=standard trace=front-e6
+2026-05-15 21:57:28,362 httpx INFO HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:streamGenerateContent?alt=sse "HTTP/1.1 200 OK"
+2026-05-15 21:57:28,364 poc.k1_poc.demo.output_channel INFO OUTPUT [ 10985.8ms] stream     front      env_id=12     parent=8      Stream text: 2 chars
+2026-05-15 21:57:28,443 k1.concierge.react.loop INFO react_loop: iter=0 actor=front has_text=True has_tools=False finish=stop streamed=True text=yo what's up
+2026-05-15 21:57:28,443 k1.concierge.actors.front INFO front_handler: LLM OUTPUT  status=complete text_len=12 dispatched=0 tool_calls=0 trace=front-e6
+2026-05-15 21:57:28,443 poc.k1_poc.demo.output_channel INFO OUTPUT [ 11064.8ms] stream     front      env_id=13     parent=8      Stream text: 12 chars
+2026-05-15 21:57:28,443 k1.concierge.actors.front INFO front_handler._on_text_response: publishing FINAL text=yo what's up parent_id=8
+2026-05-15 21:57:28,443 k1.concierge.fsm.controller INFO FSM._on_response_final: state=DISPATCHING envelope_id=14 text=yo what's up
+2026-05-15 21:57:28,444 k1.concierge.fsm.controller INFO FSM DISPATCHING -> LISTENING on k1.response.final.v1 [envelope_id=14]
+2026-05-15 21:57:28,444 poc.k1_poc.demo.output_channel INFO OUTPUT [ 11065.6ms] response   front      env_id=14     parent=8      Final response (12 chars, affect=calm, proactive=False)
+2026-05-15 21:57:28,444 poc.k1_poc.demo.output_channel INFO OUTPUT [ 11065.7ms] state      fsm        env_id=15     parent=14     FSM: DISPATCHING -> LISTENING (trigger=k1.response.final.v1)
+2026-05-15 21:57:28,444 poc.k1_poc.demo.output_channel INFO OUTPUT [ 11065.8ms] state      fsm        env_id=16     parent=14     Turn 1 completed
+2026-05-15 21:57:28,444 k1.concierge.actors.front INFO front_handler._on_text_response: FINAL published (envelope_id=0)
+2026-05-15 21:57:28,445 k1.concierge.actors.front INFO front_handler complete: status=complete dispatched=0 cancel=0 trace=front-e6
+2026-05-15 21:57:28,445 poc.k1_poc.demo.output_channel INFO OUTPUT: response received -- text_len=12

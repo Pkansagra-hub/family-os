@@ -608,6 +608,10 @@ class TestWeaveTemplatePlaceholders:
         template = SCENARIO_DATA_TEMPLATES[PromptMode.WEAVE]
         assert "{emotional_context}" in template
 
+    def test_weave_template_has_semantic_guidance(self):
+        template = SCENARIO_DATA_TEMPLATES[PromptMode.WEAVE]
+        assert "{semantic_guidance}" in template
+
     def test_weave_template_still_has_result_count(self):
         template = SCENARIO_DATA_TEMPLATES[PromptMode.WEAVE]
         assert "{result_count}" in template
@@ -625,12 +629,14 @@ class TestWeaveTemplatePlaceholders:
         formatted = template.format(
             urgency_label="URGENT -- present prominently",
             emotional_context="User affect is neutral. Standard weave.",
+            semantic_guidance="Preserve authority boundary.",
             result_count=2,
             results_summary="Hotel booked. Flight confirmed.",
             current_thread="dinner plans",
         )
         assert "URGENT" in formatted
         assert "neutral" in formatted
+        assert "authority boundary" in formatted
         assert "2 background" in formatted
         assert "Hotel booked" in formatted
         assert "dinner plans" in formatted

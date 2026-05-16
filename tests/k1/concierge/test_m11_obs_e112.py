@@ -731,12 +731,12 @@ class TestRecordBackMetrics:
             tier="HIGH",
             status="complete",
             iterations_used=6,
-            budget_limit=0,  # P3.4b: Will default to TIER_BUDGET_LIMITS["HIGH"] = 15
+            budget_limit=0,  # P3.4b: Will default to TIER_BUDGET_LIMITS["HIGH"] = 400
         )
         alerts = record_back_metrics(mc, outcome)
 
         util = mc.get_histogram("back.tier.budget_utilization", {"tier": "HIGH"})
-        assert util == [0.4]  # 6/15
+        assert util == [0.015]
 
     def test_multiple_tiers_tracked_separately(self) -> None:
         mc = self._mc()
@@ -814,13 +814,13 @@ class TestClassifyBudgetUtilization:
     def test_tier_budget_limits_defined(self) -> None:
         # P3.4b: canonical {simple, plan, crisis} buckets + legacy aliases.
         assert TIER_BUDGET_LIMITS == {
-            "simple": 5,
-            "plan": 15,
-            "crisis": 3,
-            "LOW": 5,
-            "MEDIUM": 15,
-            "HIGH": 15,
-            "CRISIS": 3,
+            "simple": 400,
+            "plan": 400,
+            "crisis": 400,
+            "LOW": 400,
+            "MEDIUM": 400,
+            "HIGH": 400,
+            "CRISIS": 400,
         }
 
 
@@ -833,7 +833,11 @@ class TestE112PackageImport:
     """Verify obs package exports E11.2 symbols."""
 
     def test_import_react_metrics(self) -> None:
-        from k1.concierge.obs import ReactLoopOutcome, classify_exit_path, record_react_loop_metrics
+        from k1.concierge.obs import (
+            ReactLoopOutcome,
+            classify_exit_path,
+            record_react_loop_metrics,
+        )
 
         assert ReactLoopOutcome is not None
         assert classify_exit_path is not None

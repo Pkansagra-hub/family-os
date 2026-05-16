@@ -705,6 +705,12 @@ class CapabilityContract:
     provider_id: str = ""
     provider_endpoint: str = ""
 
+    # ---- Prompt/Profile Metadata ----
+    prompt_template: Optional[str] = None
+    activity_profile: Optional[str] = None
+    tool_instructions: Optional[str] = None
+    prompt_variables_schema: Optional[Dict[str, Any]] = None
+
     # ---- Policy Metadata ----
     safety_band_min: str = SafetyBand.GREEN.value
     cost_per_call: float = 0.0
@@ -762,6 +768,14 @@ class CapabilityContract:
             "provider_type": self.provider_type,
             "provider_id": self.provider_id,
             "provider_endpoint": self.provider_endpoint,
+            "prompt_template": self.prompt_template,
+            "activity_profile": self.activity_profile,
+            "tool_instructions": self.tool_instructions,
+            "prompt_variables_schema": (
+                dict(self.prompt_variables_schema)
+                if isinstance(self.prompt_variables_schema, dict)
+                else self.prompt_variables_schema
+            ),
             "safety_band_min": self.safety_band_min,
             "cost_per_call": self.cost_per_call,
             "avg_latency_ms": self.avg_latency_ms,
@@ -799,6 +813,10 @@ class CapabilityContract:
             provider_type=data.get("provider_type", ""),
             provider_id=data.get("provider_id", ""),
             provider_endpoint=data.get("provider_endpoint", ""),
+            prompt_template=data.get("prompt_template"),
+            activity_profile=data.get("activity_profile"),
+            tool_instructions=data.get("tool_instructions"),
+            prompt_variables_schema=data.get("prompt_variables_schema"),
             safety_band_min=data.get("safety_band_min", SafetyBand.GREEN.value),
             cost_per_call=data.get("cost_per_call", 0.0),
             avg_latency_ms=data.get("avg_latency_ms", 0),

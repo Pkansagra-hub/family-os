@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 import pytest
@@ -564,6 +565,21 @@ async def test_response_with_unknown_id_dropped() -> None:
         )
     )
     assert resp.answer == "ok"
+    await svc.shutdown()
+
+
+async def test_legacy_bridge_response_without_future_is_ignored_quietly(caplog) -> None:
+    bus = FakeBus()
+    svc = _svc(bus)
+    caplog.set_level(logging.WARNING, logger="k1.hil.service")
+
+    await bus.deliver_response(
+        "legacy-bridge-id",
+        HILKind.NEEDS_HUMAN,
+        {"decision": "answered", "legacy_bridge": True},
+    )
+
+    assert "hil_response_unknown_id" not in caplog.text
     await svc.shutdown()
 
 

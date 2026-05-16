@@ -392,14 +392,14 @@ tools:
   # Max tool calls per tier per turn (tools/dispatcher.py)
   budget_limits:
     # Canonical 2-bucket keys (P3.2)
-    simple: 5
-    plan: 15
-    crisis: 3
+    simple: 400
+    plan: 400
+    crisis: 400
     # Legacy tier aliases (kept until P3.3 updates all callers)
-    LOW: 5
-    MEDIUM: 15
-    HIGH: 15
-    CRISIS: 3
+    LOW: 400
+    MEDIUM: 400
+    HIGH: 400
+    CRISIS: 400
   # Front tier allowlists (P3.2: collapsed to simple/plan/crisis)
   front_tier_allowlists:
     simple:

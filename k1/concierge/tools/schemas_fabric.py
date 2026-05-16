@@ -25,8 +25,9 @@ DISCOVER_CAPABILITIES_SCHEMA = ToolSchema(
     description=(
         "Query the K0 capability registry to find services, agents, or workflows "
         "that can handle a given intent. Returns ranked matches with confidence "
-        "scores. Call BEFORE invoke_capability or spawn_via_fabric to find "
-        "available options. Available in ALL tiers."
+        "scores plus each capability's required and optional input schema. Call "
+        "BEFORE invoke_capability or spawn_via_fabric to find available options "
+        "and verify required inputs. Available in ALL tiers."
     ),
     parameters={
         "type": "object",
@@ -61,8 +62,16 @@ DISCOVER_CAPABILITIES_SCHEMA = ToolSchema(
                     "properties": {
                         "name": {"type": "string"},
                         "description": {"type": "string"},
-                        "confidence": {"type": "number"},
-                        "provider": {"type": "string"},
+                        "domain": {"type": "string"},
+                        "score": {"type": "number"},
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "required_inputs": {"type": "array"},
+                                "optional_inputs": {"type": "array"},
+                                "safety_band_min": {"type": "string"},
+                            },
+                        },
                     },
                 },
             },
@@ -84,7 +93,9 @@ INVOKE_CAPABILITY_SCHEMA = ToolSchema(
     description=(
         "Invoke a known K0 capability by name with parameters. "
         "Use after discover_capabilities identifies the right service, "
-        "or when you already know the capability name from prior tasks. "
+        "or when you already know the capability name and its input schema from prior tasks. "
+        "If required inputs are missing, this tool returns a structured needs_human "
+        "recovery contract instead of invoking the side effect. "
         "Available at all tiers. For invoking MULTIPLE independent "
         "capabilities, prefer batch_invoke_capabilities to save budget."
     ),
@@ -117,8 +128,9 @@ INVOKE_CAPABILITY_SCHEMA = ToolSchema(
             "duration_ms": {"type": "integer"},
             "status": {
                 "type": "string",
-                "enum": ["success", "partial", "error"],
+                "enum": ["success", "partial", "error", "needs_human"],
             },
+            "recovery": {"type": "object"},
         },
     },
     actor="both",

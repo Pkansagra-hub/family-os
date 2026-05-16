@@ -46,7 +46,11 @@ logger = logging.getLogger(__name__)
 
 
 class WeaveAction(str, Enum):
-    """What the FSM does when a task completes in a given state.
+    """Legacy state-table primitive for pre-M8 weave fallback.
+
+    M4+ code uses the canonical WeaveDecision in weave_policy.py. This
+    enum remains for the static fallback table and is bridged through
+    _ACTION_TO_DECISION in weave_policy.py.
 
     V2 Design Ref: Section 4 (WEAVING state)
 
@@ -64,7 +68,8 @@ class WeaveAction(str, Enum):
     DEAD_LETTER = "dead_letter"
 
 
-# V2 Section 4: FSM state table for weave decisions
+# V2 Section 4: legacy FSM state table for fallback weave decisions.
+# Canonical adaptive decisions use WeaveDecision in weave_policy.py.
 STATE_ACTION_TABLE: dict[ConciergeState, WeaveAction] = {
     ConciergeState.LISTENING: WeaveAction.IMMEDIATE,
     ConciergeState.COMPANIONING: WeaveAction.QUEUE_WEAVE,

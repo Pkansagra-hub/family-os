@@ -358,6 +358,120 @@ class HILSubTask:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class HILStateRecord:
+    """Ledger projection join model for pending HIL state."""
+
+    task_id: str = ""
+    hil_request_id: str = ""
+    pending_hil_id: str = ""
+    kind: str = ""
+    hil_type: str = ""
+    question: str = ""
+    options: list[dict[str, Any]] = field(default_factory=list)
+    side_effects: list[str] = field(default_factory=list)
+    safety_band: str = "GREEN"
+    caller_key: str = ""
+    created_at_ms: int = 0
+    timeout_ms: int = 0
+    status: str = "PENDING"
+    react_snapshot: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_projection_payload(cls, task_id: str, payload: dict[str, Any]) -> HILStateRecord:
+        """Build a normalized pending-HIL record from a ledger payload."""
+        inner = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+        event_id = str(payload.get("event_id") or "")
+        hil_request_id = str(
+            payload.get("hil_request_id")
+            or payload.get("pending_hil_id")
+            or inner.get("hil_request_id")
+            or event_id
+            or task_id
+        )
+        pending_hil_id = str(
+            payload.get("pending_hil_id") or inner.get("pending_hil_id") or hil_request_id
+        )
+        kind = str(
+            payload.get("kind")
+            or inner.get("kind")
+            or payload.get("hil_type")
+            or inner.get("hil_type")
+            or "clarification"
+        )
+        hil_type = str(payload.get("hil_type") or inner.get("hil_type") or kind)
+
+        timeout_ms = payload.get("timeout_ms") or inner.get("timeout_ms") or 0
+        if not timeout_ms and payload.get("timeout_s") is not None:
+            try:
+                timeout_ms = int(float(payload.get("timeout_s", 0)) * 1000)
+            except (TypeError, ValueError):
+                timeout_ms = 0
+
+        react_snapshot = payload.get("react_snapshot")
+        if not isinstance(react_snapshot, dict):
+            maybe_snapshot = inner.get("react_snapshot")
+            react_snapshot = maybe_snapshot if isinstance(maybe_snapshot, dict) else {}
+
+        return cls(
+            task_id=task_id,
+            hil_request_id=hil_request_id,
+            pending_hil_id=pending_hil_id,
+            kind=kind,
+            hil_type=hil_type,
+            question=str(payload.get("question") or inner.get("question") or ""),
+            options=list(payload.get("options") or inner.get("options") or []),
+            side_effects=list(payload.get("side_effects") or inner.get("side_effects") or []),
+            safety_band=str(payload.get("safety_band") or inner.get("safety_band") or "GREEN"),
+            caller_key=str(payload.get("caller_key") or inner.get("caller_key") or ""),
+            created_at_ms=int(payload.get("created_at_ms") or inner.get("created_at_ms") or 0),
+            timeout_ms=int(timeout_ms or 0),
+            status=str(payload.get("status") or inner.get("status") or "PENDING"),
+            react_snapshot=react_snapshot,
+        )
+
+    def to_pending_hil_data(self) -> dict[str, Any]:
+        """Serialize into the task_state.pending_hil_data shape."""
+        inner = {
+            "task_id": self.task_id,
+            "hil_type": self.hil_type,
+            "question": self.question,
+            "options": list(self.options),
+            "side_effects": list(self.side_effects),
+            "safety_band": self.safety_band,
+        }
+        envelope = {
+            "hil_request_id": self.hil_request_id,
+            "kind": self.kind,
+            "caller_key": self.caller_key,
+            "trace_id": "",
+            "created_at_ms": self.created_at_ms,
+            "timeout_ms": self.timeout_ms,
+            "payload": inner,
+        }
+        data = {
+            "pending_hil_id": self.pending_hil_id,
+            "hil_request_id": self.hil_request_id,
+            "kind": self.kind,
+            "hil_type": self.hil_type,
+            "parent_task_id": self.task_id,
+            "question": self.question,
+            "options": list(self.options),
+            "side_effects": list(self.side_effects),
+            "safety_band": self.safety_band,
+            "caller_key": self.caller_key,
+            "created_at_ms": self.created_at_ms,
+            "timeout_ms": self.timeout_ms,
+            "status": self.status,
+            "react_snapshot": dict(self.react_snapshot),
+            "envelope": envelope,
+        }
+        if self.created_at_ms:
+            data["created_at_ns"] = self.created_at_ms * 1_000_000
+            data["suspended_at_ms"] = self.created_at_ms
+        return data
+
+
 class TaskStatus(str, Enum):
     """Task lifecycle status values.
 

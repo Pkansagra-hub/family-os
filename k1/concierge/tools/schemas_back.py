@@ -22,7 +22,10 @@ from k1.concierge.llm.types import ToolSchema
 # so they can be shared with Front without a schemas_front <-> schemas_back
 # import cycle. Re-exported here to preserve the historical public surface
 # (`from k1.concierge.tools.schemas_back import DISCOVER_CAPABILITIES_SCHEMA`).
-from k1.concierge.tools.schemas_fabric import DISCOVER_CAPABILITIES_SCHEMA, INVOKE_CAPABILITY_SCHEMA
+from k1.concierge.tools.schemas_fabric import (
+    DISCOVER_CAPABILITIES_SCHEMA,
+    INVOKE_CAPABILITY_SCHEMA,
+)
 
 # Import shared schema -- recall_memory is actor="both"
 from k1.concierge.tools.schemas_front import RECALL_MEMORY_SCHEMA
@@ -36,7 +39,7 @@ BATCH_INVOKE_CAPABILITIES_SCHEMA = ToolSchema(
     description=(
         "Invoke MULTIPLE capabilities in a single tool call. Each invocation "
         "in the batch runs independently. Use when you need to execute 2+ "
-        "capabilities (e.g. set_reminder + send_message + set_alarm) to save "
+        "capabilities (e.g. calendar event + reminder + task update) to save "
         "tool budget. Costs only 1 tool call regardless of batch size. "
         "Available at all tiers."
     ),
@@ -204,7 +207,11 @@ SUBMIT_RESULT_SCHEMA = ToolSchema(
         "Call EXACTLY ONCE as the final tool call in every Back execution. "
         "result_type='complete' when task is done; "
         "result_type='needs_human' when human-in-the-loop is required "
-        "(confirmation, choice, escalation). Available at all tiers."
+        "by a capability/tool contract (missing required input, no viable "
+        "capability candidates, explicit choice/escalation). Do not use "
+        "needs_human just because no bulk wrapper exists; decompose through "
+        "read/list + write capability contracts first. "
+        "Available at all tiers."
     ),
     parameters={
         "type": "object",
@@ -216,7 +223,7 @@ SUBMIT_RESULT_SCHEMA = ToolSchema(
             # -- Fields for result_type="complete" --
             "final_answer": {
                 "type": "string",
-                "description": "Natural language summary of what was done (for complete)",
+                "description": "Technical factual summary for Front to present (for complete)",
             },
             "results": {
                 "type": "array",
@@ -225,8 +232,24 @@ SUBMIT_RESULT_SCHEMA = ToolSchema(
             },
             "artifacts_created": {
                 "type": "array",
-                "items": {"type": "string"},
-                "description": "IDs of artifacts created (for complete)",
+                "items": {"type": "object"},
+                "description": (
+                    "Durable artifacts created (for complete). Prefer objects with "
+                    "type, summary, data, and optional semantic metadata."
+                ),
+            },
+            "semantic_context": {
+                "type": "object",
+                "description": (
+                    "Optional domain-agnostic semantic envelope for future weave, "
+                    "prep/context notes, provenance, and authority boundaries."
+                ),
+            },
+            "presentation_guidance": {
+                "type": "string",
+                "description": (
+                    "Optional concise guidance for Front presentation, not user-facing prose."
+                ),
             },
             # -- Fields for result_type="needs_human" --
             "hil_type": {

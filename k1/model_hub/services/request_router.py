@@ -455,6 +455,19 @@ class RequestRouter:
             if chunk.tool_calls:
                 accumulated_tool_calls.extend(chunk.tool_calls)
             if chunk.done:
+                chunk_finish_reason = FinishReason.STOP
+                if isinstance(chunk.metadata, dict) and chunk.metadata.get("finish_reason"):
+                    raw_finish = chunk.metadata.get("finish_reason")
+                    if isinstance(raw_finish, FinishReason):
+                        chunk_finish_reason = raw_finish
+                    else:
+                        try:
+                            chunk_finish_reason = FinishReason(str(raw_finish))
+                        except ValueError:
+                            logger.warning(
+                                "RequestRouter.stream_route: unknown provider finish_reason=%r",
+                                raw_finish,
+                            )
                 # Final chunk -- build metadata with accumulated content
                 metadata = ResponseMetadata(
                     request_id=request.request_id,
@@ -470,7 +483,7 @@ class RequestRouter:
                     capability=request.capability,
                     trace_id=request.trace_id,
                     finish_reason=(
-                        FinishReason.TOOL_CALLS if accumulated_tool_calls else FinishReason.STOP
+                        FinishReason.TOOL_CALLS if accumulated_tool_calls else chunk_finish_reason
                     ),
                 )
                 yield HubChunk(

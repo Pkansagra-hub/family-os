@@ -1210,7 +1210,7 @@ class TestDegenerateResponseRecovery:
 
         # Back degenerate + text without tools = "thinking aloud", continues loop
         # Should eventually exhaust budget (5 iterations)
-        assert result.status == "budget_exhausted"
+        assert result.status == "missing_submit_result"
         assert call_count >= 3  # At least 3 generate calls
 
 
@@ -1254,7 +1254,7 @@ class TestBackTextWithoutToolsBudget:
             scenario="test",
         )
 
-        assert result.status == "budget_exhausted"
+        assert result.status == "missing_submit_result"
         assert call_count == 3
 
     @pytest.mark.asyncio

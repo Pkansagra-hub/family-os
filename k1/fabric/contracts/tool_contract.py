@@ -233,6 +233,10 @@ class ToolContractParser:
             provider_type=body.get("provider_type", ""),
             provider_id=body.get("provider_id", ""),
             provider_endpoint=body.get("provider_endpoint", ""),
+            prompt_template=body.get("prompt_template"),
+            activity_profile=body.get("activity_profile"),
+            tool_instructions=body.get("tool_instructions"),
+            prompt_variables_schema=body.get("prompt_variables_schema"),
             # Policy Metadata
             safety_band_min=body.get("safety_band_min", "GREEN"),
             cost_per_call=float(body.get("cost_per_call", 0.0)),

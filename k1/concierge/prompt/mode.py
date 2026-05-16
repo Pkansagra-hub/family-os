@@ -231,22 +231,13 @@ def get_max_iterations(mode: PromptMode, affect_band: str = "neutral") -> int:
 # V3 E0.1.4: replaced inline string literals with canonical imports.
 # =========================================================================
 
-from k1.concierge.bus.topics import (
-    TOPIC_HIL_REQUEST as _TOPIC_HIL_REQUEST,  # noqa: E402
-)
-from k1.concierge.bus.topics import (
-    TOPIC_TASK_COMPLETE as _TOPIC_TASK_COMPLETE,  # noqa: E402
-)
-from k1.concierge.bus.topics import (
-    TOPIC_TASK_FAILED as _TOPIC_TASK_FAILED,  # noqa: E402
-)
-from k1.concierge.bus.topics import (
-    TOPIC_TASK_SUSPENDED as _TOPIC_TASK_SUSPENDED,  # noqa: E402
-)
+from k1.concierge.bus.topics import TOPIC_HIL_REQUEST as _TOPIC_HIL_REQUEST  # noqa: E402
+from k1.concierge.bus.topics import TOPIC_PROACTIVE_FILL as _TOPIC_PROACTIVE_FILL  # noqa: E402
+from k1.concierge.bus.topics import TOPIC_TASK_COMPLETE as _TOPIC_TASK_COMPLETE  # noqa: E402
+from k1.concierge.bus.topics import TOPIC_TASK_FAILED as _TOPIC_TASK_FAILED  # noqa: E402
+from k1.concierge.bus.topics import TOPIC_TASK_SUSPENDED as _TOPIC_TASK_SUSPENDED  # noqa: E402
 from k1.concierge.bus.topics import TOPIC_USER_INPUT as _TOPIC_USER_INPUT  # noqa: E402
-from k1.concierge.bus.topics import (
-    TOPIC_WEAVE_BATCH as _TOPIC_WEAVE_BATCH,  # noqa: E402
-)
+from k1.concierge.bus.topics import TOPIC_WEAVE_BATCH as _TOPIC_WEAVE_BATCH  # noqa: E402
 
 # =========================================================================
 # determine_mode() -- Mode Resolution (V2 Section 4, 16.3)
@@ -344,6 +335,9 @@ def determine_mode(
 
     # 3. Event-topic-driven mappings
     if envelope_topic == _TOPIC_TASK_COMPLETE:
+        logger.info("determine_mode  topic=%s -> PRESENT", envelope_topic)
+        return PromptMode.PRESENT
+    if envelope_topic == _TOPIC_PROACTIVE_FILL:
         logger.info("determine_mode  topic=%s -> PRESENT", envelope_topic)
         return PromptMode.PRESENT
     if envelope_topic == _TOPIC_TASK_FAILED:

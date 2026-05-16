@@ -107,6 +107,8 @@ class ResumeContext:
         remaining_budget:      Iterations remaining in the ReAct budget.
         merged_params:         Params with user modifications applied
                               (approval/selection flows only).
+        recovery:              Structured tool recovery contract, when the
+                      suspension came from missing capability inputs.
     """
 
     task_id: str
@@ -119,6 +121,8 @@ class ResumeContext:
     resume_instruction: str = ""
     remaining_budget: int = 0
     merged_params: dict[str, Any] = field(default_factory=dict)
+    recovery: dict[str, Any] = field(default_factory=dict)
+    react_checkpoint: dict[str, Any] = field(default_factory=dict)
 
     @property
     def has_findings(self) -> bool:
@@ -148,6 +152,10 @@ class ResumeContext:
         }
         if self.merged_params:
             ctx["merged_params"] = self.merged_params
+        if self.recovery:
+            ctx["recovery"] = self.recovery
+        if self.react_checkpoint:
+            ctx["react_checkpoint"] = self.react_checkpoint
         return ctx
 
 
@@ -160,6 +168,8 @@ def build_resume_context(
     last_iteration: int = 0,
     total_budget: int = 10,
     merged_params: dict[str, Any] | None = None,
+    recovery: dict[str, Any] | None = None,
+    react_checkpoint: dict[str, Any] | None = None,
 ) -> ResumeContext:
     """Assemble structured resume context for Back after HITL resolution.
 
@@ -221,6 +231,8 @@ def build_resume_context(
         resume_instruction=instruction,
         remaining_budget=remaining,
         merged_params=merged_params or {},
+        recovery=recovery or {},
+        react_checkpoint=react_checkpoint or {},
     )
 
     logger.info(
@@ -448,7 +460,12 @@ def validate_hitl_wiring() -> list[str]:
     # schema registry and that their schemas are structurally valid
     # (roundtrip: construct -> to_payload -> validate_event).
     try:
-        from k1.concierge.events.hitl import HILRequested, HILResolved, TaskResumed, TaskSuspended
+        from k1.concierge.events.hitl import (
+            HILRequested,
+            HILResolved,
+            TaskResumed,
+            TaskSuspended,
+        )
         from k1.concierge.events.validator import EVENT_SCHEMA_REGISTRY, validate_event
 
         hitl_event_types = {

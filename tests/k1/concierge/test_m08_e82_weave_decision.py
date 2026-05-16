@@ -364,6 +364,41 @@ class TestWeavePolicyDecide:
         # R2 won't fire (gate != open), R5 won't fire (has_critical=True)
         assert "R5" not in result.reasoning
 
+    # ----- Rule 5.5: pending HITL defers non-critical results -----
+
+    def test_rule5_5_hitl_pending_no_critical_defers(self) -> None:
+        """R5.5: hitl_pending + no critical -> DEFER."""
+        sig = _signal(hitl_pending=True, has_critical=False)
+        result = self.policy.decide(sig)
+        assert result.decision == WeaveDecision.DEFER
+        assert result.window_ms == 0
+        assert "R5.5" in result.reasoning
+
+    def test_rule5_5_hitl_pending_with_critical_does_not_defer(self) -> None:
+        """R2 wins before R5.5 when critical urgency and gate=open."""
+        sig = _signal(
+            hitl_pending=True,
+            has_critical=True,
+            emotional_gate=EMOTIONAL_GATE_OPEN,
+        )
+        result = self.policy.decide(sig)
+        assert result.decision == WeaveDecision.IMMEDIATE
+        assert "R2" in result.reasoning
+        assert "R5.5" not in result.reasoning
+
+    def test_rule5_5_ordering_after_rule5(self) -> None:
+        """R5 affect deferral is evaluated before R5.5 HITL deferral."""
+        sig = _signal(
+            hitl_pending=True,
+            emotional_gate=EMOTIONAL_GATE_SUPPRESS_TRIVIAL,
+            has_critical=False,
+            user_typing=False,
+        )
+        result = self.policy.decide(sig)
+        assert result.decision == WeaveDecision.DEFER
+        assert "R5:" in result.reasoning
+        assert "R5.5" not in result.reasoning
+
     # ----- Rule 6: 3+ pending + all low -> DIGEST -----
 
     def test_rule6_digest_all_low(self) -> None:
@@ -538,6 +573,36 @@ class TestWeavePolicyDecide:
         assert result.decision == WeaveDecision.BATCH
         assert result.window_ms == 500
         assert "R9" in result.reasoning
+
+    def test_rule0_runtime_disable(self) -> None:
+        """R0: set_enabled(False) short-circuits to default BATCH."""
+        self.policy.set_enabled(False)
+        sig = _signal(
+            fsm_state="LISTENING",
+            user_idle_ms=IDLE_EAGER_MS + 1,
+            has_critical=True,
+        )
+        result = self.policy.decide(sig)
+        assert result.decision == WeaveDecision.BATCH
+        assert result.window_ms == 500
+        assert "R0" in result.reasoning
+
+    def test_policy_purity_no_side_effects(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """decide() does not publish, mutate queues, or call observability hooks."""
+        from unittest.mock import MagicMock
+
+        import k1.concierge.protocols.weave_policy as weave_policy
+
+        logger_probe = MagicMock()
+        publisher_probe = MagicMock()
+        monkeypatch.setattr(weave_policy, "logger", logger_probe)
+        sig = _signal(user_typing=True)
+
+        result = self.policy.decide(sig)
+
+        assert result.decision == WeaveDecision.DEFER
+        logger_probe.assert_not_called()
+        publisher_probe.publish.assert_not_called()
 
     # ----- Priority ordering: first-match wins -----
 

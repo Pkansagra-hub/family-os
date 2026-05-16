@@ -19,7 +19,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from k1.concierge.bus.topics import ALL_TOPICS, RELAXED_TOPICS, STRICT_TOPICS, TOPIC_UI_TYPING
+from k1.concierge.bus.topics import (
+    ALL_TOPICS,
+    RELAXED_TOPICS,
+    STRICT_TOPICS,
+    TOPIC_UI_TYPING,
+)
 from k1.concierge.fsm.states import ConciergeState
 from k1.concierge.fsm.transition_table import (
     FULL_GUARD_TABLE,
@@ -239,6 +244,14 @@ class TestWeaveSignalFromRuntime:
         )
         assert sig.hitl_pending is True
         assert sig.recent_weave_count == 7
+
+    def test_from_runtime_hitl_pending_true(self) -> None:
+        """from_runtime preserves hitl_pending=True for policy R5.5."""
+        sig = WeaveSignal.from_runtime(
+            fsm_state=ConciergeState.COMPANIONING,
+            hitl_pending=True,
+        )
+        assert sig.hitl_pending is True
 
     def test_from_runtime_backpool_exception_safe(self) -> None:
         """from_runtime handles BackPool exceptions gracefully."""

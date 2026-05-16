@@ -238,6 +238,26 @@ class ActionSpec(BaseModel):
         default_factory=LLMHints,
         description="LLM-facing metadata.",
     )
+    prompt_template: Optional[str] = Field(
+        default=None,
+        description="Optional PromptContract name to use for this action.",
+    )
+    activity_profile: Optional[str] = Field(
+        default=None,
+        description="Optional activity profile id for Back/Fabric execution guidance.",
+    )
+    tool_instructions: Optional[str] = Field(
+        default=None,
+        description="Optional concise operating instructions for LLM-backed execution.",
+    )
+    social_act: Optional[str] = Field(
+        default=None,
+        description="Optional constitution/social act id manifested by this action.",
+    )
+    side_effects: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Structured side effects emitted by this action for policy/HIL/audit.",
+    )
     sse: SSESpec = Field(
         default_factory=SSESpec,
         description="SSE/audit emission declaration.",
@@ -316,6 +336,14 @@ class ToolDefinition(BaseModel):
     can_reference: list[str] = Field(
         default_factory=list,
         description="Other adapters' ``entity_type`` values this adapter may cross-link to.",
+    )
+    activity_profile: Optional[str] = Field(
+        default=None,
+        description="Default activity profile id inherited by actions without an override.",
+    )
+    domain_tags: list[str] = Field(
+        default_factory=list,
+        description="Additional discovery/ranking domain tags for Fabric contracts.",
     )
     feature_flags: list[str] = Field(
         default_factory=list,

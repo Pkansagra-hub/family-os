@@ -31,8 +31,10 @@ Identity contract (V2 Section 4.2):
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import uuid
 from dataclasses import replace
 from typing import Any
 
@@ -40,6 +42,7 @@ from k1.bus.envelope import Envelope
 from k1.bus.ports.bus import IBus
 
 # Shared actor utilities (M3 E3.5)
+from k1.concierge.actors.frames import BackResultFrame, HILResolutionFrame
 from k1.concierge.actors.shared import never_cancel as _never_cancel
 from k1.concierge.actors.shared import parse_envelope_payload as _parse_payload
 from k1.concierge.actors.shared import safe_get_section as _safe_get_section
@@ -54,9 +57,15 @@ from k1.concierge.bus.builders import (
 from k1.concierge.config import get_config
 from k1.concierge.llm.types import ModelMessage
 from k1.concierge.llm.validator import LLMOutputValidator
+from k1.concierge.prompt.back_profiles import (
+    render_back_execution_profile_block,
+    select_back_execution_profiles,
+)
 from k1.concierge.prompt.back_prompt import build_back_prompt
 from k1.concierge.protocols.cancellation import CancellationToken, CancelReason
 from k1.concierge.protocols.suspension import SuspensionResolutionNotFound
+from k1.concierge.react.checkpoint import ReActCheckpoint
+from k1.concierge.react.control import BackControlEvent
 from k1.concierge.react.history import build_chat_history_for_back
 from k1.concierge.react.loop import ReactResult, react_loop
 from k1.concierge.tools.dispatcher import ToolDispatcher, create_back_dispatcher
@@ -65,12 +74,29 @@ from k1.model_hub.ports import IModelHubPort
 
 logger = logging.getLogger(__name__)
 
+_SAFETY_BANDS = frozenset({"GREEN", "AMBER", "RED", "CRISIS"})
 
-def _correlate_envelope(env: Envelope, source: Envelope) -> Envelope:
+
+def _normalize_safety_band(value: Any, default: str = "AMBER") -> str:
+    band = str(value or "").upper()
+    if band in _SAFETY_BANDS:
+        return band
+    fallback = str(default or "AMBER").upper()
+    return fallback if fallback in _SAFETY_BANDS else "AMBER"
+
+
+def _effective_task_safety_band(task: dict[str, Any], snapshot: dict[str, Any]) -> str:
+    default = get_config().actors.back.default_safety_band
+    task_band = task.get("safety_band") if isinstance(task, dict) else None
+    snapshot_band = snapshot.get("safety_band") if isinstance(snapshot, dict) else None
+    return _normalize_safety_band(task_band or snapshot_band, default=default)
+
+
+def _correlate_envelope(env: Envelope, source: Envelope, trace_id: str = "") -> Envelope:
     """Copy source correlation headers onto a Back-emitted envelope."""
     return replace(
         env,
-        cognitive_trace_id=source.cognitive_trace_id,
+        cognitive_trace_id=trace_id or source.cognitive_trace_id,
         session_id=source.session_id,
         request_id=source.request_id,
     )
@@ -82,14 +108,20 @@ def _bind_tool_context(
     trace_id: str,
     session_id: str,
     task_id: str,
+    safety_band: str | None = None,
 ) -> None:
     """Bind Back tool calls to the current envelope correlation scope."""
     ctx = getattr(tool_dispatcher, "ctx", None)
     if ctx is None:
         return
-    ctx.cognitive_trace_id = trace_id
-    ctx.session_id = session_id
+    ctx.cognitive_trace_id = trace_id or getattr(ctx, "cognitive_trace_id", "") or uuid.uuid4().hex
+    ctx.session_id = session_id or getattr(ctx, "session_id", "")
     ctx.active_task_id = task_id
+    if safety_band is not None:
+        ctx.safety_band = _normalize_safety_band(
+            safety_band,
+            default=get_config().actors.back.default_safety_band,
+        )
 
 
 # Compatibility export -- max ReAct iterations per tier
@@ -142,25 +174,28 @@ def _maybe_rebind_back_dispatcher(
     task_tier: str,
     bus: IBus,
 ) -> ToolDispatcher:
-    """Return an equal-or-upgraded back ToolDispatcher for the given task tier.
+    """Return a fresh back ToolDispatcher for the given task tier.
 
-    Per-task rebind: avoids a global tool_tier config by spinning up a fresh
-    dispatcher when the task requires the larger 'plan' allowlist.
+    Tool budgets are per task, not per long-lived Concierge runtime. Always
+    creating a task-scoped dispatcher prevents one task from exhausting the
+    next task's budget while preserving the shared ToolContext wiring.
     """
     desired_bucket = _resolve_back_tier_bucket(task_tier)
-    if tool_dispatcher.tier == desired_bucket:
-        return tool_dispatcher
     logger.info(
-        "back_handler: rebinding dispatcher tier %s -> %s for task tier %s",
+        "back_handler: creating task-scoped dispatcher tier %s -> %s for task tier %s",
         tool_dispatcher.tier,
         desired_bucket,
         task_tier,
     )
-    return create_back_dispatcher(
+    rebound = create_back_dispatcher(
         tier=desired_bucket,
         ctx=tool_dispatcher.ctx,
         bus=bus,
     )
+    policy_gate = getattr(tool_dispatcher, "policy_gate", None)
+    if policy_gate is not None:
+        rebound.set_policy_gate(policy_gate)
+    return rebound
 
 
 # =========================================================================
@@ -210,6 +245,8 @@ def _status_to_error_code(status: str) -> str:
     mapping = {
         "cancelled": "CANCELLED",
         "budget_exhausted": "BUDGET_EXHAUSTED",
+        "missing_submit_result": "REACT_MISSING_SUBMIT_RESULT",
+        "loop_degenerate": "REACT_LOOP_DEGENERATE",
         "tool_error": "TOOL_ERROR",
     }
     return mapping.get(status, "UNKNOWN")
@@ -289,7 +326,14 @@ def _read_ss_snapshot(ss: Any) -> dict[str, Any]:
             return _default
         if hasattr(section, "safety"):
             band = getattr(section.safety, "band", None)
-            return band if band else _default
+            return _normalize_safety_band(band, default=_default) if band else _default
+        if hasattr(section, "get_metadata"):
+            try:
+                meta = section.get_metadata()
+                if isinstance(meta, dict) and meta.get("safety_band"):
+                    return _normalize_safety_band(meta.get("safety_band"), default=_default)
+            except Exception:
+                pass
         if hasattr(section, "flow_state"):
             return _default
         return _default
@@ -378,6 +422,82 @@ def _deserialize_messages(data: list[dict]) -> list[ModelMessage]:
     ]
 
 
+def _execution_records(tool_dispatcher: ToolDispatcher) -> list[dict[str, Any]]:
+    getter = getattr(tool_dispatcher, "get_execution_records", None)
+    if not callable(getter):
+        return []
+    try:
+        return [record.to_dict() for record in getter()]
+    except Exception:
+        logger.exception("back_handler: failed to read tool execution records")
+        return []
+
+
+def _execution_profile_block_for_task(task: dict[str, Any]) -> str:
+    reference_context = task.get("reference_context") if isinstance(task, dict) else None
+    selection = select_back_execution_profiles(
+        task,
+        reference_context=reference_context if isinstance(reference_context, dict) else None,
+    )
+    if isinstance(task, dict) and not task.get("execution_profiles"):
+        task["execution_profiles"] = selection.to_dict()["profiles"]
+    logger.info(
+        "back_handler: execution profiles reason=%s profiles=%s",
+        selection.reason,
+        list(selection.profile_ids),
+    )
+    return render_back_execution_profile_block(selection)
+
+
+def _build_react_checkpoint(
+    *,
+    task_id: str,
+    messages: list[ModelMessage],
+    tool_dispatcher: ToolDispatcher,
+    max_iterations: int,
+    result: ReactResult,
+    suspension_count: int = 1,
+) -> ReActCheckpoint:
+    tool_history = _execution_records(tool_dispatcher)
+    completed_call_ids = [
+        str(record.get("call_id", ""))
+        for record in tool_history
+        if str(record.get("result_status", "")).lower() in {"ok", "partial"}
+        and record.get("call_id")
+    ]
+    last_iteration = len(result.iteration_durations_ms)
+    remaining_budget = max(0, max_iterations - last_iteration)
+    return ReActCheckpoint(
+        task_id=task_id,
+        messages=_serialize_messages(messages),
+        tool_history=tool_history,
+        completed_tool_call_ids=completed_call_ids,
+        suspension_count=suspension_count,
+        budget_remaining=remaining_budget,
+        last_iteration=last_iteration,
+        scratchpad={"loop_events": list(getattr(result, "loop_events", []) or [])},
+    )
+
+
+def _get_back_control_queue(
+    fsm_state: Any | None,
+    task_id: str,
+) -> asyncio.Queue[BackControlEvent] | None:
+    if fsm_state is None:
+        return None
+    getter = getattr(fsm_state, "get_running_task_control_queue", None)
+    if callable(getter):
+        queue = getter(task_id)
+        if queue is not None:
+            return queue
+    registrar = getattr(fsm_state, "register_running_task_control_queue", None)
+    if callable(registrar):
+        queue: asyncio.Queue[BackControlEvent] = asyncio.Queue()
+        registrar(task_id, queue)
+        return queue
+    return None
+
+
 # =========================================================================
 # Result emission helper (shared by back_handler and back_resume_handler)
 # =========================================================================
@@ -391,6 +511,8 @@ def _emit_back_result(
     react_history: list[ModelMessage] | None = None,
     original_task: dict[str, Any] | None = None,
     tool_call_summaries: list[dict[str, Any]] | None = None,
+    react_checkpoint: ReActCheckpoint | None = None,
+    trace_id: str = "",
 ) -> None:
     """Emit the appropriate bus event based on ReactResult status.
 
@@ -403,12 +525,21 @@ def _emit_back_result(
     M3 E3.3.4: When status is 'suspended', react_history and
     original_task are included in the payload so the FSM can store
     them via SuspensionManager and deliver them back on resume.
+
+    M1: the suspended lane is now legacy/recovery/no-HIL-service fallback.
+    Live callers with an IHILPort should await unified HIL in-process.
     """
     parent_id = envelope.envelope_id
 
     # Extract original task action from dispatch envelope for
     # downstream PRESENT mode scenario data
     envelope_task = _parse_payload(envelope)
+    trace_id = (
+        trace_id
+        or envelope.cognitive_trace_id
+        or str(envelope_task.get("trace_id", "") or "")
+        or f"back-{uuid.uuid4().hex[:12]}"
+    )
     task_action = envelope_task.get("action", "")
     if not task_action:
         intents = envelope_task.get("intents")
@@ -417,6 +548,16 @@ def _emit_back_result(
 
     if result.status == "complete":
         data = result.data or {}
+        frame = BackResultFrame.from_dict(
+            {
+                **data,
+                "task_id": task_id,
+                "status": "complete",
+                "result_type": str(data.get("result_type", "complete") or "complete"),
+                "tool_call_summaries": list(tool_call_summaries or []),
+                "raw_final_answer": str(data.get("final_answer", "") or ""),
+            }
+        )
         complete_payload: dict[str, Any] = {
             "task_id": task_id,
             "action": task_action,
@@ -424,14 +565,24 @@ def _emit_back_result(
             "final_answer": data.get("final_answer", ""),
             "results": data.get("results", []),
             "artifacts_created": data.get("artifacts_created", []),
+            "frame": frame.to_dict(),
         }
+        for key in (
+            "confidence",
+            "blockers",
+            "suggested_next_action",
+            "semantic_context",
+            "presentation_guidance",
+        ):
+            if key in data:
+                complete_payload[key] = data.get(key)
         if tool_call_summaries:
             complete_payload["tool_call_summaries"] = tool_call_summaries
         env = build_task_complete(
             payload=complete_payload,
             parent_id=parent_id,
         )
-        env = _correlate_envelope(env, envelope)
+        env = _correlate_envelope(env, envelope, trace_id=trace_id)
         bus.publish(env)
 
     elif result.status == "suspended":
@@ -442,34 +593,66 @@ def _emit_back_result(
             "question": data.get("question", ""),
             "options": data.get("options", []),
             "side_effects": data.get("side_effects", []),
+            "safety_band": data.get("safety_band", "GREEN"),
             "timeout_s": get_config().actors.back.hitl_timeout_s,
         }
+        if data.get("recovery"):
+            suspended_payload["recovery"] = data["recovery"]
+        if data.get("missing_fields"):
+            suspended_payload["missing_fields"] = data["missing_fields"]
         # M3 E3.3.4: Include react history and original task so FSM
         # can store them via SuspensionManager and deliver on resume.
         if react_history is not None:
             suspended_payload["react_history"] = _serialize_messages(react_history)
+        if react_checkpoint is not None:
+            suspended_payload["react_checkpoint"] = react_checkpoint.to_dict()
         if original_task is not None:
             suspended_payload["original_task"] = original_task
         env = build_task_suspended(
             payload=suspended_payload,
             parent_id=parent_id,
         )
-        env = _correlate_envelope(env, envelope)
+        env = _correlate_envelope(env, envelope, trace_id=trace_id)
         bus.publish(env)
 
-    elif result.status in ("cancelled", "budget_exhausted"):
+    elif result.status in (
+        "cancelled",
+        "budget_exhausted",
+        "missing_submit_result",
+        "loop_degenerate",
+    ):
         data = result.data if result.data else {}
+        error_code = str(data.get("error_code") or _status_to_error_code(result.status))
         env = build_task_failed(
             payload={
                 "task_id": task_id,
                 "reason": result.status,
-                "error_code": _status_to_error_code(result.status),
+                "error_code": error_code,
                 "partial_results": data.get("partial_results") if data else None,
             },
             parent_id=parent_id,
         )
-        env = _correlate_envelope(env, envelope)
+        env = _correlate_envelope(env, envelope, trace_id=trace_id)
         bus.publish(env)
+
+
+def _resume_resolution_text(
+    *,
+    task_id: str,
+    hil_type: str,
+    resolution: dict[str, Any],
+    resolution_frame: HILResolutionFrame | None,
+) -> str:
+    """Build Back-facing resume JSON from typed fields, not raw user prose."""
+    if resolution_frame is not None:
+        if resolution_frame.kind in {"approval", "capability_gate"}:
+            if resolution_frame.approval is None:
+                raise SuspensionResolutionNotFound(task_id)
+        return json.dumps(resolution_frame.command_summary(), indent=2, default=str)
+
+    if hil_type in {"approval", "capability_gate"} and resolution.get("approval") is None:
+        raise SuspensionResolutionNotFound(task_id)
+    return json.dumps(resolution, indent=2, default=str)
 
 
 # =========================================================================
@@ -524,10 +707,16 @@ async def back_handler(
     Returns:
         ReactResult from the ReAct loop execution.
     """
-    trace_id = envelope.cognitive_trace_id
     task = _parse_payload(envelope)
+    trace_id = (
+        envelope.cognitive_trace_id
+        or str(task.get("trace_id", "") or "")
+        or getattr(getattr(tool_dispatcher, "ctx", None), "cognitive_trace_id", "")
+        or f"back-{uuid.uuid4().hex[:12]}"
+    )
     task_id = task.get("task_id", "")
     tier = task.get("tier", "LOW")
+    control_queue = _get_back_control_queue(fsm_state, task_id)
     # P3.4c: Per-task tier rebind for the back dispatcher.
     tool_dispatcher = _maybe_rebind_back_dispatcher(tool_dispatcher, tier, bus)
     _bind_tool_context(
@@ -546,11 +735,19 @@ async def back_handler(
 
     # 1. Read SS snapshot ONCE at task start
     snapshot = _read_ss_snapshot(ss)
+    effective_safety_band = _effective_task_safety_band(task, snapshot)
+    _bind_tool_context(
+        tool_dispatcher,
+        trace_id=trace_id,
+        session_id=envelope.session_id,
+        task_id=task_id,
+        safety_band=effective_safety_band,
+    )
     logger.info(
         "back_handler: SS snapshot  beliefs_len=%d referents=%d safety=%s history=%d",
         len(snapshot["beliefs_prompt"]),
         len(snapshot["referents"]),
-        snapshot["safety_band"],
+        effective_safety_band,
         len(snapshot["history_entries"]),
     )
 
@@ -567,9 +764,10 @@ async def back_handler(
         referents=snapshot["referents"],
         task_state=snapshot["task_state_prompt"],
         task_artifacts=snapshot["task_artifacts_prompt"],
-        safety_band=snapshot["safety_band"],
+        safety_band=effective_safety_band,
         persona_prefs=snapshot["persona_prefs"],
         max_tool_calls=max_iterations,
+        execution_profile_block=_execution_profile_block_for_task(task),
     )
 
     # 3. Build messages: last N entries + task as "user" message
@@ -631,6 +829,7 @@ async def back_handler(
         trace_id=trace_id,
         scenario="task_execution",
         validator=validator,
+        control_queue=control_queue,
     )
 
     # 6b. needs_human → task.suspended (no in-process bypass).
@@ -648,6 +847,17 @@ async def back_handler(
     # M3 E3.3.4: Pass react history + original task for suspended payloads
     # Phase P: Extract tool call summaries for MW persistence
     call_summaries = [s.to_dict() for s in tool_dispatcher.get_call_summaries()]
+    react_checkpoint = (
+        _build_react_checkpoint(
+            task_id=task_id,
+            messages=messages,
+            tool_dispatcher=tool_dispatcher,
+            max_iterations=max_iterations,
+            result=result,
+        )
+        if result.status == "suspended"
+        else None
+    )
     _emit_back_result(
         bus,
         envelope,
@@ -656,6 +866,8 @@ async def back_handler(
         react_history=messages,
         original_task=task,
         tool_call_summaries=call_summaries,
+        react_checkpoint=react_checkpoint,
+        trace_id=trace_id,
     )
 
     logger.info(
@@ -727,10 +939,23 @@ async def back_resume_handler(
     Returns:
         ReactResult from the resumed ReAct loop execution.
     """
-    trace_id = envelope.cognitive_trace_id
     payload = _parse_payload(envelope)
+    trace_id = (
+        envelope.cognitive_trace_id
+        or str(payload.get("trace_id", "") or "")
+        or getattr(getattr(tool_dispatcher, "ctx", None), "cognitive_trace_id", "")
+        or f"back-{uuid.uuid4().hex[:12]}"
+    )
     task_id = payload.get("task_id", "")
     resolution = payload.get("resolution", {})
+    resolution_frame_payload = payload.get("resolution_frame")
+    resolution_frame = (
+        HILResolutionFrame.from_dict(resolution_frame_payload)
+        if isinstance(resolution_frame_payload, dict)
+        else None
+    )
+    if resolution_frame is not None:
+        resolution = resolution_frame.to_resolution_dict()
     resume_context = payload.get("resume_context", {})
     _bind_tool_context(
         tool_dispatcher,
@@ -738,12 +963,6 @@ async def back_resume_handler(
         session_id=envelope.session_id,
         task_id=task_id,
     )
-
-    # If this is a clarification.response, map to resolution structure
-    if not resolution and payload.get("response"):
-        resolution = {"additional_info": payload["response"]}
-    if not resolution and payload.get("answer"):
-        resolution = {"additional_info": payload["answer"]}
 
     logger.info(
         "back_resume_handler: task_id=%s trace=%s",
@@ -760,19 +979,31 @@ async def back_resume_handler(
     # so the caller can re-emit the original HITL question to Front.
     original_task: dict[str, Any] = {}
     prior_messages: list[ModelMessage] = []
+    react_checkpoint: ReActCheckpoint | None = None
 
     if resume_context and (
-        resume_context.get("original_task") or resume_context.get("react_history")
+        resume_context.get("original_task")
+        or resume_context.get("react_checkpoint")
+        or resume_context.get("react_history")
+        or resume_context.get("findings_so_far")
     ):
         original_task = resume_context.get("original_task", {})
-        raw_history = resume_context.get("react_history", [])
+        raw_checkpoint = resume_context.get("react_checkpoint")
+        if isinstance(raw_checkpoint, dict):
+            react_checkpoint = ReActCheckpoint.from_dict(raw_checkpoint)
+        raw_history = (
+            react_checkpoint.messages
+            if react_checkpoint is not None
+            else resume_context.get("react_history") or resume_context.get("findings_so_far", [])
+        )
         if isinstance(raw_history, list) and raw_history:
             prior_messages = _deserialize_messages(raw_history)
         logger.info(
             "back_resume_handler: using envelope-carried resume_context "
-            "original_task_keys=%s prior_msgs=%d",
+            "original_task_keys=%s prior_msgs=%d checkpoint=%s",
             list(original_task.keys())[:5] if original_task else [],
             len(prior_messages),
+            bool(react_checkpoint),
         )
     else:
         logger.warning(
@@ -794,16 +1025,40 @@ async def back_resume_handler(
         bus.publish(env)
         raise SuspensionResolutionNotFound(task_id)
 
+    hil_type = str(resume_context.get("hil_type", "clarification") or "clarification")
+    if not resolution and payload.get("response"):
+        if hil_type in {"approval", "capability_gate"}:
+            raise SuspensionResolutionNotFound(task_id)
+        resolution = {"additional_info": payload["response"]}
+    if not resolution and payload.get("answer"):
+        if hil_type in {"approval", "capability_gate"}:
+            raise SuspensionResolutionNotFound(task_id)
+        resolution = {"additional_info": payload["answer"]}
+    if (
+        resolution_frame is None
+        and isinstance(resolution, dict)
+        and resolution.get("_frame_type") == "hil_resolution"
+    ):
+        resolution_frame = HILResolutionFrame.from_resolution_dict(resolution)
+
     tier = original_task.get("tier", "LOW")
     # P3.4c: Per-task tier rebind for the back dispatcher.
     tool_dispatcher = _maybe_rebind_back_dispatcher(tool_dispatcher, tier, bus)
 
     # 2. Re-read SS at resume time (may have changed during suspension)
     snapshot = _read_ss_snapshot(ss)
+    effective_safety_band = _effective_task_safety_band(original_task, snapshot)
+    _bind_tool_context(
+        tool_dispatcher,
+        trace_id=trace_id,
+        session_id=envelope.session_id,
+        task_id=task_id,
+        safety_band=effective_safety_band,
+    )
     logger.info(
         "back_resume_handler: SS re-read  beliefs_len=%d safety=%s prior_msgs=%d",
         len(snapshot["beliefs_prompt"]),
-        snapshot["safety_band"],
+        effective_safety_band,
         len(prior_messages),
     )
 
@@ -820,9 +1075,10 @@ async def back_resume_handler(
         referents=snapshot["referents"],
         task_state=snapshot["task_state_prompt"],
         task_artifacts=snapshot["task_artifacts_prompt"],
-        safety_band=snapshot["safety_band"],
+        safety_band=effective_safety_band,
         persona_prefs=snapshot["persona_prefs"],
         max_tool_calls=original_budget,
+        execution_profile_block=_execution_profile_block_for_task(original_task),
     )
 
     # 4. Hydrate resolution into messages (copy to avoid mutation)
@@ -831,17 +1087,35 @@ async def back_resume_handler(
     # Use structured resume instruction from ResumeContext when available
     # (built by FSM via build_resume_context in hitl_wiring.py)
     if resume_context and resume_context.get("instruction"):
-        hil_type = resume_context.get("hil_type", "clarification")
-        resume_instruction = (
-            f"{resume_context['instruction']}\n" f"Resolution: {json.dumps(resolution, indent=2)}"
+        resolution_text = _resume_resolution_text(
+            task_id=task_id,
+            hil_type=hil_type,
+            resolution=resolution if isinstance(resolution, dict) else {},
+            resolution_frame=resolution_frame,
         )
+        resume_instruction = f"{resume_context['instruction']}\n" f"Resolution: {resolution_text}"
         logger.info("back_resume_handler: using ResumeContext instruction hil_type=%s", hil_type)
     else:
+        resolution_text = _resume_resolution_text(
+            task_id=task_id,
+            hil_type=hil_type,
+            resolution=resolution if isinstance(resolution, dict) else {},
+            resolution_frame=resolution_frame,
+        )
         resume_instruction = (
             "The user has provided their answer to your question.\n"
-            f"Resolution: {json.dumps(resolution, indent=2)}\n"
+            f"Resolution: {resolution_text}\n"
             "Resume from where you left off. Do NOT re-execute tools "
             "that already succeeded. Use your prior findings as starting state."
+        )
+    recovery = resume_context.get("recovery") if isinstance(resume_context, dict) else None
+    if isinstance(recovery, dict) and recovery:
+        resume_instruction = (
+            f"{resume_instruction}\n"
+            "Structured recovery contract from the suspended tool call:\n"
+            f"{json.dumps(recovery, sort_keys=True)}\n"
+            "Use the resolution to fill the missing_fields in retry_args, then retry "
+            "the indicated retry_tool before submitting the final result."
         )
 
     messages.append(
@@ -853,7 +1127,12 @@ async def back_resume_handler(
 
     # 5. Calculate remaining budget
     tools_already_called = len([m for m in prior_messages if m.role == "tool"])
-    remaining_budget = max(original_budget - tools_already_called, 2)
+    if react_checkpoint is not None and react_checkpoint.budget_remaining > 0:
+        remaining_budget = max(react_checkpoint.budget_remaining, 1)
+    elif isinstance(resume_context, dict) and resume_context.get("remaining_budget"):
+        remaining_budget = max(int(resume_context.get("remaining_budget") or 0), 1)
+    else:
+        remaining_budget = max(original_budget - tools_already_called, 2)
 
     # 6. Select tools by tier
     tools = _filter_back_tools(tier)
@@ -870,6 +1149,7 @@ async def back_resume_handler(
     )
 
     # 8. Continue ReAct loop
+    control_queue = _get_back_control_queue(fsm_state, task_id)
     result = await react_loop(
         actor="back",
         system_prompt=system_prompt,
@@ -883,12 +1163,33 @@ async def back_resume_handler(
         trace_id=trace_id,
         scenario="task_resume",
         validator=resume_validator,
+        control_queue=control_queue,
+        completed_tool_call_ids=(
+            set(react_checkpoint.completed_tool_call_ids) if react_checkpoint is not None else None
+        ),
+        completed_tool_arg_keys=(
+            react_checkpoint.completed_tool_keys() if react_checkpoint is not None else None
+        ),
     )
 
     # 9. Emit result (same as back_handler)
     # M3 E3.3.4: Pass react history + original task for re-suspension
     # Phase P: Extract tool call summaries for MW persistence
     resume_call_summaries = [s.to_dict() for s in tool_dispatcher.get_call_summaries()]
+    next_checkpoint = (
+        _build_react_checkpoint(
+            task_id=task_id,
+            messages=messages,
+            tool_dispatcher=tool_dispatcher,
+            max_iterations=remaining_budget,
+            result=result,
+            suspension_count=(
+                (react_checkpoint.suspension_count + 1) if react_checkpoint is not None else 1
+            ),
+        )
+        if result.status == "suspended"
+        else None
+    )
     _emit_back_result(
         bus,
         envelope,
@@ -897,6 +1198,8 @@ async def back_resume_handler(
         react_history=messages,
         original_task=original_task,
         tool_call_summaries=resume_call_summaries,
+        react_checkpoint=next_checkpoint,
+        trace_id=trace_id,
     )
 
     # 10. M6 E6.2 (C07): legacy _clear_pending_context call removed --

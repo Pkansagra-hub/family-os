@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import inspect as _inspect
 import logging
+import re
 import time
 import uuid
 from dataclasses import dataclass
@@ -42,6 +43,7 @@ from k1.concierge.ports import IDispatchPort
 from k1.concierge.task.complexity import ComplexityTier
 from k1.concierge.task.dispatch import TaskDispatch
 from k1.concierge.task.intent import TaskIntent
+from k1.concierge.tools.recovery_contract import recovery_for_unsatisfied_contract
 from k1.concierge.tools.result_protocol import ToolResult
 from k1.fabric.types import CapabilityRequest
 from k1.sessionstate.public_types import BatchRequest, MutationRequest
@@ -111,6 +113,7 @@ class ToolContext:
     # future per-task observability use.
     active_task_id: str | None = None  # M6 E6.1.3: task_id for per-task L2 checks
     session_id: str = ""  # bound session id -- fallback for invoke_capability
+    safety_band: str = "AMBER"  # bound task safety band for Fabric CapabilityRequest
     dispatch: IDispatchPort | None = None  # P4B.3: typed IDispatchPort (Fabric + Orchestrator)
     recall_fn: Callable | None = None
     capability_cache: dict | None = None  # Per-session cache for discover_capabilities results
@@ -135,6 +138,143 @@ def _register(name: str):
         return fn
 
     return decorator
+
+
+def _tool_trace_id(ctx: ToolContext) -> str:
+    trace_id = str(getattr(ctx, "cognitive_trace_id", "") or "")
+    if trace_id:
+        return trace_id
+    trace_id = f"tool-{uuid.uuid4().hex[:12]}"
+    ctx.cognitive_trace_id = trace_id
+    return trace_id
+
+
+_FABRIC_SAFETY_BANDS = frozenset({"GREEN", "AMBER", "RED", "CRISIS"})
+_TASK_SAFETY_BANDS = frozenset({"GREEN", "AMBER", "RED"})
+
+
+def _normalize_safety_band(
+    value: Any,
+    *,
+    default: str = "AMBER",
+    allowed: frozenset[str] = _FABRIC_SAFETY_BANDS,
+) -> str:
+    band = str(value or "").upper()
+    if band in allowed:
+        return band
+    fallback = str(default or "AMBER").upper()
+    return fallback if fallback in allowed else "AMBER"
+
+
+def _context_safety_band(ctx: ToolContext) -> str:
+    return _normalize_safety_band(getattr(ctx, "safety_band", "AMBER"), default="AMBER")
+
+
+def _member_id_alias(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if not text:
+        return value
+    return "_".join("".join(ch.lower() if ch.isalnum() else " " for ch in text).split())
+
+
+def _task_text_assignee_alias(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    text = value.strip()
+    if not text:
+        return ""
+    for pattern in (
+        r"\bfor\s+([A-Za-z][A-Za-z _-]{1,40})$",
+        r"\bto\s+([A-Za-z][A-Za-z _-]{1,40})\s+to\b",
+    ):
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            candidate = match.group(1).strip()
+            if candidate:
+                return str(_member_id_alias(candidate))
+    return ""
+
+
+def _normalize_capability_params(capability_name: str, params: Any) -> dict[str, Any]:
+    normalized = dict(params) if isinstance(params, dict) else {}
+    if capability_name == "tool.execute.tasks.create_task":
+        if not normalized.get("title"):
+            for title_key in ("description", "content", "task", "task_title", "name", "summary"):
+                if normalized.get(title_key):
+                    normalized["title"] = normalized[title_key]
+                    break
+        if not normalized.get("assigned_to") and normalized.get("assignee"):
+            normalized["assigned_to"] = _member_id_alias(normalized["assignee"])
+        if not normalized.get("assigned_to"):
+            assignee = _task_text_assignee_alias(normalized.get("title"))
+            if assignee:
+                normalized["assigned_to"] = assignee
+    return normalized
+
+
+def _contract_cache_key(capability_name: str) -> tuple[str, str]:
+    return ("capability_contract", capability_name)
+
+
+def _input_specs_to_prompt_schema(specs: Any) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for spec in specs or []:
+        to_dict = getattr(spec, "to_dict", None)
+        if callable(to_dict):
+            out.append(dict(to_dict()))
+        else:
+            out.append(
+                {
+                    "name": str(getattr(spec, "name", "") or ""),
+                    "type": str(getattr(spec, "type", "") or ""),
+                    "description": str(getattr(spec, "description", "") or ""),
+                }
+            )
+    return out
+
+
+def _capability_prompt_schema(contract: Any) -> dict[str, Any]:
+    return {
+        "required_inputs": _input_specs_to_prompt_schema(getattr(contract, "required_inputs", ())),
+        "optional_inputs": _input_specs_to_prompt_schema(getattr(contract, "optional_inputs", ())),
+        "capabilities": list(getattr(contract, "capabilities", ()) or ()),
+        "output": dict(getattr(contract, "output", {}) or {}),
+        "safety_band_min": str(getattr(contract, "safety_band_min", "") or ""),
+    }
+
+
+async def _lookup_capability_contract(ctx: ToolContext, capability_name: str) -> Any | None:
+    if not capability_name:
+        return None
+    if ctx.capability_cache is None:
+        ctx.capability_cache = {}
+    cached = ctx.capability_cache.get(_contract_cache_key(capability_name))
+    if cached is not None:
+        return cached
+    dispatch = ctx.dispatch
+    if dispatch is None or not hasattr(dispatch, "discover_capabilities"):
+        return None
+    try:
+        retrieval = await dispatch.discover_capabilities(
+            intent=capability_name,
+            domain=None,
+            top_k=25,
+            safety_band="AMBER",
+        )
+    except Exception:
+        logger.debug("capability schema lookup failed for %s", capability_name, exc_info=True)
+        return None
+    capabilities = getattr(retrieval, "capabilities", [])
+    if not isinstance(capabilities, (list, tuple)):
+        return None
+    for scored in capabilities:
+        contract = getattr(scored, "contract", None)
+        if getattr(contract, "name", "") == capability_name:
+            ctx.capability_cache[_contract_cache_key(capability_name)] = contract
+            return contract
+    return None
 
 
 # =========================================================================
@@ -935,7 +1075,11 @@ def execute_dispatch_task(args: dict, ctx: ToolContext) -> ToolResult:
     urgency = str(args.get("urgency", "normal")).lower()
     reference_context = args.get("reference_context", {})
     depends_on = args.get("depends_on")
-    safety_band = args.get("safety_band", "AMBER")
+    safety_band = _normalize_safety_band(
+        args.get("safety_band", "AMBER"),
+        default="AMBER",
+        allowed=_TASK_SAFETY_BANDS,
+    )
 
     # Gracefully handle LLM passing a description string instead of a task ID.
     # The LLM sometimes puts an action description in depends_on rather than
@@ -946,9 +1090,11 @@ def execute_dispatch_task(args: dict, ctx: ToolContext) -> ToolResult:
             depends_on,
         )
         depends_on = None
-    # P3.4c: Tier is derived from `plan: bool` + multi-intent + depends_on
-    # signals. The legacy `tier` arg is silently ignored. AUTO-from-SS path
-    # has been removed (no SS read on dispatch).
+    # P3.4c: Tier is derived from explicit planning signals. A bundled
+    # multi-intent request can still be a simple Back task when each action
+    # is directly executable by capability tools. The legacy `tier` arg is
+    # silently ignored. AUTO-from-SS path has been removed (no SS read on
+    # dispatch).
     #
     # Optional `complexity` arg lets callers explicitly escalate to HIGH
     # tier (planner-routed) when planning signals are present. Without
@@ -957,8 +1103,9 @@ def execute_dispatch_task(args: dict, ctx: ToolContext) -> ToolResult:
     # dispatch tool surface.
     explicit_plan = bool(args.get("plan", False))
     explicit_complexity = str(args.get("complexity", "") or "").upper()
-    needs_plan = explicit_plan or len(intents) > 1 or depends_on is not None
-    if needs_plan and explicit_complexity == "HIGH":
+    explicit_high = explicit_complexity == "HIGH"
+    needs_plan = explicit_plan or explicit_high or depends_on is not None
+    if explicit_high:
         tier = ComplexityTier.HIGH
     elif needs_plan:
         tier = ComplexityTier.MEDIUM
@@ -1080,34 +1227,6 @@ async def execute_discover_capabilities(args: dict, ctx: ToolContext) -> ToolRes
             error="intent is required",
         )
 
-    # Intent-keyword domain inference: if the LLM omits domain or passes a
-    # vague umbrella domain (family/productivity/etc.), override to the
-    # structurally correct Fabric domain so the registry index search is
-    # constrained before embedding ranking fires.
-    _intent_lower = intent.lower()
-    _inferred_domain: str | None = None
-    if any(kw in _intent_lower for kw in ("task", "todo", "to-do", "assign task", "action item")):
-        _inferred_domain = "tasks"
-    elif any(kw in _intent_lower for kw in ("chore", "recurring", "weekly duty", "daily duty")):
-        _inferred_domain = "chores"
-    elif any(kw in _intent_lower for kw in ("reminder", "alert", "notify at", "fire at")):
-        _inferred_domain = "reminders"
-    elif any(kw in _intent_lower for kw in ("calendar", "appointment", "event", "meeting")):
-        _inferred_domain = "calendar"
-    elif any(kw in _intent_lower for kw in ("grocery", "shopping list", "buy", "purchase")):
-        _inferred_domain = "shopping"
-
-    _broad_domains = {"", "family", "general", "productivity", "household"}
-    if _inferred_domain and (not domain or str(domain).strip().lower() in _broad_domains):
-        if domain and str(domain).strip().lower() != _inferred_domain:
-            logger.info(
-                "discover_capabilities: normalizing broad domain %s -> %s for intent=%s",
-                domain,
-                _inferred_domain,
-                intent[:60],
-            )
-        domain = _inferred_domain
-
     # Per-session cache: avoid redundant capability lookups
     if ctx.capability_cache is None:
         ctx.capability_cache = {}
@@ -1123,46 +1242,39 @@ async def execute_discover_capabilities(args: dict, ctx: ToolContext) -> ToolRes
     # M2: K1 Fabric port path (preferred)
     if ctx.dispatch is not None:
         try:
-            retrieval = await ctx.dispatch.discover_capabilities(
-                intent=intent,
-                domain=[domain] if domain else None,
-                top_k=10,
-                safety_band="AMBER",
-            )
-            caps = []
-            for sc in retrieval.capabilities:
-                cap_dict = {
-                    "name": sc.contract.name if sc.contract else "",
-                    "description": sc.contract.description if sc.contract else "",
-                    "domain": sc.contract.domain[0] if sc.contract and sc.contract.domain else "",
-                    "score": sc.score,
-                }
-                caps.append(cap_dict)
+            caps: list[dict[str, Any]] = []
+            seen_names: set[str] = set()
 
-            # Fallback: if domain was specified but returned nothing, retry
-            # without domain filter so cross-domain tools (e.g. calendar
-            # events that cover health/school/etc.) are still discoverable.
-            if not caps and domain:
-                logger.info(
-                    "discover_capabilities: no match with domain=%s, retrying without domain filter",
-                    domain,
-                )
-                retrieval_fallback = await ctx.dispatch.discover_capabilities(
+            async def _collect(domain_filter: Any) -> None:
+                retrieval = await ctx.dispatch.discover_capabilities(
                     intent=intent,
-                    domain=None,
+                    domain=domain_filter,
                     top_k=10,
                     safety_band="AMBER",
                 )
-                for sc in retrieval_fallback.capabilities:
+                for sc in retrieval.capabilities:
+                    contract = sc.contract
+                    name = contract.name if contract else ""
+                    if name and name in seen_names:
+                        continue
+                    if name:
+                        seen_names.add(name)
+                    if contract is not None:
+                        ctx.capability_cache[_contract_cache_key(contract.name)] = contract
                     cap_dict = {
-                        "name": sc.contract.name if sc.contract else "",
-                        "description": sc.contract.description if sc.contract else "",
-                        "domain": (
-                            sc.contract.domain[0] if sc.contract and sc.contract.domain else ""
-                        ),
+                        "name": name,
+                        "description": contract.description if contract else "",
+                        "domain": contract.domain[0] if contract and contract.domain else "",
+                        "domains": list(contract.domain) if contract else [],
                         "score": sc.score,
                     }
+                    if contract is not None:
+                        cap_dict["schema"] = _capability_prompt_schema(contract)
                     caps.append(cap_dict)
+
+            if domain:
+                await _collect([domain])
+            await _collect(None)
 
             data = {"capabilities": caps, "count": len(caps)}
             if not caps:
@@ -1213,7 +1325,7 @@ async def execute_invoke_capability(args: dict, ctx: ToolContext) -> ToolResult:
     when a HITL sub-task is PENDING for this task_id.
     """
     capability_name = args.get("capability_name", "")
-    params = args.get("params", {})
+    params = _normalize_capability_params(capability_name, args.get("params", {}))
     # session_id: prefer LLM-provided arg, fall back to context-bound session
     session_id = args.get("session_id") or ctx.session_id
 
@@ -1235,6 +1347,7 @@ async def execute_invoke_capability(args: dict, ctx: ToolContext) -> ToolResult:
             status="error",
             error="capability_name is required",
         )
+    start_ms = int(time.time() * 1000)
 
     # M13.E1.I3 -- Front-actor defense-in-depth: only whitelisted
     # read-only / safe capabilities may be invoked directly from Front.
@@ -1260,7 +1373,33 @@ async def execute_invoke_capability(args: dict, ctx: ToolContext) -> ToolResult:
                 ),
             )
 
-    start_ms = int(time.time() * 1000)
+    contract = await _lookup_capability_contract(ctx, capability_name)
+    if contract is not None:
+        recovery = recovery_for_unsatisfied_contract(
+            contract=contract,
+            params=params,
+            retry_tool="invoke_capability",
+            retry_args={
+                "capability_name": capability_name,
+                "params": params,
+                "session_id": session_id or "",
+            },
+        )
+        if recovery is not None:
+            duration = int(time.time() * 1000) - start_ms
+            return ToolResult(
+                tool_name="invoke_capability",
+                status="error",
+                error="capability_params_incomplete",
+                data={
+                    "duration_ms": duration,
+                    "status": "needs_human",
+                    "capability_name": capability_name,
+                    "schema": _capability_prompt_schema(contract),
+                    "params": params,
+                    "recovery": recovery.to_dict(),
+                },
+            )
 
     # M2: K1 Fabric port path (preferred)
     if ctx.dispatch is not None:
@@ -1269,10 +1408,10 @@ async def execute_invoke_capability(args: dict, ctx: ToolContext) -> ToolResult:
                 capability_name=capability_name,
                 params=params,
                 session_id=session_id or "",
-                trace_id=ctx.cognitive_trace_id or "",
+                trace_id=_tool_trace_id(ctx),
                 caller="concierge",
                 caller_id=f"concierge.{ctx.actor}",
-                safety_band="AMBER",
+                safety_band=_context_safety_band(ctx),
             )
             k1_result = await ctx.dispatch.dispatch_direct(k1_request)
             duration = int(time.time() * 1000) - start_ms
@@ -1362,10 +1501,12 @@ async def execute_batch_invoke_capabilities(args: dict, ctx: ToolContext) -> Too
     results = []
     succeeded = 0
     failed = 0
+    session_id = ctx.session_id or ""
+    safety_band = _context_safety_band(ctx)
 
     for inv in invocations:
         cap_name = inv.get("capability_name", "")
-        params = inv.get("params", {})
+        params = _normalize_capability_params(cap_name, inv.get("params", {}))
 
         if not cap_name:
             results.append(
@@ -1386,9 +1527,11 @@ async def execute_batch_invoke_capabilities(args: dict, ctx: ToolContext) -> Too
                 k1_request = CapabilityRequest(
                     capability_name=cap_name,
                     params=params,
-                    trace_id=ctx.cognitive_trace_id or "",
+                    session_id=session_id,
+                    trace_id=_tool_trace_id(ctx),
                     caller="concierge",
                     caller_id=f"concierge.{ctx.actor}",
+                    safety_band=safety_band,
                 )
                 k1_result = await ctx.dispatch.dispatch_direct(k1_request)
                 duration = int(time.time() * 1000) - start_ms
@@ -1473,7 +1616,7 @@ async def execute_spawn_via_fabric(args: dict, ctx: ToolContext) -> ToolResult:
                     "constraints": constraints,
                     "capabilities_needed": capabilities_needed,
                 },
-                trace_id=ctx.cognitive_trace_id or "",
+                trace_id=_tool_trace_id(ctx),
                 caller="concierge",
                 caller_id=f"concierge.{ctx.actor}",
             )
@@ -1538,7 +1681,7 @@ async def execute_execute_workflow(args: dict, ctx: ToolContext) -> ToolResult:
                 capability_name=f"workflow.{workflow_id}",
                 params=params,
                 timeout_ms=timeout_ms,
-                trace_id=ctx.cognitive_trace_id or "",
+                trace_id=_tool_trace_id(ctx),
                 caller="concierge",
                 caller_id=f"concierge.{ctx.actor}",
             )
@@ -1613,6 +1756,15 @@ def execute_submit_result(args: dict, ctx: ToolContext) -> ToolResult:
         submission["final_answer"] = args.get("final_answer", "")
         submission["results"] = args.get("results", [])
         submission["artifacts_created"] = args.get("artifacts_created", [])
+        for key in (
+            "confidence",
+            "blockers",
+            "suggested_next_action",
+            "semantic_context",
+            "presentation_guidance",
+        ):
+            if key in args:
+                submission[key] = args.get(key)
     else:
         submission["hil_type"] = args.get("hil_type", "provide_info")
         submission["question"] = args.get("question", "")

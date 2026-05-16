@@ -16,6 +16,7 @@ concierge implementation.
 
 **Current behavior:**
 All three sub-components return hard-coded empty defaults:
+
 - `NarrativeWeaver.weave()` → `NarrativeContext(narrative_threads=[], story_arc=None)`
 - `AnticipatoryResponder.anticipate()` → `Anticipation(predicted_needs=[], confidence=0.0)`
 - `ProactiveAgent.generate_fill()` → `FillMessage(text="", trigger=None)`
@@ -41,6 +42,7 @@ AnticipatoryResponder can be LLM-based using history + beliefs sections.
 > that extracts salient sentences by frequency scoring.
 >
 > The actual gaps are:
+>
 > 1. `compression_strategy` field on `EpisodicCompressor` is accepted but **ignored**
 >    — the strategy enum has no effect on which algorithm runs.
 > 2. `EpisodicCompressor` is **never called from `ExperienceLayer`** — the two classes
@@ -51,61 +53,56 @@ history grows indefinitely without compression. After 50+ turns, the LLM's effec
 context becomes large and expensive.
 
 **Fix:**
+
 1. Wire `EpisodicCompressor` into `ExperienceLayer.process_turn()` (call on every Nth turn).
 2. Implement strategy dispatch: `LLM_BASED` → `_compress_with_llm()`, `EXTRACTIVE` → current key-facts path.
 
 ---
 
-## ISSUE-C03 — Back actor has no time-based task cancellation
+## ISSUE-C03 — ReAct tool dispatch hang protection ✅ CLOSED
 
-**Severity:** Medium
-**Location:** `k1/concierge/react/loop.py` (NOT `actors/back_actor.py`)
+**Severity:** Medium — RESOLVED
+**Location:** `k1/concierge/react/loop.py`
 
-> **CORRECTION (May 2026):** Original description said the issue was in `back_actor.py`.
-> **Actual location is `react/loop.py`.** The LLM invocation in the ReAct loop already
-> has `asyncio.wait_for` protection. The gap is specifically in the `_run_tool()` closure
-> inside `react/loop.py` — tool dispatch is not wrapped in `asyncio.wait_for`.
+**Verified (M0 contract-freeze pass, May 2026):**
+`react_loop()` wraps every non-terminal tool dispatch in `asyncio.wait_for(...)`
+inside the `_run_tool()` helper. The timeout reads `get_config().react.tool_timeout_ms`.
+For `invoke_capability` and `batch_invoke_capabilities`, the effective timeout is
+`max(tool_timeout_ms, hil_capability_gate_timeout_ms + 30000ms)` so HIL capability
+approval has time to resolve.
 
-**Current behavior:**
-Cancellation is iteration-based only — Back polls `cancel_token.is_cancelled()` at
-each ReAct iteration boundary. A tool call that takes 30+ seconds (e.g., a slow
-external API call) cannot be interrupted mid-execution.
+On timeout, `_run_tool()` synthesizes a `ToolResult(status="error", error="tool_timeout ...")`
+and appends it as a normal tool observation. It does not leak raw `asyncio.TimeoutError`
+out of the ReAct loop.
 
-**Failure mode:** Under user-requested cancellation (`USER_REQUESTED`), the FSM
-transitions to CANCELLING and waits for `task.failed.v1`. If the current tool call
-blocks for minutes, the user sees the system appear to hang in CANCELLING state.
+**M0 coverage:** `tests/k1/concierge/react/test_loop_tool_timeout.py` locks both
+the normal timeout path and the HIL-aware timeout calculation.
 
-**Fix:** Wrap `_run_tool()` in `asyncio.wait_for(tool_call(), timeout=config.tool_timeout_ms)`
-in `react/loop.py`. Propagate `asyncio.TimeoutError` as `TIMEOUT` reason in the
-CancellationToken. This requires tools registered in Fabric to be cancellable coroutines
-(currently not enforced by `IDispatchPort`).
+**Residual scope:** user-requested cancellation during an already-running tool is
+still governed by bounded timeout plus inter-iteration cancellation checks. Finer
+mid-tool cancellation/control events are tracked in the Concierge hardening plan M3.
 
 ---
 
-## ISSUE-C04 — Crash recovery re-delivers completed results to user
+## ISSUE-C04 — Crash recovery re-delivers completed results to user ✅ CLOSED
 
-**Severity:** High
-**Location:** `k1/concierge/core/crash_recovery.py:project_pending_results()`, `k1/concierge/ledger/recovery.py:221-256`
+**Severity:** High — RESOLVED AS DELIVERY-INTENT SEMANTICS
+**Location:** `k1/concierge/fsm/controller.py`, `k1/concierge/ledger/recovery.py`
 
-> **CORRECTION (May 2026):** Original description said projection checks `response.final.v1`.
-> **Actual projection at `ledger/recovery.py:221-256` checks `conversation.weave.emitted`.**
-> The event checked is `WeaveEmitted`, not `ResponseDelivered`.
-> The `ResponseDelivered` event **does not exist** yet.
-> The correct write point for the delivery-intent ledger entry is `controller.py:~3330`,
-> NOT `front.py` — the ledger is unreachable from `front.py`.
+**Verified (M0 contract-freeze pass, May 2026):**
+`ResponseDelivered` exists in `k1/concierge/events/conversation.py`, is registered as
+`conversation.response.delivered.v1`, and is written by `ConciergeController._on_response_final(...)`
+after `ResponseFinalDecided` but before `_execute_response_final_decision(...)`.
+`CrashRecoveryOrchestrator._derive_fsm_state(...)` treats this event as authoritative
+delivery evidence and derives `LISTENING` instead of replaying the response.
 
-**Current behavior:**
-The ledger projection re-queues all `task.complete.v1` events that do not have a
-corresponding `WeaveEmitted` in the log. However, `WeaveEmitted` is written *after* the
-Front LLM's streaming response starts. If the process crashes after streaming starts but
-before `WeaveEmitted` is written, the result is re-queued and re-delivered.
+**Important semantic note:** this event is a delivery-intent marker, not proof that
+the client finished rendering every byte. Recovery deliberately favors idempotency over
+retrying a response whose delivery side effect had already been committed.
 
-**Failure mode:** After a crash at the exact moment between streaming start and
-`WeaveEmitted` write, the user receives the same message twice.
-
-**Fix:** Add a `ResponseDelivered` ledger event written **before** streaming begins
-(as delivery intent) at `controller.py:~3330`. Projection checks for `ResponseDelivered`
-rather than `WeaveEmitted`. This makes delivery idempotent even if the stream fails.
+**M0 coverage:** `tests/k1/concierge/fsm/test_response_delivered.py` proves the ledger
+append happens before the side-effect executor is invoked. `tests/k1/concierge/test_m01_event_validator.py`
+continues to validate event registration and round-trip behavior.
 
 ---
 
@@ -155,6 +152,7 @@ event (`system.config.v1` with `target=weave_policy`) or a kernel config update 
 > **CORRECTION (May 2026):** Original description said the location was
 > `k1/concierge/core/fsm_controller.py:subscribe_back_events()`. **Wrong location.**
 > All three functions are in `back.py`:
+>
 > - `subscribe_back_events()` at `back.py:~1127`
 > - `store_pending_context()` at `back.py:~1088`
 > - `_clear_pending_context()` at `back.py:~1457`
@@ -185,10 +183,12 @@ symbol search before removal.
 
 **Current behavior:**
 `back_resume_handler()` in `back.py` contains a fallback path:
+
 ```python
 context = self._suspension_manager.get_resolution(task_id) \
     or self._get_pending_context(task_id)  # legacy, scheduled removal
 ```
+
 `_get_pending_context()` reads from an old in-memory dict that is no longer populated
 post-M3. It will always return `None`, making the fallback silently absent rather than
 explicitly failing.

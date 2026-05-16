@@ -356,13 +356,14 @@ RECALL_MEMORY_SCHEMA = ToolSchema(
     name="recall_memory",
     description=(
         "Query K0 long-term memory for relevant context. Returns past experiences, "
-        "preferences, facts, schedules, agendas, routines, and family knowledge "
-        "from previous sessions. THIS IS YOUR PRIMARY INFORMATION SOURCE. "
-        "Use for ANY information lookup: agenda, calendar, schedule, to-do items, "
-        "appointments, routines, preferences, past events, medical info, family rules, "
-        "contacts, allergies, habits. "
-        "Examples: 'what's on my agenda', 'what restaurant did we like', "
-        "'Riley's bedtime routine', 'Jordan's schedule', 'grocery delivery day'. "
+        "preferences, facts, schedules, agendas, routines, and stored knowledge "
+        "from previous sessions. Use for historical/context lookups: routines, "
+        "preferences, past events, background rules, contacts, allergies, "
+        "habits, and background facts. Do NOT use as the source of truth for live "
+        "records owned by capabilities, connectors, databases, workflows, or external "
+        "services; route those through dispatch_task or safe read capabilities. "
+        "Examples: prior preference, remembered routine, historical incident, "
+        "or stored background fact. "
         "Front uses for conversational context. Back uses for task-specific data."
     ),
     parameters={
@@ -461,6 +462,8 @@ DISPATCH_TASK_SCHEMA = ToolSchema(
     description=(
         "Dispatch a task to the background worker for execution. Use when the user "
         "wants something DONE (search, book, create, schedule, send, draft, etc.). "
+        "Also use for live system-of-record reads or writes that must be handled "
+        "through capabilities rather than memory/context. "
         "Do NOT call for pure conversation, emotional support, or clarification. "
         "The FSM intercepts this tool call and emits k1.orchestration.task.dispatch.v1 "
         "on the bus. The tool itself returns immediately with {queued: true}. "
@@ -489,8 +492,7 @@ DISPATCH_TASK_SCHEMA = ToolSchema(
                         "domain": {
                             "type": "string",
                             "description": (
-                                "Domain hint: travel, health, productivity, "
-                                "finance, creative, shopping, family, etc."
+                                "Optional deployment/domain hint, if known. Leave unset when unknown."
                             ),
                         },
                     },
@@ -512,9 +514,20 @@ DISPATCH_TASK_SCHEMA = ToolSchema(
                 "description": (
                     "Resolved references for the Back worker. Front resolves pronouns and "
                     "references using its 20-entry history view and passes resolved values "
-                    "here. E.g. {'the hotel': 'Vineyard Inn', 'it': 'restaurant search'}."
+                    "here. E.g. {'the hotel': 'Vineyard Inn', 'it': 'restaurant search'}. "
+                    "For follow-up updates to recent artifacts, include the target artifact "
+                    "or record plus any general_context_to_add and authority/provenance notes."
                 ),
-                "additionalProperties": {"type": "string"},
+                "additionalProperties": {
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "number"},
+                        {"type": "boolean"},
+                        {"type": "object"},
+                        {"type": "array"},
+                        {"type": "null"},
+                    ]
+                },
             },
             "depends_on": {
                 "type": "string",
@@ -530,9 +543,9 @@ DISPATCH_TASK_SCHEMA = ToolSchema(
                 "type": "boolean",
                 "default": False,
                 "description": (
-                    "P3.4c: Set true when the task requires multi-step planning. "
-                    "Multi-intent and depends_on auto-escalate to plan tier even "
-                    "when this flag is False."
+                    "P3.4c: Set true when the task requires a planner, specialist, "
+                    "or nontrivial multi-step workflow. Simple multi-intent bundles "
+                    "do not need this flag; depends_on still escalates to plan tier."
                 ),
             },
         },
@@ -695,6 +708,16 @@ FRONT_READ_CAPABILITY_WHITELIST: frozenset[str] = frozenset(
         "tool.execute.discover_capabilities",
         "tool.execute.date_calc",
         "tool.execute.calendar_list_events",
+        "tool.read.calendar.list_events",
+        "tool.read.calendar.get_event",
+        "tool.read.tasks.list_tasks",
+        "tool.read.tasks.get_task",
+        "tool.read.reminders.list_reminders",
+        "tool.read.reminders.get_reminder",
+        "tool.read.chores.list_chores",
+        "tool.read.chores.chore_summary",
+        "tool.read.family_settings.get_visibility_policy",
+        "tool.read.family_settings.list_feature_flags",
     }
 )
 
