@@ -20,6 +20,7 @@ Run: pytest tests/test_planner_adapters_6_2.py -v
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from typing import Any, Callable, Dict, List
 
 import pytest
@@ -284,6 +285,14 @@ class TestLLMGatewayAdapterHappyPath:
 
         result = await adapter.execute(_make_hub_request())
         assert result is response
+
+    async def test_execute_backfills_content_from_model_hub_chat_string(self):
+        response = SimpleNamespace(result="hello from chat", metadata={"model_id": "gpt-4"})
+        bus = FakeLLMBus(response=response)
+        adapter = LLMGatewayAdapter(bus, consumer_id="planner")
+
+        result = await adapter.execute(_make_hub_request())
+        assert result.result["content"] == "hello from chat"
 
     async def test_stamps_consumer_id(self):
         """Verify consumer_id is stamped on constraints (MH-11)."""

@@ -75,7 +75,7 @@ Each port co-defines supporting types used in its method signatures.
 | 1 | `SQLiteStorageAdapter` | `IStoragePort` | `adapters/sqlite_storage.py` | Thread-safe (SQLite WAL) | 4 tables: checkpoints, beliefs_archive, history_archive, narrative_archive. SLA breach warnings at >50ms |
 | 2 | `InMemoryStorageAdapter` | `IStoragePort` | `adapters/memory_storage.py` | No locking (test-only) | Dict-based, test-only utilities |
 | 3 | `LocalEventAdapter` | `IEventPort` | `adapters/local_events.py` | `RLock` + daemon thread | Queue-based async dispatch. Capture mode for testing (`enable_capture()`, `get_captured_events()`, `drain()`) |
-| 4 | `DirectWriterAdapter` | `IWriterPort` | `adapters/direct_writer.py` | `RLock` | Full mutation flow: expiration→auth→preflight→mutate→stats. Per-turn audit trail. Authorized writer set |
+| 4 | `DirectWriterAdapter` | `IWriterPort` | `adapters/direct_writer.py` | `RLock` | Lifecycle guard for bound+RUNNING manager, then expiration→auth→preflight→mutate→stats. Per-turn audit trail. Authorized writer set |
 | 5 | `StandaloneLifecycle` | `ILifecyclePort` | `adapters/standalone_lifecycle.py` | Daemon thread (checkpoint timer) | State machine: CREATED→STARTING→RUNNING→STOPPING→STOPPED→ERROR. Context manager support |
 | 6 | `NullSyncPort` | `IK0SyncPort` | `ports/k0_sync.py` | None | Always offline, all ops return failure. Lives in ports/ (not adapters/) |
 

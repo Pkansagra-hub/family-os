@@ -159,6 +159,10 @@ Structural validation: `assert hasattr(self._shared_fabric, 'execute')`.
 ```python
 event_port = EventPortProdAdapter(self._bus)
 delta_bus  = DeltaBusProdAdapter(self._bus)
+orch_storage = WorkflowStorageAdapter(
+    SQLiteWorkflowAdapter(db_path=config.workflow_db_path)
+)
+self._orch_storage = orch_storage
 
 self._orchestrator = await OrchestratorFactory.create_production(
     config=OrchestratorConfig.from_dict({
@@ -181,9 +185,7 @@ self._orchestrator = await OrchestratorFactory.create_production(
         else MockBridgeAdapter()
     ),
     event=EventSubscriptionAdapter(event_port=event_port),
-    storage=WorkflowStorageAdapter(
-        SQLiteWorkflowAdapter(db_path=config.workflow_db_path)
-    ),
+    storage=orch_storage,
     hil_port=self._hil_service,
 )
 ```
@@ -208,7 +210,7 @@ self._planner = await PlannerFactory.create_production(
     ),
     state_port=PlannerStateAdapter(
         reader=self._session_routing_reader,
-        session_id="__shared__",
+        session_id="",
     ),
     bridge_port=PlannerBridgeAdapter(bridge_port=bridge_adapter),
     delta_port=PlannerDeltaBusAdapter(delta_bus=delta_bus),
@@ -222,9 +224,10 @@ self._planner = await PlannerFactory.create_production(
 (not the client — the adapter itself). `bridge_port` in Planner is `IBridgePort`
 for writing back to K0.
 
-`state_port` uses `session_id="__shared__"`. The routing reader resolves this at
-planning request time from the request envelope's session_id, not from the literal
-key — see OPEN_ISSUES §2.
+`state_port` uses an empty fallback `session_id`. The routing reader resolves
+state at planning request time from the request envelope's session id when callers
+thread it through `read_sections(..., session_id=...)`; legacy call sites that do
+not supply a session id still receive an empty snapshot.
 
 ---
 
@@ -249,8 +252,11 @@ self._orchestrator.bind_planner(
 Post-wire verification:
 ```python
 assert not isinstance(self._orchestrator._planner_port, MockPlannerAdapter)
-assert self._planner.mailbox.has_pipeline_controller()
+assert self._orchestrator._planner_port._mailbox is self._planner.get_mailbox()
+assert getattr(self._planner.mailbox, "_pipeline_controller", None) is not None
 ```
+
+Live coverage: `tests/integration/k1/live/m2/test_m2_l2_planner_orchestrator_crosswire.py`.
 
 **Window between S5 and S6b:** orchestrator holds `MockPlannerAdapter`. Any task
 arriving in this window would be handled by the mock — see OPEN_ISSUES §5.
@@ -485,18 +491,26 @@ self._sessions[session_id] = session
 1.  destroy all active sessions (above sequence, session order unspecified)
 2.  await planner.stop()  +  planner_task.cancel()
 3.  await orchestrator.shutdown()
-4.  await hil_service.shutdown()                 if hil_service is not None
-5.  self_model_bundle.shutdown()                 if bundle is not None
-6.  await bridge.disconnect()
-7.  await shared_fabric.shutdown()
-8.  await model_hub.shutdown()
-9.  bus.close()
-10. router.close()
-11. self._running = False                        always, even on errors
+4.  orch_storage.close()                         closes SQLite workflow WAL
+5.  await hil_service.shutdown()                 if hil_service is not None
+6.  self_model_bundle.shutdown()                 if bundle is not None
+7.  await bridge.disconnect()
+8.  await shared_fabric.shutdown()
+9.  family_tools.close()                         if enabled
+10. await model_hub.shutdown()
+11. bus.close()
+12. router.close()
+13. self._running = False                        always, even on errors
 ```
 
 All per-step errors are collected. If any non-zero count: raises
-`RuntimeError("shutdown: N error(s): <details>")` after step 11.
+`RuntimeError("shutdown: N error(s): <details>")` after step 13.
+
+Lifecycle diagnostics are recorded through `lifecycle_events()` as each Tier 1
+startup phase completes (`S1_complete` ... `S7_complete`, plus `S6b_complete` and
+optional `S8_*`) and as each shutdown phase completes (`S7_shutdown_complete` ...
+`S1_shutdown_complete`). These events are observability-only and used by live
+kernel LIFECYCLE probes.
 
 ---
 

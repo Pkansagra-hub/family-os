@@ -38,7 +38,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from k1.fabric.types import CapabilityRequest, CapabilityResult
+from k1.fabric.types import CapabilityRequest
 from poc.k1_poc.fabric.ports import IFabricPort
 from poc.k1_poc.sessionstate.ports.writer import BatchRequest, MutationRequest
 from poc.k1_poc.task.complexity import ComplexityTier

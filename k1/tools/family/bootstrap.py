@@ -69,26 +69,73 @@ class FamilyToolsBundle:
         self.store.close()
 
 
-def _register_provider_with_fabric(
+def _resolve_provider_factory(fabric: Any) -> Any:
+    """Walk the Fabric container down to its ProviderFactory.
+
+    The top-level ``Fabric`` dataclass returned by ``FabricFactory`` does
+    not expose ``_provider_factory`` directly -- it lives on
+    ``fabric.facade`` (the ``CapabilityFabric`` instance).  Test doubles
+    sometimes expose it directly, so check both.
+    """
+
+    factory = getattr(fabric, "_provider_factory", None)
+    if factory is None:
+        facade = getattr(fabric, "facade", None)
+        if facade is not None:
+            factory = getattr(facade, "_provider_factory", None)
+    return factory
+
+
+def _resolve_provider_registry(fabric: Any) -> Any:
+    """Walk the Fabric container down to its ProviderRegistry.
+
+    Real production path is
+    ``fabric.facade._resolver._provider_matcher._provider_registry``.
+    Some test fabrics expose ``_provider_registry`` directly.
+    """
+
+    registry = getattr(fabric, "_provider_registry", None)
+    if registry is not None:
+        return registry
+    registry = getattr(fabric, "provider_registry", None)
+    if registry is not None:
+        return registry
+    facade = getattr(fabric, "facade", None)
+    if facade is None:
+        return None
+    resolver = getattr(facade, "_resolver", None)
+    if resolver is None:
+        return None
+    matcher = getattr(resolver, "_provider_matcher", None)
+    if matcher is None:
+        return None
+    return getattr(matcher, "_provider_registry", None)
+
+
+def register_provider_with_fabric(
     fabric: Any,
     provider: NativeToolProvider,
 ) -> None:
-    """Register ``provider`` with the Fabric provider registry.
+    """Register ``provider`` with the Fabric provider factory + registry.
 
-    The Fabric in the workspace exposes both a provider *factory*
-    (handler-keyed, used to lazily construct provider instances) and a
-    provider *registry* (instance-keyed, used to dispatch by
-    provider_id).  We register the live instance with the latter so the
-    pipeline can resolve ``capability.provider_id == "k1_native_tools"``
-    without round-tripping through the factory.
+    The Fabric exposes a provider *factory* (handler-keyed, used to
+    construct provider instances from a ``ProviderConfig``) and a
+    provider *registry* (provider_id -> ProviderConfig).  Family-tool
+    capability contracts already carry ``provider_type="LOCAL"`` and
+    ``provider_id="k1_native_tools"``, so the registry is normally
+    auto-populated by ``_auto_register_providers_from_contracts``.  The
+    missing piece is the *factory handler* for the ``LOCAL`` provider
+    type: without it, ``ProviderFactory.create(config)`` raises
+    ``UnsupportedProviderTypeError: LOCAL`` when a tool is invoked.
 
-    The function is defensive about which surfaces actually exist:
-    missing attributes are logged but do not abort boot, so this module
-    keeps working as the Fabric surface evolves.
+    We register the live singleton instance under the ``LOCAL`` handler
+    key, returning it from any factory call regardless of which
+    ``ProviderConfig`` is passed in.  We also defensively ensure the
+    ``ProviderConfig`` exists in the registry (in case a test wires a
+    raw Fabric without auto-registration).
     """
 
-    # Factory hook -- some test fabrics expose ``_provider_factory``.
-    factory = getattr(fabric, "_provider_factory", None)
+    factory = _resolve_provider_factory(fabric)
     if factory is not None and hasattr(factory, "register_handler"):
         try:
             factory.register_handler(
@@ -96,26 +143,46 @@ def _register_provider_with_fabric(
                 lambda config, **_deps: provider,  # noqa: ARG005 -- factory contract
             )
             logger.info(
-                "Family-tools: registered NativeToolProvider factory under provider_type=%s",
+                "Family-tools: registered NativeToolProvider factory handler for provider_type=%s",
                 NATIVE_PROVIDER_TYPE,
             )
         except Exception:  # pragma: no cover -- defensive
-            logger.exception("Family-tools: provider factory registration failed")
+            logger.exception("Family-tools: provider factory handler registration failed")
+    else:
+        logger.warning(
+            "Family-tools: could not locate ProviderFactory on fabric=%r; "
+            "tool invocations will fail with UnsupportedProviderTypeError",
+            type(fabric).__name__,
+        )
 
-    # Instance registry hook.
-    registry = getattr(fabric, "_provider_registry", None)
-    if registry is None:
-        # Modern Fabric facades may expose this via a public attribute instead.
-        registry = getattr(fabric, "provider_registry", None)
+    registry = _resolve_provider_registry(fabric)
     if registry is not None and hasattr(registry, "register_provider"):
-        try:
-            registry.register_provider(provider)
-            logger.info(
-                "Family-tools: registered NativeToolProvider instance under provider_id=%s",
+        if hasattr(registry, "contains") and registry.contains(NATIVE_PROVIDER_ID):
+            logger.debug(
+                "Family-tools: ProviderConfig for %s already in registry (auto-registered)",
                 NATIVE_PROVIDER_ID,
             )
-        except Exception:  # pragma: no cover -- defensive
-            logger.exception("Family-tools: provider instance registration failed")
+        else:
+            try:
+                registry.register_provider(
+                    NATIVE_PROVIDER_ID,
+                    ProviderConfig(
+                        provider_id=NATIVE_PROVIDER_ID,
+                        provider_type=NATIVE_PROVIDER_TYPE,
+                        endpoint=NATIVE_PROVIDER_ENDPOINT,
+                    ),
+                )
+                logger.info(
+                    "Family-tools: registered NativeToolProvider config for provider_id=%s",
+                    NATIVE_PROVIDER_ID,
+                )
+            except Exception:  # pragma: no cover -- defensive
+                logger.exception("Family-tools: provider config registration failed")
+    else:
+        logger.warning(
+            "Family-tools: could not locate ProviderRegistry on fabric=%r",
+            type(fabric).__name__,
+        )
 
 
 def bootstrap_family_tools(
@@ -127,6 +194,7 @@ def bootstrap_family_tools(
     service_classes: Iterable[Type[BaseToolService]] = (),
     policy: Optional[VisibilityPolicy] = None,
     bus_publisher: Optional[Any] = None,
+    default_space_id: str = "",
 ) -> FamilyToolsBundle:
     """Wire the entire family-tool layer.
 
@@ -190,10 +258,12 @@ def bootstrap_family_tools(
         endpoint=NATIVE_PROVIDER_ENDPOINT,
         max_execution_ms=30_000,
     )
-    provider = NativeToolProvider(provider_config, registry=registry)
+    provider = NativeToolProvider(
+        provider_config, registry=registry, default_space_id=default_space_id
+    )
 
     if fabric is not None:
-        _register_provider_with_fabric(fabric, provider)
+        register_provider_with_fabric(fabric, provider)
 
     capability_names = [
         cap

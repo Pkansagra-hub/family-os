@@ -115,10 +115,12 @@ class ToolRegistry:
 
         # Fabric registration (optional -- offline tests pass fabric=None).
         if self._fabric is not None:
-            registry = getattr(self._fabric, "capability_registry", None)
+            # Fabric exposes the raw CapabilityRegistry as `fabric.registry`
+            # (not `capability_registry` — that attr does not exist on the class).
+            registry = getattr(self._fabric, "registry", None)
             if registry is None:
                 logger.warning(
-                    "ToolRegistry: shared_fabric has no capability_registry attribute; "
+                    "ToolRegistry: shared_fabric has no 'registry' attribute; "
                     "skipping Fabric registration for adapter %s.",
                     adapter_id,
                 )

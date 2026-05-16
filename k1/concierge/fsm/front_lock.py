@@ -31,6 +31,7 @@ from typing import Awaitable, Callable
 from k1.bus.envelope import Envelope
 from k1.concierge.bus.topics import (
     TOPIC_FINDINGS_READY,
+    TOPIC_PROACTIVE_FILL,
     TOPIC_TASK_COMPLETE,
     TOPIC_TASK_FAILED,
     TOPIC_TASK_SUSPENDED,
@@ -59,6 +60,7 @@ TOPIC_PRIORITY: dict[str, int] = {
     TOPIC_TASK_FAILED: PRIORITY_ERROR,
     TOPIC_FINDINGS_READY: PRIORITY_INFO,
     TOPIC_WEAVE_BATCH: PRIORITY_RESULT,
+    TOPIC_PROACTIVE_FILL: PRIORITY_INFO,
 }
 
 # Kept as module constant for backward compatibility; runtime reads from config
@@ -196,6 +198,15 @@ class FrontLock:
     def is_idle(self) -> bool:
         """True if Front is not busy and queue is empty."""
         return not self.busy and len(self.event_queue) == 0
+
+    def is_accepting_context(self) -> bool:
+        """Whether Front can accept mid-generation context injection.
+
+        Current Front delivery is envelope-based, so live context chaining is
+        not supported yet. The explicit capability check keeps same-turn
+        result handling honest and lets future implementations opt in here.
+        """
+        return False
 
     def peek_priorities(self) -> list[int]:
         """Return the priority values of all queued events (for testing)."""

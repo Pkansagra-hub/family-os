@@ -28,8 +28,9 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional
 
+from k1.model_hub.events import TOPIC_FALLBACK_TRIGGERED, TOPIC_PROVIDER_FAILURE
 from k1.model_hub.plugins.base import (
     IProviderPlugin,
     NormalizedRequest,
@@ -101,11 +102,13 @@ class ProviderDispatcher:
         rate_limiter: RateLimiter,
         credential_port: ICredentialPort,
         plugins: Optional[Dict[str, IProviderPlugin]] = None,
+        event_port: Any | None = None,
     ) -> None:
         self._circuit_mgr = circuit_mgr
         self._rate_limiter = rate_limiter
         self._credential_port = credential_port
         self._plugins: Dict[str, IProviderPlugin] = plugins or {}
+        self._event_port = event_port
 
     # -- Plugin management -----------------------------------------------------
 
@@ -166,6 +169,18 @@ class ProviderDispatcher:
                     attempts=attempts,
                 )
             # Provider failed -- continue to next fallback
+            next_provider = providers[idx + 1] if idx + 1 < len(providers) else ""
+            if next_provider:
+                await self._publish_provider_failure(
+                    request,
+                    provider_id=pid,
+                    will_fallback=True,
+                )
+                await self._publish_fallback_triggered(
+                    request,
+                    from_provider=pid,
+                    to_provider=next_provider,
+                )
             last_error = result  # type: ignore[assignment]
 
         # All providers exhausted
@@ -292,6 +307,51 @@ class ProviderDispatcher:
                 return None
 
         return None  # pragma: no cover
+
+    async def _publish(self, topic: str, payload: dict[str, Any]) -> None:
+        if self._event_port is None:
+            return
+        try:
+            await self._event_port.publish(topic, payload)
+        except Exception:  # noqa: BLE001
+            return
+
+    async def _publish_provider_failure(
+        self,
+        request: NormalizedRequest,
+        *,
+        provider_id: str,
+        will_fallback: bool,
+    ) -> None:
+        await self._publish(
+            TOPIC_PROVIDER_FAILURE,
+            {
+                "request_id": request.extra.get("request_id", ""),
+                "trace_id": request.trace_id,
+                "provider_id": provider_id,
+                "error_type": "provider_dispatch_failed",
+                "error_message": "provider attempt failed or was unavailable",
+                "will_fallback": will_fallback,
+            },
+        )
+
+    async def _publish_fallback_triggered(
+        self,
+        request: NormalizedRequest,
+        *,
+        from_provider: str,
+        to_provider: str,
+    ) -> None:
+        await self._publish(
+            TOPIC_FALLBACK_TRIGGERED,
+            {
+                "request_id": request.extra.get("request_id", ""),
+                "trace_id": request.trace_id,
+                "from_provider": from_provider,
+                "to_provider": to_provider,
+                "reason": "primary_provider_failed",
+            },
+        )
 
 
 __all__ = [

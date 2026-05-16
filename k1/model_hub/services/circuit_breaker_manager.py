@@ -21,13 +21,18 @@ References
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
+from k1.model_hub.events import TOPIC_CIRCUIT_STATE
 from k1.model_hub.manifest import CircuitBreakerConfig
 from k1.model_hub.types import CircuitState
+
+logger = logging.getLogger(__name__)
 
 # ===========================================================================
 # Per-provider circuit breaker state
@@ -80,10 +85,11 @@ class CircuitBreakerManager:
     Implements ICircuitBreakerQuery protocol from capability_router.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, event_port: Any | None = None) -> None:
         self._circuits: Dict[str, _ProviderCircuit] = {}
         self._transitions: List[CircuitTransition] = []
         self._lock = threading.RLock()
+        self._event_port = event_port
 
     # -- Registration ----------------------------------------------------------
 
@@ -234,15 +240,39 @@ class CircuitBreakerManager:
         """Record a state transition."""
         old_state = circuit.state
         circuit.state = new_state
-        self._transitions.append(
-            CircuitTransition(
-                provider_id=provider_id,
-                old_state=old_state,
-                new_state=new_state,
-                failure_count=len(circuit.failure_timestamps),
-                timestamp=time.monotonic(),
-            )
+        transition = CircuitTransition(
+            provider_id=provider_id,
+            old_state=old_state,
+            new_state=new_state,
+            failure_count=len(circuit.failure_timestamps),
+            timestamp=time.monotonic(),
         )
+        self._transitions.append(transition)
+        self._publish_transition(transition)
+
+    def _publish_transition(self, transition: CircuitTransition) -> None:
+        """Publish transition events from sync CB methods without blocking callers."""
+        if self._event_port is None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        payload = {
+            "provider_id": transition.provider_id,
+            "old_state": transition.old_state.value,
+            "new_state": transition.new_state.value,
+            "failure_count": transition.failure_count,
+        }
+        task = loop.create_task(self._event_port.publish(TOPIC_CIRCUIT_STATE, payload))
+        task.add_done_callback(self._log_publish_failure)
+
+    @staticmethod
+    def _log_publish_failure(task: asyncio.Task[Any]) -> None:
+        try:
+            task.result()
+        except Exception:  # noqa: BLE001
+            logger.debug("Circuit state event publish failed", exc_info=True)
 
 
 __all__ = [

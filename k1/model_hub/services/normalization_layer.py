@@ -45,6 +45,7 @@ from k1.model_hub.types import (
     TokenCountPayload,
     TokenUsage,
     ToolCallPayload,
+    ToolCallResultSet,
     TTSPayload,
     VisionPayload,
     WebSearchPayload,
@@ -374,13 +375,10 @@ class NormalizationLayer:
         consumers (concierge ``_unwrap_response``).
         """
         if capability == CapabilityType.TOOL_CALL:
-            return {
-                "text": response.text or "",
-                "tool_calls": [
-                    {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
-                    for tc in (response.tool_calls or [])
-                ],
-            }
+            return ToolCallResultSet(
+                text=response.text or "",
+                tool_calls=list(response.tool_calls or []),
+            )
         if capability == CapabilityType.STRUCTURED:
             raw = response.raw_response or {}
             return StructuredResult(json_output=raw.get("json_output", {}))

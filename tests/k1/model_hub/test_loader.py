@@ -8,27 +8,27 @@ every load outcome (registered / skipped / failed).
 from __future__ import annotations
 
 from pathlib import Path
-from typing import AsyncIterator, List
+from typing import AsyncIterator
 
 import pytest
 import yaml
 
+from k1.model_hub.events import TOPIC_PROVIDER_REGISTERED
 from k1.model_hub.factory import ModelHubFactory
 from k1.model_hub.loader import (
     ProviderConfig,
     ProviderEntry,
     ProviderLoader,
-    ProviderLoadResult,
     _import_plugin_class,
 )
-from k1.model_hub.manifest import AuthConfig, ModelSpec, PlacementConfig, ProviderManifest
+from k1.model_hub.manifest import ProviderManifest
 from k1.model_hub.plugins.base import (
     NormalizedRequest,
     ProviderChunk,
     ProviderHealth,
     ProviderResponse,
 )
-from k1.model_hub.types import CapabilityType, HealthStatus, ModelTier, PlacementType
+from k1.model_hub.types import CapabilityType, HealthStatus
 
 # ---------------------------------------------------------------------------
 # Stub plugins
@@ -76,6 +76,14 @@ class _NoApiKeyPlugin(_StubPlugin):
 class _BoomOnInitPlugin(_StubPlugin):
     async def initialize(self, manifest: ProviderManifest) -> None:
         raise RuntimeError("init exploded")
+
+
+class _RecordingEventPort:
+    def __init__(self) -> None:
+        self.published: list[tuple[str, object]] = []
+
+    async def publish(self, topic: str, payload: object) -> None:
+        self.published.append((topic, payload))
 
 
 # Module-level so importlib can resolve them via dotted paths.
@@ -201,6 +209,30 @@ class TestProviderLoader:
         assert result.skipped == ()
         assert result.failed == ()
         assert result.total == 1
+
+    async def test_happy_path_publishes_provider_registered(
+        self, hub, manifest_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _write_manifest(manifest_dir, "evented")
+        monkeypatch.setenv("TEST_API_KEY", "secret-123")
+        event_port = _RecordingEventPort()
+
+        loader = ProviderLoader(hub, manifest_root=manifest_dir, event_port=event_port)
+        result = await loader.load(
+            ProviderConfig(providers=(ProviderEntry(provider_id="evented"),))
+        )
+
+        assert result.registered == ("evented",)
+        assert event_port.published == [
+            (
+                TOPIC_PROVIDER_REGISTERED,
+                {
+                    "provider_id": "evented",
+                    "capabilities": ["CHAT"],
+                    "model_count": 1,
+                },
+            )
+        ]
 
     async def test_missing_env_var_skipped(
         self, hub, manifest_dir: Path, monkeypatch: pytest.MonkeyPatch

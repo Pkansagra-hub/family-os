@@ -23,7 +23,7 @@
 Step 1:  config = config or ModelHubConfig()
 Step 2:  credential_adapter = CredentialStoreAdapter()
 Step 3:  registry = ProviderRegistry(config)
-Step 4a: circuit_mgr = CircuitBreakerManager()
+Step 4a: circuit_mgr = CircuitBreakerManager(event_port=None)
 Step 4b: rate_limiter = RateLimiter(default_headroom_pct=config.rate_limit_headroom_pct)
 Step 5:  response_cache = ResponseCache(config)
 Step 6a: health_adapter = HealthReportAdapter()
@@ -32,18 +32,19 @@ Step 6c: capability_router = CapabilityRouter(registry, circuit_mgr, rate_limite
 Step 6d: model_selector = ModelSelector()
 Step 7:  normalization = NormalizationLayer()
 Step 8:  dispatcher = ProviderDispatcher(circuit_mgr, rate_limiter, credential_adapter,
-                                          plugins=plugins or {})
+                                          plugins=plugins or {}, event_port=None)
 Step 9:  router = RequestRouter(
              capability_router, model_selector, response_cache,
              normalization, dispatcher,
-             audit_logger=AuditLogger()
+             audit_logger=AuditLogger(), event_port=None
          )
 Step 10: hub = _HubCore(router, registry, health_adapter)
 Step 11: return hub
 ```
 
-`metrics_port` is NOT wired in `create_standalone` — the caller must attach via
-`router._metrics_port = ...` or use `create_with_ports`.
+`metrics_port` and `event_port` are NOT wired in `create_standalone` — the caller must
+attach private fields manually or use `create_with_ports` / `from_config(..., ports=...)`.
+This is the remaining ISSUE-M01 gap: standalone hubs suppress ModelHub bus events.
 
 ---
 
@@ -60,13 +61,14 @@ async def from_config(
 ```
 
 1. `hub = create_standalone(hub_config)` or `create_with_ports(ports, hub_config)` if ports given
-2. `loader = ProviderLoader(hub, manifest_root=manifest_root or _DEFAULT_MANIFEST_ROOT)`
+2. `loader = ProviderLoader(hub, manifest_root=manifest_root or _DEFAULT_MANIFEST_ROOT, event_port=ports.get("event_port"))`
 3. `result = await loader.load(config)` — never raises; inspect `result.failed`
 4. Returns `(hub, result)`
 
-**KNOWN GAP (factory.py:512):** `event_port`, `state_read_port`, `config_port`, `health_port`
-accepted in `from_config` but NOT wired into any internal service. They are stored in the
-ports dict but unused. Tagged "not addressed by P2.2".
+With `ports` provided, `create_with_ports` wires `event_port` into `RequestRouter`,
+`ProviderDispatcher`, and `CircuitBreakerManager`; `metrics_port` and `state_read_port`
+also reach `RequestRouter`. `health_port` becomes the `_HubCore.health()` adapter.
+`config_port` is still only validated, not connected to a live `ConfigAdapter`.
 
 ---
 
@@ -94,7 +96,7 @@ _load_one(entry):
         if api_key and hasattr(plugin, "set_api_key"):
             plugin.set_api_key(api_key)
   6. hub.register_plugin(manifest, plugin)  ← Step 10 below
-     emit TOPIC_PROVIDER_REGISTERED, TOPIC_CAPABILITY_AVAILABLE
+      publish TOPIC_PROVIDER_REGISTERED if event_port is wired
 Returns ("registered"|"skipped"|"failed", detail_str)
 ```
 
@@ -114,7 +116,10 @@ registry.register(manifest, plugin)
 # Seam 2: install plugin into ProviderDispatcher's plugin map
 dispatcher.register_plugin(manifest.provider_id, plugin)
 
-# Seam 3 (shutdown): _HubCore.shutdown() reaches into
+# Seam 3: install provider circuit-breaker config
+dispatcher._circuit_mgr.register_provider(manifest.provider_id, manifest.circuit_breaker)
+
+# Seam 4 (shutdown): _HubCore.shutdown() reaches into
 #   self._router._dispatcher._plugins to close all plugins
 ```
 
@@ -144,6 +149,7 @@ currently maintain independent maps (ProviderInfo vs IProviderPlugin).
 ```
 route(request):
     ├── _validate(request)          → ValidationError if trace_id empty or unknown cap
+    ├── event: request.received     → includes request_id, trace_id, consumer_id, capability
     ├── metrics.emit(active+1)
     ├── capability_router.route(cap, constraints, token_estimate)
     │       ├── registry.get_providers_for_capability(cap)    O(1) index
@@ -155,7 +161,7 @@ route(request):
     │       ├── [score: preference + placement + health]
     │       ├── [avoid_providers exclusion]
     │       └── ModelChoice(primary, fallbacks[:2])
-    ├── response_cache.get(cache_key)       → HubResponse on hit (skip to emit)
+    ├── response_cache.get(cache_key)       → HubResponse on hit (emit response.complete cache_hit=True)
     ├── normalization.normalize(request, provider_id)
     │       └── _CAPABILITY_EXTRACTORS[cap](payload) → NormalizedRequest
     ├── dispatcher.dispatch(normalized, primary_id, fallback_chain=fallbacks)
@@ -169,8 +175,14 @@ route(request):
     ├── normalization.denormalize(provider_response, request, ...)
     ├── response_cache.put(cache_key, hub_response)   [if should_cache]
     ├── audit_logger.log(request, response)
+    ├── event: request.completed    → legacy topic kept for compatibility
+    ├── event: response.complete    → documented completion topic
     └── metrics.emit(tokens, latency, active-1) → HubResponse
 ```
+
+Failure paths publish `k1.model_hub.request.failed.v1`. Provider fallback paths publish
+`provider.failure.v1` and `fallback.triggered.v1` from `ProviderDispatcher` before the
+router publishes the final completion event.
 
 ---
 
@@ -218,6 +230,9 @@ dispatch(request, provider_id, fallback_chain, token_estimate):
             last_error = exc
             if attempt == 0:   # retry once on primary
                 retry attempt on same pid
+        if next fallback exists:
+            publish provider.failure.v1
+            publish fallback.triggered.v1
     if last_error: raise last_error
     raise NoEligibleProviderError(...)
 ```
@@ -233,6 +248,7 @@ No cache on streaming path.
 `ProviderDispatcher` (write: `acquire()`, `record_success()`, `record_failure()`).
 
 Per-provider `_CircuitBreakerState` internal class:
+
 ```python
 state: CircuitState = CLOSED
 failure_timestamps: deque[float]   # sliding window
@@ -243,7 +259,8 @@ config: CircuitBreakerConfig
 ```
 
 `get_state(pid)` auto-transitions `OPEN → HALF_OPEN` if `time.time() - last_opened_at > cooldown_s`.
-This is a lazy transition — no background timer.
+This is a lazy transition — no background timer. When constructed with `event_port`, every
+state transition publishes `k1.model_hub.circuit.state.v1` asynchronously from the active loop.
 
 ---
 
@@ -257,6 +274,7 @@ cache_key = SHA-256(f"{capability.value}|{repr(payload)}|{model_id}|{temperature
 output for frozen dataclasses, which is deterministic within a single Python version.
 
 Skip rules (`should_cache` returns `False`):
+
 - `capability in {TOOL_CALL, BATCH, MODERATE}`
 - `streaming=True`
 - `constraints.temperature > 0.9`
@@ -349,15 +367,21 @@ BusEnvelopeDeserializer
 
 Produced by RequestRouter (via event_port.publish):
     k1.model_hub.request.received.v1
-    k1.model_hub.request.routed.v1
     k1.model_hub.response.complete.v1
-    k1.model_hub.cache.hit.v1
+    k1.model_hub.request.completed.v1   # legacy compatibility topic
+    k1.model_hub.request.failed.v1      # legacy compatibility topic
+
+Produced by ProviderDispatcher:
     k1.model_hub.provider.failure.v1
     k1.model_hub.fallback.triggered.v1
+
+Produced by CircuitBreakerManager:
     k1.model_hub.circuit.state.v1
-    k1.model_hub.provider.health.v1
 
 Produced by ProviderLoader (via hub._event_port if wired):
     k1.model_hub.provider.registered.v1
-    k1.model_hub.capability.available.v1
 ```
+
+Declared but not emitted by the current request path: `request.routed.v1`, `cache.hit.v1`,
+`capability.available.v1`, and `provider.health.v1`. `k1.model_hub.budget.alert.v1`
+is not declared in `events.py` and has no enforcer in this revision.

@@ -3,143 +3,365 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <meta name="theme-color" content="#000000">
-    <meta name="color-scheme" content="dark">
-    <title>FamilyOS -- K1 Concierge</title>
+    <meta name="theme-color" content="#f9fafb">
+    <meta name="color-scheme" content="light">
+    <title>Family Hub -- FamilyOS</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link rel="stylesheet" href="/static/styles.css?v=3">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css?v=6">
     <style>
-        /* Critical above-fold to prevent FOUC */
-        html { background: #000; color: rgba(255,255,255,0.92); }
+        html { background: #f9fafb; color: #111827; }
     </style>
 </head>
 <body>
-    <div id="app">
-        <!-- ============================================================
-             HEADER
-             ============================================================ -->
-        <header id="header">
-            <div class="header-left">
-                <h1>FamilyOS</h1>
-                <span class="subtitle">K1 Concierge</span>
-            </div>
 
-            <div class="header-center">
-                <!-- FSM State -->
-                <div id="fsm-badge" class="fsm-badge" title="System State">
-                    <span class="fsm-dot" aria-hidden="true"></span>
-                    <span id="fsm-state">INITIALIZING</span>
+<div id="app" class="app-shell">
+
+    <!-- ============================================================
+         SIDEBAR  (Figma layout)
+         ============================================================ -->
+    <aside id="sidebar" class="sidebar" role="navigation" aria-label="Main navigation">
+        <div class="sidebar-brand">
+            <h1>Family Hub</h1>
+            <p>Coordinate together</p>
+        </div>
+
+        <nav id="nav-primary" class="nav-list" role="tablist">
+            <button class="nav-item active" data-view="home"     role="tab" aria-selected="true">
+                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+                <span>Home</span>
+            </button>
+            <button class="nav-item" data-view="chat" role="tab" aria-selected="false">
+                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+                <span>Chat Assistant</span>
+            </button>
+            <button class="nav-item" data-view="calendar" role="tab" aria-selected="false">
+                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                <span>Calendar</span>
+            </button>
+            <button class="nav-item" data-view="tasks" role="tab" aria-selected="false">
+                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+                <span>Tasks</span>
+            </button>
+            <button class="nav-item" data-view="shopping" role="tab" aria-selected="false">
+                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg>
+                <span>Shopping</span>
+            </button>
+            <button class="nav-item" data-view="reminders" role="tab" aria-selected="false">
+                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+                <span>Reminders</span>
+            </button>
+            <button class="nav-item" data-view="chores" role="tab" aria-selected="false">
+                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18M6 7v14h12V7M9 7V4h6v3"/></svg>
+                <span>Chores</span>
+            </button>
+            <button class="nav-item" data-view="settings" role="tab" aria-selected="false">
+                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                <span>Family Settings</span>
+            </button>
+        </nav>
+
+        <div class="nav-divider"></div>
+
+        <nav id="nav-system" class="nav-list nav-list--system" role="tablist" aria-label="System">
+            <p class="nav-section-title">SYSTEM</p>
+            <button class="nav-item" data-view="timeline" role="tab" aria-selected="false">
+                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                <span>Timeline</span>
+            </button>
+            <button class="nav-item" data-view="dashboard" role="tab" aria-selected="false">
+                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
+                <span>Dashboard</span>
+            </button>
+            <button class="nav-item" data-view="sessionstate" role="tab" aria-selected="false">
+                <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+                <span>Session State</span>
+            </button>
+        </nav>
+
+        <div class="sidebar-footer">
+            <button id="member-switcher" class="member-switcher" aria-label="Switch family member">
+                <div id="member-avatar" class="member-avatar">A</div>
+                <div class="member-info">
+                    <p id="member-name" class="member-name">Alex</p>
+                    <p id="member-role" class="member-role">Parent</p>
                 </div>
+                <svg class="member-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
 
-                <!-- Affect Indicator -->
-                <div id="affect-indicator" class="affect-indicator" title="Emotional State">
-                    <span id="affect-emoji" aria-hidden="true">--</span>
-                    <span id="affect-label">neutral</span>
-                    <div class="affect-bar" role="progressbar" aria-label="Affect level">
-                        <div id="affect-fill" class="affect-fill" style="width: 50%"></div>
+            <div id="member-list-dropdown" class="member-dropdown hidden" role="listbox"></div>
+
+            <div id="connection-status" class="connection-status disconnected" title="Backend connection">
+                <span class="status-dot" aria-hidden="true"></span>
+                <span class="status-text">Connecting...</span>
+            </div>
+        </div>
+    </aside>
+
+    <!-- ============================================================
+         MAIN AREA
+         ============================================================ -->
+    <main id="main-area" class="main-area">
+
+        <!-- ===== HOME / DASHBOARD ===== -->
+        <section id="view-home" class="view view--active">
+            <div class="view-container">
+                <header class="page-header">
+                    <h2>Welcome back, <span id="welcome-name">Alex</span>!</h2>
+                    <p>Here's what's happening with your family today</p>
+                </header>
+
+                <!-- Quick stats -->
+                <div class="stats-grid" id="home-stats">
+                    <div class="stat-card stat-card--clickable" data-target="tasks">
+                        <div class="stat-icon stat-icon--blue">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+                        </div>
+                        <svg class="stat-trend" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+                        <p class="stat-value" id="stat-tasks">--</p>
+                        <p class="stat-label">Tasks Due Today</p>
+                    </div>
+                    <div class="stat-card stat-card--clickable" data-target="calendar">
+                        <div class="stat-icon stat-icon--purple">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                        </div>
+                        <svg class="stat-trend" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+                        <p class="stat-value" id="stat-events">--</p>
+                        <p class="stat-label">Upcoming Events</p>
+                    </div>
+                    <div class="stat-card stat-card--clickable" data-target="reminders">
+                        <div class="stat-icon stat-icon--green">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+                        </div>
+                        <svg class="stat-trend" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+                        <p class="stat-value" id="stat-reminders">--</p>
+                        <p class="stat-label">Active Reminders</p>
+                    </div>
+                    <div class="stat-card stat-card--clickable" data-target="chores">
+                        <div class="stat-icon stat-icon--orange">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18M6 7v14h12V7M9 7V4h6v3"/></svg>
+                        </div>
+                        <svg class="stat-trend" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+                        <p class="stat-value" id="stat-chores">--</p>
+                        <p class="stat-label">Active Chores</p>
                     </div>
                 </div>
-            </div>
 
-            <div class="header-right">
-                <span id="turn-badge" class="turn-badge" title="Current Turn">Turn 0</span>
-                <button id="btn-timeline" class="icon-btn" title="Toggle Timeline" aria-label="Toggle timeline panel">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
-                    </svg>
-                </button>
-                <button id="btn-dashboard" class="icon-btn" title="Toggle Dashboard" aria-label="Toggle dashboard panel">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>
-                    </svg>
-                </button>
-                <button id="btn-sessionstate" class="icon-btn" title="Toggle Session State" aria-label="Toggle session state panel">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
-                    </svg>
-                </button>
-            </div>
-        </header>
-
-        <!-- ============================================================
-             MAIN LAYOUT
-             ============================================================ -->
-        <div id="main-layout">
-            <!-- Left: Family Member Switcher -->
-            <aside id="sidebar" role="navigation" aria-label="Family members">
-                <h3>Family</h3>
-                <div id="member-list" role="listbox" aria-label="Select family member"></div>
-                <div class="sidebar-footer">
-                    <div id="connection-status" class="connection-status disconnected">
-                        <span class="status-dot" aria-hidden="true"></span>
-                        <span class="status-text">Disconnected</span>
+                <!-- Recent activity -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3>Recent Activity</h3>
+                        <button class="card-action" data-target="timeline">View timeline →</button>
+                    </div>
+                    <div id="home-activity" class="activity-list">
+                        <p class="muted-empty">Activity will appear as the family hub becomes active.</p>
                     </div>
                 </div>
-            </aside>
 
-            <!-- Center: Chat -->
-            <main id="chat-area" role="log" aria-label="Chat messages" aria-live="polite">
-                <div id="messages" class="messages"></div>
-
-                <div id="streaming-indicator" class="streaming-indicator hidden" aria-live="assertive">
-                    <div class="typing-dots" aria-hidden="true">
-                        <span></span><span></span><span></span>
+                <!-- Quick actions -->
+                <div class="card">
+                    <div class="card-header">
+                        <h3>Quick Actions</h3>
                     </div>
-                    <span class="streaming-text">Concierge is thinking...</span>
-                </div>
-
-                <div id="toast-container" class="toast-container" aria-live="polite"></div>
-
-                <form id="input-form" class="input-form" autocomplete="off">
-                    <div class="input-wrapper">
-                        <span id="input-member-tag" class="input-member-tag" aria-label="Current member">Alex</span>
-                        <input
-                            type="text"
-                            id="message-input"
-                            placeholder="Message..."
-                            autocomplete="off"
-                            spellcheck="true"
-                            disabled
-                            aria-label="Type a message"
-                        />
-                        <button type="submit" id="send-btn" disabled aria-label="Send message">
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                                <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
-                            </svg>
+                    <div class="quick-actions-grid">
+                        <button class="quick-action" data-target="chat">
+                            <svg class="qa-icon qa-icon--blue" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+                            <p class="qa-title">Ask Assistant</p>
+                            <p class="qa-desc">Get help with anything</p>
+                        </button>
+                        <button class="quick-action" data-target="tasks">
+                            <svg class="qa-icon qa-icon--purple" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+                            <p class="qa-title">Add Task</p>
+                            <p class="qa-desc">Create a new task</p>
+                        </button>
+                        <button class="quick-action" data-target="calendar">
+                            <svg class="qa-icon qa-icon--green" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                            <p class="qa-title">Schedule Event</p>
+                            <p class="qa-desc">Add to calendar</p>
                         </button>
                     </div>
-                </form>
-            </main>
-
-            <!-- Right: Timeline + Dashboard -->
-            <aside id="right-panel" class="right-panel hidden" role="complementary" aria-label="System details">
-                <div class="panel-tabs" role="tablist">
-                    <button class="panel-tab active" data-panel="timeline" role="tab" aria-selected="true">Timeline</button>
-                    <button class="panel-tab" data-panel="dashboard" role="tab" aria-selected="false">Dashboard</button>
-                    <button class="panel-tab" data-panel="sessionstate" role="tab" aria-selected="false">Session State</button>
                 </div>
+            </div>
+        </section>
 
-                <div id="timeline-panel" class="panel-content active" role="tabpanel">
+        <!-- ===== CHAT ASSISTANT (real K1 WS) ===== -->
+        <section id="view-chat" class="view view--chat">
+            <header class="chat-header">
+                <div class="chat-header-left">
+                    <div class="chat-avatar">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="11" r="2"/><path d="M8 16h8"/><line x1="12" y1="3" x2="12" y2="6"/></svg>
+                    </div>
+                    <div>
+                        <h2>Family Assistant</h2>
+                        <p>
+                            <span id="fsm-badge" class="fsm-badge" title="System State">
+                                <span class="fsm-dot" aria-hidden="true"></span>
+                                <span id="fsm-state">INITIALIZING</span>
+                            </span>
+                            <span id="affect-indicator" class="affect-indicator-inline" title="Emotional State">
+                                <span id="affect-emoji">--</span>
+                                <span id="affect-label">neutral</span>
+                                <span class="affect-bar"><span id="affect-fill" class="affect-fill" style="width:50%"></span></span>
+                            </span>
+                            <span id="turn-badge" class="turn-badge">Turn 0</span>
+                        </p>
+                    </div>
+                </div>
+            </header>
+
+            <div id="chat-area" class="chat-area" role="log" aria-live="polite">
+                <div id="messages" class="messages"></div>
+                <div id="streaming-indicator" class="streaming-indicator hidden" aria-live="assertive">
+                    <div class="typing-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+                    <span class="streaming-text">Concierge is thinking...</span>
+                </div>
+                <div id="toast-container" class="toast-container" aria-live="polite"></div>
+            </div>
+
+            <form id="input-form" class="chat-input-bar" autocomplete="off">
+                <div class="chat-input-inner">
+                    <span id="input-member-tag" class="input-member-tag">Alex</span>
+                    <input id="message-input" type="text" placeholder="Ask me anything..." autocomplete="off" spellcheck="true" disabled aria-label="Type a message"/>
+                    <button type="submit" id="send-btn" disabled aria-label="Send message">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                        <span>Send</span>
+                    </button>
+                </div>
+            </form>
+        </section>
+
+        <!-- ===== CALENDAR ===== -->
+        <section id="view-calendar" class="view">
+            <div class="view-container">
+                <header class="page-header page-header--with-action">
+                    <div>
+                        <h2>Family Calendar</h2>
+                        <p>Coordinate everyone's schedule</p>
+                    </div>
+                    <button class="btn-primary" data-app-action="calendar:create_event">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                        Add Event
+                    </button>
+                </header>
+                <div id="view-calendar-body" class="view-body"></div>
+            </div>
+        </section>
+
+        <!-- ===== TASKS ===== -->
+        <section id="view-tasks" class="view">
+            <div class="view-container">
+                <header class="page-header page-header--with-action">
+                    <div>
+                        <h2>Task Manager</h2>
+                        <p>Assign and track family tasks</p>
+                    </div>
+                    <button class="btn-primary" data-app-action="tasks:create_task">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                        Add Task
+                    </button>
+                </header>
+                <div id="view-tasks-body" class="view-body"></div>
+            </div>
+        </section>
+
+        <!-- ===== SHOPPING (placeholder — adapter not registered) ===== -->
+        <section id="view-shopping" class="view">
+            <div class="view-container">
+                <header class="page-header">
+                    <h2>Shopping List</h2>
+                    <p>Family grocery list</p>
+                </header>
+                <div class="card card--empty">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="empty-icon"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg>
+                    <h3>Shopping adapter not registered yet</h3>
+                    <p>The Shopping K1 adapter will appear here once it's wired into the kernel.</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- ===== REMINDERS ===== -->
+        <section id="view-reminders" class="view">
+            <div class="view-container">
+                <header class="page-header page-header--with-action">
+                    <div>
+                        <h2>Reminders</h2>
+                        <p>Stay on top of every nudge</p>
+                    </div>
+                    <button class="btn-primary" data-app-action="reminders:create_reminder">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                        Add Reminder
+                    </button>
+                </header>
+                <div id="view-reminders-body" class="view-body"></div>
+            </div>
+        </section>
+
+        <!-- ===== CHORES ===== -->
+        <section id="view-chores" class="view">
+            <div class="view-container">
+                <header class="page-header page-header--with-action">
+                    <div>
+                        <h2>Chores</h2>
+                        <p>Recurring household responsibilities</p>
+                    </div>
+                    <button class="btn-primary" data-app-action="chores:create_chore">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                        Add Chore
+                    </button>
+                </header>
+                <div id="view-chores-body" class="view-body"></div>
+            </div>
+        </section>
+
+        <!-- ===== FAMILY SETTINGS ===== -->
+        <section id="view-settings" class="view">
+            <div class="view-container">
+                <header class="page-header">
+                    <h2>Family Settings</h2>
+                    <p>Feature flags, visibility policy, and family-wide preferences</p>
+                </header>
+                <div id="view-settings-body" class="view-body"></div>
+            </div>
+        </section>
+
+        <!-- ===== TIMELINE ===== -->
+        <section id="view-timeline" class="view">
+            <div class="view-container">
+                <header class="page-header">
+                    <h2>Timeline</h2>
+                    <p>Live system trace — FSM transitions, tool calls, kernel events</p>
+                </header>
+                <div class="card card--padded">
                     <div id="timeline-entries" class="timeline-entries"></div>
                 </div>
+            </div>
+        </section>
 
-                <div id="dashboard-panel" class="panel-content" role="tabpanel">
-                    <div class="dash-section">
-                        <h4>FSM States</h4>
+        <!-- ===== DASHBOARD ===== -->
+        <section id="view-dashboard" class="view">
+            <div class="view-container">
+                <header class="page-header">
+                    <h2>System Dashboard</h2>
+                    <p>FSM states, session ops, tool calls, and metrics</p>
+                </header>
+
+                <div class="dash-grid">
+                    <div class="card card--padded">
+                        <h4 class="card-subtitle">FSM States</h4>
                         <div id="dash-fsm" class="dash-fsm"></div>
                     </div>
-                    <div class="dash-section">
-                        <h4>Session Ops</h4>
+                    <div class="card card--padded">
+                        <h4 class="card-subtitle">Session Ops</h4>
                         <div id="dash-ops" class="dash-list"></div>
                     </div>
-                    <div class="dash-section">
-                        <h4>Tool Calls</h4>
+                    <div class="card card--padded">
+                        <h4 class="card-subtitle">Tool Calls</h4>
                         <div id="dash-tools" class="dash-list"></div>
                     </div>
-                    <div class="dash-section">
-                        <h4>Metrics</h4>
-                        <div id="dash-metrics" class="dash-metrics">
+                    <div class="card card--padded">
+                        <h4 class="card-subtitle">Metrics</h4>
+                        <div class="dash-metrics">
                             <div class="metric">
                                 <span class="metric-label">Latency</span>
                                 <span id="metric-latency" class="metric-value">--</span>
@@ -155,41 +377,81 @@
                         </div>
                     </div>
                 </div>
+            </div>
+        </section>
 
-                <div id="sessionstate-panel" class="panel-content" role="tabpanel">
-                    <div id="ss-loading" class="ss-loading">Loading session state...</div>
-                    <div id="ss-content" class="ss-content" style="display:none">
-                        <!-- Overview -->
-                        <div class="dash-section">
-                            <h4>Overview</h4>
-                            <div id="ss-overview" class="ss-overview"></div>
-                        </div>
-                        <!-- Tier bars -->
-                        <div class="dash-section">
-                            <h4>Tier Utilization</h4>
-                            <div id="ss-tier-bars" class="ss-tier-bars"></div>
-                        </div>
-                        <!-- HOT Sections -->
-                        <div class="dash-section">
-                            <h4>HOT Tier (In-Memory)</h4>
-                            <div id="ss-hot-sections" class="ss-sections"></div>
-                        </div>
-                        <!-- WARM Sections -->
-                        <div class="dash-section">
-                            <h4>WARM Tier (Evictable)</h4>
-                            <div id="ss-warm-sections" class="ss-sections"></div>
-                        </div>
-                        <!-- LOCAL COLD -->
-                        <div class="dash-section">
-                            <h4>LOCAL COLD (Archive)</h4>
-                            <div id="ss-cold-info" class="ss-cold-info"></div>
-                        </div>
+        <!-- ===== SESSION STATE ===== -->
+        <section id="view-sessionstate" class="view">
+            <div class="view-container">
+                <header class="page-header">
+                    <h2>Session State</h2>
+                    <p>HOT / WARM / COLD memory tier utilization</p>
+                </header>
+
+                <div id="ss-loading" class="ss-loading">Loading session state...</div>
+                <div id="ss-content" class="ss-content" style="display:none">
+                    <div class="card card--padded">
+                        <h4 class="card-subtitle">Overview</h4>
+                        <div id="ss-overview" class="ss-overview"></div>
+                    </div>
+                    <div class="card card--padded">
+                        <h4 class="card-subtitle">Tier Utilization</h4>
+                        <div id="ss-tier-bars" class="ss-tier-bars"></div>
+                    </div>
+                    <div class="card card--padded">
+                        <h4 class="card-subtitle">HOT Tier (In-Memory)</h4>
+                        <div id="ss-hot-sections" class="ss-sections"></div>
+                    </div>
+                    <div class="card card--padded">
+                        <h4 class="card-subtitle">WARM Tier (Evictable)</h4>
+                        <div id="ss-warm-sections" class="ss-sections"></div>
+                    </div>
+                    <div class="card card--padded">
+                        <h4 class="card-subtitle">LOCAL COLD (Archive)</h4>
+                        <div id="ss-cold-info" class="ss-cold-info"></div>
                     </div>
                 </div>
-            </aside>
+            </div>
+        </section>
+
+    </main>
+</div>
+
+<!-- ============================================================
+     ACTION FORM MODAL  (re-used by every adapter view)
+     ============================================================ -->
+<div id="action-form-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-backdrop" id="action-form-backdrop"></div>
+    <div class="modal-dialog">
+        <div class="modal-header">
+            <h3 id="action-form-title">Action</h3>
+            <button id="btn-action-close" class="icon-btn-ghost" aria-label="Close form">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+        </div>
+        <div id="action-form-fields" class="modal-body"></div>
+        <div class="modal-footer">
+            <button id="btn-action-cancel" class="btn-secondary">Cancel</button>
+            <button id="btn-action-submit" class="btn-primary">Submit</button>
         </div>
     </div>
+</div>
 
-    <script src="/static/app.js?v=3"></script>
+<!-- Hidden legacy containers retained so existing app.js DOM refs don't crash -->
+<div style="display:none">
+    <div id="apps-overlay" class="hidden"></div>
+    <div id="apps-tabs"></div>
+    <div id="apps-content"></div>
+    <div id="apps-status-dot"></div>
+    <button id="btn-apps" class="hidden"></button>
+    <button id="btn-apps-close"></button>
+    <button id="btn-timeline"></button>
+    <button id="btn-dashboard"></button>
+    <button id="btn-sessionstate"></button>
+    <div id="right-panel" class="hidden"></div>
+    <div id="member-list"></div>
+</div>
+
+<script src="/static/app.js?v=7"></script>
 </body>
 </html>

@@ -25,12 +25,13 @@ Reference: v3_milestones.md E9.5.3 (FSM state derivation)
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from k1.concierge.ledger.projections import (
     project_cancel_state,
     project_history,
+    project_hitl_state,
     project_pending_results,
     project_task_states,
 )
@@ -170,19 +171,29 @@ class CrashRecoveryOrchestrator:
         # 3. Project suspension state -> rebuild SuspensionManager
         report.suspensions_restored = fsm._suspension_manager.rebuild_from_events(entries)
 
-        # 4. Project HITL state -> rebuild HILCoordinator (if wired)
-        # E4.M1.4: legacy `_hil_coordinator` removed.  HITL state recovery
-        # is the unified HIL service's responsibility (HILLedgerAdapter,
-        # E1) once it is wired in E4.M1.6 / E5.  Until then no rebuild
-        # happens at this seam.
+        # 4. Project HITL state -> rebuild controller/SessionState mirrors when available
+        pending_hil, hil_counts, hil_histories = project_hitl_state(entries)
+        report.hitl_pending_restored = len(pending_hil)
+        report._details["pending_hil"] = {
+            task_id: asdict(record) for task_id, record in pending_hil.items()
+        }
+        report._details["hil_counts"] = dict(hil_counts)
+        report._details["hil_histories"] = dict(hil_histories)
+        rebuild_pending = getattr(fsm, "rebuild_pending_hil_from_projection", None)
+        if callable(rebuild_pending):
+            report.hitl_pending_restored = rebuild_pending(pending_hil)
 
         # 5. Project pending results -> rebuild FSMTurnState
         pending = project_pending_results(entries)
         report.pending_results_restored = fsm._turn_state.rebuild_from_projection(pending)
 
-        # 6. Project history -> store in report (controller can apply)
+        # 6. Project history -> rebuild controller cache when supported
         history = project_history(entries)
-        report.history_entries = len(history)
+        rebuild_history = getattr(fsm, "rebuild_history_from_projection", None)
+        if callable(rebuild_history):
+            report.history_entries = rebuild_history(history)
+        else:
+            report.history_entries = len(history)
         report._details["history"] = history
 
         # 7. Derive _active_task_ids from projected task states
@@ -196,11 +207,73 @@ class CrashRecoveryOrchestrator:
                 active_ids.add(task_id)
         report.active_task_count = len(active_ids)
         report._details["active_task_ids"] = active_ids
+        if hasattr(fsm, "_active_task_ids"):
+            fsm._active_task_ids = set(active_ids)
 
         # 8. Derive FSM state from event patterns (E9.5.3)
         report.derived_state = self._derive_fsm_state(entries, task_states, pending)
+        anomalies = self._check_recovery_coherence(
+            fsm, task_states, pending, pending_hil, active_ids
+        )
+        report._details["coherence_anomalies"] = anomalies
+        for anomaly in anomalies:
+            logger.warning("Crash recovery coherence anomaly: %s", anomaly)
 
         logger.info("Crash recovery complete: %s", report.summary())
+
+    def _check_recovery_coherence(
+        self,
+        fsm: Any,
+        task_states: dict[str, Any],
+        pending_results: Any,
+        pending_hil: dict[str, Any],
+        active_task_ids: set[str],
+    ) -> list[str]:
+        """Return non-fatal recovery anomalies for observability."""
+        anomalies: list[str] = []
+        for task_id, entry in task_states.items():
+            status = getattr(entry, "status", None)
+            if status in (TaskStatus.DISPATCHED, TaskStatus.IN_PROGRESS, TaskStatus.SUSPENDED):
+                if task_id not in active_task_ids:
+                    anomalies.append(f"active_task_missing:{task_id}")
+            if status == TaskStatus.SUSPENDED:
+                try:
+                    has_suspension = bool(fsm._suspension_manager.has_context(task_id))
+                except Exception:
+                    has_suspension = False
+                try:
+                    task = fsm._task_bridge.get_task(task_id)
+                    has_bridge_pending = bool(
+                        getattr(task, "pending_hil", False)
+                        or getattr(task, "pending_hil_data", None)
+                    )
+                except Exception:
+                    has_bridge_pending = False
+                if not (has_suspension or has_bridge_pending or task_id in pending_hil):
+                    anomalies.append(f"suspended_task_without_pending_hil:{task_id}")
+
+        for item in list(pending_results or []):
+            task_id = item.get("task_id", "") if isinstance(item, dict) else ""
+            status = getattr(task_states.get(task_id), "status", None)
+            already_delivered = bool(
+                isinstance(item, dict) and (item.get("delivered") or item.get("emitted"))
+            )
+            if already_delivered and status in (
+                TaskStatus.COMPLETED,
+                TaskStatus.FAILED,
+                TaskStatus.CANCELLED,
+            ):
+                anomalies.append(f"pending_result_for_terminal_task:{task_id}")
+
+        expected_active = sum(
+            1
+            for entry in task_states.values()
+            if getattr(entry, "status", None)
+            in (TaskStatus.DISPATCHED, TaskStatus.IN_PROGRESS, TaskStatus.SUSPENDED)
+        )
+        if expected_active != len(active_task_ids):
+            anomalies.append(f"active_count_mismatch:{expected_active}!={len(active_task_ids)}")
+        return anomalies
 
     def _derive_fsm_state(
         self,

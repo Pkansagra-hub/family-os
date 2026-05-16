@@ -13,7 +13,11 @@ from __future__ import annotations
 import json
 
 from k1.concierge.bus.builders import build_user_input
-from k1.concierge.bus.topics import TOPIC_INTENT_ARBITRATED, TOPIC_STATE_UPDATED, TOPIC_TURN_STARTED
+from k1.concierge.bus.topics import (
+    TOPIC_INTENT_ARBITRATED,
+    TOPIC_STATE_UPDATED,
+    TOPIC_TURN_STARTED,
+)
 from k1.concierge.fsm.arbiter import ArbiterDecision
 from k1.concierge.fsm.states import ConciergeState
 
@@ -144,22 +148,6 @@ class TestListeningArbiterWiring:
         arb_events = _captured_by_topic(bus, TOPIC_INTENT_ARBITRATED)
         payload = _payload(arb_events[0])
         assert payload["inflight_task_count"] == 0
-
-    def test_phase1_runs_exactly_once(self) -> None:
-        """Phase 1 classification runs exactly once per turn."""
-        fsm, bus = _make_fsm()
-        # Patch to count invocations
-        original = fsm._phase1_pipeline.classify
-        call_count = [0]
-
-        def counting_classify(text):
-            call_count[0] += 1
-            return original(text)
-
-        fsm._phase1_pipeline.classify = counting_classify
-        env = build_user_input({"text": "plan a trip"})
-        fsm._on_user_input(env)
-        assert call_count[0] == 1, "Phase 1 must run exactly once"
 
 
 # ===================================================================
@@ -517,20 +505,8 @@ class TestListeningEndToEnd:
         last = fsm._history[-1]
         assert "arbiter" in last.metadata
 
-    def test_run_phase1_with_arbiter_method_exists(self) -> None:
-        """Controller has _run_phase1_with_arbiter method."""
-        fsm, _ = _make_fsm()
-        assert hasattr(fsm, "_run_phase1_with_arbiter")
-        assert callable(fsm._run_phase1_with_arbiter)
-
     def test_enrich_envelope_with_arbiter_method_exists(self) -> None:
         """Controller has _enrich_envelope_with_arbiter method."""
         fsm, _ = _make_fsm()
         assert hasattr(fsm, "_enrich_envelope_with_arbiter")
         assert callable(fsm._enrich_envelope_with_arbiter)
-
-    def test_old_run_phase1_still_exists(self) -> None:
-        """_run_phase1 is still present for backward compatibility (E5.2)."""
-        fsm, _ = _make_fsm()
-        assert hasattr(fsm, "_run_phase1")
-        assert callable(fsm._run_phase1)

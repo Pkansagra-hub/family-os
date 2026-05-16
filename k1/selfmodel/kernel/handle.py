@@ -115,7 +115,8 @@ class SelfModelHandle:
                 )
                 continue
             setter(self.gate.evaluate)
-            self._installed_dispatchers.append(dispatcher)
+            if dispatcher not in self._installed_dispatchers:
+                self._installed_dispatchers.append(dispatcher)
 
         # ── Wrap recall_fn on every ToolContext ────────────────────
         for ctx in (front_ctx, back_ctx):

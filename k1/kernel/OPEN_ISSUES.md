@@ -68,54 +68,55 @@ Either: (a) pass a `NullSessionStateReaderAdapter` to the planner explicitly, so
 
 ---
 
-## Issue 3 — Per-session Fabric is never torn down
+## Issue 3 — Per-session Fabric is never torn down ~~CLOSED~~
 
-**Severity:** Medium — resource leak on session destruction
-**File:** `k1/kernel/service.py` (`destroy_session` / `_teardown_session`)
+> **Status: CLOSED** — Fixed by 3.3.1 (commit context: added `hasattr` guarded
+> `await fabric.shutdown()` call in `destroy_session` between P4 and P2 teardown).
+> Verified by M2-L6 live probe: `test_m2_l6_fabric_shutdown_called_on_destroy` → GREEN.
 
-### What the code does
+**Severity:** ~~Medium — resource leak on session destruction~~
+**File:** `k1/kernel/service.py` (`destroy_session`)
 
-`destroy_session` stops `memory_writer`, `concierge`, `ssm`, and closes the
-per-session bus and router. It does **not** call `session.fabric.shutdown()`.
+### What the code does (historical)
 
-### Failure mode
+`destroy_session` stopped `memory_writer`, `concierge`, `ssm`, and closed the
+per-session bus and router. It did **not** call `session.fabric.shutdown()`.
 
-If `CapabilityFabric` holds background tasks, open database handles, or active module
-loaders (MCP/WASM), they will continue running after the session is destroyed. Over
-many sessions, this accumulates leaked resources.
+### Fix applied (3.3.1)
 
-### Suggested fix
+After Concierge stop (P4 teardown) and before SessionState stop (P2 teardown),
+`destroy_session` now calls:
 
-Add `await session.fabric.shutdown()` after `concierge.stop()` and before `ssm.stop()`
-in the session teardown sequence. Wrap with the standard `_with_timeout` guard.
+```python
+fabric = getattr(session, "fabric", None)
+if fabric is not None and hasattr(fabric, "shutdown"):
+    await asyncio.wait_for(fabric.shutdown(), timeout=_TEARDOWN_TIMEOUT)
+```
+
+`Fabric.shutdown()` stops `health_checker` and `module_loader` cleanly.
+This is logged as `P3_teardown_complete` in the lifecycle event stream.
+
+### Remaining scope (NOT covered by this fix)
+
+`CapabilityFabric` (the facade inside `Fabric`) has no `shutdown()` method.
+If it gains one, a new issue should be filed.
 
 ---
 
-## Issue 4 — `max_sessions` declared but never enforced
+## Issue 4 — `max_sessions` declared but never enforced ~~CLOSED~~
 
-**Severity:** Low — configuration field has no effect
-**File:** `k1/kernel/config.py`, `k1/kernel/service.py` (`create_session`)
+> **Status: CLOSED** — Guard added at `service.py` lines 789–792:
+> ```python
+> if len(self._sessions) >= self._config.max_sessions:
+>     raise RuntimeError(
+>         f"Maximum session limit reached ({self._config.max_sessions}). "
+>         "Destroy an existing session before creating a new one."
+>     )
+> ```
+> Verified by M2-L7 live probe (4/4 green): `test_m2_l7_max_sessions_limit.py`.
 
-### What the code does
-
-`KernelConfig.max_sessions: int = 100` exists, but `create_session()` has no check
-against `len(self._sessions)`.
-
-### Failure mode
-
-Under load or in tests that create many sessions without destroying them, memory and
-SQLite handles will grow unbounded without any backpressure.
-
-### Suggested fix
-
-Add a guard at the start of `create_session()`:
-
-```python
-if len(self._sessions) >= self._config.max_sessions:
-    raise RuntimeError(
-        f"session limit reached ({self._config.max_sessions})"
-    )
-```
+~~**Severity:** Low — configuration field has no effect~~
+**File:** `k1/kernel/service.py` (`create_session`, line 789)
 
 ---
 
@@ -141,6 +142,9 @@ mock planner. Mock responses may be silently accepted by the workflow engine.
 S7's post-wire verification asserts
 `not isinstance(self._orchestrator._planner_port, MockPlannerAdapter)` before setting
 `_running = True`, so this cannot persist past a successful startup.
+
+Live coverage: `tests/integration/k1/live/m2/test_m2_l2_planner_orchestrator_crosswire.py`
+boots Recipe A and asserts the real `PlannerAdapter` plus mailbox identity.
 
 ### Suggested fix
 

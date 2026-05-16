@@ -178,3 +178,42 @@ class WebSocketRenderer:
                 "timestamp": time.time(),
             }
         )
+
+    def send_tool_refresh(self, adapter_id: str, space_id: str = "") -> None:
+        """E15.10: notify the browser that a family-tool's data has changed."""
+        self._broadcast_sync(
+            {
+                "type": "tool_refresh",
+                "adapter": adapter_id,
+                "space_id": space_id,
+                "timestamp": time.time(),
+            }
+        )
+
+    def send_hil_request(self, envelope: dict[str, Any]) -> None:
+        """Forward a HIL request envelope to the browser for user action."""
+        connections = len(self._connections)
+        if connections == 0:
+            logger.warning(
+                "WEB: no active websocket connections for hil_request hil_request_id=%s kind=%s",
+                envelope.get("hil_request_id", ""),
+                envelope.get("kind", ""),
+            )
+        else:
+            logger.info(
+                "WEB: broadcasting hil_request hil_request_id=%s kind=%s connections=%d",
+                envelope.get("hil_request_id", ""),
+                envelope.get("kind", ""),
+                connections,
+            )
+        self._broadcast_sync(
+            {
+                "type": "hil_request",
+                "hil_request_id": envelope.get("hil_request_id", ""),
+                "kind": envelope.get("kind", ""),
+                "caller_key": envelope.get("caller_key", ""),
+                "payload": envelope.get("payload", {}),
+                "timeout_ms": envelope.get("timeout_ms", 120000),
+                "timestamp": time.time(),
+            }
+        )

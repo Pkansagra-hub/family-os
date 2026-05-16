@@ -29,7 +29,7 @@ Model Hub does **not** own:
 | MH-01 | Model Hub never writes to SessionState. `IStateReadPort` has no write methods. |
 | MH-02 | Credentials are injected at request time via `ICredentialPort.get_key(provider_id)` — never stored inside plugins at rest beyond initialization. |
 | MH-03 | `trace_id` is REQUIRED on every `HubRequest`. Requests with empty `trace_id` are rejected with `ValidationError`. |
-| MH-04 | `cost_limit` is accepted in `RequestConstraints` but is NOT enforced by this revision. Cost tracking is passive (audit log + topic). |
+| MH-04 | `cost_limit` is accepted in `RequestConstraints` but is NOT enforced by this revision. Cost tracking is passive; there is no `k1.model_hub.budget.alert.v1` constant or enforcer. |
 | MH-05 | `IProviderPlugin.execute()` and `stream_execute()` are isolated: all plugin exceptions are caught by `ProviderDispatcher` and trigger circuit-failure recording. They never propagate uncaught to callers. |
 | MH-06 | Streaming responses are NEVER cached. `should_cache(..., streaming=True)` always returns `False`. |
 | MH-07 | `TOOL_CALL`, `BATCH`, `MODERATE` capabilities are NEVER cached regardless of temperature. |
@@ -260,17 +260,27 @@ Consumed:
 - `k1.model_hub.execute.v1` — inbound `HubRequest` (bus transport path, via `BusEnvelopeDeserializer`)
 
 Produced:
+
 - `k1.model_hub.request.received.v1` — `RequestReceivedPayload`
-- `k1.model_hub.request.routed.v1` — `RequestRoutedPayload` (provider_id, model_id)
-- `k1.model_hub.response.complete.v1` — `ResponseCompletePayload` (tokens, cost, latency)
-- `k1.model_hub.cache.hit.v1` — `CacheHitPayload`
-- `k1.model_hub.provider.failure.v1` — `ProviderFailurePayload`
+- `k1.model_hub.response.complete.v1` — `ResponseCompletePayload` (tokens, cost, latency, cache_hit)
+- `k1.model_hub.provider.failure.v1` — `ProviderFailurePayload` (from `ProviderDispatcher` when fallback is available)
 - `k1.model_hub.fallback.triggered.v1` — `FallbackTriggeredPayload`
 - `k1.model_hub.circuit.state.v1` — `CircuitStatePayload` (state transitions)
-- `k1.model_hub.provider.health.v1` — `ProviderHealthPayload`
-- `k1.model_hub.provider.registered.v1` — `ProviderRegisteredPayload`
-- `k1.model_hub.capability.available.v1` — `CapabilityAvailablePayload`
+- `k1.model_hub.provider.registered.v1` — `ProviderRegisteredPayload` (from `ProviderLoader` when wired)
 - `k1.model_hub.execute.response.v1` — JSON `HubResponse` reply (bus transport path)
+
+Legacy topics still emitted by `RequestRouter` but not declared in `events.py`:
+
+- `k1.model_hub.request.completed.v1`
+- `k1.model_hub.request.failed.v1`
+
+Declared but not emitted by current code: `k1.model_hub.capability.available.v1`.
+
+Declared in `events.py` but not emitted by the current `route()` path:
+
+- `k1.model_hub.request.routed.v1`
+- `k1.model_hub.cache.hit.v1` (cache hits currently emit `response.complete.v1` with `cache_hit=True`)
+- `k1.model_hub.provider.health.v1`
 
 ---
 

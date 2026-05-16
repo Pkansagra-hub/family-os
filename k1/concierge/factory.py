@@ -36,7 +36,6 @@ from k1.bus.ports.bus import IBus
 from k1.bus.ports.mailbox import IMailbox, IMailboxRouter
 from k1.concierge.config.concierge import ConciergeConfig  # canonical location
 from k1.concierge.ports import (
-    IClassificationPort,
     IDeltaPort,
     IDispatchPort,
     IInputPort,
@@ -62,7 +61,6 @@ _ALL_PORT_KEYS = frozenset(
     {
         "input_",
         "output",
-        "classification",
         "llm",
         "state",
         "dispatch",
@@ -87,7 +85,6 @@ class PortBundle:
     state: IStatePort
     llm: ILLMPort
     # OPTIONAL -- default to null/test adapters for two-tier boot
-    classification: IClassificationPort | None = None
     dispatch: IDispatchPort | None = None
     memory: IMemoryPort | None = None
     # P4B.6: writer is passed explicitly (was reach-through into ssm._writer_port)
@@ -374,7 +371,6 @@ class ConciergeFactory:
             output=adapters["output"],
             state=adapters["state"],
             llm=adapters["llm"],
-            classification=adapters["classification"],
             dispatch=adapters["dispatch"],
             memory=adapters["memory"],
         )
@@ -429,7 +425,6 @@ class ConciergeFactory:
             output=adapters["output"],
             state=adapters["state"],
             llm=adapters["llm"],
-            classification=adapters.get("classification"),
             dispatch=adapters.get("dispatch"),
             memory=adapters.get("memory"),
         )
@@ -510,7 +505,6 @@ class ConciergeFactory:
             InMemoryStateAdapter,
             MockDispatchAdapter,
             MockMemoryAdapter,
-            StubPhase1Pipeline,
             TestInputAdapter,
             TestOutputAdapter,
             create_test_bus,
@@ -536,7 +530,6 @@ class ConciergeFactory:
         return {
             "input_": TestInputAdapter(),
             "output": TestOutputAdapter(),
-            "classification": StubPhase1Pipeline(),
             "llm": TestModelHubBridge(),
             "state": state,
             "dispatch": MockDispatchAdapter(),
@@ -584,10 +577,6 @@ class ConciergeFactory:
         # Step 1: Create FSM
         fsm = ConciergeController(bus=bus, router=router)
 
-        # Step 2: Wire Phase1 pipeline
-        if ports.classification is not None:
-            fsm._phase1_pipeline = ports.classification
-
         # Step 3: Wire ledger (optional)
         ledger = None
         ledger_store = None
@@ -624,6 +613,7 @@ class ConciergeFactory:
         # ``dispatch_not_wired`` error.
         writer_port = ports.writer
         allow_dispatch_passthrough = bool(getattr(config, "allow_dispatch_passthrough", False))
+        _ctx_session_id = getattr(config, "session_id", "") or ""
         front_ctx = ToolContext(
             session_manager=ports.state,
             cognitive_trace_id=f"k-front-{uuid.uuid4().hex[:6]}",
@@ -632,6 +622,7 @@ class ConciergeFactory:
             dispatch=ports.dispatch,
             writer_port=writer_port,
             allow_dispatch_passthrough=allow_dispatch_passthrough,
+            session_id=_ctx_session_id,
         )
         back_ctx = ToolContext(
             session_manager=ports.state,
@@ -641,6 +632,7 @@ class ConciergeFactory:
             dispatch=ports.dispatch,
             writer_port=writer_port,
             allow_dispatch_passthrough=allow_dispatch_passthrough,
+            session_id=_ctx_session_id,
         )
 
         # Step 8: Tool dispatchers (P3.4c: defaults to 'simple'; back actor
@@ -762,6 +754,9 @@ class ConciergeFactory:
             back_mailbox=back_mailbox,
             fsm=fsm,
             model=ports.llm,
+            input_port=ports.input_,
+            output_port=ports.output,
+            dispatch_port=ports.dispatch,
             session_state=ports.state,
             front_dispatcher=front_dispatcher,
             back_dispatcher=back_dispatcher,

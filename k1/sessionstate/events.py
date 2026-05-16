@@ -43,7 +43,7 @@ DATACLASSES
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List
 
@@ -93,7 +93,9 @@ class BaseEvent:
     event_type: str = ""
     session_id: str = ""
     cognitive_trace_id: str = ""
-    timestamp_ms: int = field(default_factory=lambda: int(datetime.utcnow().timestamp() * 1000))
+    timestamp_ms: int = field(
+        default_factory=lambda: int(datetime.now(timezone.utc).timestamp() * 1000)
+    )
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""

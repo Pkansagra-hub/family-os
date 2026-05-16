@@ -200,6 +200,25 @@ class TestToolCallRoundTrip:
         resp = await bridge.execute(req)
         assert resp is not None
 
+    @pytest.mark.asyncio
+    async def test_tool_call_system_prompt_passthrough(self, bridge: TestModelHubBridge) -> None:
+        bridge.set_response("front", "", ConciergeModelResponse(text="ok"))
+        req = HubRequest(
+            capability=CapabilityType.TOOL_CALL,
+            payload=ToolCallPayload(
+                messages=[Message(role="user", content="x")],
+                tools=[ToolDefinition(name="t", description="d")],
+                tool_choice="auto",
+                system_prompt="front error policy",
+            ),
+            constraints=RequestConstraints(consumer_id="concierge.front"),
+            trace_id="test-trace",
+        )
+
+        await bridge.execute(req)
+
+        assert bridge.inner.calls[-1].system_prompt == "front error policy"
+
 
 # =====================================================================
 # STRUCTURED round-trip
@@ -295,12 +314,45 @@ class TestStreaming:
         assert len(chunks) >= 2
         # Last chunk is "done"
         assert chunks[-1].done is True
+        assert chunks[-1].content == "Hello world"
         assert chunks[-1].metadata is not None
         # At least one content chunk before done
         text_chunks = [c for c in chunks if c.content and not c.done]
         assert len(text_chunks) >= 1
         combined_text = "".join(c.content for c in text_chunks)
         assert combined_text == "Hello world"
+
+    @pytest.mark.asyncio
+    async def test_stream_execute_done_preserves_tool_calls(
+        self, bridge: TestModelHubBridge
+    ) -> None:
+        bridge.set_response(
+            "front",
+            "",
+            ConciergeModelResponse(
+                text="",
+                tool_calls=[POCToolCallResult(id="tc1", name="search_web", arguments={"q": "x"})],
+                finish_reason="tool_calls",
+            ),
+        )
+        req = HubRequest(
+            capability=CapabilityType.TOOL_CALL,
+            payload=ToolCallPayload(
+                messages=[Message(role="user", content="search")],
+                tools=[ToolDefinition(name="search_web", description="search")],
+            ),
+            constraints=RequestConstraints(consumer_id="concierge.front"),
+            trace_id="test-trace",
+        )
+
+        chunks = []
+        async for chunk in bridge.stream_execute(req):
+            chunks.append(chunk)
+
+        assert chunks[-1].done is True
+        assert chunks[-1].tool_calls is not None
+        assert chunks[-1].tool_calls[0].name == "search_web"
+        assert chunks[-1].metadata.finish_reason.value == "tool_calls"
 
 
 # =====================================================================

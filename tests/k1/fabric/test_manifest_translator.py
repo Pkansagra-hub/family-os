@@ -43,6 +43,15 @@ class TestBuildContract:
         assert all(i.name != "message" for i in c.required_inputs)
         assert any(i.name == "message" for i in c.optional_inputs)
 
+    def test_result_fields_become_output_schema(self) -> None:
+        d = PingToolService.DEFINITION
+        action = d.find_action("list_pings")
+        assert action is not None
+        c = build_contract(d, action)
+        assert c.output["type"] == "object"
+        assert c.output["properties"]["items"]["type"] == "array"
+        assert c.output["required"] == ["items"]
+
 
 class TestRegisterDefinition:
     def test_registers_every_action(self) -> None:

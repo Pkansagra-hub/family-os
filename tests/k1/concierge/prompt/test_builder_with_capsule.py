@@ -23,13 +23,17 @@ def _affect_neutral() -> AffectBand:
     return AffectBand(band="neutral")
 
 
-def _build(mode: PromptMode = PromptMode.STANDARD, **kwargs):
+def _build(
+    mode: PromptMode = PromptMode.STANDARD,
+    scenario_data: dict[str, object] | None = None,
+    **kwargs,
+):
     return DynamicPromptBuilder().build(
         mode=mode,
         affect_band=_affect_neutral(),
         history_messages=[],
         all_tool_schemas=[],
-        scenario_data={},
+        scenario_data=scenario_data or {},
         **kwargs,
     )
 
@@ -90,3 +94,37 @@ def test_empty_capsule_text_is_skipped() -> None:
     baseline = _build(grounding_capsule=None)
     out = _build(grounding_capsule=cap)
     assert out.system_prompt == baseline.system_prompt
+
+
+def test_standard_prompt_examples_do_not_override_greeting_rules() -> None:
+    out = _build(grounding_capsule=None)
+    assert "Greeting / banter turn:\n  1. Text response only. No tools." in out.system_prompt
+    assert "Mixed banter + request turn:" in out.system_prompt
+    assert (
+        "1. recall_memory() + update_scoreboard() + update_beliefs()  [all at once]"
+        not in out.system_prompt
+    )
+
+
+def test_standard_prompt_forces_text_only_salutations() -> None:
+    out = _build(grounding_capsule=None)
+    assert "good morning" in out.system_prompt
+    assert "good evening" in out.system_prompt
+    assert "Greeting / salutation turns: reply directly with text. No tools." in out.system_prompt
+    assert "Never use this path for greetings, salutations," in out.system_prompt
+    assert "1. update_beliefs() or text response directly" not in out.system_prompt
+
+
+def test_standard_prompt_drops_duplicate_active_member_when_capsule_present() -> None:
+    cap = GroundingCapsule(
+        self_block="[self]\nname=Alex\nrole=parent",
+        space_graph_block="[space]\n- Alex\n- Jordan",
+        rendered_at_ms=0,
+    )
+    out = _build(
+        grounding_capsule=cap,
+        scenario_data={"active_member": "unknown", "async_results_context": ""},
+    )
+    assert out.system_prompt.count("== ACTIVE MEMBER") == 1
+    assert "You are talking to: unknown" not in out.system_prompt
+    assert "name=Alex" in out.system_prompt

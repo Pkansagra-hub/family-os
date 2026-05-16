@@ -8,10 +8,9 @@ Key real-behavior constraints reflected in these tests:
   - RelevanceFilter R3 dedup: pipeline passes entities=[], topics=[] to filter,
     so R3 hash is identical for every turn. Dedup window = filter_dedup_window_seconds.
     Multi-turn tests set filter_dedup_window_seconds=0 to disable R3 dedup.
-  - MemoryWriterAgent catches all exceptions from model_hub.chat() and returns [].
-    The pipeline's circuit_breaker.record_failure() only fires if agent.extract()
-    raises -- which it never does. Circuit breaker tests exercise the CB directly
-    (it's a real object on the service) rather than expecting agent errors to trip it.
+    - MemoryWriterAgent catches model_hub.chat() exceptions and returns [], while
+        exposing the failure to the pipeline so model-edge failures still count
+        toward the circuit breaker.
 """
 
 from __future__ import annotations
@@ -57,9 +56,7 @@ class FakeSessionReadPort:
             raise RuntimeError("session read failed")
         return {k: v for k, v in self._snapshot_data.items() if k not in exclude}
 
-    async def read_archived_history(
-        self, session_id: str, limit: int = 50
-    ) -> List[Dict[str, Any]]:
+    async def read_archived_history(self, session_id: str, limit: int = 50) -> List[Dict[str, Any]]:
         return []
 
 
@@ -415,7 +412,7 @@ class TestLifecycleErrorResilience:
 
     @pytest.mark.asyncio
     async def test_llm_failure_skip_turn(self):
-        """FakeModelHub raises → agent catches, returns [] → next turn OK."""
+        """FakeModelHub raises → pipeline records CB failure → next turn OK."""
         mh = FakeModelHubPort([_meaningful_llm_response()] * 3)
         svc, sp, _, bp, ep = _create_service(model_hub=mh)
 

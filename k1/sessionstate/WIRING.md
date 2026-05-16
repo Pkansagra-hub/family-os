@@ -48,6 +48,11 @@ Phase 2: Bind back-references
 
 `create_with_ports()` validates port types via `PortProtocolError` (isinstance check against ABC).
 
+`DirectWriterAdapter.request_mutation()` is only valid after Phase 2 binding and
+after `SessionStateManager.start()` has moved the manager to RUNNING. Calls made
+while the writer is unbound or while the manager is pre-start/stopped raise
+`LifecycleError` instead of falling through to guard or mutation logic.
+
 ---
 
 ## 3. `SessionStateManager.__init__` — internal construction

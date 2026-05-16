@@ -811,6 +811,15 @@ class ProactiveGapDetector:
         """Number of active event subscriptions."""
         return len(self._subscription_handles)
 
+    def stop(self) -> None:
+        """Unsubscribe all event subscriptions wired by this detector."""
+        for handle in list(self._subscription_handles):
+            try:
+                self._event_port.unsubscribe(handle)
+            except Exception:
+                logger.debug("ProactiveGapDetector unsubscribe failed", exc_info=True)
+        self._subscription_handles.clear()
+
     # ------------------------------------------------------------------
     # Handlers: Registry change events -> contract_updated emission
     # ------------------------------------------------------------------

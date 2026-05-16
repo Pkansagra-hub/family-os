@@ -146,7 +146,17 @@ class CognitiveLoadRouting:
         if self._state_reader is None:
             return CognitiveScore(score=0.0, reason="no_state_reader")
 
+        # "cognitive" was the legacy section name; the current SessionState v2
+        # schema carries ``complexity_tier`` under ``control``. Try the legacy
+        # name first, then fall back to ``control`` for the tier hint.
         section = self._state_reader.read_section(request.session_id, "cognitive")
+        if section is None:
+            control = self._state_reader.read_section(request.session_id, "control")
+            if control is not None:
+                tier_map = {"low": "LOW", "medium": "MEDIUM", "high": "HIGH"}
+                tier_raw = str(control.get("complexity_tier", "")).lower()
+                if tier_raw in tier_map:
+                    section = {"complexity_tier": tier_map[tier_raw]}
         if section is None:
             return CognitiveScore(score=0.0, reason="cognitive_unavailable")
 

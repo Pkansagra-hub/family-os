@@ -76,7 +76,6 @@ ALL_16_EVENT_CLASSES: list[type[CanonicalEventMeta]] = [
 # M2 E2.5.4 added ResponseFinalDecided (17th event type)
 # M6 E6.3 (C04) added ResponseDelivered (33rd event type)
 from k1.concierge.events.conversation import (
-    Phase1Classified,
     ResponseDelivered,
     ResponseFinalDecided,
     TaskRouted,
@@ -117,7 +116,6 @@ ALL_EVENT_CLASSES: list[type[CanonicalEventMeta]] = ALL_16_EVENT_CLASSES + [
     TaskDeferredEvent,
     DependencyFailedEvent,
     WeaveMetricsEvent,
-    Phase1Classified,
     TaskRouted,
     HITLRequestedEvent,
     HITLResolvedEvent,

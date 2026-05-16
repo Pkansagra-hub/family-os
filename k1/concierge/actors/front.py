@@ -26,12 +26,24 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import time
+import uuid
+from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 from k1.bus.envelope import Envelope
 from k1.bus.ports.bus import IBus
 
 # Shared actor utilities (M3 E3.5)
+from k1.concierge.actors.frames import (
+    BackResultFrame,
+    HILResolutionFrame,
+    WeavePresentationFrame,
+    affect_dict_from_session,
+    build_emotional_context,
+)
 from k1.concierge.actors.shared import never_cancel as _never_cancel
 from k1.concierge.actors.shared import parse_envelope_payload as _parse_payload
 from k1.concierge.actors.shared import safe_get_section as _safe_get_section
@@ -43,6 +55,7 @@ from k1.concierge.bus.builders import (
     build_task_dispatch,
     build_task_resume,
 )
+from k1.concierge.bus.topics import TOPIC_PROACTIVE_FILL
 from k1.concierge.config import get_config
 from k1.concierge.llm.types import ModelMessage
 from k1.concierge.llm.validator import LLMOutputValidator
@@ -56,12 +69,29 @@ from k1.model_hub.ports import IModelHubPort
 
 logger = logging.getLogger(__name__)
 
-# Reasoning-leak detection patterns.  Flash Lite (and other non-thinking
-# models) sometimes prefix their response text with chain-of-thought
-# reasoning that should never reach the user.  These patterns detect
-# common prefixes so _strip_leaked_reasoning can remove them.
-import re
+_PROMPT_DUMP_DIR = Path(__file__).resolve().parents[3] / "data" / "prompt_dumps"
 
+
+def _correlate_envelope(env: Envelope, source: Envelope, trace_id: str) -> Envelope:
+    """Copy source correlation headers onto a Front-emitted envelope."""
+    return replace(
+        env,
+        cognitive_trace_id=trace_id or source.cognitive_trace_id,
+        session_id=source.session_id,
+        request_id=source.request_id,
+    )
+
+
+def _bind_tool_context(tool_dispatcher: ToolDispatcher, *, trace_id: str, session_id: str) -> None:
+    """Bind Front tool calls to the current envelope correlation scope."""
+    ctx = getattr(tool_dispatcher, "ctx", None)
+    if ctx is None:
+        return
+    ctx.cognitive_trace_id = trace_id or getattr(ctx, "cognitive_trace_id", "") or uuid.uuid4().hex
+    ctx.session_id = session_id or getattr(ctx, "session_id", "")
+
+
+# Detect common reasoning prefixes so they never leak to the user.
 _REASONING_PREFIXES = re.compile(
     r"^("
     # "The user is asking..." / "The user's request..."
@@ -76,6 +106,58 @@ _REASONING_PREFIXES = re.compile(
     r"(?=\n[A-Z]|\n\n)",
     re.DOTALL,
 )
+
+
+def _write_runtime_prompt_dump(
+    *,
+    envelope: Envelope,
+    mode: PromptMode,
+    context: Any,
+    domain: str | None,
+    tier: str,
+    clarify_depth: int,
+    trace_id: str,
+) -> None:
+    """Persist the exact Front prompt payload for postmortem debugging."""
+    try:
+        _PROMPT_DUMP_DIR.mkdir(parents=True, exist_ok=True)
+        timestamp_ms = int(time.time() * 1000)
+        payload = {
+            "timestamp_ms": timestamp_ms,
+            "topic": envelope.topic,
+            "envelope_id": envelope.envelope_id,
+            "parent_id": envelope.parent_id,
+            "trace_id": trace_id,
+            "mode": mode.value,
+            "domain": domain,
+            "tier": tier,
+            "clarify_depth": clarify_depth,
+            "affect_band": context.affect_band,
+            "max_iterations": context.max_iterations,
+            "tool_names": [t.name for t in context.tools],
+            "messages": [
+                {
+                    "role": m.role,
+                    "content": m.content,
+                }
+                for m in context.messages
+            ],
+            "system_prompt": context.system_prompt,
+        }
+        stem = f"front_prompt_env{envelope.envelope_id}_{timestamp_ms}"
+        stamped_path = _PROMPT_DUMP_DIR / f"{stem}.json"
+        latest_path = _PROMPT_DUMP_DIR / "front_prompt_latest.json"
+        serialized = json.dumps(payload, ensure_ascii=False, indent=2)
+        stamped_path.write_text(serialized, encoding="utf-8")
+        latest_path.write_text(serialized, encoding="utf-8")
+        logger.info(
+            "front_handler: prompt dump written envelope_id=%d file=%s latest=%s",
+            envelope.envelope_id,
+            stamped_path,
+            latest_path,
+        )
+    except Exception:
+        logger.warning("front_handler: prompt dump write failed", exc_info=True)
 
 
 def _strip_leaked_reasoning(text: str) -> str:
@@ -147,6 +229,13 @@ def _strip_leaked_reasoning(text: str) -> str:
     return text
 
 
+def _build_dispatch_ack(dispatches: list[dict[str, Any]]) -> str:
+    """Return a deterministic in-progress acknowledgement for dispatched work."""
+    if len(dispatches) > 1:
+        return "I'm working on those now."
+    return "I'm working on that now."
+
+
 # Patterns matching raw system/HIL blocks that LLMs sometimes pass through
 # instead of rephrasing.  Covers:
 #   [HIL Request] Type: ... Question: ... Options: ... Side effects: ...
@@ -183,6 +272,65 @@ def _strip_leaked_system_blocks(text: str) -> str:
             removed,
         )
     return cleaned if cleaned else text
+
+
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
+_BACK_FRAME_JSON_RE = re.compile(
+    r"\{[^{}]*(?:\"task_id\"|\"final_answer\"|\"result_type\"|"
+    r"\"tool_call_summaries\")[\s\S]*?\}",
+    re.IGNORECASE,
+)
+_TOOL_TRACE_LINE_RE = re.compile(
+    r"(?im)^\s*(?:tool(?:_call| call|_history|_call_summaries)|iteration|scratchpad)\s*[:=].*$"
+)
+
+
+def _strip_leaked_back_frame(text: str) -> str:
+    """Remove Back-internal frames, traces, and thinking blocks from final text."""
+    if not text:
+        return text
+    cleaned = _THINK_BLOCK_RE.sub("", text)
+    cleaned = _BACK_FRAME_JSON_RE.sub("", cleaned)
+    cleaned = _TOOL_TRACE_LINE_RE.sub("", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    if cleaned != text.strip():
+        logger.info(
+            "front_handler: stripped %d chars of leaked Back frame/trace text",
+            len(text) - len(cleaned),
+        )
+    return cleaned
+
+
+_INTERNAL_FAILURE_MARKERS: tuple[str, ...] = (
+    "tool invocation",
+    "tool budget",
+    "discover or invoke",
+    "necessary capabilities",
+    "validationerror",
+    "traceback",
+    "api error",
+    "provider_error",
+    "writecontext",
+    "worker",
+    "backend",
+    "system failed",
+)
+
+
+def _looks_internal_failure_text(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(marker in lowered for marker in _INTERNAL_FAILURE_MARKERS)
+
+
+def _user_safe_failure_text(action: str = "") -> str:
+    target = (action or "that task").strip() or "that task"
+    return f"I couldn't finish {target}. Want me to try again?"
+
+
+def _sanitize_result_summary(text: str) -> str:
+    if not text or not _looks_internal_failure_text(text):
+        return text
+    return _user_safe_failure_text()
 
 
 # =========================================================================
@@ -233,114 +381,58 @@ def _extract_scenario_data(
     payload = _parse_payload(envelope)
 
     if mode == PromptMode.PRESENT:
+        if envelope.topic == TOPIC_PROACTIVE_FILL:
+            message = str(payload.get("message") or payload.get("text") or "").strip()
+            style = str(payload.get("style") or "informational")
+            show_progress = bool(payload.get("show_progress", False))
+            task_description = str(payload.get("action") or payload.get("task") or "status update")
+            facts = [f"Fill candidate: {message}", f"Style: {style}"]
+            if show_progress:
+                facts.append("Show progress indicator: yes")
+            return {
+                "task_description": task_description,
+                "task_result_summary": message,
+                "task_facts": "\n".join(facts),
+                "task_artifacts": "",
+                "task_confidence": "high",
+                "task_blockers": [],
+                "suggested_next_action": "continue waiting for the background task",
+                "semantic_guidance": "",
+                "artifacts": [],
+                "completed_before_cancel": False,
+                "results": [],
+                "tool_history": [],
+                "proactive_fill_message": message,
+                "proactive_fill_style": style,
+                "proactive_fill_show_progress": show_progress,
+            }
+        frame_payload = payload.get("frame") if isinstance(payload.get("frame"), dict) else None
+        frame = BackResultFrame.from_dict(frame_payload or payload)
+        task_summary = frame.summary_text() if frame_payload else payload.get("final_answer", "")
         return {
             "task_description": payload.get("action", ""),
-            "task_result_summary": payload.get("final_answer", ""),
-            "artifacts": payload.get("artifacts_created", []),
+            "task_result_summary": task_summary,
+            "task_facts": "\n".join(frame.fact_lines()),
+            "task_artifacts": "\n".join(frame.artifact_lines()),
+            "task_confidence": frame.confidence if frame.confidence is not None else "unknown",
+            "task_blockers": frame.blockers,
+            "suggested_next_action": frame.suggested_next_action,
+            "semantic_guidance": frame.semantic_guidance_text(),
+            "artifacts": frame.artifacts if frame_payload else payload.get("artifacts_created", []),
             "completed_before_cancel": payload.get("completed_before_cancel", False),
-            "results": payload.get("results", []),
-            "tool_history": payload.get("tool_history", []),
+            "results": frame.facts if frame_payload else payload.get("results", []),
+            "tool_history": (
+                frame.tool_call_summaries
+                if frame_payload
+                else payload.get("tool_history", payload.get("tool_call_summaries", []))
+            ),
         }
 
     if mode == PromptMode.WEAVE:
-        payload_results = payload.get("results")
-        if isinstance(payload_results, list):
-            pending = payload_results
-        else:
-            control = _safe_get_section(ss, "control")
-            pending = getattr(control, "pending_results", None) or []
-
-        payload_count = payload.get("count")
-        result_count = payload_count if isinstance(payload_count, int) else len(pending)
-
-        # M8 E8.5.5: Check if this is a digest payload
-        if isinstance(payload_results, list) and len(payload_results) == 1:
-            first = payload_results[0]
-            if isinstance(first, dict) and first.get("is_digest"):
-                narrative = _safe_get_section(ss, "narrative_active")
-                thread_name = payload.get("current_thread", "")
-                if not thread_name and narrative and hasattr(narrative, "get_active_thread_name"):
-                    thread_name = narrative.get_active_thread_name() or ""
-                # M8 E8.5.6: Emotional context for digest
-                affect_dict = _get_affect_dict(ss)
-                emotional_context = _build_emotional_context(affect_dict)
-                return {
-                    "result_count": first.get("digest_count", 0),
-                    "results_summary": first.get("digest_summary", ""),
-                    "current_thread": thread_name,
-                    "urgency_label": "Summary -- present as a brief update",
-                    "emotional_context": emotional_context,
-                }
-
-        payload_summary = payload.get("results_summary")
-        if isinstance(payload_summary, str) and payload_summary:
-            results_summary = payload_summary
-        else:
-            # FSMTurnState.enqueue_result wraps the task.complete payload
-            # under a "result" key.  Unwrap it so we can read "action"
-            # and "final_answer" regardless of nesting.
-            summary_lines: list[str] = []
-            for r in pending:
-                inner = r.get("result", r) if isinstance(r, dict) else r
-                action = inner.get("action", "") if isinstance(inner, dict) else ""
-                final_answer = inner.get("final_answer", "") if isinstance(inner, dict) else ""
-                summary_lines.append(f"- {action}: {final_answer}")
-
-                # Include structured results data (e.g. web search results)
-                # so Front can present actual names, URLs, snippets to user.
-                inner_results = inner.get("results", []) if isinstance(inner, dict) else []
-                if isinstance(inner_results, list):
-                    for item in inner_results[:10]:
-                        if isinstance(item, dict):
-                            # Web search result: {title, url, snippet}
-                            title = item.get("title") or item.get("name", "")
-                            url = item.get("url") or item.get("href", "")
-                            snippet = item.get("snippet") or item.get("body", "")
-                            if title:
-                                line = f"  * {title}"
-                                if url:
-                                    line += f" -- {url}"
-                                if snippet:
-                                    line += f"\n    {snippet[:120]}"
-                                summary_lines.append(line)
-
-            results_summary = "\n".join(summary_lines)
-
-        narrative = _safe_get_section(ss, "narrative_active")
-        thread_name = payload.get("current_thread", "")
-        if not thread_name and narrative and hasattr(narrative, "get_active_thread_name"):
-            thread_name = narrative.get_active_thread_name() or ""
-
-        # M8 E8.5.6: Urgency label from result metadata
-        has_critical = any(
-            (r.get("result", r) if isinstance(r, dict) else {}).get("urgency")
-            in ("critical", "urgent")
-            for r in pending
-            if isinstance(r, dict)
-        )
-        if has_critical:
-            urgency_label = (
-                "URGENT -- present the time-critical result(s) prominently. "
-                "The user needs to know about this immediately."
-            )
-        elif result_count >= 3:
-            urgency_label = (
-                "Summary -- these are routine updates. " "Present as a brief, natural aside."
-            )
-        else:
-            urgency_label = "Informational -- weave this result lightly into the conversation."
-
-        # M8 E8.5.6: Emotional context from affective_now
-        affect_dict = _get_affect_dict(ss)
-        emotional_context = _build_emotional_context(affect_dict)
-
-        return {
-            "result_count": result_count,
-            "results_summary": results_summary,
-            "current_thread": thread_name,
-            "urgency_label": urgency_label,
-            "emotional_context": emotional_context,
-        }
+        frame = WeavePresentationFrame.from_payload_and_pending(payload, None, ss)
+        data = frame.to_scenario_dict()
+        data["results_summary"] = _sanitize_result_summary(str(data.get("results_summary") or ""))
+        return data
 
     if mode == PromptMode.HITL_RELAY:
         # E1.M2.1: support new HILEnvelope shape; fall back to legacy
@@ -357,23 +449,72 @@ def _extract_scenario_data(
         }
 
     if mode == PromptMode.HITL_RESOLVE:
+        from k1.concierge.actors.front_hil_envelope import (
+            is_legacy_bridge_envelope,
+            unwrap_hil_request_payload,
+        )
+
         task_state = _safe_get_section(ss, "task_state")
         suspended = {}
         if task_state and hasattr(task_state, "get_all"):
             tasks = task_state.get_all()
             suspended = next(
-                (t for t in tasks if t.get("status") == "SUSPENDED"),
+                (t for t in tasks if _task_has_status(t, "SUSPENDED")),
                 {},
             )
+        pending_hil = _task_pending_hil_payload(suspended)
+        incoming_envelope = pending_hil.get("envelope") or pending_hil.get("compat_hil_envelope")
+        flat_hil = (
+            unwrap_hil_request_payload(incoming_envelope)
+            if isinstance(incoming_envelope, dict)
+            else {}
+        )
+        inner_payload = (
+            incoming_envelope.get("payload", {}) if isinstance(incoming_envelope, dict) else {}
+        )
+        legacy_bridge = bool(
+            pending_hil.get("legacy_bridge") or is_legacy_bridge_envelope(incoming_envelope)
+        )
         return {
-            "suspended_task_summary": suspended.get("action", ""),
-            "original_question": (suspended.get("pending_hil") or {}).get("question", ""),
+            "suspended_task_summary": _task_field(suspended, "action", ""),
+            "original_question": flat_hil.get("question") or pending_hil.get("question", ""),
             "user_answer": payload.get("text", ""),
+            "_hil_envelope": incoming_envelope,
+            "hil_type": (
+                str(incoming_envelope.get("kind", ""))
+                if isinstance(incoming_envelope, dict)
+                else str(pending_hil.get("hil_type", ""))
+            ),
+            "hil_options": flat_hil.get("options")
+            or pending_hil.get("options")
+            or inner_payload.get("options")
+            or inner_payload.get("proposed_alternatives")
+            or [],
+            "hil_side_effects": flat_hil.get("side_effects")
+            or pending_hil.get("side_effects")
+            or inner_payload.get("side_effects")
+            or [],
+            "pending_hil_id": (
+                str(incoming_envelope.get("hil_request_id", ""))
+                if isinstance(incoming_envelope, dict)
+                else str(
+                    pending_hil.get("pending_hil_id") or pending_hil.get("hil_request_id") or ""
+                )
+            ),
+            "legacy_bridge": legacy_bridge,
+            "task_id": _task_field(suspended, "task_id", ""),
         }
 
     if mode == PromptMode.ERROR:
+        task_id = payload.get("task_id", "")
+        task_state = _safe_get_section(ss, "task_state")
+        task: Any = {}
+        if task_id and task_state and hasattr(task_state, "get_by_id"):
+            task = task_state.get_by_id(task_id) or {}
+        task_description = payload.get("action") or _task_field(task, "action", "")
         return {
-            "task_description": payload.get("action", ""),
+            "task_id": task_id,
+            "task_description": task_description,
             "failure_reason": payload.get("reason", ""),
             "error_code": payload.get("error_code", ""),
             "partial_results": payload.get("partial_results", []),
@@ -503,9 +644,9 @@ def _extract_family_context(ss: Any) -> dict[str, Any]:
 def _build_resolution(scenario_data: dict[str, Any]) -> dict[str, Any]:
     """Build a resolution dict from HITL_RESOLVE scenario data.
 
-    For M06 POC: extract resolution from the user answer text.
-    Full implementation in M09 uses structured output or tool calls
-    to parse the user's natural language answer into a typed resolution.
+    M1: parse the user's answer into the resolution shape expected by
+    front_hil_envelope.build_hil_response_envelope_dict while keeping
+    legacy task.resume payloads backward-compatible.
 
     Args:
         scenario_data: Dict from _extract_scenario_data(HITL_RESOLVE, ...).
@@ -514,12 +655,164 @@ def _build_resolution(scenario_data: dict[str, Any]) -> dict[str, Any]:
         Resolution dict with keys: selected_option, target, approval,
         additional_info.
     """
-    return {
-        "selected_option": None,
-        "target": None,
-        "approval": None,
-        "additional_info": scenario_data.get("user_answer"),
-    }
+    return _build_resolution_frame(scenario_data).to_resolution_dict()
+
+
+def _build_resolution_frame(scenario_data: dict[str, Any]) -> HILResolutionFrame:
+    """Build a typed HIL resolution frame from HITL_RESOLVE scenario data."""
+    from k1.concierge.protocols.hitl_flow import (
+        parse_approval_resolution,
+        parse_selection_resolution,
+    )
+
+    raw_answer = str(scenario_data.get("user_answer") or "")
+    hil_type = _scenario_hil_kind(scenario_data)
+    options = scenario_data.get("hil_options") or []
+    task_id = str(scenario_data.get("task_id", "") or "")
+    pending_hil_id = str(scenario_data.get("pending_hil_id", "") or "")
+    legacy_bridge = bool(scenario_data.get("legacy_bridge", False))
+
+    if hil_type == "approval":
+        decision = _approval_decision_from_text(raw_answer)
+        normalized = {"decision": decision}
+        if decision == "modify":
+            normalized["modifications"] = {"raw_user_text": raw_answer}
+        parsed = parse_approval_resolution(normalized)
+        approval = (
+            True
+            if parsed["decision"] == "approve"
+            else False if parsed["decision"] == "reject" else None
+        )
+        return HILResolutionFrame(
+            task_id=task_id,
+            hil_request_id=pending_hil_id,
+            kind=hil_type,
+            raw_user_text=raw_answer,
+            selected_option=parsed["decision"],
+            approval=approval,
+            additional_info=raw_answer,
+            modifications=parsed.get("modifications"),
+            legacy_bridge=legacy_bridge,
+        )
+
+    if hil_type == "capability_gate":
+        decision = _approval_decision_from_text(raw_answer)
+        approval = (
+            True if decision == "approve" else False if decision in {"reject", "cancel"} else None
+        )
+        return HILResolutionFrame(
+            task_id=task_id,
+            hil_request_id=pending_hil_id,
+            kind=hil_type,
+            raw_user_text=raw_answer,
+            selected_option=decision,
+            approval=approval,
+            additional_info=raw_answer,
+            legacy_bridge=legacy_bridge,
+        )
+
+    if hil_type == "needs_human":
+        matched = _match_hil_option(raw_answer, options)
+        if matched is not None:
+            selected = (
+                matched.get("id")
+                or matched.get("value")
+                or matched.get("label")
+                or matched.get("name")
+            )
+            parsed = parse_selection_resolution(
+                {"selected_option": selected, "target": matched},
+                options,
+            )
+            return HILResolutionFrame(
+                task_id=task_id,
+                hil_request_id=pending_hil_id,
+                kind=hil_type,
+                raw_user_text=raw_answer,
+                selected_option=parsed.get("selected_option", selected),
+                target=parsed.get("target", matched),
+                additional_info=raw_answer,
+                legacy_bridge=legacy_bridge,
+            )
+        return HILResolutionFrame(
+            task_id=task_id,
+            hil_request_id=pending_hil_id,
+            kind=hil_type,
+            raw_user_text=raw_answer,
+            selected_option="answered",
+            additional_info=raw_answer,
+            legacy_bridge=legacy_bridge,
+        )
+
+    if hil_type == "override":
+        matched = _match_hil_option(raw_answer, options)
+        decision = _approval_decision_from_text(raw_answer)
+        choice = (
+            "fallback"
+            if matched is not None
+            else "abort" if decision in {"reject", "cancel"} else "override"
+        )
+        return HILResolutionFrame(
+            task_id=task_id,
+            hil_request_id=pending_hil_id,
+            kind=hil_type,
+            raw_user_text=raw_answer,
+            selected_option=choice,
+            target=matched,
+            additional_info=raw_answer,
+            legacy_bridge=legacy_bridge,
+        )
+
+    return HILResolutionFrame(
+        task_id=task_id,
+        hil_request_id=pending_hil_id,
+        kind=hil_type or "clarification",
+        raw_user_text=raw_answer,
+        additional_info=raw_answer,
+        legacy_bridge=legacy_bridge,
+    )
+
+
+def _scenario_hil_kind(scenario_data: dict[str, Any]) -> str:
+    envelope = scenario_data.get("_hil_envelope")
+    if isinstance(envelope, dict) and envelope.get("kind"):
+        return str(envelope.get("kind") or "").lower()
+    return str(scenario_data.get("hil_type") or "clarification").lower()
+
+
+def _approval_decision_from_text(text: str) -> str:
+    lowered = text.strip().lower().rstrip(".")
+    if any(token in lowered for token in ("modify", "change", "adjust", "with ")):
+        return "modify"
+    if any(token in lowered for token in ("cancel", "abort", "stop")):
+        return "cancel"
+    if any(token in lowered for token in ("reject", "deny", "block", "no", "nope")):
+        return "reject"
+    if any(
+        token in lowered
+        for token in ("approve", "yes", "ok", "okay", "allow", "proceed", "go ahead", "sure")
+    ):
+        return "approve"
+    return "approve" if lowered in {"y", "yeah", "yep"} else "cancel"
+
+
+def _match_hil_option(answer: str, options: Any) -> dict[str, Any] | None:
+    if not isinstance(options, list):
+        return None
+    lowered = answer.lower()
+    for opt in options:
+        if not isinstance(opt, dict):
+            continue
+        candidates = [
+            opt.get("id"),
+            opt.get("value"),
+            opt.get("label"),
+            opt.get("name"),
+            opt.get("description"),
+        ]
+        if any(str(candidate).lower() in lowered for candidate in candidates if candidate):
+            return opt
+    return None
 
 
 # =========================================================================
@@ -529,12 +822,7 @@ def _build_resolution(scenario_data: dict[str, Any]) -> dict[str, Any]:
 
 def _get_affect_dict(ss: Any) -> dict[str, Any]:
     """Get affect dict from affective_now section, with fallback."""
-    section = _safe_get_section(ss, "affective_now")
-    if section is None:
-        return {}
-    if hasattr(section, "to_dict"):
-        return section.to_dict()
-    return {}
+    return affect_dict_from_session(ss)
 
 
 def _build_emotional_context(affect_dict: dict[str, Any]) -> str:
@@ -543,38 +831,7 @@ def _build_emotional_context(affect_dict: dict[str, Any]) -> str:
     Used by _extract_scenario_data WEAVE mode to populate the
     {emotional_context} placeholder in the WEAVE scenario template.
     """
-    if not affect_dict:
-        return (
-            "User affect is neutral. Standard weave -- respond to their "
-            "topic first, then naturally transition to the result."
-        )
-
-    valence = affect_dict.get("valence", 0.0)
-    band = affect_dict.get("band", affect_dict.get("affect_band", ""))
-
-    if band == "crisis" or valence < -0.5:
-        return (
-            "The user is in emotional distress. Be extremely gentle. "
-            "Acknowledge their state before presenting any result. "
-            "If the result is not safety-critical, consider deferring it entirely. "
-            "Example: 'I know this is a really hard time...'"
-        )
-    if valence < -0.3:
-        return (
-            "The user's mood is negative (sad, frustrated, or stressed). "
-            "Be sensitive. Acknowledge what they're going through before "
-            "transitioning to the result. Frame results positively: "
-            "'One less thing to worry about -- your hotel is confirmed.'"
-        )
-    if band == "positive" or valence > 0.3:
-        return (
-            "The user is in a positive mood. Match their energy. "
-            "Present results enthusiastically: 'Great news -- everything went through!'"
-        )
-    return (
-        "User affect is neutral. Standard weave -- respond to their "
-        "topic first, then naturally transition to the result."
-    )
+    return build_emotional_context(affect_dict)
 
 
 def _get_clarification_state(ss: Any) -> dict[str, Any]:
@@ -600,6 +857,26 @@ def _get_task_state_dict(ss: Any) -> dict[str, Any]:
     if hasattr(section, "get_all"):
         return {"tasks": section.get_all()}
     return {"tasks": []}
+
+
+def _task_field(task: Any, key: str, default: Any = None) -> Any:
+    if isinstance(task, dict):
+        return task.get(key, default)
+    return getattr(task, key, default)
+
+
+def _task_has_status(task: Any, status: str) -> bool:
+    return str(_task_field(task, "status", "")).upper() == status.upper()
+
+
+def _task_pending_hil_payload(task: Any) -> dict[str, Any]:
+    pending_hil_data = _task_field(task, "pending_hil_data")
+    if isinstance(pending_hil_data, dict):
+        return pending_hil_data
+    pending_hil = _task_field(task, "pending_hil")
+    if isinstance(pending_hil, dict):
+        return pending_hil
+    return {}
 
 
 def _get_fsm_state(ss: Any) -> str:
@@ -654,6 +931,65 @@ def _extract_current_user_text(mode: PromptMode, envelope: Envelope) -> str:
     return ""
 
 
+def _build_event_turn_text(mode: PromptMode, scenario_data: dict[str, Any]) -> str:
+    """Build an explicit user turn for event-driven Front invocations.
+
+    Event modes such as ERROR/PRESENT/WEAVE are triggered by bus events,
+    not by a fresh user message. If the scenario exists only in the system
+    prompt, some models can stop with no text because the chat transcript has
+    no active turn to answer. This short message makes the event actionable
+    while policy/details remain in the system prompt.
+    """
+    if mode == PromptMode.ERROR:
+        task = str(scenario_data.get("task_description") or "that task")
+        partial = scenario_data.get("partial_results") or []
+        partial_hint = (
+            "Mention the partial results that did succeed."
+            if partial
+            else "There are no partial results to present."
+        )
+        return (
+            "A background task just failed. Tell the user in one concise, natural "
+            f"message that {task} did not go through. Offer to try again or take "
+            f"another path. {partial_hint} Do not expose internal reasons, error "
+            "codes, stack traces, or system names."
+        )
+
+    if mode == PromptMode.PRESENT:
+        if scenario_data.get("proactive_fill_message"):
+            return (
+                "A brief proactive status fill is ready. Use the fill facts as context, "
+                "phrase it naturally in Front's voice, and do not expose internal payload fields."
+            )
+        task = str(scenario_data.get("task_description") or "the completed task")
+        return (
+            f"A user-relevant result is ready for {task}. Lead with what is now true "
+            "or done, mention the concrete time/place/confirmation details, and "
+            "preserve any semantic guidance or authority boundary in the scenario. "
+            "Sound like you handled it, not like you are reading an operations log."
+        )
+
+    if mode == PromptMode.WEAVE:
+        return (
+            "Async results are ready. Answer the current conversation first, then "
+            "bring in the concrete result summary naturally. Preserve any semantic "
+            "guidance or authority boundary, and do not invent facts."
+        )
+
+    if mode == PromptMode.HITL_RELAY:
+        question = str(scenario_data.get("hil_question") or "the worker's question")
+        return (
+            "A background task needs the user's input. Ask this question naturally "
+            f"and briefly: {question}"
+        )
+
+    if mode == PromptMode.CANCEL:
+        task = str(scenario_data.get("task_action") or scenario_data.get("task_id") or "the task")
+        return f"Confirm the cancellation status for {task} in one concise message."
+
+    return ""
+
+
 # =========================================================================
 # front_handler -- V2 Section 6.1 Front Handler Wiring
 # =========================================================================
@@ -691,7 +1027,10 @@ async def front_handler(
     Returns:
         ReactResult from the ReAct loop execution.
     """
-    trace_id = envelope.cognitive_trace_id
+    trace_id = (
+        envelope.cognitive_trace_id or envelope.request_id or f"front-{uuid.uuid4().hex[:12]}"
+    )
+    _bind_tool_context(tool_dispatcher, trace_id=trace_id, session_id=envelope.session_id)
 
     # 0. Guard: skip observability-only topics that should never trigger
     #    an LLM call. These are informational events (turn lifecycle,
@@ -771,6 +1110,17 @@ async def front_handler(
 
     # 6. Build scenario data
     scenario_data = _extract_scenario_data(mode, envelope, ss)
+    if mode == PromptMode.WEAVE and (
+        int(scenario_data.get("result_count", 0) or 0) == 0
+        or not str(scenario_data.get("results_summary", "") or "").strip()
+    ):
+        logger.info("front_handler: WEAVE skipped because no concrete results are available")
+        _ack_env = build_final_response(
+            payload={"text": "", "is_ack": True},
+            parent_id=envelope.envelope_id,
+        )
+        bus.publish(_ack_env)
+        return ReactResult(status="skipped", text="", dispatched_tasks=[])
 
     # 7. Build chat history
     from k1.concierge.react.history import build_chat_history
@@ -872,6 +1222,15 @@ async def front_handler(
         ss=ss,
         grounding_capsule=grounding_capsule,
     )
+    event_turn_text = _build_event_turn_text(mode, scenario_data)
+    if event_turn_text:
+        if not context.messages or context.messages[-1].content != event_turn_text:
+            context.messages.append(ModelMessage(role="user", content=event_turn_text))
+            logger.info(
+                "front_handler: appended event turn for mode=%s: %s",
+                mode.value,
+                event_turn_text[:80],
+            )
 
     # 9. Run ReAct loop (Section 7)
     # OPP-3: Apply affect hard caps to LLM params before invocation
@@ -916,8 +1275,34 @@ async def front_handler(
         "front_handler: LLM INPUT tools=%s",
         [t.name for t in context.tools],
     )
+    _write_runtime_prompt_dump(
+        envelope=envelope,
+        mode=mode,
+        context=context,
+        domain=domain,
+        tier=tier,
+        clarify_depth=clarify_depth,
+        trace_id=trace_id,
+    )
+
+    async def _publish_final_text(text: str) -> None:
+        logger.info(
+            "front_handler._on_text_response: publishing FINAL text=%s parent_id=%d",
+            text[:60],
+            parent_id,
+        )
+        env = build_final_response(
+            payload={"text": text, "trace_id": trace_id},
+            parent_id=parent_id,
+        )
+        env = _correlate_envelope(env, envelope, trace_id)
+        bus.publish(env)
+        logger.info(
+            "front_handler._on_text_response: FINAL published (envelope_id=%d)", env.envelope_id
+        )
 
     # Build output validator with the FULL tool schema set (Epic 4.1).
+
     # Uses all_tool_schemas (not mode-filtered context.tools) so valid Front
     # tools aren't rejected -- validator catches truly hallucinated names.
     validator = LLMOutputValidator(all_tool_schemas) if all_tool_schemas else None
@@ -928,6 +1313,8 @@ async def front_handler(
     async def _on_stream(chunk) -> None:
         """Forward streaming chunks to bus as k1.response.stream.v1."""
         nonlocal _stream_chunk_idx
+        if mode == PromptMode.HITL_RESOLVE:
+            return
         if chunk.chunk_type == "thought_delta" and chunk.thought_text:
             env = build_response_stream(
                 payload={
@@ -939,6 +1326,7 @@ async def front_handler(
                 },
                 parent_id=parent_id,
             )
+            env = _correlate_envelope(env, envelope, trace_id)
             bus.publish(env)
             _stream_chunk_idx += 1
         elif chunk.chunk_type == "text_delta" and chunk.text:
@@ -952,24 +1340,13 @@ async def front_handler(
                 },
                 parent_id=parent_id,
             )
+            env = _correlate_envelope(env, envelope, trace_id)
             bus.publish(env)
             _stream_chunk_idx += 1
 
     async def _on_text_response(text: str) -> None:
         """Emit k1.response.final.v1 on bus -- Epic 6.3.3."""
-        logger.info(
-            "front_handler._on_text_response: publishing FINAL text=%s parent_id=%d",
-            text[:60],
-            parent_id,
-        )
-        env = build_final_response(
-            payload={"text": text, "trace_id": trace_id},
-            parent_id=parent_id,
-        )
-        bus.publish(env)
-        logger.info(
-            "front_handler._on_text_response: FINAL published (envelope_id=%d)", env.envelope_id
-        )
+        await _publish_final_text(text)
 
     result = await react_loop(
         actor="front",
@@ -1059,21 +1436,76 @@ async def front_handler(
             },
             parent_id=parent_id,
         )
+        env = _correlate_envelope(env, envelope, trace_id)
         bus.publish(env)
 
     # 10c. Emit response.final AFTER all dispatches (correct FSM ordering)
     #      For STANDARD/PRESENT modes, emit stream chunks first (Epic 4.2).
-    if result.text:
-        clean_text = _strip_leaked_reasoning(result.text)
+    _final_text = result.text or ""
+    if mode == PromptMode.STANDARD and normal_dispatches:
+        _final_text = _build_dispatch_ack(normal_dispatches)
+        logger.info("front_handler: replaced post-dispatch text with deterministic ack")
+    # WEAVE degenerate guard: if the LLM produced the generic fallback
+    # ("Let me think about that for a moment.") during a WEAVE/proactive
+    # delivery, replace it with a deterministic summary built from the
+    # Back worker's final_answer.  This prevents useless "thinking" phrases
+    # leaking to the user after routine task completions.
+    if mode == PromptMode.WEAVE:
+        _degenerate_fallback = get_config().react.front_degenerate_fallback
+        if not _final_text or _final_text.strip() == _degenerate_fallback.strip():
+            _weave_payload = _parse_payload(envelope)
+            _weave_pending = _weave_payload.get("results") or []
+            _weave_lines: list[str] = []
+            for _r in _weave_pending:
+                _inner = _r.get("result", _r) if isinstance(_r, dict) else {}
+                _fa = _inner.get("final_answer", "") if isinstance(_inner, dict) else ""
+                if _fa:
+                    _action = (
+                        str(_inner.get("action", "") or "") if isinstance(_inner, dict) else ""
+                    )
+                    _weave_lines.append(
+                        _user_safe_failure_text(_action)
+                        if _looks_internal_failure_text(_fa)
+                        else _fa
+                    )
+            if _weave_lines:
+                _final_text = " ".join(_weave_lines)
+                logger.info(
+                    "front_handler: WEAVE degenerate suppressed, "
+                    "using Back final_answer (%d chars)",
+                    len(_final_text),
+                )
+            else:
+                # Nothing useful from Back either — suppress entirely.
+                _final_text = ""
+                logger.info("front_handler: WEAVE degenerate suppressed, no final_answer available")
+    if mode == PromptMode.HITL_RELAY:
+        _degenerate_fallback = get_config().react.front_degenerate_fallback
+        if not _final_text or _final_text.strip() == _degenerate_fallback.strip():
+            _question = str(scenario_data.get("hil_question") or "").strip()
+            _final_text = _question if _question else ""
+            logger.info("front_handler: HITL_RELAY degenerate replaced with deterministic prompt")
+    if mode == PromptMode.HITL_RESOLVE and _final_text:
+        _final_text = "Got it. I'll keep going."
+        logger.info("front_handler: HITL_RESOLVE final text replaced with deterministic ack")
+    if _final_text:
+        clean_text = _strip_leaked_reasoning(_final_text)
         clean_text = _strip_leaked_system_blocks(clean_text)
-        if mode in (PromptMode.STANDARD, PromptMode.PRESENT):
-            await _emit_streaming_response(
-                bus=bus,
-                text=clean_text,
-                trace_id=trace_id,
-                parent_id=parent_id,
+        clean_text = _strip_leaked_back_frame(clean_text)
+        if clean_text:
+            if mode in (PromptMode.STANDARD, PromptMode.PRESENT):
+                await _emit_streaming_response(
+                    bus=bus,
+                    text=clean_text,
+                    trace_id=trace_id,
+                    parent_id=parent_id,
+                    source_envelope=envelope,
+                )
+            await _on_text_response(clean_text)
+        else:
+            logger.info(
+                "front_handler: final text suppressed after leak guards mode=%s", mode.value
             )
-        await _on_text_response(clean_text)
 
     # 11. Post-loop: auto-emit task.resume after HITL_RESOLVE (Epic 6.4.4)
     if mode == PromptMode.HITL_RESOLVE:
@@ -1082,35 +1514,39 @@ async def front_handler(
         if task_state_section and hasattr(task_state_section, "get_all"):
             tasks = task_state_section.get_all()
             suspended_task = next(
-                (t for t in tasks if t.get("status") == "SUSPENDED"),
+                (t for t in tasks if _task_has_status(t, "SUSPENDED")),
                 {},
             )
-        suspended_task_id = suspended_task.get("task_id", "")
-        resolution = _build_resolution(scenario_data) if suspended_task_id else None
-        if suspended_task_id and resolution is not None:
-            emit_task_resume(
-                bus=bus,
-                task_id=suspended_task_id,
-                user_answer=json.dumps(resolution),
-                resolution=resolution,
-                parent_id=parent_id,
-                trace_id=trace_id,
-            )
-        # E1.M2.1: also emit unified HIL response if the suspended task
-        # was created by the unified HumanInTheLoopService (carries the
-        # original HILEnvelope under pending_hil.envelope).
-        pending_hil = (suspended_task.get("pending_hil") or {}) if suspended_task else {}
-        incoming_envelope = pending_hil.get("envelope")
+        suspended_task_id = _task_field(suspended_task, "task_id", "")
+        # E1.M2.1 / E4: when the suspension was created by the unified
+        # HumanInTheLoopService, ``pending_hil.envelope`` carries the
+        # original HILEnvelope.  In that case we publish ONLY the
+        # unified TOPIC_HIL_RESPONSE -- the service resolves the Future
+        # and the caller (Fabric / Back / Planner / Orchestrator)
+        # continues in-process.  We must NOT also emit the legacy
+        # TOPIC_TASK_RESUME or downstream Back would attempt a double
+        # resume.  Legacy emission is only correct for legacy task
+        # suspensions (no envelope under pending_hil).
+        pending_hil = _task_pending_hil_payload(suspended_task) if suspended_task else {}
+        incoming_envelope = pending_hil.get("envelope") or pending_hil.get("compat_hil_envelope")
+        resolution_frame = _build_resolution_frame(scenario_data) if suspended_task_id else None
+        resolution = resolution_frame.to_resolution_dict() if resolution_frame else None
+
         if incoming_envelope:
             from k1.concierge.actors.front_hil_envelope import (
                 build_hil_response_envelope_dict,
+                is_legacy_bridge_envelope,
             )
 
             try:
                 resp_payload = build_hil_response_envelope_dict(
                     incoming_envelope,
                     resolution or _build_resolution(scenario_data),
-                    raw_user_text=scenario_data.get("user_answer"),
+                    raw_user_text=(
+                        resolution_frame.raw_user_text
+                        if resolution_frame
+                        else scenario_data.get("user_answer")
+                    ),
                 )
                 bus.publish(build_hil_response(resp_payload, parent_id=parent_id))
                 logger.info(
@@ -1118,6 +1554,17 @@ async def front_handler(
                     resp_payload.get("hil_request_id"),
                     resp_payload.get("kind"),
                 )
+                if is_legacy_bridge_envelope(incoming_envelope) and suspended_task_id:
+                    emit_task_resume(
+                        bus=bus,
+                        task_id=suspended_task_id,
+                        user_answer=json.dumps(resolution or {}),
+                        resolution=resolution,
+                        resolution_frame=resolution_frame.to_dict() if resolution_frame else None,
+                        parent_id=parent_id,
+                        trace_id=trace_id,
+                        source_envelope=envelope,
+                    )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "front_emit_hil_response_failed error=%s envelope_keys=%s",
@@ -1128,6 +1575,21 @@ async def front_handler(
                         else type(incoming_envelope).__name__
                     ),
                 )
+        elif suspended_task_id and resolution is not None:
+            # Legacy path: no unified envelope -- emit TOPIC_TASK_RESUME so
+            # Back's back_resume_handler can pick up the resolution.  Once
+            # E4 Back migration retires the bus round-trip this branch can
+            # be deleted along with back_resume_handler.
+            emit_task_resume(
+                bus=bus,
+                task_id=suspended_task_id,
+                user_answer=json.dumps(resolution),
+                resolution=resolution,
+                resolution_frame=resolution_frame.to_dict() if resolution_frame else None,
+                parent_id=parent_id,
+                trace_id=trace_id,
+                source_envelope=envelope,
+            )
 
     logger.info(
         "front_handler complete: status=%s dispatched=%d cancel=%d trace=%s",
@@ -1214,8 +1676,10 @@ def emit_task_resume(
     task_id: str,
     user_answer: str,
     resolution: dict[str, Any] | None = None,
+    resolution_frame: dict[str, Any] | None = None,
     parent_id: int = 0,
     trace_id: str = "",
+    source_envelope: Envelope | None = None,
 ) -> Envelope:
     """Emit k1.orchestration.task.resume.v1 on bus -- Epic 6.3.5.
 
@@ -1239,15 +1703,23 @@ def emit_task_resume(
         except (json.JSONDecodeError, TypeError):
             resolved_payload = {"additional_info": user_answer}
 
-    env = build_task_resume(
-        payload={
-            "task_id": task_id,
-            "resolution": resolved_payload,
-            "answer": user_answer,
-            "trace_id": trace_id,
-        },
-        parent_id=parent_id,
-    )
+    payload = {
+        "task_id": task_id,
+        "resolution": resolved_payload,
+        "answer": user_answer,
+        "trace_id": trace_id,
+    }
+    if resolution_frame is not None:
+        payload["resolution_frame"] = resolution_frame
+    elif (
+        isinstance(resolved_payload, dict)
+        and resolved_payload.get("_frame_type") == "hil_resolution"
+    ):
+        payload["resolution_frame"] = resolved_payload
+
+    env = build_task_resume(payload=payload, parent_id=parent_id)
+    if source_envelope is not None:
+        env = _correlate_envelope(env, source_envelope, trace_id)
     bus.publish(env)
     logger.info("emit_task_resume: task_id=%s answer_len=%d", task_id, len(user_answer))
     return env
@@ -1263,6 +1735,7 @@ async def _emit_streaming_response(
     text: str,
     trace_id: str,
     parent_id: int,
+    source_envelope: Envelope | None = None,
 ) -> None:
     """Emit text as stream chunks before final response (Epic 4.2).
 
@@ -1315,4 +1788,6 @@ async def _emit_streaming_response(
             },
             parent_id=parent_id,
         )
+        if source_envelope is not None:
+            env = _correlate_envelope(env, source_envelope, trace_id)
         bus.publish(env)

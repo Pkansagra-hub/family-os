@@ -43,7 +43,10 @@ from k1.concierge.bus.topics import (
 )
 from k1.concierge.config.loader import get_config
 from k1.concierge.fsm.dead_letter_consumer import DeadLetterConsumer
-from k1.concierge.fsm.response_final_table import ResponseFinalAction, decide_response_final
+from k1.concierge.fsm.response_final_table import (
+    ResponseFinalAction,
+    decide_response_final,
+)
 from k1.concierge.fsm.states import ConciergeState
 from k1.concierge.fsm.transition_table import (
     FULL_GUARD_TABLE,
@@ -476,7 +479,7 @@ class TestResponseFinalTruthTable:
                 ResponseFinalAction.TRANSITION_LISTENING,
                 ConciergeState.LISTENING,
             ),
-            # Branch 11: CLARIFYING_WORKER + active -> COMPANIONING
+            # Branch 11: CLARIFYING_WORKER + active -> stay open for HITL answer
             (
                 11,
                 ConciergeState.CLARIFYING_WORKER,
@@ -484,8 +487,8 @@ class TestResponseFinalTruthTable:
                 True,
                 False,
                 False,
-                ResponseFinalAction.TRANSITION_COMPANIONING,
-                ConciergeState.COMPANIONING,
+                ResponseFinalAction.STAY,
+                None,
             ),
             # Branch 12: CLARIFYING_WORKER + no active -> LISTENING
             (

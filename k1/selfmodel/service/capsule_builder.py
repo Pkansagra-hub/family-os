@@ -168,10 +168,49 @@ class GroundingCapsuleBuilder:
         edges = rel.edges if rel else ()
         others = rel.projected_others if rel else ()
 
-        if not edges and not others:
+        # Trusted roster: the actor's own L3 view of who's in their family.
+        # This is NOT subject to E2 default-deny visibility (the actor is
+        # always allowed to know their own family). It is the surface that
+        # lets the LLM resolve casual references like nicknames/aliases.
+        proj = frame.projected_self or {}
+        roster_raw = proj.get("family_members") or ()
+        roster: list[dict] = []
+        if isinstance(roster_raw, (list, tuple)):
+            for entry in roster_raw:
+                if isinstance(entry, dict):
+                    roster.append(entry)
+
+        # Active actor's own aliases (if seeded) — helpful when the user
+        # refers to themselves by a nickname.
+        self_aliases_raw = proj.get("aliases") or ()
+        self_aliases: list[str] = []
+        if isinstance(self_aliases_raw, (list, tuple)):
+            self_aliases = [_safe_str(a) for a in self_aliases_raw if a]
+
+        if not edges and not others and not roster and not self_aliases:
             return "[family]\n(no related members in this frame)"
 
         lines = ["[family]"]
+
+        # Roster first — gives the LLM a clean name+alias resolution map
+        # before any privacy-projected attribute details.
+        if self_aliases:
+            lines.append("- self aliases: " + ", ".join(self_aliases))
+        for entry in roster:
+            mid = _safe_str(entry.get("member_id") or "")
+            disp = _safe_str(entry.get("display_name") or "")
+            role = _safe_str(entry.get("role") or "member")
+            aliases_raw = entry.get("aliases") or ()
+            if isinstance(aliases_raw, (list, tuple)):
+                aliases = [_safe_str(a) for a in aliases_raw if a]
+            else:
+                aliases = []
+            line = f"- {disp or mid} ({role}, id={mid})"
+            if aliases:
+                line += " aliases: " + ", ".join(aliases)
+            lines.append(line)
+
+        # Privacy-projected attribute details (E1 ∩ E2 ∩ E5 filtered).
         for other in others:
             visible = other.visible_attributes or {}
             if _has_black_band(visible):

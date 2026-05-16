@@ -126,6 +126,22 @@
           "type": "string",
           "description": "Connection string (e.g. mcp://local/opentable, wasm://sandbox/calc)"
         },
+        "prompt_template": {
+          "type": ["string", "null"],
+          "description": "Optional PromptContract name to compile for this tool when no request-level prompt_template is supplied."
+        },
+        "activity_profile": {
+          "type": ["string", "null"],
+          "description": "Optional activity profile id used to select concise operating guidance for this capability."
+        },
+        "tool_instructions": {
+          "type": ["string", "null"],
+          "description": "Optional inline tool-specific operating guidance. Schemas, policy, and HIL remain authoritative."
+        },
+        "prompt_variables_schema": {
+          "type": ["object", "null"],
+          "description": "Optional JSON-schema fragment describing variables expected by prompt_template."
+        },
         "safety_band_min": {
           "type": "string",
           "enum": ["GREEN", "AMBER", "RED", "CRISIS"],

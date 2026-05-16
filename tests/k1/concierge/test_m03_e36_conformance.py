@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -304,6 +305,51 @@ class TestFrontEmissionOrdering:
         assert result.status == "complete"
         assert result.text == "Hello!"
         assert len(result.dispatched_tasks) == 0
+
+    @pytest.mark.asyncio
+    async def test_front_handler_writes_runtime_prompt_dump(self, tmp_path: Path) -> None:
+        """Front persists the exact system_prompt and messages for debugging."""
+        import k1.concierge.actors.front as front_mod
+
+        model = AsyncMock()
+        model.execute = AsyncMock(return_value=make_hub_text_response(text="Hello!"))
+
+        bus = MagicMock()
+        bus.publish = lambda env: None
+
+        ss = MagicMock()
+        ss.get_section = MagicMock(return_value=None)
+
+        env = _make_envelope(
+            topic="k1.session.user.input.v1",
+            payload={"text": "hello there"},
+            envelope_id=123,
+        )
+
+        with patch.object(front_mod, "_PROMPT_DUMP_DIR", tmp_path):
+            result = await front_mod.front_handler(
+                envelope=env,
+                model=model,
+                ss=ss,
+                bus=bus,
+                tool_dispatcher=AsyncMock(),
+                all_tool_schemas=[],
+            )
+
+        latest = tmp_path / "front_prompt_latest.json"
+        stamped = list(tmp_path.glob("front_prompt_env123_*.json"))
+
+        assert result.status == "complete"
+        assert latest.exists()
+        assert len(stamped) == 1
+
+        dump = json.loads(latest.read_text(encoding="utf-8"))
+        assert dump["envelope_id"] == 123
+        assert dump["topic"] == "k1.session.user.input.v1"
+        assert dump["mode"] == "standard"
+        assert dump["messages"] == [{"role": "user", "content": "hello there"}]
+        assert isinstance(dump["system_prompt"], str)
+        assert dump["system_prompt"]
 
 
 # =========================================================================

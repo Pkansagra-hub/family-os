@@ -243,6 +243,9 @@ def validate_writer(writer_id: str) -> WriterAuthorization
 - `priority: MutationPriority` (CRITICAL/HIGH/NORMAL/LOW/DEFERRED)
 - `delegation_chain: List[str]`, `timeout_ms: int`
 
+`DirectWriterAdapter.request_mutation()` requires a bound, running
+`SessionStateManager`; unbound or pre-start/stopped calls raise `LifecycleError`.
+
 `MutationStatus` lifecycle: `PENDING → VALIDATING → APPROVED/REJECTED → APPLIED/FAILED`
 
 ---

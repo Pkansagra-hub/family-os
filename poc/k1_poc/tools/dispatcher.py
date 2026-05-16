@@ -67,14 +67,14 @@ _TIER_ALIAS: dict[str, str] = {
 # =========================================================================
 
 BUDGET_LIMITS: dict[str, int] = {
-    "simple": 5,
-    "plan": 15,
-    "crisis": 3,
+    "simple": 400,
+    "plan": 400,
+    "crisis": 400,
     # Legacy aliases kept so any direct reader of this constant still works
-    "LOW": 5,
-    "MEDIUM": 15,
-    "HIGH": 15,
-    "CRISIS": 3,
+    "LOW": 400,
+    "MEDIUM": 400,
+    "HIGH": 400,
+    "CRISIS": 400,
 }
 
 # =========================================================================
@@ -212,9 +212,13 @@ class ToolDispatcher:
         self._bus = bus
         self.call_count: int = 0
         self.call_history: list[DispatchRecord] = []
-        self._budget_limit = get_config().tools.budget_limits.get(
-            _TIER_ALIAS.get(tier, tier),
-            get_config().tools.budget_limits.get(tier, 5),
+        budget_limits = get_config().tools.budget_limits
+        canonical_tier = _TIER_ALIAS.get(tier, tier)
+        self._budget_limit = budget_limits.get(
+            tier,
+            budget_limits.get(
+                canonical_tier, BUDGET_LIMITS.get(tier, BUDGET_LIMITS.get(canonical_tier, 400))
+            ),
         )
         logger.info(
             "ToolDispatcher initialized (actor=%s, tier=%s, budget=%d, allowlist=%d tools)",

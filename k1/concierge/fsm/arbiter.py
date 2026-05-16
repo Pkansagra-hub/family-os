@@ -28,9 +28,43 @@ from enum import Enum
 from typing import Any
 
 from k1.concierge.config import ArbiterConfig, get_config
-from k1.concierge.fsm.phase1 import Phase1Result
 
 logger = logging.getLogger(__name__)
+
+
+# =========================================================================
+# 5.1.0 -- ArbiterInput: minimal signal contract for Arbiter
+# =========================================================================
+
+
+@dataclass
+class ArbiterInput:
+    """Minimal signal payload for the Conversation Arbiter.
+
+    Replaces the former Phase1Result dependency. The Arbiter consumes only
+    the small set of hints it actually uses for routing: a safety band (for
+    the RED short-circuit), an intent hint, a domain hint, and an optional
+    entity list. All fields are optional with safe defaults so callers can
+    pass only what they have. The Front LLM owns richer semantics.
+    """
+
+    safety_band: str = "GREEN"
+    intent_classification: str = "general"
+    domain_context: str = "general"
+    primary_emotion: str = "neutral"
+    emotion_confidence: float = 0.5
+    entities: list[dict[str, Any]] = field(default_factory=list)
+
+    def to_metadata(self) -> dict[str, Any]:
+        """Compact dict for routing_metadata / ledger payloads."""
+        return {
+            "intent": self.intent_classification,
+            "domain": self.domain_context,
+            "safety_band": self.safety_band,
+            "emotion": self.primary_emotion,
+            "emotion_confidence": self.emotion_confidence,
+            "entities": list(self.entities),
+        }
 
 
 # =========================================================================
@@ -60,7 +94,7 @@ class ArbiterResult:
     target_task_id: str | None
     modification_params: dict[str, Any] | None
     routing_metadata: dict[str, Any]
-    phase1: Phase1Result
+    inputs: ArbiterInput
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-serializable dict for ledger/observability."""
@@ -70,21 +104,24 @@ class ArbiterResult:
             "target_task_id": self.target_task_id,
             "modification_params": self.modification_params,
             "routing_metadata": self.routing_metadata,
-            "phase1": self.phase1.to_metadata(),
+            "inputs": self.inputs.to_metadata(),
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ArbiterResult:
-        """Reconstruct from dict (round-trip support)."""
-        phase1_meta = data.get("phase1", {})
-        phase1 = Phase1Result(
-            intent_classification=phase1_meta.get("intent", "general"),
-            domain_context=phase1_meta.get("domain", "general"),
-            safety_band=phase1_meta.get("safety_band", "GREEN"),
-            primary_emotion=phase1_meta.get("emotion", "neutral"),
-            emotion_confidence=phase1_meta.get("emotion_confidence", 0.5),
-            # P3.4a: complexity_tier removed from Phase1Result.
-            entities=phase1_meta.get("entities", []),
+        """Reconstruct from dict (round-trip support).
+
+        Accepts both new "inputs" key and the legacy "phase1" key from
+        pre-deprecation ledger entries.
+        """
+        meta = data.get("inputs") or data.get("phase1") or {}
+        inputs = ArbiterInput(
+            intent_classification=meta.get("intent", "general"),
+            domain_context=meta.get("domain", "general"),
+            safety_band=meta.get("safety_band", "GREEN"),
+            primary_emotion=meta.get("emotion", "neutral"),
+            emotion_confidence=meta.get("emotion_confidence", 0.5),
+            entities=meta.get("entities", []),
         )
         return cls(
             decision=ArbiterDecision(data["decision"]),
@@ -92,7 +129,7 @@ class ArbiterResult:
             target_task_id=data.get("target_task_id"),
             modification_params=data.get("modification_params"),
             routing_metadata=data.get("routing_metadata", {}),
-            phase1=phase1,
+            inputs=inputs,
         )
 
 
@@ -355,17 +392,16 @@ def is_short_input(text: str, threshold: int | None = None) -> bool:
     return len(words) < threshold
 
 
-def domain_overlap(phase1: Phase1Result, inflight: InflightContext) -> float:
+def domain_overlap(inputs: ArbiterInput, inflight: InflightContext) -> float:
     """Score [0.0, 1.0] how much the new input's domain matches inflight tasks.
 
     POC: exact string match = 1.0, related domain = 0.5, else 0.0.
     OPP-2: Recency decay -- older tasks get lower overlap scores.
-    Production: cosine similarity on UltraBERT domain embeddings.
     """
     if not inflight.tasks:
         return 0.0
 
-    input_domain = (phase1.domain_context or "").lower().strip()
+    input_domain = (inputs.domain_context or "").lower().strip()
     if not input_domain or input_domain == "general":
         return 0.0
 
@@ -394,19 +430,18 @@ def domain_overlap(phase1: Phase1Result, inflight: InflightContext) -> float:
     return best
 
 
-def entity_overlap(phase1: Phase1Result, inflight: InflightContext) -> float:
+def entity_overlap(inputs: ArbiterInput, inflight: InflightContext) -> float:
     """Score [0.0, 1.0] how much the new input's entities match inflight tasks.
 
     POC: Jaccard coefficient on entity text sets.
     OPP-2: Per-task Jaccard with recency decay, take best score.
-    Production: entity-linking via NER model.
     """
     if not inflight.tasks:
         return 0.0
 
-    # Extract entity text from Phase1Result
+    # Extract entity text from ArbiterInput
     input_entities: set[str] = set()
-    for ent in phase1.entities:
+    for ent in inputs.entities:
         if isinstance(ent, dict):
             text = ent.get("text", ent.get("name", ""))
         elif isinstance(ent, str):
@@ -493,8 +528,8 @@ _CANCEL_ALL_KEYWORDS: frozenset[str] = frozenset(
 class ConversationArbiter:
     """Context-aware intent arbiter replacing keyword-based InterruptClassifier.
 
-    Runs synchronously (no LLM call). Receives Phase1Result and
-    InflightContext, returns deterministic ArbiterResult.
+    Runs synchronously (no LLM call). Receives an ArbiterInput signal
+    payload and InflightContext, returns deterministic ArbiterResult.
 
     The decision table is evaluated in strict priority order (safety first).
     """
@@ -535,7 +570,7 @@ class ConversationArbiter:
     def classify(
         self,
         text: str,
-        phase1: Phase1Result,
+        inputs: ArbiterInput,
         inflight: InflightContext,
     ) -> ArbiterResult:
         """Classify user input against inflight context.
@@ -551,7 +586,7 @@ class ConversationArbiter:
 
         Args:
             text: Raw user input text.
-            phase1: Phase 1 classification result.
+            inputs: ArbiterInput signal payload (safety, intent hint, etc.).
             inflight: Snapshot of all inflight work.
 
         Returns:
@@ -562,8 +597,8 @@ class ConversationArbiter:
         has_inflight = len(inflight.tasks) > 0
 
         # Compute metadata once for all paths
-        d_overlap = domain_overlap(phase1, inflight) if has_inflight else 0.0
-        e_overlap = entity_overlap(phase1, inflight) if has_inflight else 0.0
+        d_overlap = domain_overlap(inputs, inflight) if has_inflight else 0.0
+        e_overlap = entity_overlap(inputs, inflight) if has_inflight else 0.0
 
         # OPP-2: Short input penalty -- reduce confidence of overlap-based
         # decisions when input is too short for reliable matching
@@ -573,22 +608,21 @@ class ConversationArbiter:
             e_overlap *= 0.5
 
         routing_metadata = {
-            "intent_class": phase1.intent_classification,
+            "intent_class": inputs.intent_classification,
             "domain_overlap_score": round(d_overlap, 3),
             "entity_overlap_score": round(e_overlap, 3),
-            "safety_band": phase1.safety_band,
-            # P3.4a: complexity_tier removed from routing_metadata.
+            "safety_band": inputs.safety_band,
             "inflight_task_count": len(inflight.tasks),
             "pending_result_count": inflight.pending_results,
         }
 
         # --- Priority 1: Safety override ---
-        if phase1.safety_band == "RED":
+        if inputs.safety_band == "RED":
             result = self._make_result(
                 decision=ArbiterDecision.CANCEL,
                 confidence=1.0,
                 target_task_id=None,  # Cancel ALL
-                phase1=phase1,
+                inputs=inputs,
                 routing_metadata=routing_metadata,
                 reason="safety_red",
             )
@@ -596,7 +630,7 @@ class ConversationArbiter:
             return result
 
         # --- Priority 2: Cancel intent + inflight tasks ---
-        is_cancel = self._detect_cancel_intent(lower, phase1)
+        is_cancel = self._detect_cancel_intent(lower, inputs)
         if is_cancel and has_inflight:
             cancel_all = self._detect_cancel_all(lower)
             target = (
@@ -604,7 +638,7 @@ class ConversationArbiter:
                 if cancel_all
                 else self._select_cancel_target(
                     lower,
-                    phase1,
+                    inputs,
                     inflight,
                 )
             )
@@ -612,7 +646,7 @@ class ConversationArbiter:
                 decision=ArbiterDecision.CANCEL,
                 confidence=0.9 if target else 0.85,
                 target_task_id=target,
-                phase1=phase1,
+                inputs=inputs,
                 routing_metadata=routing_metadata,
                 reason="cancel_intent",
             )
@@ -624,7 +658,7 @@ class ConversationArbiter:
             result = self._make_result(
                 decision=ArbiterDecision.PARALLEL_NEW,
                 confidence=0.7,
-                phase1=phase1,
+                inputs=inputs,
                 routing_metadata=routing_metadata,
                 reason="cancel_no_inflight",
             )
@@ -637,13 +671,13 @@ class ConversationArbiter:
             and d_overlap >= self._config.domain_overlap_threshold
             and e_overlap >= self._config.entity_overlap_threshold
         ):
-            target = self._select_modify_target(phase1, inflight)
+            target = self._select_modify_target(inputs, inflight)
             result = self._make_result(
                 decision=ArbiterDecision.MODIFY_INFLIGHT,
                 confidence=min(d_overlap, e_overlap),
                 target_task_id=target,
-                modification_params=self._extract_modification_params(text, phase1),
-                phase1=phase1,
+                modification_params=self._extract_modification_params(text, inputs),
+                inputs=inputs,
                 routing_metadata=routing_metadata,
                 reason="domain_entity_overlap",
             )
@@ -655,7 +689,7 @@ class ConversationArbiter:
             result = self._make_result(
                 decision=ArbiterDecision.DEFER,
                 confidence=0.8,
-                phase1=phase1,
+                inputs=inputs,
                 routing_metadata=routing_metadata,
                 reason="defer_pattern",
             )
@@ -666,7 +700,7 @@ class ConversationArbiter:
         result = self._make_result(
             decision=ArbiterDecision.PARALLEL_NEW,
             confidence=0.9 if not has_inflight else 0.75,
-            phase1=phase1,
+            inputs=inputs,
             routing_metadata=routing_metadata,
             reason="default_parallel",
         )
@@ -677,9 +711,9 @@ class ConversationArbiter:
     # Internal helpers
     # -----------------------------------------------------------------
 
-    def _detect_cancel_intent(self, lower: str, phase1: Phase1Result) -> bool:
+    def _detect_cancel_intent(self, lower: str, inputs: ArbiterInput) -> bool:
         """Check if user input expresses cancel intent."""
-        if phase1.intent_classification == "cancel":
+        if inputs.intent_classification == "cancel":
             return True
         for kw in self._cancel_keywords:
             if kw in lower:
@@ -707,7 +741,7 @@ class ConversationArbiter:
     @staticmethod
     def _select_cancel_target(
         lower: str,
-        phase1: Phase1Result,
+        inputs: ArbiterInput,  # noqa: ARG004 -- reserved for entity-aware targeting
         inflight: InflightContext,
     ) -> str | None:
         """Select which inflight task to cancel.
@@ -747,14 +781,14 @@ class ConversationArbiter:
 
     @staticmethod
     def _select_modify_target(
-        phase1: Phase1Result,
+        inputs: ArbiterInput,
         inflight: InflightContext,
     ) -> str | None:
         """Select which inflight task to modify based on overlap."""
         if len(inflight.tasks) == 1:
             return inflight.tasks[0].task_id
 
-        input_domain = (phase1.domain_context or "").lower()
+        input_domain = (inputs.domain_context or "").lower()
         for task in inflight.tasks:
             if (task.domain or "").lower() == input_domain:
                 return task.task_id
@@ -763,13 +797,13 @@ class ConversationArbiter:
         return inflight.tasks[0].task_id if inflight.tasks else None
 
     @staticmethod
-    def _extract_modification_params(text: str, phase1: Phase1Result) -> dict[str, Any]:
+    def _extract_modification_params(text: str, inputs: ArbiterInput) -> dict[str, Any]:
         """Extract parameter modifications from user text.
 
-        POC: returns entities and raw text. Production: structured NER extraction.
+        Returns entities (if any) and raw text. Front LLM may refine.
         """
         params: dict[str, Any] = {"raw_text": text}
-        for ent in phase1.entities:
+        for ent in inputs.entities:
             if isinstance(ent, dict):
                 etype = ent.get("type", "unknown")
                 evalue = ent.get("text", ent.get("value", ""))
@@ -782,7 +816,7 @@ class ConversationArbiter:
         *,
         decision: ArbiterDecision,
         confidence: float,
-        phase1: Phase1Result,
+        inputs: ArbiterInput,
         routing_metadata: dict[str, Any],
         reason: str,
         target_task_id: str | None = None,
@@ -803,7 +837,7 @@ class ConversationArbiter:
             target_task_id=target_task_id,
             modification_params=modification_params,
             routing_metadata=routing_metadata,
-            phase1=phase1,
+            inputs=inputs,
         )
 
     # -----------------------------------------------------------------
@@ -849,7 +883,7 @@ class ConversationArbiter:
 
         def _priority(result: ArbiterResult) -> int:
             # Safety-critical override: RED band always gets priority 2
-            if result.phase1.safety_band == "RED":
+            if result.inputs.safety_band == "RED":
                 return 2
             return self._DECISION_PRIORITY.get(result.decision, 5)
 
@@ -905,12 +939,12 @@ class ConversationArbiter:
         )
 
         a_is_high = (
-            result_a.phase1.safety_band == "RED"
-            or result_a.phase1.intent_classification in high_impact_actions
+            result_a.inputs.safety_band == "RED"
+            or result_a.inputs.intent_classification in high_impact_actions
         )
         b_is_high = (
-            result_b.phase1.safety_band == "RED"
-            or result_b.phase1.intent_classification in high_impact_actions
+            result_b.inputs.safety_band == "RED"
+            or result_b.inputs.intent_classification in high_impact_actions
         )
 
         if not (a_is_high or b_is_high):
@@ -926,7 +960,7 @@ class ConversationArbiter:
 
         if a_is_high and b_is_high:
             # Both high-impact, different intents
-            if result_a.phase1.intent_classification != result_b.phase1.intent_classification:
+            if result_a.inputs.intent_classification != result_b.inputs.intent_classification:
                 return True
 
         return False
@@ -946,8 +980,8 @@ class ConversationArbiter:
         Returns:
             Dict suitable for update_clarifications tool / writer port.
         """
-        action_a = result_a.phase1.intent_classification or "unknown action"
-        action_b = result_b.phase1.intent_classification or "unknown action"
+        action_a = result_a.inputs.intent_classification or "unknown action"
+        action_b = result_b.inputs.intent_classification or "unknown action"
         return {
             "question": (
                 f"I received conflicting requests from two devices. "

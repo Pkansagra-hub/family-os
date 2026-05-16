@@ -435,9 +435,6 @@ class TestWriterRole:
     def test_front_llm(self):
         assert WriterRole.FRONT_LLM.value == "front_llm"
 
-    def test_phase1(self):
-        assert WriterRole.PHASE1.value == "phase1"
-
     def test_fsm(self):
         assert WriterRole.FSM.value == "fsm"
 
@@ -448,8 +445,8 @@ class TestWriterRole:
         assert WriterRole.SESSION_INIT.value == "session_init"
 
     def test_all_roles_count(self):
-        """Five roles: FRONT_LLM, PHASE1, FSM, EXPERIENCE_LAYER, SESSION_INIT."""
-        assert len(WriterRole) == 5
+        """Four roles: FRONT_LLM, FSM, EXPERIENCE_LAYER, SESSION_INIT."""
+        assert len(WriterRole) == 4
 
     def test_no_back_llm_role(self):
         """Back LLM is NOT a WriterRole (V2 Section 5, Rule 2)."""
@@ -482,13 +479,12 @@ class TestSectionWritersMatrix:
         assert SECTION_WRITERS["beliefs_active"] == [WriterRole.FRONT_LLM]
 
     def test_scoreboard_writers(self):
-        """scoreboard: Phase1 (primary), Front LLM (secondary)."""
-        assert SECTION_WRITERS["scoreboard"] == [WriterRole.PHASE1, WriterRole.FRONT_LLM]
+        """scoreboard: Front LLM only (post-Phase1 removal)."""
+        assert SECTION_WRITERS["scoreboard"] == [WriterRole.FRONT_LLM]
 
     def test_affective_now_writers(self):
-        """affective_now: Phase1, Front LLM, ExperienceLayer."""
+        """affective_now: Front LLM, ExperienceLayer."""
         assert SECTION_WRITERS["affective_now"] == [
-            WriterRole.PHASE1,
             WriterRole.FRONT_LLM,
             WriterRole.EXPERIENCE_LAYER,
         ]
@@ -500,8 +496,8 @@ class TestSectionWritersMatrix:
         assert SECTION_WRITERS["narrative_active"] == [WriterRole.FRONT_LLM]
 
     def test_control_writers(self):
-        """control: FSM (primary), Phase1 (secondary)."""
-        assert SECTION_WRITERS["control"] == [WriterRole.FSM, WriterRole.PHASE1]
+        """control: FSM only (post-Phase1 removal)."""
+        assert SECTION_WRITERS["control"] == [WriterRole.FSM]
 
     def test_history_active_writer(self):
         assert SECTION_WRITERS["history_active"] == [WriterRole.FSM]
@@ -557,15 +553,6 @@ class TestValidateWriter:
 
     def test_fsm_cannot_write_beliefs(self):
         assert validate_writer("beliefs_active", WriterRole.FSM) is False
-
-    def test_phase1_writes_scoreboard(self):
-        assert validate_writer("scoreboard", WriterRole.PHASE1) is True
-
-    def test_phase1_writes_affective_now(self):
-        assert validate_writer("affective_now", WriterRole.PHASE1) is True
-
-    def test_phase1_writes_control(self):
-        assert validate_writer("control", WriterRole.PHASE1) is True
 
     def test_experience_layer_writes_affective_now(self):
         assert validate_writer("affective_now", WriterRole.EXPERIENCE_LAYER) is True

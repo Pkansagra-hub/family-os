@@ -44,11 +44,6 @@ class TestObsSubmoduleImports:
 
         assert WeaveMetricsSubscriber is not None
 
-    def test_import_phase1_metrics(self):
-        from k1.concierge.obs import Phase1MetricsSubscriber
-
-        assert Phase1MetricsSubscriber is not None
-
     def test_all_exports_in___all__(self):
         import k1.concierge.obs as obs
 
@@ -60,7 +55,6 @@ class TestObsSubmoduleImports:
             "HITLMetricsSubscriber",
             "ArbiterMetricsSubscriber",
             "WeaveMetricsSubscriber",
-            "Phase1MetricsSubscriber",
         }
         assert expected_new.issubset(set(obs.__all__))
 
@@ -197,20 +191,4 @@ class TestWeaveMetricsSubscriber:
         collector = MetricsCollector(session_id="s1")
         sub = WeaveMetricsSubscriber(collector=collector)
         sub.on_weave_execution(policy_matched=True, quality_score=0.85)
-        assert len(collector.drain_pending()) > 0
-
-
-class TestPhase1MetricsSubscriber:
-    def test_construction_no_collector(self):
-        from k1.concierge.obs.phase1_metrics import Phase1MetricsSubscriber
-
-        sub = Phase1MetricsSubscriber()
-        sub.on_classification("greeting")  # no-op, no crash
-
-    def test_on_classification_emits_metric(self):
-        from k1.concierge.obs.phase1_metrics import Phase1MetricsSubscriber
-
-        collector = MetricsCollector(session_id="s1")
-        sub = Phase1MetricsSubscriber(collector=collector)
-        sub.on_classification("greeting", confidence=0.95, latency_ms=12.0)
         assert len(collector.drain_pending()) > 0

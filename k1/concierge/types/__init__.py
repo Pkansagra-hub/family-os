@@ -12,7 +12,6 @@ from __future__ import annotations
 from k1.bus.envelope import Envelope
 from k1.bus.ports import SubscriptionHandle
 from k1.bus.ports.bus import IBus
-from k1.concierge.fsm.phase1 import Phase1Result
 from k1.concierge.orchestrator.types import AggregatedResult, TaskEnvelope
 from k1.fabric.types import CapabilityRequest, CapabilityResult
 from k1.model_hub.types import HubChunk, HubRequest, HubResponse
@@ -26,7 +25,6 @@ __all__ = [
     "HubRequest",
     "HubResponse",
     "IBus",
-    "Phase1Result",
     "SubscriptionHandle",
     "TaskEnvelope",
 ]

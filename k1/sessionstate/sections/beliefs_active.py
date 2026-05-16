@@ -1034,6 +1034,15 @@ class BeliefsActiveSection:
 
     def get(self) -> Dict[str, Any]:
         """Get section state as dictionary (legacy API)."""
+        mentioned_entities = [
+            {
+                "id": e.id,
+                "type": e.type,
+                "display_name": e.display_name,
+                "confidence": e.confidence,
+            }
+            for e in self._entities.values()
+        ]
         return {
             "session_id": self._session_id,
             "turn_id": self._turn_id,
@@ -1059,6 +1068,7 @@ class BeliefsActiveSection:
                 }
                 for e in self._entities.values()
             ],
+            "mentioned_entities": mentioned_entities,
             "mentioned_time": (
                 {
                     "raw_text": self._mentioned_time.raw_text,

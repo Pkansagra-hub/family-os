@@ -321,6 +321,26 @@ class WeaveBatcher:
             if self._timer is None and self._pending:
                 self._timer = asyncio.create_task(self._flush_after_delay())
 
+    def discard_task(self, task_id: str) -> bool:
+        """Remove a task result from pending and Front-busy queues."""
+        pending_before = len(self._pending)
+        queued_before = len(self._queued)
+        self._pending = [item for item in self._pending if item.task_id != task_id]
+        self._queued = [item for item in self._queued if item.task_id != task_id]
+        removed = len(self._pending) != pending_before or len(self._queued) != queued_before
+        if removed and not self._pending and self._timer is not None:
+            self._timer.cancel()
+            self._timer = None
+        return removed
+
+    def reset(self) -> None:
+        """Clear queued results and cancel any pending batch timer."""
+        if self._timer is not None:
+            self._timer.cancel()
+            self._timer = None
+        self._pending.clear()
+        self._queued.clear()
+
     # -----------------------------------------------------------------
     # Properties
     # -----------------------------------------------------------------

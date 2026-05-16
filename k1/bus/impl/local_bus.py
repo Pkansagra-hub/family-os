@@ -610,6 +610,9 @@ class LocalBus:
         "_durable_topics",
         "_durable_consumers",
         "_durable_consumers_lock",
+        # Diagnostics: sub_id -> (pattern, original_handler).
+        # Written by subscribe(); read by list_subscriptions() probes only.
+        "_sub_patterns",
     )
 
     def __init__(
@@ -698,6 +701,8 @@ class LocalBus:
         # consumer_id -> list of (topic_pattern, raw_handler)
         self._durable_consumers: dict[str, list[tuple[str, BusHandler]]] = {}
         self._durable_consumers_lock = threading.Lock()
+        # Diagnostics: sub_id -> (pattern, original_handler) for list_subscriptions().
+        self._sub_patterns: dict[str, tuple[str, BusHandler]] = {}
 
     # ------------------------------------------------------------------
     # IBus.publish
@@ -982,7 +987,8 @@ class LocalBus:
         """
         sub_id = f"sub-{uuid.uuid4().hex[:12]}"
 
-        # P6.13: if a consumer_id is supplied AND the bus has an outbox,
+        # Diagnostics: record original pattern + handler before any wrapping.
+        self._sub_patterns[sub_id] = (pattern, handler)
         # wrap the user handler so successful invocations ack to the outbox.
         # The wrapper preserves exception propagation so retry/DLQ behavior
         # in the async path remains unchanged.
@@ -1061,6 +1067,8 @@ class LocalBus:
         if removed:
             self._stats.subscriptions_active -= 1
             self._stats.unsubscribe_count += 1
+            # Clean up diagnostics map.
+            self._sub_patterns.pop(handle.subscription_id, None)
             # Shut down the async worker (if any) outside the trie lock.
             if self._async_dispatch:
                 with self._async_subs_lock:
@@ -1322,6 +1330,21 @@ class LocalBus:
     def topic_sequence(self, topic: str) -> int:
         """Current sequence number for a topic (0 if never published)."""
         return self._seq_gen.current(topic)
+
+    def list_subscriptions(self) -> list[tuple[str, str]]:
+        """Return a snapshot of all active subscriptions for diagnostics.
+
+        Intended exclusively for SUBSCRIPTION-TOPOLOGY probes in
+        ``tests/integration/k1/live/``.  Never call from production code.
+
+        Returns:
+            List of ``(pattern, handler_qualname)`` tuples, one per live
+            subscription, in arbitrary order.
+        """
+        return [
+            (pattern, getattr(h, "__qualname__", repr(h)))
+            for pattern, h in self._sub_patterns.values()
+        ]
 
     @property
     def last_envelope_id(self) -> int:

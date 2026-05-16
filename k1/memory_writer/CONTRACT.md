@@ -41,14 +41,14 @@ side-effect component: it reads SessionState (read-only) and writes nothing back
 
 ## 4. Trigger and entry points
 
-MW has **one external trigger**: the bus event `k1.session.turn.complete.v1`.
+MW has **one external trigger**: the bus event `k1.session.turn.completed.v1`.
 
 | Dispatcher | Topic subscribed | Behaviour |
 |---|---|---|
-| `TurnDispatcher` | `k1.session.turn.complete.v1` | One turn → one pipeline call (backpressure: newest wins when queue depth = 2) |
+| `TurnDispatcher` | `k1.session.turn.completed.v1` | One turn → one pipeline call (backpressure: newest wins when queue depth = 2) |
 | `SessionBatchDispatcher` | `k1.session.turn.completed.v1` | Buffer up to 20 turns; flush on threshold, idle (300s), or `stop()` |
 
-> **Note:** the two topics differ by a trailing `d` — `complete` vs `completed`. Both are production variants for different extraction modes. See §11 (open issues) for the stale topic risk.
+> **Live check:** M5-L1 verifies Concierge's publish topic and both MW dispatcher constants all use the same `completed` topic.
 
 There is no direct API (no HTTP endpoint, no RPC). MW is bus-driven only.
 

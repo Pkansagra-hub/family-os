@@ -87,6 +87,17 @@ _FINISH_MAP: Dict[str, FinishReason] = {
     "MALFORMED_FUNCTION_CALL": FinishReason.ERROR,
 }
 
+
+def _map_finish_reason(raw_finish: Any) -> FinishReason:
+    if raw_finish is None:
+        return FinishReason.STOP
+    finish_text = str(raw_finish).upper()
+    for key, mapped in _FINISH_MAP.items():
+        if key in finish_text:
+            return mapped
+    return FinishReason.STOP
+
+
 # Thinking budget mapping for Gemini 2.5 models (0-24576 for Flash)
 _THINKING_BUDGET_MAP: Dict[str, int] = {
     "low": 1024,
@@ -202,6 +213,8 @@ class GooglePlugin:
 
         loop = asyncio.get_event_loop()
         _threading_mod.Thread(target=_produce, daemon=True).start()
+        streamed_text_chars = 0
+        streamed_tool_calls = 0
 
         while True:
             item = await loop.run_in_executor(None, chunk_queue.get)
@@ -225,6 +238,36 @@ class GooglePlugin:
                 continue
             candidate = chunk.candidates[0]
             if not candidate.content or not candidate.content.parts:
+                # No content parts, but check if this is the final chunk
+                # (finish_reason set without content — common in Gemini streaming)
+                if candidate.finish_reason is not None:
+                    finish_reason = _map_finish_reason(candidate.finish_reason)
+                    prompt_tokens = 0
+                    completion_tokens = 0
+                    if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
+                        um = chunk.usage_metadata
+                        prompt_tokens = int(getattr(um, "prompt_token_count", 0) or 0)
+                        completion_tokens = int(getattr(um, "candidates_token_count", 0) or 0)
+                    if streamed_text_chars == 0 and streamed_tool_calls == 0:
+                        logger.warning(
+                            "GooglePlugin.stream_execute: empty terminal chunk "
+                            "finish_reason=%s prompt_tokens=%d completion_tokens=%d trace=%s",
+                            candidate.finish_reason,
+                            prompt_tokens,
+                            completion_tokens,
+                            request.trace_id[:8] if request.trace_id else "",
+                        )
+                    yield ProviderChunk(
+                        text="",
+                        done=True,
+                        tool_calls=None,
+                        metadata={
+                            "finish_reason": finish_reason.value,
+                            "provider_finish_reason": str(candidate.finish_reason),
+                        },
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                    )
                 continue
 
             text_parts = []
@@ -248,7 +291,13 @@ class GooglePlugin:
                     )
 
             finish = candidate.finish_reason is not None
+            finish_reason = (
+                _map_finish_reason(candidate.finish_reason) if finish else FinishReason.STOP
+            )
             metadata = {}
+            if finish:
+                metadata["finish_reason"] = finish_reason.value
+                metadata["provider_finish_reason"] = str(candidate.finish_reason)
             if thought_text:
                 metadata["thought_text"] = thought_text
 
@@ -259,8 +308,29 @@ class GooglePlugin:
                 prompt_tokens = int(getattr(um, "prompt_token_count", 0) or 0)
                 completion_tokens = int(getattr(um, "candidates_token_count", 0) or 0)
 
+            visible_text = "".join(text_parts)
+            if (
+                finish
+                and not visible_text
+                and not tool_calls
+                and streamed_text_chars == 0
+                and streamed_tool_calls == 0
+            ):
+                logger.warning(
+                    "GooglePlugin.stream_execute: terminal chunk has no text/tool calls "
+                    "finish_reason=%s thought_chars=%d prompt_tokens=%d completion_tokens=%d trace=%s",
+                    candidate.finish_reason,
+                    len(thought_text),
+                    prompt_tokens,
+                    completion_tokens,
+                    request.trace_id[:8] if request.trace_id else "",
+                )
+
+            streamed_text_chars += len(visible_text)
+            streamed_tool_calls += len(tool_calls)
+
             yield ProviderChunk(
-                text="".join(text_parts),
+                text=visible_text,
                 done=finish,
                 tool_calls=tool_calls if tool_calls else None,
                 metadata=metadata if metadata else None,
@@ -467,11 +537,7 @@ class GooglePlugin:
         elif response.candidates:
             fr = getattr(response.candidates[0], "finish_reason", None)
             if fr is not None:
-                fr_str = str(fr).upper()
-                for key, mapped in _FINISH_MAP.items():
-                    if key in fr_str:
-                        finish_reason = mapped
-                        break
+                finish_reason = _map_finish_reason(fr)
 
         raw = {"thought_text": thought_text} if thought_text else {}
 

@@ -907,9 +907,22 @@ class DynamicPromptBuilder:
             if ap_text:
                 prompt_parts.append(ap_text)
 
+        active_member_block = ""
+        if grounding_capsule is not None:
+            active_member_block = self._build_active_member_block(grounding_capsule)
+
         # Stage 7: Format and append scenario data from template
-        if scenario_data:
-            scenario_block = self._format_scenario_data(mode, scenario_data)
+        scenario_payload = scenario_data
+        if (
+            scenario_data
+            and active_member_block
+            and mode in (PromptMode.STANDARD, PromptMode.INTERRUPT)
+        ):
+            scenario_payload = dict(scenario_data)
+            scenario_payload["_suppress_active_member_block"] = True
+
+        if scenario_payload:
+            scenario_block = self._format_scenario_data(mode, scenario_payload)
             if scenario_block:
                 prompt_parts.append(scenario_block)
 
@@ -952,11 +965,9 @@ class DynamicPromptBuilder:
         # preamble keeps that disambiguation while being much shorter.
         live_now_block = self._build_now_block(ss)
         affect_state_block = self._build_affect_state_block(affect_band, modifiers, ss)
-        active_member_block = ""
         conscience_block_text = ""
         capsule_text = ""
         if grounding_capsule is not None:
-            active_member_block = self._build_active_member_block(grounding_capsule)
             conscience_block_text = getattr(grounding_capsule, "conscience_block", "") or ""
             try:
                 capsule_text = self._render_capsule_without_conscience(grounding_capsule)
@@ -1244,6 +1255,11 @@ class DynamicPromptBuilder:
         """
         if not data:
             return ""
+
+        if mode in (PromptMode.STANDARD, PromptMode.INTERRUPT) and data.get(
+            "_suppress_active_member_block"
+        ):
+            return str(data.get("async_results_context", "") or "")
 
         template = SCENARIO_DATA_TEMPLATES.get(mode, "")
         if template:

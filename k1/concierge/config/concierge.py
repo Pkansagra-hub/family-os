@@ -13,7 +13,6 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 # P3.4c: tool_tier removed; canonical tiers live in dispatcher.
-_VALID_PHASE1_PIPELINES = frozenset({"stub", "ultrabert"})
 
 
 @dataclass(frozen=True)
@@ -38,19 +37,12 @@ class ConciergeConfig:
     enable_dead_letter_consumer: bool = True
     session_id: str | None = None
     seed_memories: list[dict[str, Any]] = field(default_factory=list)
-    phase1_pipeline: str = "stub"
-    phase1_warmup: bool = False
     delta_batch_window_ms: int = 100
     dead_letter_enabled: bool = False
 
     def __post_init__(self) -> None:
         if self.delta_batch_window_ms <= 0:
             raise ValueError(f"delta_batch_window_ms must be > 0, got {self.delta_batch_window_ms}")
-        if self.phase1_pipeline not in _VALID_PHASE1_PIPELINES:
-            raise ValueError(
-                f"phase1_pipeline must be one of {sorted(_VALID_PHASE1_PIPELINES)}, "
-                f"got {self.phase1_pipeline!r}"
-            )
 
     # ------------------------------------------------------------------
     # Constructors

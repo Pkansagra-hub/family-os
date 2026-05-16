@@ -342,7 +342,9 @@ class TestModelHubAdapterWiring:
 
     def test_adapter_satisfies_mw_protocol(self) -> None:
         """ModelHubAdapter satisfies MW's IModelHubPort (has chat method)."""
-        from k1.memory_writer.ports.model_hub_port import IModelHubPort as MWModelHubPort
+        from k1.memory_writer.ports.model_hub_port import (
+            IModelHubPort as MWModelHubPort,
+        )
 
         svc = KernelService(config=KernelConfig())
         svc._model_hub = MagicMock()
@@ -404,7 +406,9 @@ class TestModelHubAdapterWiring:
     @pytest.mark.asyncio
     async def test_adapter_not_same_as_raw_hub(self) -> None:
         """K1 ModelHub must NOT be passed directly — it lacks chat()."""
-        from k1.memory_writer.ports.model_hub_port import IModelHubPort as MWModelHubPort
+        from k1.memory_writer.ports.model_hub_port import (
+            IModelHubPort as MWModelHubPort,
+        )
 
         mock_k1_hub = MagicMock()  # raw K1 hub — has execute(), no chat()
         assert not isinstance(mock_k1_hub, MWModelHubPort)
@@ -2628,7 +2632,6 @@ class TestP4ConciergeWiring:
                 output=self.p4_output_adapter,
                 state=self.p4_state_port,
                 llm=self._model_hub,
-                classification=None,
                 dispatch=self.p4_dispatch_port,
                 memory=None,
             )

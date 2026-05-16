@@ -2,27 +2,19 @@
 
 ---
 
-## ISSUE-MW01 — `SessionBatchDispatcher` uses stale topic `k1.session.turn.completed.v1`
+## ISSUE-MW01 — CLOSED: Concierge and MW turn-completed topic are aligned
 
-**Severity:** High
+**Severity:** High (closed)
 **Location:** `k1/memory_writer/pipeline/session_batch_dispatcher.py`, class constant `TOPIC`
 
-**Current behavior:**
-`SessionBatchDispatcher.TOPIC = "k1.session.turn.completed.v1"` (with `d`).
-`TurnDispatcher.TOPIC = "k1.session.turn.complete.v1"` (without `d`).
-The docstring inside `SessionBatchDispatcher` explicitly notes the old topic was
-"a dead pipeline." The default `extraction_mode` is `"session_batch"`, which selects
-`SessionBatchDispatcher`. This means the default production path subscribes to a topic
-that may never receive events — depending on which variant Concierge actually emits.
+**Verified behavior:**
+Concierge `TOPIC_TURN_COMPLETED`, `build_turn_completed()`, MW `TOPIC_TURN_COMPLETE`,
+`TurnDispatcher.TOPIC`, and default `SessionBatchDispatcher.TOPIC` all use
+`k1.session.turn.completed.v1`.
 
-**Failure mode:** If Concierge emits only `k1.session.turn.complete.v1`, `SessionBatchDispatcher`
-receives zero events. The buffer never fills; no extraction occurs; all turns are silently
-dropped. There is no counter, no error, no bus event emitted. Memory for the session is empty.
-
-**Fix:** Audit which exact topic Concierge emits (check `k1/concierge/events.py`). Align
-`SessionBatchDispatcher.TOPIC` to match. Consider emitting both topics during a transition
-period. Add a startup assertion or integration test that verifies the dispatcher's subscribed
-topic matches the emitter's published topic.
+**Live verification:** `tests/integration/k1/live/m5/test_m5_l1_l6_bus_ss_mw.py::test_m5_l1_concierge_turn_completed_topic_matches_live_mw_subscription`
+creates a Recipe A session, confirms the live MW subscription appears on the session bus,
+and confirms `MW.stop()` unsubscribes it.
 
 ---
 
@@ -81,26 +73,20 @@ after acquiring the lock before draining.
 
 ---
 
-## ISSUE-MW04 — `PlaceResolver` is constructed with empty entities; geohash always falls back to `"000000"`
+## ISSUE-MW04 — CLOSED: `PlaceResolver` refreshes from SessionState location entities
 
-**Severity:** Medium
+**Severity:** Medium (closed)
 **Location:** `k1/memory_writer/factory.py` (line: `PlaceResolver([])`), `place_resolver.py`
 
-**Current behavior:**
-`MemoryWriterFactory.create()` constructs `PlaceResolver([])` — with an empty entity list.
-A factory comment says "populated per-turn from SS." But `PlaceResolver` receives no update
-mechanism; it has no `update_entities()` method. The entity list provided at construction is
-all it has. On every `resolve_with_geohash()` call: no entity matches → place_id resolved but
-no geohash → sentinel `"000000"` returned.
+**Verified behavior:**
+`PlaceResolver` supports `set_entities()` and now accepts both object-style and dict-style
+location entities. The MW pipeline refreshes it from `beliefs_active.mentioned_entities` or
+the legacy `entities` alias on each `process()` / `process_session()` call.
 
-**Failure mode:** Every atom with a location gets `geohash_6 = "000000"`. K0 proximity queries
-and location-based retrieval fail silently — all family memories appear to be co-located at
-lat/lon (0°, 0°) (the ocean near Ghana). No error is raised; no warning is emitted.
-
-**Fix:** On each pipeline `process()` call, extract the `beliefs_active.known_locations` list
-from the SS snapshot and pass it to `PlaceResolver` (either re-construct or add a
-`set_entities()` method). Alternatively, move entity resolution into `ContextBuilder.build()`
-and pass resolved place data directly into the `ExtractionContext` used by `FieldMapper`.
+**Live verification:** `tests/integration/k1/live/m5/test_m5_l1_l6_bus_ss_mw.py::test_m5_l4_live_mw_place_resolver_uses_sessionstate_location_entities`
+seeds live SessionState `beliefs_active` with a LOCATION entity, runs the live MW session-batch
+context path, verifies `context.place_id == "place_olive_garden"`, and verifies a known seed
+geohash resolves to `c23nb6` instead of the sentinel `000000`.
 
 ---
 

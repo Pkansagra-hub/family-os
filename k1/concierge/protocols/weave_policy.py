@@ -1,6 +1,9 @@
 """
 k1.concierge.protocols.weave_policy -- Adaptive Weave Signal Collector.
 
+M4+ treats WeaveDecision and WeavePolicy as the canonical weave decision
+surface. weave_state.WeaveAction remains only as the legacy fallback bridge.
+
 M8 E8.1: Collects the 6 signal categories that feed the adaptive weave
 decision engine (E8.2).  The static get_weave_action(ConciergeState) in
 weave_state.py reads ONLY the FSM state.  This module collects urgency,
@@ -785,18 +788,26 @@ class WeavePolicy:
     # -----------------------------------------------------------------
 
     def decide(self, signal: WeaveSignal) -> WeaveDecisionResult:
-        """Evaluate the 9-rule priority-ordered decision table.
+        """Evaluate the priority-ordered decision table.
 
         M8 E8.2.2: First-match wins.  Each rule produces a
         WeaveDecisionResult with decision, window_ms, reasoning,
         and override flags.
 
+        Priority order: runtime disable, idle eager, critical urgency,
+        user typing, crisis/safety affect gate, grief/distress affect
+        gate, pending HITL, digest, idle batch, pool pressure, default
+        batch. The method is pure: it does not publish, mutate queues,
+        drain state, or call Front.
+
         Rules:
+            0. policy disabled -> BATCH(default_batch_ms)
             1. LISTENING + idle > IDLE_EAGER_MS -> IMMEDIATE
             2. has_critical + gate open -> IMMEDIATE
             3. user_typing -> DEFER
             4. gate == suppress_all_non_safety -> SUPPRESS
             5. gate == suppress_trivial + no critical -> DEFER
+            5.5. hitl_pending + no critical -> DEFER
             6. pending >= digest_threshold + all low -> DIGEST
             7. pending >= 1 + idle > IDLE_BATCH_MS -> BATCH (dynamic)
             8. backpool_utilization > pool_pressure_threshold -> BATCH
@@ -1251,7 +1262,7 @@ class TypingPolicyReEvaluator:
 # =====================================================================
 
 
-# Mapping from static WeaveAction to adaptive WeaveDecision for fallback
+# Bridge legacy weave_state.WeaveAction values to canonical WeaveDecision.
 _ACTION_TO_DECISION: dict[str, WeaveDecision] = {
     "immediate": WeaveDecision.IMMEDIATE,
     "queue_weave": WeaveDecision.BATCH,
@@ -1260,7 +1271,7 @@ _ACTION_TO_DECISION: dict[str, WeaveDecision] = {
     "dead_letter": WeaveDecision.SUPPRESS,
 }
 
-# Fixed fallback window matching pre-M8 behavior
+# Fixed fallback window matching pre-M8 state-table behavior.
 _FALLBACK_WINDOW_MS: int = 500
 
 

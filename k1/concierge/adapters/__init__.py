@@ -16,7 +16,6 @@ Adapter map (import from the individual module or from this package):
     ----------------------|---------------------------|-----------------------------
     IInputPort            | TestInputAdapter          | BusInputAdapter
     IOutputPort           | TestOutputAdapter         | BusOutputAdapter
-    IClassificationPort   | StubPhase1Pipeline        | UltraBERTPhase1Pipeline
     ILLMPort              | TestModelHubBridge        | ModelHubPOCBridge
     IStatePort            | InMemoryStateAdapter      | SSMStateAdapter
     IDispatchPort         | MockDispatchAdapter       | FabricDispatchAdapter
@@ -50,7 +49,6 @@ from k1.concierge.adapters.null_state_reader import NullSessionStateReaderAdapte
 from k1.concierge.adapters.recall_memory import RecallMemoryAdapter  # IMemoryPort
 from k1.concierge.adapters.snapshot_state_read import SnapshotStateReadAdapter
 from k1.concierge.adapters.ssm_state import SSMStateAdapter  # IStatePort
-from k1.concierge.adapters.test_classification import StubPhase1Pipeline  # IClassificationPort
 from k1.concierge.adapters.test_delta import create_test_bus  # IDeltaPort
 from k1.concierge.adapters.test_dispatch import MockDispatchAdapter  # IDispatchPort
 
@@ -61,19 +59,17 @@ from k1.concierge.adapters.test_output import TestOutputAdapter  # IOutputPort
 from k1.concierge.adapters.test_state import InMemoryStateAdapter  # IStatePort
 
 # ---- Heavy adapters (deferred — import from their module directly) --------
-# These pull in large dependency chains (Gemini SDK, UltraBERT DLL, etc.)
+# These pull in large dependency chains (Gemini SDK, etc.)
 # and must be imported from their individual modules:
 #
 #   from k1.concierge.adapters.test_llm import TestModelHubBridge
 #   from k1.concierge.adapters.hub_llm import ModelHubPOCBridge
-#   from k1.concierge.adapters.ultrabert_classification import UltraBERTPhase1Pipeline
 #   from k1.concierge.adapters.local_delta import BusFactory
 
 __all__ = [
     # Test adapters (eagerly imported)
     "TestInputAdapter",
     "TestOutputAdapter",
-    "StubPhase1Pipeline",
     "InMemoryStateAdapter",
     "MockDispatchAdapter",
     "create_test_bus",

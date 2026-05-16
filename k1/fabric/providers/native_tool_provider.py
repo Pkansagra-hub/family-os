@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import inspect
 import logging
-from typing import Any, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional
 
 from k1.fabric.providers.base_provider import (
     BaseProvider,
@@ -52,8 +52,10 @@ from k1.fabric.types import (
     ProviderHealth,
     ProviderStatus,
 )
-from k1.tools.family.base import WriteContext
-from k1.tools.family.ports import IToolRegistryReader, IToolService
+
+if TYPE_CHECKING:
+    from k1.tools.family.base import WriteContext
+    from k1.tools.family.ports import IToolRegistryReader, IToolService
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +113,7 @@ def _parse_capability_name(name: str) -> tuple[str, str]:
 class NativeToolProvider(BaseProvider):
     """In-process provider for every K1-native family-tool capability."""
 
-    __slots__ = ("_registry", "_default_user_id")
+    __slots__ = ("_registry", "_default_user_id", "_default_space_id")
 
     def __init__(
         self,
@@ -119,6 +121,7 @@ class NativeToolProvider(BaseProvider):
         *,
         registry: IToolRegistryReader,
         default_user_id: str = "system",
+        default_space_id: str = "",
     ) -> None:
         """
         Args
@@ -141,6 +144,7 @@ class NativeToolProvider(BaseProvider):
         super().__init__(config)
         self._registry: IToolRegistryReader = registry
         self._default_user_id: str = default_user_id
+        self._default_space_id: str = default_space_id
 
     # ------------------------------------------------------------------ #
     # CapabilityProvider surface
@@ -252,6 +256,16 @@ class NativeToolProvider(BaseProvider):
                 error_code="invalid_result",
             )
 
+        if data.get("success") is False:
+            return CapabilityResult.failure_result(
+                request_id=request.request_id,
+                error_code=str(data.get("error_code") or "dispatch_failed"),
+                error_message=str(data.get("error_message") or "family-tool dispatch failed"),
+                retriable=False,
+                provider_id=self.provider_id,
+                trace_id=trace_id,
+            )
+
         return CapabilityResult.success_result(
             request_id=request.request_id,
             data=data,
@@ -299,10 +313,10 @@ class NativeToolProvider(BaseProvider):
 
         user_id = request.caller_id or request.caller or self._default_user_id
 
-        # space_id: caller frame > control section > "" (no-scope).
+        # space_id: caller frame > control section > provider default ("" if unset).
         space_id_raw = control.get("space_id")
-        if not isinstance(space_id_raw, str):
-            space_id_raw = ""
+        if not isinstance(space_id_raw, str) or not space_id_raw:
+            space_id_raw = self._default_space_id
 
         # face: Fabric requests originate from the LLM/planner pipeline; default "llm"
         # when not provided.  Adapter authors building synthetic requests can override
@@ -315,6 +329,8 @@ class NativeToolProvider(BaseProvider):
             key = request.params.get("idempotency_key")
             if isinstance(key, str) and key:
                 idempotency_key = key
+
+        from k1.tools.family.base import WriteContext
 
         return WriteContext(
             user_id=user_id,

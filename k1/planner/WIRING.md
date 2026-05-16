@@ -105,6 +105,7 @@ Step 10: [KERNEL PHASE 5 — IMPLEMENTED in service.py:1322-1422]
          # S6b: PlannerAdapter(mailbox, cb_planner) and orchestrator.bind_planner()
          # S7: asyncio.create_task(planner.start()) + cross-wire verification
          # MockPlannerAdapter is replaced before _running = True
+         # Live coverage: tests/integration/k1/live/m2/test_m2_l2_planner_orchestrator_crosswire.py
 ```
 
 ---

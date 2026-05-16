@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from k1.model_hub.manifest import ProviderManifest, load_manifest
+from k1.model_hub.manifest import load_manifest
 
 if TYPE_CHECKING:
     from k1.model_hub.factory import _HubCore
@@ -96,6 +96,19 @@ def _import_plugin_class(dotted_path: str) -> type:
         raise ImportError(
             f"plugin_class {dotted_path!r}: module {module_path!r} has no attribute {class_name!r}"
         ) from exc
+
+
+async def _close_plugin_safely(plugin: "IProviderPlugin | None") -> None:
+    """Best-effort cleanup for partially initialized plugins."""
+    if plugin is None:
+        return
+    close_fn = getattr(plugin, "close", None)
+    if not callable(close_fn):
+        return
+    try:
+        await close_fn()
+    except Exception:
+        logger.debug("ProviderLoader: plugin close failed during cleanup", exc_info=True)
 
 
 class ProviderLoader:
@@ -179,7 +192,19 @@ class ProviderLoader:
         except Exception as exc:
             return ("failed", f"load_manifest: {exc!r}")
 
-        # 3. Resolve plugin class
+        # 3. Resolve credentials BEFORE plugin initialization so providers
+        # without keys are skipped before they can allocate aiohttp sessions.
+        env_var = manifest.auth.credential_key
+        api_key = os.environ.get(env_var) if env_var else None
+        if manifest.auth.type != "none" and not api_key:
+            logger.warning(
+                "ProviderLoader: %s skipped — env var %r not set",
+                entry.provider_id,
+                env_var,
+            )
+            return ("skipped", f"env var {env_var!r} not set")
+
+        # 4. Resolve plugin class
         plugin_class_path = entry.plugin_class or manifest.plugin_class
         if not plugin_class_path:
             return ("failed", "plugin_class not set on entry or manifest")
@@ -188,31 +213,24 @@ class ProviderLoader:
         except Exception as exc:
             return ("failed", f"import {plugin_class_path}: {exc!r}")
 
-        # 4. Instantiate + initialize
+        # 5. Instantiate + initialize
+        plugin: "IProviderPlugin | None" = None
         try:
-            plugin: "IProviderPlugin" = PluginCls()
+            plugin = PluginCls()
             await plugin.initialize(manifest)
         except Exception as exc:
+            await _close_plugin_safely(plugin)
             return ("failed", f"initialize: {exc!r}")
 
-        # 5. Credential resolution. ``manifest.auth.credential_key`` is the
-        #    env-var name. If auth.type == "none" we don't require a key
-        #    (Ollama). Otherwise a missing env var → skip (not failure).
-        env_var = manifest.auth.credential_key
-        api_key = os.environ.get(env_var) if env_var else None
+        # 6. Credential binding. ``manifest.auth.credential_key`` is the env-var
+        #    name. If auth.type == "none" we don't require a key (Ollama).
         if manifest.auth.type != "none":
-            if not api_key:
-                logger.warning(
-                    "ProviderLoader: %s skipped — env var %r not set",
-                    entry.provider_id,
-                    env_var,
-                )
-                return ("skipped", f"env var {env_var!r} not set")
             set_api_key = getattr(plugin, "set_api_key", None)
             if callable(set_api_key):
                 try:
                     set_api_key(api_key)
                 except Exception as exc:
+                    await _close_plugin_safely(plugin)
                     return ("failed", f"set_api_key: {exc!r}")
             else:
                 logger.debug(
@@ -228,30 +246,32 @@ class ProviderLoader:
                 except Exception:
                     pass  # auth.type=none means key is optional
 
-        # 6. Register with the hub (both registry + dispatcher).
+        # 7. Register with the hub (both registry + dispatcher).
         try:
             self._hub.register_plugin(manifest, plugin)
         except Exception as exc:
+            await _close_plugin_safely(plugin)
             return ("failed", f"register_plugin: {exc!r}")
 
         # Emit provider registered event if an event port is wired.
         if self._event_port is not None:
             from k1.model_hub.events import (  # local import: avoid cycle
                 TOPIC_PROVIDER_REGISTERED,
-                ProviderRegisteredPayload,
             )
 
             all_caps = set(manifest.capabilities)
             for model in manifest.models:
                 all_caps.update(model.capabilities)
             try:
-                self._event_port.emit(
+                await self._event_port.publish(
                     TOPIC_PROVIDER_REGISTERED,
-                    ProviderRegisteredPayload(
-                        provider_id=manifest.provider_id,
-                        capabilities=sorted(all_caps, key=lambda c: c.value),
-                        model_count=len(manifest.models),
-                    ),
+                    {
+                        "provider_id": manifest.provider_id,
+                        "capabilities": [
+                            cap.value for cap in sorted(all_caps, key=lambda c: c.value)
+                        ],
+                        "model_count": len(manifest.models),
+                    },
                 )
             except Exception:  # pragma: no cover -- event emission must not block load
                 pass

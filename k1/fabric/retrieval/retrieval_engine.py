@@ -277,6 +277,13 @@ class RetrievalEngine:
                 or (getattr(c, "name", "") or "").lower().startswith("prompt.")
             ]
 
+        logger.debug(
+            "_run_pipeline: step0 all_contracts=%d query_domains=%s safety_band=%s",
+            len(all_contracts),
+            query_domains,
+            safety_band,
+        )
+
         if not all_contracts:
             elapsed_ms = int((time.monotonic() - start) * 1000)
             result = RetrievalResult(
@@ -327,6 +334,12 @@ class RetrievalEngine:
         )
 
         total_matched = len(survivors)
+
+        logger.debug(
+            "_run_pipeline: step2 filter_candidates=%d survivors=%d",
+            len(filter_candidates),
+            total_matched,
+        )
 
         if not survivors:
             elapsed_ms = int((time.monotonic() - start) * 1000)

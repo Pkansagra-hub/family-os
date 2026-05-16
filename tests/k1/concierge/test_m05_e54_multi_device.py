@@ -19,12 +19,12 @@ from k1.concierge.bus.topics import TOPIC_INTENT_ARBITRATED
 from k1.concierge.config import ArbiterConfig
 from k1.concierge.fsm.arbiter import (
     ArbiterDecision,
+    ArbiterInput,
     ArbiterResult,
     ConversationArbiter,
     InflightContext,
     build_inflight_context,
 )
-from k1.concierge.fsm.phase1 import Phase1Result
 from k1.concierge.fsm.states import ConciergeState
 from k1.concierge.protocols.hitl_wiring import validate_hitl_wiring
 from k1.sessionstate.sections.meta import MetaSection
@@ -63,9 +63,9 @@ def _make_phase1(
     domain: str = "general",
     safety_band: str = "GREEN",
     entities: list[dict] | None = None,
-) -> Phase1Result:
-    """Build a Phase1Result for testing."""
-    return Phase1Result(
+) -> ArbiterInput:
+    """Build an ArbiterInput for testing."""
+    return ArbiterInput(
         intent_classification=intent,
         domain_context=domain,
         safety_band=safety_band,
@@ -80,17 +80,17 @@ def _make_arbiter_result(
     decision: ArbiterDecision = ArbiterDecision.PARALLEL_NEW,
     confidence: float = 0.9,
     target_task_id: str | None = None,
-    phase1: Phase1Result | None = None,
+    inputs: ArbiterInput | None = None,
 ) -> ArbiterResult:
     """Build an ArbiterResult for testing."""
-    p1 = phase1 or _make_phase1()
+    p1 = inputs or _make_phase1()
     return ArbiterResult(
         decision=decision,
         confidence=confidence,
         target_task_id=target_task_id,
         modification_params=None,
         routing_metadata={},
-        phase1=p1,
+        inputs=p1,
     )
 
 
@@ -321,7 +321,7 @@ class TestDeviceConflictPrecedence:
         arbiter = ConversationArbiter()
         red_parallel = _make_arbiter_result(
             decision=ArbiterDecision.PARALLEL_NEW,
-            phase1=_make_phase1(safety_band="RED"),
+            inputs=_make_phase1(safety_band="RED"),
         )
         normal_cancel = _make_arbiter_result(decision=ArbiterDecision.CANCEL)
 
@@ -338,7 +338,7 @@ class TestDeviceConflictPrecedence:
         arbiter = ConversationArbiter()
         red_defer = _make_arbiter_result(
             decision=ArbiterDecision.DEFER,
-            phase1=_make_phase1(safety_band="RED"),
+            inputs=_make_phase1(safety_band="RED"),
         )
         normal_modify = _make_arbiter_result(decision=ArbiterDecision.MODIFY_INFLIGHT)
 
@@ -383,7 +383,7 @@ class TestDeviceConflictPrecedence:
         cancel = _make_arbiter_result(decision=ArbiterDecision.CANCEL)
         red_new = _make_arbiter_result(
             decision=ArbiterDecision.PARALLEL_NEW,
-            phase1=_make_phase1(safety_band="RED"),
+            inputs=_make_phase1(safety_band="RED"),
         )
         modify = _make_arbiter_result(decision=ArbiterDecision.MODIFY_INFLIGHT)
         parallel = _make_arbiter_result(decision=ArbiterDecision.PARALLEL_NEW)
@@ -425,11 +425,11 @@ class TestHighImpactConflictDetection:
         arbiter = ConversationArbiter()
         cancel_result = _make_arbiter_result(
             decision=ArbiterDecision.CANCEL,
-            phase1=_make_phase1(intent="booking"),
+            inputs=_make_phase1(intent="booking"),
         )
         proceed_result = _make_arbiter_result(
             decision=ArbiterDecision.PARALLEL_NEW,
-            phase1=_make_phase1(intent="booking"),
+            inputs=_make_phase1(intent="booking"),
         )
         assert (
             arbiter.detect_high_impact_conflict(cancel_result, "phone", proceed_result, "tablet")
@@ -441,11 +441,11 @@ class TestHighImpactConflictDetection:
         arbiter = ConversationArbiter()
         cancel_result = _make_arbiter_result(
             decision=ArbiterDecision.CANCEL,
-            phase1=_make_phase1(intent="booking"),
+            inputs=_make_phase1(intent="booking"),
         )
         proceed_result = _make_arbiter_result(
             decision=ArbiterDecision.PARALLEL_NEW,
-            phase1=_make_phase1(intent="booking"),
+            inputs=_make_phase1(intent="booking"),
         )
         assert (
             arbiter.detect_high_impact_conflict(cancel_result, "phone", proceed_result, "phone")
@@ -458,11 +458,11 @@ class TestHighImpactConflictDetection:
         arbiter = ConversationArbiter(config=cfg)
         cancel_result = _make_arbiter_result(
             decision=ArbiterDecision.CANCEL,
-            phase1=_make_phase1(intent="booking"),
+            inputs=_make_phase1(intent="booking"),
         )
         proceed_result = _make_arbiter_result(
             decision=ArbiterDecision.PARALLEL_NEW,
-            phase1=_make_phase1(intent="booking"),
+            inputs=_make_phase1(intent="booking"),
         )
         assert (
             arbiter.detect_high_impact_conflict(cancel_result, "phone", proceed_result, "tablet")
@@ -474,11 +474,11 @@ class TestHighImpactConflictDetection:
         arbiter = ConversationArbiter()
         result_a = _make_arbiter_result(
             decision=ArbiterDecision.CANCEL,
-            phase1=_make_phase1(intent="general"),
+            inputs=_make_phase1(intent="general"),
         )
         result_b = _make_arbiter_result(
             decision=ArbiterDecision.PARALLEL_NEW,
-            phase1=_make_phase1(intent="general"),
+            inputs=_make_phase1(intent="general"),
         )
         assert arbiter.detect_high_impact_conflict(result_a, "phone", result_b, "tablet") is False
 
@@ -487,11 +487,11 @@ class TestHighImpactConflictDetection:
         arbiter = ConversationArbiter()
         red_result = _make_arbiter_result(
             decision=ArbiterDecision.CANCEL,
-            phase1=_make_phase1(intent="general", safety_band="RED"),
+            inputs=_make_phase1(intent="general", safety_band="RED"),
         )
         proceed_result = _make_arbiter_result(
             decision=ArbiterDecision.PARALLEL_NEW,
-            phase1=_make_phase1(intent="general"),
+            inputs=_make_phase1(intent="general"),
         )
         # One is RED (high-impact), one cancels while other proceeds
         assert (
@@ -504,11 +504,11 @@ class TestHighImpactConflictDetection:
         arbiter = ConversationArbiter()
         booking = _make_arbiter_result(
             decision=ArbiterDecision.PARALLEL_NEW,
-            phase1=_make_phase1(intent="booking"),
+            inputs=_make_phase1(intent="booking"),
         )
         payment = _make_arbiter_result(
             decision=ArbiterDecision.PARALLEL_NEW,
-            phase1=_make_phase1(intent="payment"),
+            inputs=_make_phase1(intent="payment"),
         )
         assert arbiter.detect_high_impact_conflict(booking, "phone", payment, "tablet") is True
 
@@ -517,11 +517,11 @@ class TestHighImpactConflictDetection:
         arbiter = ConversationArbiter()
         booking_a = _make_arbiter_result(
             decision=ArbiterDecision.PARALLEL_NEW,
-            phase1=_make_phase1(intent="booking"),
+            inputs=_make_phase1(intent="booking"),
         )
         booking_b = _make_arbiter_result(
             decision=ArbiterDecision.PARALLEL_NEW,
-            phase1=_make_phase1(intent="booking"),
+            inputs=_make_phase1(intent="booking"),
         )
         assert arbiter.detect_high_impact_conflict(booking_a, "phone", booking_b, "tablet") is False
 
@@ -539,11 +539,11 @@ class TestBuildConflictClarification:
         arbiter = ConversationArbiter()
         result_a = _make_arbiter_result(
             decision=ArbiterDecision.CANCEL,
-            phase1=_make_phase1(intent="booking"),
+            inputs=_make_phase1(intent="booking"),
         )
         result_b = _make_arbiter_result(
             decision=ArbiterDecision.PARALLEL_NEW,
-            phase1=_make_phase1(intent="payment"),
+            inputs=_make_phase1(intent="payment"),
         )
         clar = arbiter.build_conflict_clarification(result_a, "phone", result_b, "tablet")
         assert "question" in clar
@@ -557,8 +557,8 @@ class TestBuildConflictClarification:
     def test_clarification_has_three_options(self) -> None:
         """Options include device_a, device_b, and cancel_both."""
         arbiter = ConversationArbiter()
-        result_a = _make_arbiter_result(phase1=_make_phase1(intent="booking"))
-        result_b = _make_arbiter_result(phase1=_make_phase1(intent="payment"))
+        result_a = _make_arbiter_result(inputs=_make_phase1(intent="booking"))
+        result_b = _make_arbiter_result(inputs=_make_phase1(intent="payment"))
         clar = arbiter.build_conflict_clarification(result_a, "phone", result_b, "tablet")
         values = [o["value"] for o in clar["options"]]
         assert "device_a" in values
@@ -568,8 +568,8 @@ class TestBuildConflictClarification:
     def test_clarification_question_mentions_actions(self) -> None:
         """Question text includes the intent actions from both devices."""
         arbiter = ConversationArbiter()
-        result_a = _make_arbiter_result(phase1=_make_phase1(intent="booking"))
-        result_b = _make_arbiter_result(phase1=_make_phase1(intent="payment"))
+        result_a = _make_arbiter_result(inputs=_make_phase1(intent="booking"))
+        result_b = _make_arbiter_result(inputs=_make_phase1(intent="payment"))
         clar = arbiter.build_conflict_clarification(result_a, "phone-1", result_b, "tablet-2")
         assert "booking" in clar["question"]
         assert "payment" in clar["question"]
@@ -818,11 +818,11 @@ class TestDeviceIdFSMIntegration:
         params = list(sig.parameters.keys())
         assert "device_id" in params
 
-    def test_run_phase1_with_arbiter_accepts_device_id_kwarg(self) -> None:
-        """_run_phase1_with_arbiter signature accepts device_id keyword argument."""
+    def test_route_user_turn_accepts_device_id_kwarg(self) -> None:
+        """_route_user_turn signature accepts device_id keyword argument."""
         fsm, _ = _make_fsm()
         import inspect
 
-        sig = inspect.signature(fsm._run_phase1_with_arbiter)
+        sig = inspect.signature(fsm._route_user_turn)
         params = list(sig.parameters.keys())
         assert "device_id" in params

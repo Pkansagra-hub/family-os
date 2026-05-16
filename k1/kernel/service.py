@@ -20,12 +20,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 # Issue 2.4.3: Default timeout for component teardown (seconds).
 _TEARDOWN_TIMEOUT: float = 10.0
+from bridge.bus_guard import BridgeAwareLocalBus
+
 # Issue 2.3.5: MemoryWriter factory + adapters (per-session)
 from k1.bus.adapters.fabric_adapter import FabricBusAdapter
 from k1.bus.async_bridge import AsyncBusBridge
@@ -84,7 +87,9 @@ from k1.memory_writer.health.circuit_breaker import CircuitBreaker as MWCircuitB
 from k1.model_hub.adapters.config_adapter import ConfigAdapter
 from k1.model_hub.adapters.credential_store_adapter import CredentialStoreAdapter
 from k1.model_hub.adapters.event_bus_adapter import EventBusAdapter as MHEventBusAdapter
-from k1.model_hub.adapters.health_report_adapter import HealthReportAdapter as MHHealthReportAdapter
+from k1.model_hub.adapters.health_report_adapter import (
+    HealthReportAdapter as MHHealthReportAdapter,
+)
 from k1.model_hub.adapters.prometheus_adapter import PrometheusAdapter
 from k1.model_hub.adapters.session_state_prod import SessionStateProdAdapter
 from k1.model_hub.factory import ModelHubFactory
@@ -106,13 +111,19 @@ from k1.orchestrator.config import OrchestratorConfig
 from k1.orchestrator.factory import OrchestratorFactory
 from k1.orchestrator.workflows.persistence import SQLiteWorkflowAdapter
 from k1.planner.adapters.bridge_adapter import BridgeAdapter as PlannerBridgeAdapter
-from k1.planner.adapters.delta_bus_adapter import DeltaBusAdapter as PlannerDeltaBusAdapter
-from k1.planner.adapters.event_bus_adapter import EventBusAdapter as PlannerEventBusAdapter
+from k1.planner.adapters.delta_bus_adapter import (
+    DeltaBusAdapter as PlannerDeltaBusAdapter,
+)
+from k1.planner.adapters.event_bus_adapter import (
+    EventBusAdapter as PlannerEventBusAdapter,
+)
 from k1.planner.adapters.fabric_registry_adapter import FabricRegistryAdapter
 from k1.planner.adapters.fabric_retrieval_adapter import FabricRetrievalAdapter
 from k1.planner.adapters.llm_gateway_adapter import LLMGatewayAdapter
 from k1.planner.adapters.mailbox_adapter import MailboxAdapter as PlannerMailboxAdapter
-from k1.planner.adapters.session_state_adapter import SessionStateReadAdapter as PlannerStateAdapter
+from k1.planner.adapters.session_state_adapter import (
+    SessionStateReadAdapter as PlannerStateAdapter,
+)
 from k1.planner.factory import PlannerFactory
 
 # M5.E3.I2 + I3: k1.selfmodel kernel wiring (S2.6 + P3.5).
@@ -198,6 +209,7 @@ class KernelService:
         self._shared_fabric: Any | None = None  # Fabric
         self._bridge: Any | None = None  # IBridgeClient | None
         self._orchestrator: Any | None = None  # OrchestratorService
+        self._orch_storage: Any | None = None  # WorkflowStorageAdapter
         self._planner: Any | None = None  # PlannerAgent
         self._planner_task: asyncio.Task[Any] | None = None
 
@@ -215,12 +227,6 @@ class KernelService:
         # store / signature validator.
         self._self_model_bundle: SelfModelServiceBundle | None = None
 
-        # P4B.8: Shared Phase1 (UltraBERT) classification pipeline.
-        # Built once during _startup_tier1, reused across every session.
-        # familyos_ultrabert.Client is loaded lazily on first analyze() call
-        # so process boot does not pay the ~20s model load cost.
-        self._phase1_pipeline: Any | None = None
-
         # M15: Family-tools bundle (k1.tools.family). Built at S8 of
         # _startup_tier1 when KernelConfig.enable_family_tools is True.
         # Owns the K1FamilyStore SQLite connection, ToolRegistry,
@@ -236,6 +242,11 @@ class KernelService:
 
         # lifecycle flag
         self._running: bool = False
+
+        # Diagnostics: append-only log of lifecycle phase transitions.
+        # Written by _log_lifecycle(); read by lifecycle_events() probes.
+        # Never read by production code.
+        self._lifecycle_log: list[dict[str, Any]] = []
 
     # ------------------------------------------------------------------
     # Properties
@@ -304,6 +315,142 @@ class KernelService:
         return self._self_model_bundle
 
     # ------------------------------------------------------------------
+    # Diagnostics API (observability-only; no production code reads these)
+    # ------------------------------------------------------------------
+
+    def describe_wiring(self) -> dict[str, Any]:
+        """Return a read-only snapshot of the live kernel wiring graph.
+
+        Intended exclusively for PORT-IDENTITY probes in
+        ``tests/integration/k1/live/``.  Never call from production code.
+
+        Returns a plain dict with keys:
+            tier1:          names→type of shared Tier-1 components.
+            tier1_ports:    selected shared port adapter types.
+            port_identities: selected PORT-IDENTITY boolean claims.
+            sessions:       per-session component class names.
+            running:        whether the kernel has completed startup.
+            bridge_mode:    "LIVE" | "SINK" | "OFFLINE".
+            planner_task:   asyncio.Task name or None.
+        """
+        tier1: dict[str, str | None] = {
+            "bus": type(self._bus).__name__ if self._bus is not None else None,
+            "async_bus": type(self._async_bus).__name__ if self._async_bus is not None else None,
+            "router": type(self._router).__name__ if self._router is not None else None,
+            "model_hub": type(self._model_hub).__name__ if self._model_hub is not None else None,
+            "shared_fabric": (
+                type(self._shared_fabric).__name__ if self._shared_fabric is not None else None
+            ),
+            "bridge": type(self._bridge).__name__ if self._bridge is not None else None,
+            "orchestrator": (
+                type(self._orchestrator).__name__ if self._orchestrator is not None else None
+            ),
+            "planner": type(self._planner).__name__ if self._planner is not None else None,
+            "hil_service": (
+                type(self._hil_service).__name__ if self._hil_service is not None else None
+            ),
+            "self_model_bundle": (
+                type(self._self_model_bundle).__name__
+                if self._self_model_bundle is not None
+                else None
+            ),
+        }
+
+        sessions: dict[str, dict[str, str | None]] = {}
+        for sid, sess in self._sessions.items():
+            sessions[sid] = {
+                "bus": type(sess.bus).__name__ if sess.bus is not None else None,
+                "session_state": (
+                    type(sess.session_state).__name__ if sess.session_state is not None else None
+                ),
+                "fabric": type(sess.fabric).__name__ if sess.fabric is not None else None,
+                "concierge": type(sess.concierge).__name__ if sess.concierge is not None else None,
+                "memory_writer": (
+                    type(sess.memory_writer).__name__ if sess.memory_writer is not None else None
+                ),
+            }
+
+        # Determine bridge mode from the runtime bridge object type name.
+        bridge_type = type(self._bridge).__name__ if self._bridge is not None else "None"
+        if "Live" in bridge_type or "Http" in bridge_type:
+            bridge_mode = "LIVE"
+        elif "Sink" in bridge_type or "Outbox" in bridge_type:
+            bridge_mode = "SINK"
+        else:
+            bridge_mode = "OFFLINE"
+
+        planner_port = (
+            getattr(self._orchestrator, "_planner_port", None)
+            if self._orchestrator is not None
+            else None
+        )
+        get_planner_mailbox = (
+            getattr(self._planner, "get_mailbox", None) if self._planner is not None else None
+        )
+        planner_mailbox = get_planner_mailbox() if callable(get_planner_mailbox) else None
+        planner_port_mailbox = getattr(planner_port, "_mailbox", None)
+
+        tier1_ports: dict[str, str | None] = {
+            "orchestrator.planner_port": (
+                type(planner_port).__name__ if planner_port is not None else None
+            ),
+            "orchestrator.planner_port.mailbox": (
+                type(planner_port_mailbox).__name__ if planner_port_mailbox is not None else None
+            ),
+            "planner.mailbox": (
+                type(planner_mailbox).__name__ if planner_mailbox is not None else None
+            ),
+        }
+        port_identities: dict[str, bool | None] = {
+            "orchestrator.planner_port_is_real_planner_adapter": (
+                isinstance(planner_port, PlannerAdapter) if planner_port is not None else None
+            ),
+            "orchestrator.planner_port_is_mock": (
+                isinstance(planner_port, MockPlannerAdapter) if planner_port is not None else None
+            ),
+            "orchestrator.planner_port_mailbox_is_planner_mailbox": (
+                planner_port_mailbox is planner_mailbox
+                if planner_port_mailbox is not None and planner_mailbox is not None
+                else None
+            ),
+        }
+
+        return {
+            "tier1": tier1,
+            "tier1_ports": tier1_ports,
+            "port_identities": port_identities,
+            "sessions": sessions,
+            "running": self._running,
+            "bridge_mode": bridge_mode,
+            "planner_task": (
+                self._planner_task.get_name() if self._planner_task is not None else None
+            ),
+        }
+
+    def lifecycle_events(self) -> list[dict[str, Any]]:
+        """Return the append-only log of lifecycle phase transitions.
+
+        Each entry is ``{"phase": str, "component": str, "ts": float}``
+        where ``ts`` is ``time.monotonic()`` at the moment the event was
+        recorded.  Intended for LIFECYCLE-ORDER probes.
+        """
+        return list(self._lifecycle_log)
+
+    def _log_lifecycle(self, phase: str, component: str) -> None:
+        """Append a lifecycle event to the internal log (diagnostics only)."""
+        self._lifecycle_log.append({"phase": phase, "component": component, "ts": time.monotonic()})
+
+    def _close_orchestrator_storage(self) -> None:
+        """Close S5 workflow storage owned by the kernel construction root."""
+        storage = self._orch_storage
+        if storage is None:
+            return
+        close = getattr(storage, "close", None)
+        if callable(close):
+            close()
+        self._orch_storage = None
+
+    # ------------------------------------------------------------------
     # ILifecyclePort
     # ------------------------------------------------------------------
 
@@ -366,6 +513,7 @@ class KernelService:
             except Exception as exc:
                 errors.append(exc)
                 logger.warning("shutdown: destroy_session(%s) failed: %s", sid, exc)
+        self._log_lifecycle("sessions_destroyed", "SessionInstance")
 
         # ── Reverse S7: Stop Planner + cancel task ────────────
         if self._planner is not None:
@@ -374,6 +522,7 @@ class KernelService:
                     self._planner.stop(),
                     timeout=_TEARDOWN_TIMEOUT,
                 )
+                self._log_lifecycle("S7_shutdown_complete", "PlannerAgent")
             except Exception as exc:
                 errors.append(exc)
                 logger.warning("shutdown: Planner stop failed: %s", exc)
@@ -399,9 +548,17 @@ class KernelService:
                     self._orchestrator.shutdown(),
                     timeout=_TEARDOWN_TIMEOUT,
                 )
+                self._log_lifecycle("S5_shutdown_complete", "OrchestratorService")
             except Exception as exc:
                 errors.append(exc)
                 logger.warning("shutdown: Orchestrator shutdown failed: %s", exc)
+
+        if self._orch_storage is not None:
+            try:
+                self._close_orchestrator_storage()
+            except Exception as exc:
+                errors.append(exc)
+                logger.warning("shutdown: Orchestrator storage close failed: %s", exc)
 
         # ── Reverse S2.5: Shutdown HIL service (E7.M1.1) ──────
         # Cancels every pending HIL future and unsubscribes from the bus.
@@ -413,6 +570,7 @@ class KernelService:
                     self._hil_service.shutdown(),
                     timeout=_TEARDOWN_TIMEOUT,
                 )
+                self._log_lifecycle("S2.5_shutdown_complete", "HumanInTheLoopService")
             except Exception as exc:
                 errors.append(exc)
                 logger.warning("shutdown: HIL service shutdown failed: %s", exc)
@@ -425,6 +583,7 @@ class KernelService:
         if self._self_model_bundle is not None:
             try:
                 self._self_model_bundle.shutdown()
+                self._log_lifecycle("S2.6_shutdown_complete", "SelfModelServiceBundle")
             except Exception as exc:
                 errors.append(exc)
                 logger.warning("shutdown: selfmodel bundle shutdown failed: %s", exc)
@@ -437,6 +596,7 @@ class KernelService:
                     self._bridge.disconnect(),
                     timeout=_TEARDOWN_TIMEOUT,
                 )
+                self._log_lifecycle("S4_shutdown_complete", type(self._bridge).__name__)
             except Exception as exc:
                 errors.append(exc)
                 logger.warning("shutdown: Bridge disconnect failed: %s", exc)
@@ -448,6 +608,7 @@ class KernelService:
                     self._shared_fabric.shutdown(),
                     timeout=_TEARDOWN_TIMEOUT,
                 )
+                self._log_lifecycle("S3_shutdown_complete", "CapabilityFabric")
             except Exception as exc:
                 errors.append(exc)
                 logger.warning("shutdown: Fabric shutdown failed: %s", exc)
@@ -456,6 +617,7 @@ class KernelService:
         if self._family_tools is not None:
             try:
                 self._family_tools.close()
+                self._log_lifecycle("S8_shutdown_complete", "FamilyToolsBundle")
             except Exception as exc:
                 errors.append(exc)
                 logger.warning("shutdown: FamilyToolsBundle close failed: %s", exc)
@@ -468,6 +630,7 @@ class KernelService:
                     self._model_hub.shutdown(),
                     timeout=_TEARDOWN_TIMEOUT,
                 )
+                self._log_lifecycle("S2_shutdown_complete", "ModelHub")
             except Exception as exc:
                 errors.append(exc)
                 logger.warning("shutdown: ModelHub shutdown failed: %s", exc)
@@ -483,12 +646,14 @@ class KernelService:
         if self._router is not None:
             try:
                 self._router.close()
+                self._log_lifecycle("S1_shutdown_complete", "Bus+Router")
             except Exception as exc:
                 errors.append(exc)
                 logger.warning("shutdown: Router close failed: %s", exc)
 
         # ── Always mark as not running ────────────────────────
         self._running = False
+        self._log_lifecycle("shutdown_complete", "KernelService")
 
         # Issue 2.4.3 #8: Structured error reporting.
         if errors:
@@ -651,12 +816,14 @@ class KernelService:
             - #10: Short drain period before closing the session bus.
 
         Sequence (reverse P6→P1):
-            1. Remove from registry (``_sessions.pop``)
-            2. Reverse P5: Stop MemoryWriter
-            3. Reverse P4: Stop Concierge (FSM + consumer tasks)
-            4. Reverse P3: (per-session Fabric has no explicit teardown)
-            5. Reverse P2: Checkpoint + stop SessionState
-            6. Reverse P1: Close per-session Bus + Router
+            1. Remove from registry (``_sessions.pop``) → logs ``P6_teardown_start``
+            2. Reverse P3.5: Uninstall SelfModel handle
+            3. Reverse P5: Stop MemoryWriter → logs ``P5_teardown_complete``
+            4. Reverse P4: Stop Concierge (FSM + consumer tasks) → logs ``P4_teardown_complete``
+            5. Reverse P1.5: Shutdown per-session HIL service
+            6. Reverse P3: ``Fabric.shutdown()`` (health_checker + module_loader) → logs ``P3_teardown_complete``
+            7. Reverse P2: Checkpoint + stop SessionState → logs ``P2_teardown_complete``
+            8. Reverse P1: Close per-session Bus + Router → logs ``P1_teardown_complete``
 
         Each step is individually guarded — teardown continues even if
         one step fails.  All errors are collected and logged.
@@ -668,6 +835,7 @@ class KernelService:
             KeyError: If no session with that ID exists.
         """
         session = self._sessions.pop(session_id)  # KeyError if missing
+        self._log_lifecycle("P6_teardown_start", f"session:{session_id}")
         errors: list[Exception] = []
 
         # Reverse P3.5: uninstall selfmodel handle (M5.E3.I3).
@@ -695,6 +863,7 @@ class KernelService:
         except Exception as exc:
             errors.append(exc)
             logger.warning("destroy_session(%s): MemoryWriter stop failed: %s", session_id, exc)
+        self._log_lifecycle("P5_teardown_complete", f"session:{session_id}")
 
         # Reverse P4: Stop Concierge
         try:
@@ -705,6 +874,26 @@ class KernelService:
         except Exception as exc:
             errors.append(exc)
             logger.warning("destroy_session(%s): Concierge stop failed: %s", session_id, exc)
+        self._log_lifecycle("P4_teardown_complete", f"session:{session_id}")
+
+        # Reverse P1.5: Shutdown per-session HIL service (cancels pending
+        # futures and unsubscribes from session_bus). Run AFTER Concierge
+        # stop so the FSM cannot create new HIL requests, and BEFORE
+        # session_bus.close so the unsubscribe call has a live bus.
+        session_hil = getattr(session, "hil_port", None)
+        if session_hil is not None and hasattr(session_hil, "shutdown"):
+            try:
+                await asyncio.wait_for(
+                    session_hil.shutdown(),
+                    timeout=_TEARDOWN_TIMEOUT,
+                )
+            except Exception as exc:
+                errors.append(exc)
+                logger.warning(
+                    "destroy_session(%s): HIL service shutdown failed: %s",
+                    session_id,
+                    exc,
+                )
 
         # 3.3.3: Cancel any in-flight DeltaAggregator batch timer.
         # ``flush()`` cancels ``_timer`` and emits any pending batch.
@@ -738,6 +927,7 @@ class KernelService:
         except Exception as exc:
             errors.append(exc)
             logger.warning("destroy_session(%s): Fabric shutdown failed: %s", session_id, exc)
+        self._log_lifecycle("P3_teardown_complete", f"session:{session_id}")
 
         # 3.3.2: Reverse P2 -- Stop SessionState. ``stop()`` is synchronous and
         # performs SQLite WAL checkpoint writes; offload to a worker thread
@@ -751,6 +941,7 @@ class KernelService:
         except Exception as exc:
             errors.append(exc)
             logger.warning("destroy_session(%s): SessionState stop failed: %s", session_id, exc)
+        self._log_lifecycle("P2_teardown_complete", f"session:{session_id}")
 
         # Issue 2.4.3 #10: Graceful drain — yield to event loop so any
         # in-flight bus callbacks complete before closing the bus.
@@ -768,6 +959,7 @@ class KernelService:
         except Exception as exc:
             errors.append(exc)
             logger.warning("destroy_session(%s): Router close failed: %s", session_id, exc)
+        self._log_lifecycle("P1_teardown_complete", f"session:{session_id}")
 
         if errors:
             logger.error(
@@ -1117,6 +1309,7 @@ class KernelService:
         self._bus = bus
         self._router = BusFactory.create_mailbox_router()
         self._async_bus = AsyncBusBridge(bus)
+        self._log_lifecycle("S1_complete", "Bus+Router+AsyncBusBridge")
 
         # ── S2: ModelHub (with auxiliary ports + declarative provider load) ──
         # P2.3: replaces the prior ``create_with_ports`` + private
@@ -1197,6 +1390,7 @@ class KernelService:
             self._bus.close()
             self._router.close()
             raise
+        self._log_lifecycle("S2_complete", "ModelHub")
 
         # ── S2.5: Unified HIL service (E7.M1.1) ───────────────
         # Constructed after S2 (ModelHub) and before S4 (Bridge) so all four
@@ -1237,6 +1431,9 @@ class KernelService:
         else:
             self._hil_service = None
             logger.info("HIL: enable_hil_service=False — subsystems get None hil_port")
+            self._log_lifecycle("S2.5_skipped", "HumanInTheLoopService")
+        if self._hil_service is not None:
+            self._log_lifecycle("S2.5_complete", "HumanInTheLoopService")
 
         # ── S2.6: k1.selfmodel bundle (M5.E3.I2) ──────────────
         # Constructed after S2.5 HIL and before S4 Bridge so the
@@ -1270,6 +1467,9 @@ class KernelService:
         else:
             self._self_model_bundle = None
             logger.debug("selfmodel: enable_self_model=False; skipping S2.6")
+            self._log_lifecycle("S2.6_skipped", "SelfModelServiceBundle")
+        if self._self_model_bundle is not None:
+            self._log_lifecycle("S2.6_complete", "SelfModelServiceBundle")
 
         # ── S4: Bridge (kernel-level IBridgePort) ─────────
         # S4 before S3 because Fabric needs a bridge adapter.
@@ -1293,6 +1493,13 @@ class KernelService:
                     "K1 Kernel S4: bridge=LIVE (HttpBridgeClient → %s).",
                     self._config.k0_endpoint,
                 )
+                # E15.10: subscribe to tool_state.changed.v1 on K0 and
+                # forward to the K1 bus so the web shell can push
+                # "tool_refresh" to the browser.
+                asyncio.create_task(
+                    self._consume_tool_sse(),
+                    name="k1-tool-sse-consumer",
+                )
             elif self._config.bridge_enabled:
                 self._bridge = SinkBridgeAdapter(
                     outbox_path=self._config.bridge_outbox_path,
@@ -1309,6 +1516,7 @@ class KernelService:
             self._bus.close()
             self._router.close()
             raise
+        self._log_lifecycle("S4_complete", type(self._bridge).__name__)
 
         # ── P1.1/P1.4: SessionRoutingStateReader (shared by S3, S5, S6) ──
         session_routing_reader = SessionRoutingStateReader(
@@ -1356,6 +1564,7 @@ class KernelService:
             self._bus.close()
             self._router.close()
             raise
+        self._log_lifecycle("S3_complete", "CapabilityFabric")
 
         # ── S5: Orchestrator ─────────────────────────────
         try:
@@ -1386,6 +1595,7 @@ class KernelService:
             orch_storage = WorkflowStorageAdapter(
                 storage=SQLiteWorkflowAdapter(db_path=self._config.workflow_db_path),
             )
+            self._orch_storage = orch_storage
 
             self._orchestrator = await OrchestratorFactory.create_production(
                 config=orch_config,
@@ -1400,11 +1610,16 @@ class KernelService:
                 hil_port=self._hil_service,  # E7.M1.1
             )
         except Exception:
+            try:
+                self._close_orchestrator_storage()
+            except Exception:
+                pass
             await self._shared_fabric.shutdown()
             await self._bridge.disconnect()
             self._bus.close()
             self._router.close()
             raise
+        self._log_lifecycle("S5_complete", "OrchestratorService")
 
         # ── S6: Planner ──────────────────────────────────
         try:
@@ -1449,11 +1664,16 @@ class KernelService:
             )
         except Exception:
             await self._orchestrator.shutdown()
+            try:
+                self._close_orchestrator_storage()
+            except Exception:
+                pass
             await self._shared_fabric.shutdown()
             await self._bridge.disconnect()
             self._bus.close()
             self._router.close()
             raise
+        self._log_lifecycle("S6_complete", "PlannerAgent")
 
         # ── S6b: Cross-wire Orchestrator↔Planner ─────────
         planner_cb = CircuitBreaker(
@@ -1466,6 +1686,7 @@ class KernelService:
                 cb_planner=planner_cb,
             )
         )
+        self._log_lifecycle("S6b_complete", "Orchestrator↔Planner")
 
         # ── S7: Start Planner Background Task ─────────────
         # Note: PlannerFactory now wires mailbox.set_pipeline_controller()
@@ -1485,12 +1706,7 @@ class KernelService:
             self._verify_planner_orchestrator_crosswire()
             self._verify_planner_mailbox_binding()
             self._verify_planner_task_running()
-
-            # ── P4B.8: Shared Phase1 pipeline ────────────────
-            # Built after S7 because it does not depend on any earlier
-            # tier 1 component. Construction is cheap (lazy_load defers
-            # the ~20s familyos_ultrabert model load to first analyze()).
-            self._phase1_pipeline = self._build_shared_phase1_pipeline()
+            self._log_lifecycle("S7_complete", "planner-agent")
 
             # ── S8: Family-tools (M15) ───────────────────────
             # Bootstrap the FamilyToolsBundle when enabled. Registers
@@ -1498,6 +1714,9 @@ class KernelService:
             # the K1FamilyStore SQLite WAL connection. Off by default.
             if getattr(self._config, "enable_family_tools", False):
                 self._family_tools = self._bootstrap_family_tools()
+                self._log_lifecycle("S8_complete", "FamilyToolsBundle")
+            else:
+                self._log_lifecycle("S8_skipped", "FamilyToolsBundle")
         except Exception:
             # S7 or verification failed — tear down S6 through S1.
             if self._planner_task is not None:
@@ -1509,6 +1728,10 @@ class KernelService:
                 self._planner_task = None
             await self._planner.stop()
             await self._orchestrator.shutdown()
+            try:
+                self._close_orchestrator_storage()
+            except Exception:
+                pass
             await self._shared_fabric.shutdown()
             await self._bridge.disconnect()
             self._bus.close()
@@ -1522,7 +1745,54 @@ class KernelService:
             raise
 
         self._running = True
+        self._log_lifecycle("startup_complete", "KernelService")
         logger.info("Tier 1 startup complete — all shared components wired")
+
+    async def _consume_tool_sse(self) -> None:
+        """E15.10: Stream ``tool_state.changed.v1`` from K0 and publish to K1 bus.
+
+        Runs as a background ``asyncio.create_task``.  Only started when the
+        bridge is a :class:`LiveBridgeAdapter` (i.e. ``K0_ENDPOINT`` is set).
+        Each SSE data frame is published to the K1 bus under
+        ``TOPIC_TOOL_STATE_CHANGED`` so :class:`UiCoordinator` can forward a
+        ``tool_refresh`` event to the browser over the WebSocket.
+
+        The loop exits cleanly on :class:`asyncio.CancelledError` (shutdown).
+        Transient errors (network blips) are caught and retried after 5 s.
+        """
+        import json
+
+        from k1.bus.envelope import Envelope
+        from k1.concierge.bus.topics import TOPIC_TOOL_STATE_CHANGED
+
+        space_id = getattr(self._config, "selfmodel_space_id", "") or "family:default"
+        logger.info("E15.10: starting tool-SSE consumer (space=%s)", space_id)
+
+        while True:
+            try:
+                from k1.kernel.adapters.live_bridge_adapter import LiveBridgeAdapter
+
+                if not isinstance(self._bridge, LiveBridgeAdapter):
+                    return  # bridge swapped out; stop silently
+                async for event in self._bridge.subscribe_sse(
+                    topics=["tool_state.changed.v1"],
+                    space_id=space_id,
+                ):
+                    payload: dict = event if isinstance(event, dict) else {"raw": str(event)}
+                    env = Envelope(
+                        topic=TOPIC_TOOL_STATE_CHANGED,
+                        payload=json.dumps(payload).encode(),
+                    )
+                    try:
+                        self._bus.publish(env)
+                    except Exception:
+                        logger.debug("_consume_tool_sse: bus.publish failed", exc_info=True)
+            except asyncio.CancelledError:
+                logger.info("E15.10: tool-SSE consumer cancelled — shutting down")
+                return
+            except Exception:
+                logger.warning("E15.10: tool-SSE consumer error; retrying in 5 s", exc_info=True)
+                await asyncio.sleep(5)
 
     def _bootstrap_family_tools(self) -> Any:
         """Build the FamilyToolsBundle (M15) and register it with Fabric.
@@ -1536,7 +1806,7 @@ class KernelService:
         """
         from importlib import import_module
 
-        from k1.tools.family import NullSsePublisher, bootstrap_family_tools
+        from k1.tools.family import bootstrap_family_tools
 
         service_classes: list[type] = []
         for path in getattr(self._config, "family_tool_service_paths", ()) or ():
@@ -1550,11 +1820,35 @@ class KernelService:
             cls = getattr(mod, cls_name)
             service_classes.append(cls)
 
+        # E15.10: wire BusSsePublisher so every family-tool write publishes
+        # k1.tool_state.changed.v1 to the K1 bus.  The coordinator
+        # subscribes that topic and broadcasts a "tool_refresh" WebSocket
+        # message so the browser reloads the affected adapter view.
+        from k1.concierge.bus.topics import TOPIC_TOOL_STATE_CHANGED
+        from k1.tools.family.sse_adapters import BusSsePublisher
+
+        def _sse_forward(topic: str, payload: dict) -> None:  # type: ignore[type-arg]
+            import json
+
+            from k1.bus.envelope import Envelope
+
+            env = Envelope(
+                topic=TOPIC_TOOL_STATE_CHANGED,
+                payload=json.dumps(payload).encode(),
+            )
+            try:
+                self._bus.publish(env)
+            except Exception:
+                logger.debug("BusSsePublisher bus.publish failed", exc_info=True)
+
+        sse_pub = BusSsePublisher(forward=_sse_forward)
+
         bundle = bootstrap_family_tools(
             fabric=self._shared_fabric,
-            sse_publisher=NullSsePublisher(),
+            sse_publisher=sse_pub,
             db_path=getattr(self._config, "family_tools_db_path", "./data/k1_family.db"),
             service_classes=tuple(service_classes),
+            default_space_id=getattr(self._config, "selfmodel_space_id", "") or "",
         )
         logger.info(
             "S8: family-tools bundle ready (adapters=%s)",
@@ -1563,68 +1857,12 @@ class KernelService:
         return bundle
 
     def _build_shared_phase1_pipeline(self) -> Any:
-        """Build the process-wide Phase1 classification pipeline (P4B.8).
+        """Deprecated -- Phase 1 has been removed (returns None).
 
-        Called once from ``_startup_tier1``. The returned pipeline is shared
-        across every session via ``PortBundle.classification``.
-
-        Selection by ``KernelConfig.phase1_pipeline``:
-          * ``"stub"``  → ``StubPhase1Pipeline`` (keyword-based, no model load)
-          * ``"ultrabert"`` → ``UltraBERTPhase1Pipeline`` wrapping the
-            singleton ``K1UltraBERTAdapter``. The adapter forwards
-            ``lazy_load=True`` (default) to ``familyos_ultrabert.Client`` so
-            the ~20s model load happens on first ``analyze()`` call, not at
-            boot. ``warmup_on_startup=True`` triggers the (cheap, in-process)
-            warmup path that ``Client`` runs after first load.
+        Kept as a no-op shim to avoid breaking out-of-tree callers during
+        the deprecation window. Will be removed in a future release.
         """
-        from k1.concierge.config.loader import get_config
-        from k1.concierge.fsm.phase1 import KeywordPhase1Pipeline, StubPhase1Pipeline
-
-        pipeline_kind = getattr(self._config, "phase1_pipeline", "stub").lower()
-        if pipeline_kind != "ultrabert":
-            logger.info("Phase1 pipeline: stub (keyword-based)")
-            return StubPhase1Pipeline()
-
-        # ultrabert path
-        from k1.concierge.fsm.ultrabert_adapter import K1UltraBERTAdapter
-        from k1.concierge.fsm.ultrabert_phase1 import UltraBERTPhase1Pipeline
-
-        phase1_cfg = get_config().phase1
-        adapter = K1UltraBERTAdapter.get_instance(
-            warmup=bool(getattr(self._config, "phase1_warmup_on_startup", False))
-            or phase1_cfg.warmup_on_startup,
-            warmup_rounds=phase1_cfg.warmup_rounds,
-            lazy_load=phase1_cfg.lazy_load,
-            backend=phase1_cfg.backend,
-            device=phase1_cfg.device,
-            cache_size=phase1_cfg.cache_size,
-            cache_ttl_s=phase1_cfg.cache_ttl_s,
-        )
-        # 4.3.2: Availability gate. If the UltraBERT model failed to
-        # load (missing weights, unsupported backend, GPU OOM, etc.),
-        # fall back to the richer KeywordPhase1Pipeline rather than the
-        # minimal StubPhase1Pipeline. Surface that we degraded so ops
-        # has a clear signal in logs.
-        if not adapter.is_available():
-            logger.warning(
-                "Phase1 pipeline: ultrabert requested but adapter unavailable; "
-                "falling back to KeywordPhase1Pipeline (richer keyword baseline)"
-            )
-            return KeywordPhase1Pipeline()
-
-        pipeline = UltraBERTPhase1Pipeline(
-            adapter=adapter,
-            fallback=KeywordPhase1Pipeline() if phase1_cfg.degradation_fallback_enabled else None,
-            config=phase1_cfg,
-        )
-        logger.info(
-            "Phase1 pipeline: ultrabert (singleton, lazy_load=%s, warmup=%s, "
-            "adapter_available=%s)",
-            phase1_cfg.lazy_load,
-            phase1_cfg.warmup_on_startup,
-            adapter.is_available(),
-        )
-        return pipeline
+        return None
 
     async def _cleanup_tier1_partial(self) -> None:
         """Issue 2.4.3 #3: Clean up any Tier 1 components assigned to self.
@@ -1654,6 +1892,12 @@ class KernelService:
         if self._orchestrator is not None:
             try:
                 await self._orchestrator.shutdown()
+            except Exception:
+                pass
+
+        if self._orch_storage is not None:
+            try:
+                self._close_orchestrator_storage()
             except Exception:
                 pass
 
@@ -1724,8 +1968,8 @@ class KernelService:
         self._shared_fabric = None
         self._bridge = None
         self._orchestrator = None
+        self._orch_storage = None
         self._planner = None
-        self._phase1_pipeline = None
         self._hil_service = None  # E7.M1.1
         self._self_model_bundle = None  # M5.E3.I2
 
@@ -1791,11 +2035,16 @@ class KernelService:
         NOT added to ``_sessions`` until fully assembled.
 
         Steps:
-            P1: Per-session Bus + MailboxRouter + front/back Mailboxes
+            P1: Per-session Bus (BridgeAwareLocalBus-wrapped) + MailboxRouter + front/back Mailboxes
             P2–P7: Remaining session components (Epic 2.3 issues)
         """
         # ── P1: Per-session Bus + Mailboxes ───────────────────
-        session_bus = BusFactory.create_local_ordered(capture=False)
+        # R10 mitigation (I2.7.5 / I2.7.11): wrap the raw bus with
+        # BridgeAwareLocalBus so any direct publish on a cross-kernel
+        # bridge topic raises UnknownContractError instead of silently
+        # bypassing the bridge registry.
+        _raw_session_bus = BusFactory.create_local_ordered(capture=False)
+        session_bus = BridgeAwareLocalBus(_raw_session_bus)
         session_router = BusFactory.create_mailbox_router()
         # Use canonical ACTOR_FRONT / ACTOR_BACK constants: the router is
         # already per-session (so names don't need a session_id suffix),
@@ -1805,6 +2054,50 @@ class KernelService:
 
         front_mailbox = session_router.register(ACTOR_FRONT)
         back_mailbox = session_router.register(ACTOR_BACK)
+        self._log_lifecycle("P1_complete", f"session:{session_id}")
+
+        # ── P1.5: Per-session HIL service ─────────────────────
+        # HIL events (k1.hil.request.v1 / k1.hil.response.v1) are scoped to
+        # a conversation. The Concierge FSM, per-session Fabric, SelfModel
+        # handle and UI coordinator all subscribe on ``session_bus``. The
+        # kernel-level HIL service (S2.5) is bound to the kernel bus and
+        # serves kernel-level callers (Orchestrator, Planner, shared
+        # Fabric); it MUST NOT be used by session-scoped subsystems or
+        # their HIL requests will be published on the kernel bus where
+        # nothing is listening (root cause of the silent HIL-never-reaches-
+        # UI bug).
+        session_hil_service: Any | None = None
+        if self._config.enable_hil_service:
+            try:
+                session_hil_event_port = KernelHILEventAdapter(
+                    session_bus,
+                    loop=asyncio.get_running_loop(),
+                )
+                session_hil_service = HumanInTheLoopService(
+                    event_port=session_hil_event_port,
+                    ledger=HILLedgerAdapter(None),
+                    suspension_mgr=None,
+                    safety_policy=SafetyBandPolicy(),
+                    config=HILConfig(
+                        max_clarification_rounds=self._config.hil_max_clarification_rounds,
+                        clarification_timeout_ms=self._config.hil_clarification_timeout_ms,
+                        approval_timeout_ms=self._config.hil_approval_timeout_ms,
+                        needs_human_timeout_ms=self._config.hil_needs_human_timeout_ms,
+                        override_timeout_ms=self._config.hil_override_timeout_ms,
+                        capability_gate_timeout_ms=self._config.hil_capability_gate_timeout_ms,
+                        enable_audit_topic=self._config.hil_enable_audit_topic,
+                        enable_llm_synthesis=self._config.hil_enable_llm_synthesis,
+                    ),
+                    llm_port=None,
+                )
+                logger.info(
+                    "HIL (session=%s): HumanInTheLoopService bound to session_bus",
+                    session_id,
+                )
+            except Exception:
+                session_bus.close()
+                session_router.close()
+                raise
 
         # ── P2: SessionState (per-session) ─────────────────────
         ssm = None
@@ -1826,6 +2119,7 @@ class KernelService:
             ss_lifecycle.bind_manager(ssm)
             ssm.start()
             async_ssm = AsyncSSMBridge(ssm)
+            self._log_lifecycle("P2_complete", f"session:{session_id}")
         except Exception:
             session_bus.close()
             session_router.close()
@@ -1841,6 +2135,16 @@ class KernelService:
             session_bridge_client = self._bridge.get_client()
             session_bridge_adapter = BridgeConnectionAdapter(client=session_bridge_client)
 
+            # Pass shared_fabric.registry so the per-session Fabric reuses the
+            # same CapabilityRegistry that already has all 41 family-tool
+            # contracts registered.  ModuleLoader will attempt to re-add the
+            # 24 k1\contracts files but DuplicateCapabilityError is silently
+            # swallowed, so this is safe.
+            _shared_registry = (
+                getattr(self._shared_fabric, "registry", None)
+                if self._shared_fabric is not None
+                else None
+            )
             session_fabric = FabricFactory.create_with_ports(
                 state_reader=session_state_reader,
                 event_port=session_event_port,
@@ -1849,8 +2153,32 @@ class KernelService:
                 prompt_system=session_prompt_sys,
                 delta_bus=session_delta_bus,
                 production_mode=True,
-                hil_port=self._hil_service,  # E7.M1.1: per-session fabric gate
+                hil_port=session_hil_service,  # P1.5: session-bus-bound HIL
+                capability_registry=_shared_registry,
             )
+
+            # P3.1: Re-register the singleton NativeToolProvider with this
+            # per-session fabric.  FabricFactory only registers the seven
+            # built-in handlers (MCP/WASM/BRIDGE/AGENT/WORKFLOW/CONCIERGE/
+            # LOCAL_STUB) on the new provider_factory.  The ``LOCAL``
+            # handler (k1 native family-tools, provider_type=NATIVE_PROVIDER_TYPE)
+            # is created during S8 family-tools bootstrap and only registered
+            # on the SHARED fabric's provider_factory.  Without this hook
+            # every capability resolving to ``provider=k1_native_tools``
+            # fails with ``UnsupportedProviderTypeError: LOCAL`` at execute
+            # time, so the actual tool effects never happen (root cause of
+            # the "task says added but never appears in UI" bug).
+            if self._family_tools is not None:
+                native_provider = getattr(self._family_tools, "native_provider", None)
+                if native_provider is not None:
+                    from k1.tools.family.bootstrap import register_provider_with_fabric
+
+                    logger.info(
+                        "P3.1: registering NativeToolProvider on session fabric (session=%s)",
+                        session_id,
+                    )
+                    register_provider_with_fabric(session_fabric, native_provider)
+            self._log_lifecycle("P3_complete", f"session:{session_id}")
         except Exception:
             ssm.stop()
             session_bus.close()
@@ -1874,7 +2202,7 @@ class KernelService:
                     actor_id=actor_id,
                     device_id=device_meta,
                     situation_kind=self._config.selfmodel_situation_kind,
-                    hil_service=self._hil_service,
+                    hil_service=session_hil_service,
                 )
                 logger.debug(
                     "selfmodel P3.5 wired session=%s actor=%s device=%s",
@@ -1916,7 +2244,6 @@ class KernelService:
                 output=session_output,
                 state=session_state_port,
                 llm=self._model_hub,
-                classification=self._phase1_pipeline,
                 dispatch=session_dispatch,
                 # P5.2 / MS-3c: Wire recall through the typed paired-contract
                 # surface (``recall.request.v1`` / ``recall.response.v1``).
@@ -1939,8 +2266,9 @@ class KernelService:
                 back_mailbox=back_mailbox,
                 ports=port_bundle,
                 config=concierge_config,
-                hil_port=self._hil_service,  # E7.M1.1
+                hil_port=session_hil_service,  # P1.5: session-bus-bound HIL
             )
+            self._log_lifecycle("P4_complete", f"session:{session_id}")
         except Exception:
             # P3 Fabric has no teardown; clean up P2 + P1.
             ssm.stop()
@@ -1986,6 +2314,7 @@ class KernelService:
                 health_port=mw_health,
                 config=mw_config,
             )
+            self._log_lifecycle("P5_complete", f"session:{session_id}")
         except Exception:
             # P4 Concierge not started yet — no stop needed.
             # P3 Fabric no teardown.  Clean up P2 + P1.
@@ -2078,4 +2407,5 @@ class KernelService:
             self_model=session_self_model,
         )
         self._sessions[session_id] = session
+        self._log_lifecycle("P6_complete", f"session:{session_id}")
         return session

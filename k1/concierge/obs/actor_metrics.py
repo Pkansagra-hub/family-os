@@ -211,13 +211,13 @@ class BackOutcome:
 
 # Tier budget limits (P3.4b: canonical buckets + legacy aliases).
 TIER_BUDGET_LIMITS: dict[str, int] = {
-    "simple": 5,
-    "plan": 15,
-    "crisis": 3,
-    "LOW": 5,
-    "MEDIUM": 15,
-    "HIGH": 15,
-    "CRISIS": 3,
+    "simple": 400,
+    "plan": 400,
+    "crisis": 400,
+    "LOW": 400,
+    "MEDIUM": 400,
+    "HIGH": 400,
+    "CRISIS": 400,
 }
 
 # Budget utilization thresholds

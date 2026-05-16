@@ -291,6 +291,109 @@ class SelfModelService:
     def set_communication_style(self, actor_id: str, style: str) -> None:
         self._record_typed_l3(actor_id, "communication_style", {"value": str(style)})
 
+    # ------------------------------------------------------------------
+    # Family-roster aliases (legacy unbucketed L3 key ``family_members``).
+    # The roster lives at ``L3_pattern["family_members"]`` as a list of
+    # dicts seeded from ``FamilyProfile``. ``add_member_alias`` mutates a
+    # single roster entry's ``aliases`` list so the LLM resolves casual
+    # references (e.g. "the kiddo" -> Riley) on the next prompt cycle.
+    # ------------------------------------------------------------------
+    def add_member_alias(
+        self,
+        actor_id: str,
+        *,
+        member_id: str,
+        alias: str,
+    ) -> bool:
+        """Append ``alias`` to the named member's aliases in ``actor_id``'s L3.
+
+        Returns ``True`` if the alias was newly added, ``False`` if it was
+        already present (or no matching roster entry exists, which is
+        treated as a silent no-op so callers don't need to pre-check).
+
+        - ``actor_id``: the viewer whose self-model holds the roster.
+        - ``member_id``: the actor_id of the family member being aliased.
+        - ``alias``: the casual/nickname string to record.
+
+        Raises:
+            ValueError: on empty arguments.
+            UnknownActorError: if ``actor_id`` is unseeded.
+        """
+        if not actor_id:
+            raise ValueError("actor_id must be non-empty")
+        if not member_id:
+            raise ValueError("member_id must be non-empty")
+        alias_clean = (alias or "").strip()
+        if not alias_clean:
+            raise ValueError("alias must be a non-empty string")
+        # Self-alias path: if member_id == actor_id, write to L3.aliases
+        # (the viewer's own nickname list) rather than to family_members.
+        if member_id == actor_id:
+            return self._append_self_alias(actor_id, alias_clean)
+
+        with self._lock:
+            current, _ = self._store.read_self(actor_id)
+            if current is None:
+                raise UnknownActorError(f"cannot add alias for unknown actor {actor_id!r}")
+            roster_raw = current.L3_pattern.get("family_members") or []
+            if not isinstance(roster_raw, list):
+                return False
+            new_roster: list[dict] = []
+            changed = False
+            matched = False
+            for entry in roster_raw:
+                if not isinstance(entry, dict):
+                    new_roster.append(entry)
+                    continue
+                if entry.get("member_id") != member_id:
+                    new_roster.append(entry)
+                    continue
+                matched = True
+                aliases = list(entry.get("aliases") or [])
+                if alias_clean in aliases:
+                    new_roster.append(entry)
+                    continue
+                aliases.append(alias_clean)
+                updated_entry = dict(entry)
+                updated_entry["aliases"] = aliases
+                new_roster.append(updated_entry)
+                changed = True
+            if not matched or not changed:
+                return False
+            merged = dict(current.L3_pattern)
+            merged["family_members"] = new_roster
+            updated = replace(
+                current,
+                L3_pattern=merged,
+                composed_at_ms=_now_ms(),
+            )
+            res = self._store.write_self(updated, writer_id=SELF_MODEL_WRITER_ID)
+            if not res.accepted:  # pragma: no cover - allowlist misconfig
+                raise RuntimeError(f"projection store rejected alias write: {res.reason!r}")
+            return True
+
+    def _append_self_alias(self, actor_id: str, alias: str) -> bool:
+        with self._lock:
+            current, _ = self._store.read_self(actor_id)
+            if current is None:
+                raise UnknownActorError(f"cannot add self-alias for unknown actor {actor_id!r}")
+            existing_raw = current.L3_pattern.get("aliases") or []
+            aliases = list(existing_raw) if isinstance(existing_raw, list) else []
+            if alias in aliases:
+                return False
+            aliases.append(alias)
+            merged = dict(current.L3_pattern)
+            merged["aliases"] = aliases
+            updated = replace(
+                current,
+                L3_pattern=merged,
+                composed_at_ms=_now_ms(),
+            )
+            res = self._store.write_self(updated, writer_id=SELF_MODEL_WRITER_ID)
+            if not res.accepted:  # pragma: no cover - allowlist misconfig
+                raise RuntimeError(f"projection store rejected alias write: {res.reason!r}")
+            return True
+
     def get_pattern_shape(self, actor_id: str) -> L3PatternShape:
         """Return the actor's typed ``L3PatternShape``.
 

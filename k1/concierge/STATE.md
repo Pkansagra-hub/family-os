@@ -97,7 +97,7 @@ CLARIFYING_USER:
 CLARIFYING_WORKER:
   user.input               → CLARIFYING_WORKER (same-turn HITL reply)
   task.resume              → COMPANIONING
-  response.final           → (decided by response_final decision table)
+  response.final           → CLARIFYING_WORKER while task active; LISTENING when no active task remains
 
 CANCELLING:
   task.failed              → DELIVERING

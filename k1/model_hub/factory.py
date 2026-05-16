@@ -133,6 +133,10 @@ class _HubCore:
         """
         self._registry.register(manifest, plugin)
         self._router._dispatcher.register_plugin(manifest.provider_id, plugin)
+        self._router._dispatcher._circuit_mgr.register_provider(
+            manifest.provider_id,
+            manifest.circuit_breaker,
+        )
 
     async def execute(self, request: HubRequest) -> HubResponse:
         return await self._router.route(request)
@@ -171,6 +175,45 @@ class _HubCore:
     async def health(self) -> HubHealthReport:
         report = self._health.check_health()
         return HubHealthReport(status=report.status)
+
+    def describe_routes(self) -> list[dict]:
+        """Return a snapshot of registered model providers and circuit-breaker states.
+
+        Intended exclusively for PORT-IDENTITY probes in
+        ``tests/integration/k1/live/``.  Never call from production code.
+
+        Returns:
+            List of dicts with keys:
+                provider_id:  Provider identifier (str).
+                capabilities: List of CapabilityType enum/string values.
+                models:       List of model id strings.
+                cb_state:     CircuitBreaker state string or None.
+                plugin_class: Runtime plugin type name or None.
+        """
+        results: list[dict] = []
+        dispatcher = self._router._dispatcher
+        circuit_mgr = getattr(dispatcher, "_circuit_mgr", None)
+        plugins: dict = getattr(dispatcher, "_plugins", {})
+
+        for info in self._registry.list_providers():
+            pid = info.provider_id
+            cb_state: str | None = None
+            if circuit_mgr is not None:
+                try:
+                    cb_state = str(circuit_mgr.get_state(pid))
+                except Exception:
+                    cb_state = None
+            plugin = plugins.get(pid)
+            results.append(
+                {
+                    "provider_id": pid,
+                    "capabilities": [str(c) for c in (info.capabilities or [])],
+                    "models": [m.id for m in (info.models or [])],
+                    "cb_state": cb_state,
+                    "plugin_class": type(plugin).__name__ if plugin is not None else None,
+                }
+            )
+        return results
 
     async def shutdown(self) -> None:
         """Drain registered plugins. Idempotent. Never raises.
@@ -346,7 +389,7 @@ class ModelHubFactory:
 
         # Wire services
         registry = ProviderRegistry(cfg)
-        circuit_mgr = CircuitBreakerManager()
+        circuit_mgr = CircuitBreakerManager(event_port=event_port)
         rate_limiter = RateLimiter(
             default_headroom_pct=cfg.rate_limit_headroom_pct,
         )
@@ -368,6 +411,7 @@ class ModelHubFactory:
             rate_limiter=rate_limiter,
             credential_port=credential_port,
             plugins=plugins,
+            event_port=event_port,
         )
 
         audit_logger = AuditLogger()
@@ -451,7 +495,7 @@ class ModelHubFactory:
         )
 
         registry = ProviderRegistry(cfg)
-        circuit_mgr = CircuitBreakerManager()
+        circuit_mgr = CircuitBreakerManager(event_port=event_port)
         rate_limiter = RateLimiter(
             default_headroom_pct=cfg.rate_limit_headroom_pct,
         )
@@ -469,6 +513,7 @@ class ModelHubFactory:
             rate_limiter=rate_limiter,
             credential_port=credential_port,
             plugins=plugins or {},
+            event_port=event_port,
         )
 
         router = RequestRouter(

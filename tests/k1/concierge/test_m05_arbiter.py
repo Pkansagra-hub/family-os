@@ -17,6 +17,7 @@ from k1.concierge.fsm.arbiter import (
     _DEFAULT_CANCEL_KEYWORDS,
     _DEFAULT_DEFER_KEYWORDS,
     ArbiterDecision,
+    ArbiterInput,
     ArbiterResult,
     ConversationArbiter,
     InflightContext,
@@ -25,7 +26,6 @@ from k1.concierge.fsm.arbiter import (
     domain_overlap,
     entity_overlap,
 )
-from k1.concierge.fsm.phase1 import Phase1Result
 
 # ===================================================================
 # Fixtures
@@ -40,9 +40,9 @@ def _phase1(
     entities: list | None = None,
     emotion: str = "neutral",
     emotion_conf: float = 0.5,
-) -> Phase1Result:
-    """Create a Phase1Result with sensible defaults."""
-    return Phase1Result(
+) -> ArbiterInput:
+    """Create an ArbiterInput with sensible defaults."""
+    return ArbiterInput(
         intent_classification=intent,
         domain_context=domain,
         safety_band=safety,
@@ -138,7 +138,7 @@ class TestArbiterResult:
             target_task_id="task-42",
             modification_params=None,
             routing_metadata={"foo": "bar"},
-            phase1=p1,
+            inputs=p1,
         )
         d = r.to_dict()
         assert d["decision"] == "cancel"
@@ -146,7 +146,7 @@ class TestArbiterResult:
         assert d["target_task_id"] == "task-42"
         assert d["modification_params"] is None
         assert d["routing_metadata"] == {"foo": "bar"}
-        assert "intent" in d["phase1"]
+        assert "intent" in d["inputs"]
 
     def test_from_dict_round_trip(self):
         p1 = _phase1(intent="modify", domain="health", safety="AMBER")
@@ -156,7 +156,7 @@ class TestArbiterResult:
             target_task_id="t-1",
             modification_params={"nights": 3},
             routing_metadata={"key": "val"},
-            phase1=p1,
+            inputs=p1,
         )
         d = original.to_dict()
         rebuilt = ArbiterResult.from_dict(d)
@@ -166,9 +166,9 @@ class TestArbiterResult:
         assert rebuilt.target_task_id == "t-1"
         assert rebuilt.modification_params == {"nights": 3}
         assert rebuilt.routing_metadata["key"] == "val"
-        assert rebuilt.phase1.intent_classification == "modify"
-        assert rebuilt.phase1.domain_context == "health"
-        assert rebuilt.phase1.safety_band == "AMBER"
+        assert rebuilt.inputs.intent_classification == "modify"
+        assert rebuilt.inputs.domain_context == "health"
+        assert rebuilt.inputs.safety_band == "AMBER"
 
     def test_importable_from_module(self):
         from k1.concierge.fsm.arbiter import ArbiterDecision as AD
@@ -827,11 +827,11 @@ class TestEdgeCases:
             assert result.target_task_id is None, f"'{kw}' should cancel all"
 
     def test_phase1_passthrough(self):
-        """ArbiterResult carries the original Phase1Result."""
+        """ArbiterResult carries the original ArbiterInput."""
         p1 = _phase1(intent="general", domain="food", safety="AMBER")
         ctx = _ctx([])
         result = self.arbiter.classify("hello", p1, ctx)
-        assert result.phase1 is p1
+        assert result.inputs is p1
 
     def test_modification_params_only_on_modify(self):
         """modification_params is None for non-MODIFY decisions."""

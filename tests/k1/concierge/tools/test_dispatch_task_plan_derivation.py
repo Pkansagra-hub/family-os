@@ -6,7 +6,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from k1.concierge.task.complexity import ComplexityTier
 from k1.concierge.tools.dispatcher import create_back_dispatcher
 from k1.concierge.tools.implementations import ToolContext, execute_dispatch_task
 
@@ -39,14 +38,23 @@ class TestDispatchTaskPlanDerivation:
         assert result.data["_dispatch"]["plan"] is True
         assert result.data["_dispatch"]["tier"] == "MEDIUM"
 
-    def test_multi_intent_auto_escalates_to_plan(self):
+    def test_multi_intent_bundle_stays_low_without_plan(self):
         result = execute_dispatch_task(
             {"intents": [{"action": "search"}, {"action": "summarize"}]},
             self._ctx(),
         )
         assert result.status == "ok"
+        assert result.data["_dispatch"]["plan"] is False
+        assert result.data["_dispatch"]["tier"] == "LOW"
+
+    def test_explicit_high_complexity_routes_high(self):
+        result = execute_dispatch_task(
+            {"intents": [{"action": "research"}], "complexity": "HIGH"},
+            self._ctx(),
+        )
+        assert result.status == "ok"
         assert result.data["_dispatch"]["plan"] is True
-        assert result.data["_dispatch"]["tier"] == "MEDIUM"
+        assert result.data["_dispatch"]["tier"] == "HIGH"
 
     def test_depends_on_auto_escalates_to_plan(self):
         result = execute_dispatch_task(
@@ -103,17 +111,18 @@ class TestDispatchTaskPlanDerivation:
 
 
 class TestBackDispatcherRebind:
-    """`_maybe_rebind_back_dispatcher` upgrades dispatcher per task tier."""
+    """`_maybe_rebind_back_dispatcher` creates a fresh dispatcher per task tier."""
 
     def _ctx(self):
         return ToolContext(session_manager=MagicMock())
 
-    def test_rebind_low_to_simple_no_op(self):
+    def test_rebind_low_creates_fresh_simple_dispatcher(self):
         from k1.concierge.actors.back import _maybe_rebind_back_dispatcher
 
         d = create_back_dispatcher(tier="simple", ctx=self._ctx())
         rebound = _maybe_rebind_back_dispatcher(d, "LOW", bus=MagicMock())
-        assert rebound is d
+        assert rebound is not d
+        assert rebound.tier == "simple"
 
     def test_rebind_medium_upgrades_to_plan(self):
         from k1.concierge.actors.back import _maybe_rebind_back_dispatcher
@@ -132,12 +141,13 @@ class TestBackDispatcherRebind:
         assert rebound.tier == "plan"
         assert "execute_workflow" in rebound.allowlist
 
-    def test_rebind_unknown_tier_falls_back_to_simple(self):
+    def test_rebind_unknown_tier_creates_fresh_simple_dispatcher(self):
         from k1.concierge.actors.back import _maybe_rebind_back_dispatcher
 
         d = create_back_dispatcher(tier="simple", ctx=self._ctx())
         rebound = _maybe_rebind_back_dispatcher(d, "BOGUS", bus=MagicMock())
-        assert rebound is d
+        assert rebound is not d
+        assert rebound.tier == "simple"
 
     def test_rebind_preserves_ctx(self):
         from k1.concierge.actors.back import _maybe_rebind_back_dispatcher
@@ -146,6 +156,31 @@ class TestBackDispatcherRebind:
         d = create_back_dispatcher(tier="simple", ctx=ctx)
         rebound = _maybe_rebind_back_dispatcher(d, "MEDIUM", bus=MagicMock())
         assert rebound.ctx is ctx
+
+    def test_bind_tool_context_sets_safety_band(self):
+        from k1.concierge.actors.back import _bind_tool_context
+
+        ctx = self._ctx()
+        d = create_back_dispatcher(tier="simple", ctx=ctx)
+        _bind_tool_context(
+            d,
+            trace_id="trace-1",
+            session_id="sess-1",
+            task_id="task-1",
+            safety_band="RED",
+        )
+        assert ctx.safety_band == "RED"
+
+    def test_effective_task_safety_prefers_dispatch_payload(self):
+        from k1.concierge.actors.back import _effective_task_safety_band
+
+        assert (
+            _effective_task_safety_band(
+                {"safety_band": "AMBER"},
+                {"safety_band": "GREEN"},
+            )
+            == "AMBER"
+        )
 
 
 # =========================================================================
@@ -169,29 +204,6 @@ class TestKernelConfigToolTierRemoved:
 
         with pytest.raises(TypeError):
             KernelConfig(tool_tier="LOW")  # type: ignore[call-arg]
-
-
-# =========================================================================
-# Phase1Classified.derived_plan
-# =========================================================================
-
-
-class TestPhase1ClassifiedDerivedPlan:
-    """P3.4c: Phase1Classified gains a `derived_plan: bool` field."""
-
-    def test_default_derived_plan_false(self):
-        from k1.concierge.events.conversation import Phase1Classified
-
-        evt = Phase1Classified()
-        assert evt.derived_plan is False
-
-    def test_derived_plan_in_payload(self):
-        from k1.concierge.events.conversation import Phase1Classified
-
-        evt = Phase1Classified(derived_plan=True)
-        payload = evt.to_payload()
-        assert "derived_plan" in payload
-        assert payload["derived_plan"] is True
 
 
 # =========================================================================

@@ -170,6 +170,11 @@ async def delete(workflow_id: str) -> bool
 
 Backed by SQLite WAL. Path: `config.workflow_db_path = "data/orchestrator_workflows.db"`.
 
+The production `WorkflowStorageAdapter` also exposes a synchronous `close()` hook
+outside the async port contract. Construction roots that inject a real
+`SQLiteWorkflowAdapter` must call it during teardown so SQLite WAL/SHM sidecars and
+file handles are released after `OrchestratorService.shutdown()` completes.
+
 ### 3.8 `IAdminPort` (async)
 
 ```python

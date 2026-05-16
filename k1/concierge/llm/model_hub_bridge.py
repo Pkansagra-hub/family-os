@@ -184,6 +184,7 @@ class ModelHubPOCBridge:
             messages = [self._k1_msg_to_poc(m) for m in payload.messages]
 
         elif isinstance(payload, ToolCallPayload):
+            system_prompt = payload.system_prompt or ""
             messages = [self._k1_msg_to_poc(m) for m in payload.messages]
             tools = [self._k1_tool_to_poc(t) for t in payload.tools]
             tool_choice = payload.tool_choice
@@ -295,7 +296,16 @@ class ModelHubPOCBridge:
 
         if chunk.chunk_type == "done" and chunk.response:
             hub_resp = self._poc_to_hub_response(chunk.response, capability, trace_id)
-            return HubChunk(content="", done=True, metadata=hub_resp.metadata)
+            content = getattr(hub_resp.result, "text", "")
+            tool_calls = None
+            if isinstance(hub_resp.result, ToolCallResultSet):
+                tool_calls = hub_resp.result.tool_calls
+            return HubChunk(
+                content=content,
+                done=True,
+                metadata=hub_resp.metadata,
+                tool_calls=tool_calls,
+            )
 
         if chunk.chunk_type == "tool_call_delta" and chunk.tool_call_partial:
             tc = chunk.tool_call_partial

@@ -66,6 +66,16 @@ _VISIBLE_TO_FIELD = FieldSpec(
         "``visibility`` is ``named``.  Ignored otherwise."
     ),
 )
+_METADATA_FIELD = FieldSpec(
+    name="metadata",
+    type="object",
+    required=False,
+    description=(
+        "Opaque structured metadata for coordination. Use ``_semantic`` for "
+        "domain-agnostic prep notes, authority boundaries, future-weave hints, "
+        "or provenance; keep user-visible notes in ``notes``."
+    ),
+)
 
 
 # ---------------------------------------------------------------------------
@@ -150,6 +160,7 @@ CALENDAR_DEFINITION = ToolDefinition(
                 ),
                 FieldSpec(name="location", type="string", required=False),
                 FieldSpec(name="notes", type="string", required=False),
+                _METADATA_FIELD,
                 FieldSpec(
                     name="rrule",
                     type="string",
@@ -205,6 +216,7 @@ CALENDAR_DEFINITION = ToolDefinition(
                 FieldSpec(name="attendees", type="array", required=False),
                 FieldSpec(name="location", type="string", required=False),
                 FieldSpec(name="notes", type="string", required=False),
+                _METADATA_FIELD,
                 FieldSpec(name="rrule", type="string", required=False),
             ],
             result=[

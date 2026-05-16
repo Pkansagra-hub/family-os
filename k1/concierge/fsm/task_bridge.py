@@ -656,6 +656,8 @@ class TaskBridge:
             if restored is not None:
                 if entry.pending_hil:
                     restored.pending_hil = True
+                    if isinstance(entry.pending_hil, dict):
+                        restored.pending_hil_data = dict(entry.pending_hil)
                 restored.hil_suspensions_count = getattr(entry, "hil_suspensions_count", 0)
 
         self._total_dispatched = counts["dispatched"]

@@ -128,35 +128,41 @@ types. This means any object with the right methods is accepted — no hard impo
 ## 4. Dispatcher subscription lifecycle
 
 ### `TurnDispatcher.start()`
-1. `await event_port.subscribe("k1.session.turn.complete.v1", self._on_turn_complete)`
+
+1. `await event_port.subscribe("k1.session.turn.completed.v1", self._on_turn_complete)`
 2. Stores `Subscription(subscription_id, topic)` as `self._subscription`
 
 ### `TurnDispatcher.stop()`
+
 1. `await event_port.unsubscribe(self._subscription.subscription_id)`
 2. Clears `self._subscription = None`
 
 ### `SessionBatchDispatcher.start()`
+
 1. `await event_port.subscribe("k1.session.turn.completed.v1", self._on_turn_completed)`
-   (note: `completed`, with `d`)
 2. Stores subscription handle
 3. Launches `asyncio.create_task(self._idle_loop())` as `self._idle_task`
 
 ### `SessionBatchDispatcher.stop()`
+
 1. Sets `_stopping = True`
-2. `await self._flush_buffer()` — submits any buffered turns
+2. `self._idle_task.cancel()` + `await` (ignores `CancelledError`)
 3. `await event_port.unsubscribe(...)` — stops future turn events
-4. `self._idle_task.cancel()` + `await` (ignores `CancelledError`)
+4. `await self._flush_buffer(reason="session_end")` — submits any buffered turns
+5. `await self._pipeline.flush_pending()` — drains any leftover aggregator envelopes
 
 ---
 
 ## 5. `MemoryWriterService.start()` / `stop()`
 
 ### `start()`
+
 1. Asserts `not _started`
 2. `await self._dispatcher.start()` — subscribes to bus, launches idle task (SBD only)
 3. Sets `_started = True`
 
 ### `stop()`
+
 1. Asserts `_started`
 2. `await self._dispatcher.stop()` — flushes buffer, unsubscribes, cancels idle task
 3. Sets `_started = False`
@@ -167,10 +173,10 @@ No teardown of pipeline internals (no DB to close, no threads to join).
 
 ## 6. Internal call graph per bus event
 
-### `TurnDispatcher` path (`per_turn` mode):
+### `TurnDispatcher` path (`per_turn` mode)
 
-```
-bus event: k1.session.turn.complete.v1
+```text
+bus event: k1.session.turn.completed.v1
     ↓
 TurnDispatcher._on_turn_complete(raw_payload: dict)
     ↓ deserialize to TurnCompletePayload
@@ -180,7 +186,7 @@ TurnDispatcher._on_turn_complete(raw_payload: dict)
            ↓
            MemoryWriterPipeline.process(payload)
                ↓ Stage 1: RelevanceFilter.evaluate()
-               ↓ Stage 2: MWSessionReader.read_snapshot_enriched()
+               ↓ Stage 2: MWSessionReader.read_snapshot()
                ↓ Stage 3a: ContextBuilder.build()
                ↓ Stage 3b: MemoryWriterAgent.extract()
                ↓ Stage 4: ExtractionValidator.validate()
@@ -191,9 +197,9 @@ TurnDispatcher._on_turn_complete(raw_payload: dict)
                ↓ returns PipelineResult
 ```
 
-### `SessionBatchDispatcher` path (`session_batch` mode, default):
+### `SessionBatchDispatcher` path (`session_batch` mode, default)
 
-```
+```text
 bus event: k1.session.turn.completed.v1
     ↓
 SessionBatchDispatcher._on_turn_completed(raw_payload: dict)
@@ -226,7 +232,7 @@ on stop() or explicit flush:
 
 These are emitted from within `MemoryWriterPipeline` via `_publish_safe()`:
 
-```
+```text
 After Stage 1 (always):
     event_port.publish("k1.mw.filter.decision.v1", FilterDecisionEvent)
 
@@ -249,7 +255,7 @@ All calls wrapped in `try/except Exception: pass` — telemetry failures never s
 
 ## 8. Dependency graph (simplified)
 
-```
+```text
 MemoryWriterService
     ├── MemoryWriterPipeline
     │       ├── RelevanceFilter         ← config only
@@ -283,7 +289,7 @@ passed to both `MemoryWriterPipeline` (Stage 3 gate) and `MemoryWriterService` (
 ## 9. K1 inter-component dependencies
 
 | Dependency | Import path | Used by |
-|---|---|---|
+| --- | --- | --- |
 | `k1.model_hub.ports.hub_port.IModelHubPort` | `ModelHubAdapter` constructor | `MemoryWriterAgent` via port |
 | `k1.model_hub.types` (HubRequest, ChatPayload, Priority) | `model_hub_adapter.py` | Translates `chat()` call |
 | `k1.sessionstate.manager.SessionStateManager` | `SessionReadAdapter` constructor | `MWSessionReader` via port |

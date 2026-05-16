@@ -29,12 +29,8 @@ from k1.concierge.adapters.test_memory import MockMemoryAdapter
 from k1.concierge.adapters.test_output import TestOutputAdapter
 from k1.concierge.adapters.test_state import InMemoryStateAdapter
 
-# --- Existing impls for re-exported port compliance ---
-from k1.concierge.fsm.phase1 import StubPhase1Pipeline
-
 # --- Ports ---
 from k1.concierge.ports import (
-    IClassificationPort,
     IDeltaPort,
     IDispatchPort,
     IInputPort,
@@ -268,21 +264,6 @@ class TestMemoryAdapterCompliance:
 
 
 class TestReExportedPortCompliance:
-    def test_stub_phase1_satisfies_iclassificationport(self) -> None:
-        """Phase1Pipeline is not @runtime_checkable, so verify structurally."""
-        stub = StubPhase1Pipeline()
-        assert hasattr(stub, "classify")
-        assert callable(stub.classify)
-        # Verify it returns Phase1Result
-        from k1.concierge.fsm.phase1 import Phase1Result
-
-        result = stub.classify("hello")
-        assert isinstance(result, Phase1Result)
-        # Verify IClassificationPort alias is Phase1Pipeline
-        from k1.concierge.fsm.phase1 import Phase1Pipeline
-
-        assert IClassificationPort is Phase1Pipeline
-
     def test_ideltaport_is_ibus(self) -> None:
         """IDeltaPort is just an alias for IBus."""
         assert IDeltaPort is IBus

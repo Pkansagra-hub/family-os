@@ -94,6 +94,21 @@ def _get_planner_token_budget(tier: ComplexityTier) -> int:
     return raw.get(tier.name, TIER_PLANNER_TOKEN_BUDGET.get(tier, 0))
 
 
+def _orchestrator_context(task: TaskDispatch) -> dict[str, Any]:
+    """Build the context shape expected by OrchestratorService.handle_task()."""
+    context = dict(task.context_snapshot or {})
+    params_by_capability = dict(context.get("params") or {})
+    for intent in task.intents:
+        if intent.params:
+            params_by_capability[intent.action] = dict(intent.params)
+    if params_by_capability:
+        context["params"] = params_by_capability
+    session_id = getattr(task, "session_id", "")
+    if session_id:
+        context["session_id"] = session_id
+    return context
+
+
 # =========================================================================
 # route_task -- single dispatch point
 # =========================================================================
@@ -172,7 +187,7 @@ def _route_medium_sync(task: TaskDispatch) -> DispatchRecord:
     envelope = TaskEnvelope(
         intent=intent,
         task_id=task.task_id,
-        context=task.context_snapshot or {},
+        context=_orchestrator_context(task),
         tier=ComplexityTier.MEDIUM,
         budget=Budget(max_fabric_calls=_get_fabric_budget(ComplexityTier.MEDIUM)),
         session_id=getattr(task, "session_id", ""),
@@ -190,7 +205,7 @@ def _route_high_sync(task: TaskDispatch) -> DispatchRecord:
     envelope = TaskEnvelope(
         intent=intent,
         task_id=task.task_id,
-        context=task.context_snapshot or {},
+        context=_orchestrator_context(task),
         tier=ComplexityTier.HIGH,
         budget=Budget(
             max_fabric_calls=_get_fabric_budget(ComplexityTier.HIGH),

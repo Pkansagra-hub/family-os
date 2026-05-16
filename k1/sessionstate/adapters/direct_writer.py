@@ -225,6 +225,21 @@ class DirectWriterAdapter(IWriterPort):
         with self._lock:
             self._stats["total_requests"] += 1
 
+            if self._manager is None or self._guard is None:
+                from ..manager import LifecycleError
+
+                raise LifecycleError(
+                    "DirectWriterAdapter: mutation rejected before manager binding"
+                )
+
+            is_running = getattr(self._manager, "is_running", True)
+            if is_running is False:
+                from ..manager import LifecycleError
+
+                raise LifecycleError(
+                    "DirectWriterAdapter: mutation rejected before SessionStateManager is running"
+                )
+
             # 1. Check expiration
             if request.is_expired():
                 duration_ms = (time.perf_counter() - start_time) * 1000

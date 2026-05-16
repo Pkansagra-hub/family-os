@@ -31,6 +31,10 @@ import logging
 import time
 from typing import Any, AsyncIterator, Optional, Protocol, runtime_checkable
 
+from k1.model_hub.events import (
+    TOPIC_REQUEST_RECEIVED,
+    TOPIC_RESPONSE_COMPLETE,
+)
 from k1.model_hub.plugins.base import NormalizedRequest
 from k1.model_hub.ports.event_port import IEventPort
 from k1.model_hub.ports.state_read_port import IStateReadPort
@@ -148,6 +152,17 @@ class RequestRouter:
             "priority": request.constraints.priority.value,
         }
 
+        await self._publish(
+            TOPIC_REQUEST_RECEIVED,
+            {
+                "request_id": request.request_id,
+                "trace_id": request.trace_id,
+                "consumer_id": request.constraints.consumer_id,
+                "capability": request.capability.value,
+                "budget_remaining_pct": 100.0,
+            },
+        )
+
         # Metric: requests_total counter
         self._emit("model_hub.requests_total", 1, std_labels)
 
@@ -238,6 +253,15 @@ class RequestRouter:
                         "capability": request.capability.value,
                     },
                 )
+                await self._publish_response_complete(
+                    request,
+                    cache_result.response,
+                    latency_ms=0,
+                    total_tokens=(
+                        cache_result.response.metadata.usage.prompt_tokens
+                        + cache_result.response.metadata.usage.completion_tokens
+                    ),
+                )
                 return cache_result.response
 
         # Step 7: NormalizationLayer -> NormalizedRequest
@@ -256,7 +280,7 @@ class RequestRouter:
             trace_id=normalized.trace_id,
             consumer_id=normalized.consumer_id,
             reasoning_effort=normalized.reasoning_effort,
-            extra=normalized.extra,
+            extra={**normalized.extra, "request_id": request.request_id},
         )
 
         # Step 8: ProviderDispatcher -> execute
@@ -346,6 +370,12 @@ class RequestRouter:
                 "fallback_used": dispatch_result.fallback_used,
             },
         )
+        await self._publish_response_complete(
+            request,
+            response,
+            latency_ms=latency_ms,
+            total_tokens=total_tokens,
+        )
 
         return response
 
@@ -425,6 +455,19 @@ class RequestRouter:
             if chunk.tool_calls:
                 accumulated_tool_calls.extend(chunk.tool_calls)
             if chunk.done:
+                chunk_finish_reason = FinishReason.STOP
+                if isinstance(chunk.metadata, dict) and chunk.metadata.get("finish_reason"):
+                    raw_finish = chunk.metadata.get("finish_reason")
+                    if isinstance(raw_finish, FinishReason):
+                        chunk_finish_reason = raw_finish
+                    else:
+                        try:
+                            chunk_finish_reason = FinishReason(str(raw_finish))
+                        except ValueError:
+                            logger.warning(
+                                "RequestRouter.stream_route: unknown provider finish_reason=%r",
+                                raw_finish,
+                            )
                 # Final chunk -- build metadata with accumulated content
                 metadata = ResponseMetadata(
                     request_id=request.request_id,
@@ -440,7 +483,7 @@ class RequestRouter:
                     capability=request.capability,
                     trace_id=request.trace_id,
                     finish_reason=(
-                        FinishReason.TOOL_CALLS if accumulated_tool_calls else FinishReason.STOP
+                        FinishReason.TOOL_CALLS if accumulated_tool_calls else chunk_finish_reason
                     ),
                 )
                 yield HubChunk(
@@ -476,6 +519,31 @@ class RequestRouter:
             await self._event_port.publish(topic, payload)
         except Exception:  # noqa: BLE001
             logger.debug("Event publish failed: %s", topic, exc_info=True)
+
+    async def _publish_response_complete(
+        self,
+        request: HubRequest,
+        response: HubResponse,
+        *,
+        latency_ms: int,
+        total_tokens: int,
+    ) -> None:
+        """Publish the documented response-complete event."""
+        metadata = response.metadata
+        await self._publish(
+            TOPIC_RESPONSE_COMPLETE,
+            {
+                "request_id": request.request_id,
+                "trace_id": request.trace_id,
+                "tokens_used": total_tokens,
+                "latency_ms": latency_ms,
+                "cost_usd": metadata.cost_usd,
+                "provider_id": metadata.provider_id,
+                "model_id": metadata.model_id,
+                "capability": request.capability.value,
+                "cache_hit": metadata.cache_hit,
+            },
+        )
 
     # -- Validation ------------------------------------------------------------
 

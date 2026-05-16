@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -32,8 +33,16 @@ from k1.concierge.llm.types import (
 )
 from k1.concierge.llm.types import tool_result_to_message as _tool_result_to_msg
 from k1.concierge.llm.validator import LLMOutputValidator, ValidationResult
+from k1.concierge.react.capability_routing import (
+    context_read_gap_requires_dispatch,
+    has_dispatch_tool,
+    latest_user_text,
+    synthesize_dispatch_task,
+)
+from k1.concierge.react.control import BackControlEvent, ReactLoopEvent
 from k1.concierge.task.parallel_safety import classify_tool_batch
-from k1.concierge.tools.dispatcher import ToolDispatcher
+from k1.concierge.tools.dispatcher import ToolDispatcher, hash_tool_arguments
+from k1.concierge.tools.recovery_contract import ask_human_recovery_from_tool_data
 from k1.concierge.tools.result_protocol import ToolResult
 from k1.model_hub.ports import IModelHubPort
 from k1.model_hub.types import (
@@ -268,15 +277,18 @@ class ReactResult:
                             HITL pending.
       - "cancelled":        cancellation_check() returned True between iterations.
       - "budget_exhausted": max_iterations reached without termination.
+            - "loop_degenerate":  repeated loop pattern triggered terminal guard.
+            - "missing_submit_result": Back exhausted without submit_result.
     """
 
-    status: str  # "complete" | "suspended" | "cancelled" | "budget_exhausted"
+    status: str
     text: str | None = None  # Front: final response text. Back: None.
     data: dict | None = None  # Back: submit_result() arguments. Front: None.
     dispatched_tasks: list[dict] = field(default_factory=list)  # L3: dispatch_task calls
     parallel_tool_calls: int = 0  # M3 E3.7.4: count of parallel-executed tool calls
     sequential_tool_calls: int = 0  # M3 E3.7.4: count of sequential-executed tool calls
     iteration_durations_ms: list[int] = field(default_factory=list)  # Per-iteration wall-clock ms
+    loop_events: list[dict[str, Any]] = field(default_factory=list)
 
 
 # =========================================================================
@@ -284,17 +296,18 @@ class ReactResult:
 # =========================================================================
 
 
-def _resolve_tool_choice(iteration: int, actor: str, tools: list[ToolSchema]) -> str:
+def _resolve_tool_choice(
+    iteration: int, actor: str, tools: list[ToolSchema]
+) -> str:  # noqa: ARG001 -- signature retained for caller stability
     """Determine tool_choice for this iteration.
 
-    Rules (V2 Section 7.5, ITEM #13):
-      - Front, iteration 0, tools available: "required"
-        Forces the first tool call.
-      - All other cases: "auto"
-        Let the model decide whether to call a tool or respond with text.
+    Policy: always ``"auto"``. The model decides whether to call a tool or
+    respond with text. Forcing ``"required"`` on iteration 0 produces
+    spurious tool calls on simple greetings or low-stakes turns where text
+    is the right output. The Front prompt continues to instruct the model
+    on when tools are appropriate; this matches the wider production
+    pattern of trusting model judgment over hard kernel gating.
     """
-    if iteration == 0 and actor == "front" and tools:
-        return "required"
     return "auto"
 
 
@@ -309,8 +322,353 @@ def _result_to_dict(result: ToolResult) -> dict[str, Any]:
     For errors, returns error info dict. For success, returns result.data.
     """
     if result.is_error():
-        return {"error": result.error, "tool": result.tool_name}
+        payload = {"error": result.error, "tool": result.tool_name}
+        if result.data:
+            payload.update(result.data)
+        return payload
     return result.data
+
+
+_BACK_AUTHORITY_TOOL_NAMES = {
+    "invoke_capability",
+    "batch_invoke_capabilities",
+    "execute_workflow",
+    "spawn_via_fabric",
+}
+
+
+def _json_object(content: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(content)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _has_discovery_candidates(payload: dict[str, Any]) -> bool:
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    count = data.get("count")
+    capabilities = data.get("capabilities")
+    return (isinstance(count, int) and count > 0) or bool(capabilities)
+
+
+def _seed_back_capability_state(messages: list[ModelMessage]) -> tuple[bool, bool]:
+    candidates_seen = False
+    authority_attempted = False
+    for message in messages:
+        if message.role != "tool":
+            continue
+        name = str(message.name or "")
+        if name == "discover_capabilities":
+            candidates_seen = candidates_seen or _has_discovery_candidates(
+                _json_object(message.content)
+            )
+        elif name in _BACK_AUTHORITY_TOOL_NAMES:
+            authority_attempted = True
+    return candidates_seen, authority_attempted
+
+
+def _seed_back_tool_names(messages: list[ModelMessage]) -> set[str]:
+    names: set[str] = set()
+    for message in messages:
+        if message.role == "tool" and message.name:
+            names.add(str(message.name))
+    return names
+
+
+@dataclass(frozen=True)
+class _CollectionMutationPlan:
+    adapter: str
+    read_capability: str
+    write_capability: str
+    output_field: str
+    id_param: str
+    record_id_field: str = "id"
+
+
+@dataclass(frozen=True)
+class _ContractPlanExecution:
+    submit_args: dict[str, Any]
+    tool_calls: int
+
+
+def _seed_back_discovery_payloads(messages: list[ModelMessage]) -> list[dict[str, Any]]:
+    payloads: list[dict[str, Any]] = []
+    for message in messages:
+        if message.role == "tool" and message.name == "discover_capabilities":
+            payload = _json_object(message.content)
+            if _has_discovery_candidates(payload):
+                payloads.append(payload)
+    return payloads
+
+
+def _discovered_capabilities(payloads: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    capabilities: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for payload in payloads:
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+        for capability in data.get("capabilities") or []:
+            if not isinstance(capability, dict):
+                continue
+            name = str(capability.get("name") or "")
+            if name and name in seen:
+                continue
+            if name:
+                seen.add(name)
+            capabilities.append(capability)
+    return capabilities
+
+
+def _capability_schema(capability: dict[str, Any]) -> dict[str, Any]:
+    schema = capability.get("schema")
+    return schema if isinstance(schema, dict) else {}
+
+
+def _capability_kinds(capability: dict[str, Any]) -> set[str]:
+    schema = _capability_schema(capability)
+    return {
+        str(kind)
+        for kind in schema.get("capabilities") or []
+        if kind and not str(kind).startswith("adapter:")
+    }
+
+
+def _adapter_key(capability: dict[str, Any]) -> str:
+    schema = _capability_schema(capability)
+    for marker in schema.get("capabilities") or []:
+        marker_text = str(marker)
+        if marker_text.startswith("adapter:"):
+            return marker_text.split(":", 1)[1]
+    domains = capability.get("domains")
+    if isinstance(domains, list) and len(domains) > 1:
+        return str(domains[1])
+    name_parts = str(capability.get("name") or "").split(".")
+    if len(name_parts) >= 3 and name_parts[0] == "tool":
+        return name_parts[2]
+    return ""
+
+
+def _required_input_names(capability: dict[str, Any]) -> list[str]:
+    schema = _capability_schema(capability)
+    names: list[str] = []
+    for field_spec in schema.get("required_inputs") or []:
+        if isinstance(field_spec, dict):
+            name = str(field_spec.get("name") or "")
+            if name:
+                names.append(name)
+    return names
+
+
+def _array_output_fields(capability: dict[str, Any]) -> list[str]:
+    schema = _capability_schema(capability)
+    output = schema.get("output") if isinstance(schema.get("output"), dict) else {}
+    properties = output.get("properties") if isinstance(output.get("properties"), dict) else {}
+    fields: list[str] = []
+    for field_name, field_schema in properties.items():
+        if isinstance(field_schema, dict) and field_schema.get("type") == "array":
+            fields.append(str(field_name))
+    return fields
+
+
+def _identity_input_name(capability: dict[str, Any]) -> str:
+    required = _required_input_names(capability)
+    if len(required) != 1:
+        return ""
+    name = required[0]
+    if name == "id" or name.endswith("_id"):
+        return name
+    return ""
+
+
+def _score(capability: dict[str, Any]) -> float:
+    try:
+        return float(capability.get("score") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _build_collection_mutation_plans(
+    discovery_payloads: list[dict[str, Any]],
+) -> list[_CollectionMutationPlan]:
+    capabilities = _discovered_capabilities(discovery_payloads)
+    reads_by_adapter: dict[str, dict[str, Any]] = {}
+    mutations_by_adapter: dict[str, dict[str, Any]] = {}
+
+    for capability in capabilities:
+        adapter = _adapter_key(capability)
+        if not adapter:
+            continue
+        kinds = _capability_kinds(capability)
+        array_outputs = _array_output_fields(capability)
+        if "read" in kinds and not _required_input_names(capability) and array_outputs:
+            current = reads_by_adapter.get(adapter)
+            if current is None or _score(capability) > _score(current):
+                reads_by_adapter[adapter] = capability
+            continue
+        if kinds.isdisjoint({"write", "delete"}):
+            continue
+        if not _identity_input_name(capability):
+            continue
+        current = mutations_by_adapter.get(adapter)
+        if current is None or _score(capability) > _score(current):
+            mutations_by_adapter[adapter] = capability
+
+    plans: list[_CollectionMutationPlan] = []
+    for adapter, mutation in mutations_by_adapter.items():
+        read = reads_by_adapter.get(adapter)
+        if read is None:
+            continue
+        output_fields = _array_output_fields(read)
+        id_param = _identity_input_name(mutation)
+        if not output_fields or not id_param:
+            continue
+        plans.append(
+            _CollectionMutationPlan(
+                adapter=adapter,
+                read_capability=str(read.get("name") or ""),
+                write_capability=str(mutation.get("name") or ""),
+                output_field=output_fields[0],
+                id_param=id_param,
+            )
+        )
+    return plans
+
+
+def _records_from_list_result(result: ToolResult, output_field: str) -> list[dict[str, Any]]:
+    if not result.is_ok():
+        return []
+    data = result.data if isinstance(result.data, dict) else {}
+    payload = data.get("result") if isinstance(data.get("result"), dict) else data
+    records = payload.get(output_field)
+    if not isinstance(records, list):
+        return []
+    return [record for record in records if isinstance(record, dict)]
+
+
+def _record_id(record: dict[str, Any], plan: _CollectionMutationPlan) -> str:
+    value = record.get(plan.record_id_field)
+    if value is None:
+        value = record.get(plan.id_param)
+    return str(value or "")
+
+
+def _chunked(items: list[dict[str, Any]], size: int) -> list[list[dict[str, Any]]]:
+    return [items[index : index + size] for index in range(0, len(items), size)]
+
+
+def _collection_plan_answer(plan_results: list[dict[str, Any]]) -> str:
+    total = sum(int(result.get("total", 0)) for result in plan_results)
+    succeeded = sum(int(result.get("succeeded", 0)) for result in plan_results)
+    failed = sum(int(result.get("failed", 0)) for result in plan_results)
+    labels = sorted({str(result.get("adapter") or "records") for result in plan_results})
+    label = ", ".join(labels) if labels else "records"
+    if total == 0:
+        return f"No matching {label} were found."
+    if failed:
+        return f"Processed {succeeded} of {total} {label}; {failed} failed."
+    return f"Processed {succeeded} {label}."
+
+
+async def _execute_collection_mutation_plan(
+    *,
+    discovery_payloads: list[dict[str, Any]],
+    tool_dispatcher: ToolDispatcher,
+    messages: list[ModelMessage],
+    trace_id: str,
+) -> _ContractPlanExecution | None:
+    plans = _build_collection_mutation_plans(discovery_payloads)
+    if not plans:
+        return None
+
+    tool_calls = 0
+    plan_results: list[dict[str, Any]] = []
+    for plan in plans[:1]:
+        list_call = ToolCallResult(
+            id=f"kernel-plan-list-{uuid.uuid4().hex[:8]}",
+            name="invoke_capability",
+            arguments={"capability_name": plan.read_capability, "params": {}},
+        )
+        list_result = await tool_dispatcher.dispatch(list_call)
+        tool_calls += 1
+        messages.append(_tool_result_to_msg(list_call, _result_to_dict(list_result)))
+        records = _records_from_list_result(list_result, plan.output_field)
+        invocations = [
+            {
+                "capability_name": plan.write_capability,
+                "params": {plan.id_param: record_id},
+            }
+            for record_id in (_record_id(record, plan) for record in records)
+            if record_id
+        ]
+        summary = {
+            "adapter": plan.adapter.replace("_", " "),
+            "read_capability": plan.read_capability,
+            "write_capability": plan.write_capability,
+            "total": len(invocations),
+            "succeeded": 0,
+            "failed": 0,
+            "results": [],
+        }
+        if invocations:
+            for chunk in _chunked(invocations, 8):
+                batch_call = ToolCallResult(
+                    id=f"kernel-plan-batch-{uuid.uuid4().hex[:8]}",
+                    name="batch_invoke_capabilities",
+                    arguments={"invocations": chunk},
+                )
+                batch_result = await tool_dispatcher.dispatch(batch_call)
+                tool_calls += 1
+                messages.append(_tool_result_to_msg(batch_call, _result_to_dict(batch_result)))
+                batch_data = batch_result.data if isinstance(batch_result.data, dict) else {}
+                summary["succeeded"] = int(summary["succeeded"]) + int(
+                    batch_data.get("succeeded", 0)
+                )
+                summary["failed"] = int(summary["failed"]) + int(batch_data.get("failed", 0))
+                summary["results"].extend(batch_data.get("results") or [])
+        plan_results.append(summary)
+
+    submit_args = {
+        "result_type": "complete",
+        "final_answer": _collection_plan_answer(plan_results),
+        "results": plan_results,
+        "artifacts_created": [],
+    }
+    submit_call = ToolCallResult(
+        id=f"kernel-plan-submit-{uuid.uuid4().hex[:8]}",
+        name="submit_result",
+        arguments=submit_args,
+    )
+    submit_result = await tool_dispatcher.dispatch(submit_call)
+    tool_calls += 1
+    messages.append(_tool_result_to_msg(submit_call, _result_to_dict(submit_result)))
+    if submit_result.is_error():
+        logger.warning(
+            "react_loop: contract collection plan submit failed error=%s trace=%s",
+            submit_result.error,
+            trace_id[:8] if trace_id else "",
+        )
+        return None
+    logger.info(
+        "react_loop: contract collection plan executed plans=%d trace=%s",
+        len(plan_results),
+        trace_id[:8] if trace_id else "",
+    )
+    return _ContractPlanExecution(submit_args=submit_args, tool_calls=tool_calls)
+
+
+def _recovery_to_suspended_data(recovery: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "result_type": "needs_human",
+        "hil_type": str(recovery.get("hil_type") or "clarification"),
+        "question": str(
+            recovery.get("question")
+            or "I need one more detail before I can keep going. What should I use?"
+        ),
+        "options": list(recovery.get("options") or []),
+        "side_effects": list(recovery.get("side_effects") or []),
+        "missing_fields": list(recovery.get("missing_fields") or []),
+        "recovery": recovery,
+    }
 
 
 # =========================================================================
@@ -375,6 +733,9 @@ async def react_loop(
     scenario: str = "",
     validator: LLMOutputValidator | None = None,
     on_stream: Callable[[StreamChunk], Awaitable[None]] | None = None,
+    control_queue: asyncio.Queue[BackControlEvent] | None = None,
+    completed_tool_call_ids: set[str] | None = None,
+    completed_tool_arg_keys: set[str] | None = None,
 ) -> ReactResult:
     """Shared ReAct loop for both Front and Back actors.
 
@@ -415,6 +776,183 @@ async def react_loop(
     _iteration_durations: list[int] = []  # Per-iteration wall-clock ms
     original_tools = tools  # Preserve original list; tools may be cleared on degenerate retry
     _degenerate_retry_active = False  # Track if we're in a degenerate retry
+    _front_turn_text = latest_user_text(messages) if actor == "front" else ""
+    (
+        _back_capability_candidates_seen,
+        _back_authority_tool_attempted,
+    ) = (
+        _seed_back_capability_state(messages) if actor == "back" else (False, False)
+    )
+    _back_discovery_payloads = _seed_back_discovery_payloads(messages) if actor == "back" else []
+    _back_tool_names_seen = _seed_back_tool_names(messages) if actor == "back" else set()
+    _loop_events: list[dict[str, Any]] = []
+    _completed_tool_call_ids = set(completed_tool_call_ids or set())
+    _completed_tool_arg_keys = set(completed_tool_arg_keys or set())
+    _retryable_error_counts: dict[str, int] = {}
+    _repeated_tool_counts: dict[str, int] = {}
+    _empty_response_count = 0
+    _invalid_schema_count = 0
+    effective_max_iterations = max_iterations
+    hard_max_iterations = max(1, max_iterations + 1)
+
+    def _record_loop_event(
+        event_type: str,
+        iteration: int,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        _loop_events.append(
+            ReactLoopEvent(
+                event_type=event_type,
+                actor=actor,
+                scenario=scenario,
+                iteration=iteration,
+                trace_id=trace_id,
+                payload=payload or {},
+            ).to_dict()
+        )
+
+    def _make_result(
+        status: str,
+        *,
+        text: str | None = None,
+        data: dict | None = None,
+    ) -> ReactResult:
+        return ReactResult(
+            status=status,
+            text=text,
+            data=data,
+            dispatched_tasks=dispatched_tasks,
+            parallel_tool_calls=_parallel_count,
+            sequential_tool_calls=_sequential_count,
+            iteration_durations_ms=_iteration_durations,
+            loop_events=list(_loop_events),
+        )
+
+    def _tool_key(tc: Any) -> str:
+        return (
+            f"{getattr(tc, 'name', '')}:{hash_tool_arguments(getattr(tc, 'arguments', {}) or {})}"
+        )
+
+    def _is_completed_duplicate(tc: Any) -> bool:
+        return _tool_key(tc) in _completed_tool_arg_keys
+
+    def _is_retryable_error(result: ToolResult) -> bool:
+        if not result.is_error():
+            return False
+        data = result.data if isinstance(result.data, dict) else {}
+        if "retryable" in data:
+            return bool(data.get("retryable"))
+        error = (result.error or "").lower()
+        if "tool_timeout" in error or "tool_exception" in error:
+            return True
+        terminal = (
+            "not allowed",
+            "budget exhausted",
+            "invalid arguments",
+            "side-effect tools blocked",
+            "submit_result(complete) rejected",
+            "needs_human_without_authority_attempt",
+        )
+        return bool(error) and not any(marker in error for marker in terminal)
+
+    def _control_message(event: BackControlEvent) -> ModelMessage:
+        payload = event.to_dict()
+        return ModelMessage(
+            role="user",
+            content="BACK_CONTROL_EVENT\n" + json.dumps(payload, sort_keys=True, default=str),
+        )
+
+    def _back_progress_nudge(*, empty_response: bool) -> str:
+        if _back_authority_tool_attempted:
+            return (
+                "You already invoked an authority capability. Now call "
+                "submit_result to deliver that actual result. Do NOT write "
+                "conversational text."
+            )
+        if "discover_capabilities" in _back_tool_names_seen:
+            if _back_capability_candidates_seen:
+                return (
+                    "Discovery returned viable capability candidates, but you have not "
+                    "invoked an authority capability yet. Inspect the discovered schemas "
+                    "and call invoke_capability or batch_invoke_capabilities with the "
+                    "exact registry-owned name. Ask the user only if every candidate is "
+                    "unsuitable or required inputs are missing."
+                )
+            return (
+                "Discovery returned no viable capability candidates for this live or "
+                "external task. Do NOT call discover_capabilities again for the same "
+                "intent, and do NOT claim completion. Call submit_result with "
+                "result_type='needs_human', hil_type='clarification' or 'escalate', "
+                "and a concise question explaining what capability, source, or user "
+                "detail is needed."
+            )
+        if "recall_memory" in _back_tool_names_seen or "summarize_context" in _back_tool_names_seen:
+            return (
+                "You already checked memory/context. Call submit_result with "
+                "result_type='complete' using the memory/context findings, or say "
+                "not found if there were no relevant results. Do NOT invent a live "
+                "system-of-record action."
+            )
+        if empty_response:
+            return (
+                "Your last response was empty. Continue working on the task: use "
+                "recall_memory for memory/context lookup, or discover and invoke "
+                "capabilities for live system-of-record work. If you cannot make "
+                "progress, call submit_result with result_type='needs_human'."
+            )
+        return "Continue working. Use tool calls, not conversational text."
+
+    def _drain_control_events(iteration: int) -> bool:
+        nonlocal effective_max_iterations
+        if control_queue is None:
+            return False
+        cancel_requested = False
+        drained_parameter_updates = 0
+        while True:
+            try:
+                event = control_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            event.received_at_iteration = iteration
+            event_type = str(event.event_type or "").lower()
+            _record_loop_event(event_type, iteration, event.to_dict())
+            if event_type == "cancel":
+                cancel_requested = True
+                continue
+            messages.append(_control_message(event))
+            if event_type == "parameter_update":
+                drained_parameter_updates += 1
+        if drained_parameter_updates and iteration >= effective_max_iterations - 1:
+            if effective_max_iterations < hard_max_iterations:
+                effective_max_iterations += 1
+                _record_loop_event(
+                    "parameter_update_extra_iteration",
+                    iteration,
+                    {"effective_max_iterations": effective_max_iterations},
+                )
+            else:
+                _record_loop_event(
+                    "cannot_apply_parameter_update",
+                    iteration,
+                    {"reason": "hard_cap_reached"},
+                )
+        return cancel_requested
+
+    def _front_policy_dispatch(reason: str) -> ReactResult | None:
+        if actor != "front":
+            return None
+        if not _front_turn_text or dispatched_tasks:
+            return None
+        if not has_dispatch_tool(original_tools):
+            return None
+        task_entry = synthesize_dispatch_task(_front_turn_text, reason)
+        dispatched_tasks.append(task_entry)
+        logger.warning(
+            "react_loop: front capability routing guard synthesized dispatch " "reason=%s trace=%s",
+            reason,
+            trace_id[:8] if trace_id else "",
+        )
+        return _make_result("complete", text="")
 
     # Per-iteration LLM call timeout (prevents hangs from API stalls)
     _iter_timeout_s: float = get_config().llm.default_timeout_ms / 1000.0
@@ -428,25 +966,71 @@ async def react_loop(
         # Defensive: if config is mocked/non-numeric, use sane default
         _tool_timeout_s = 30.0
 
+    # HIL-aware override: invoke_capability may block while awaiting human
+    # approval (capability_gate_timeout_ms = 120 s by default).  Use
+    # max(tool_timeout, hil_timeout + 30 s) so the gate can resolve before
+    # the react loop cancels the tool call.
+    _raw_hil_timeout = getattr(get_config(), "hil_capability_gate_timeout_ms", 120_000)
+    try:
+        _hil_tool_timeout_s: float = max(_tool_timeout_s, float(_raw_hil_timeout) / 1000.0 + 30.0)
+    except (TypeError, ValueError):
+        _hil_tool_timeout_s = max(_tool_timeout_s, 150.0)
+
     # Hoist _run_tool outside the loop to avoid re-creating the closure
     async def _run_tool(tc: Any) -> tuple[Any, ToolResult]:
+        if _is_completed_duplicate(tc):
+            tool_name = getattr(tc, "name", "unknown")
+            _record_loop_event(
+                "tool_already_completed",
+                -1,
+                {
+                    "tool_name": tool_name,
+                    "call_id": getattr(tc, "id", "") or "",
+                    "args_hash": hash_tool_arguments(getattr(tc, "arguments", {}) or {}),
+                },
+            )
+            return tc, ToolResult(
+                tool_name=tool_name,
+                status="ok",
+                data={
+                    "already_completed": True,
+                    "tool_name": tool_name,
+                    "call_id": getattr(tc, "id", "") or "",
+                },
+            )
+        _effective_timeout = (
+            _hil_tool_timeout_s
+            if getattr(tc, "name", "") in ("invoke_capability", "batch_invoke_capabilities")
+            else _tool_timeout_s
+        )
         try:
-            result = await asyncio.wait_for(tool_dispatcher.dispatch(tc), timeout=_tool_timeout_s)
+            result = await asyncio.wait_for(
+                tool_dispatcher.dispatch(tc), timeout=_effective_timeout
+            )
         except asyncio.TimeoutError:
             tool_name = getattr(tc, "name", "unknown")
             logger.error(
                 "react_loop: tool TIMED OUT tool=%s (timeout=%.1fs) "
                 "actor=%s trace=%s -- synthesizing error result",
                 tool_name,
-                _tool_timeout_s,
+                _effective_timeout,
                 actor,
                 trace_id[:8] if trace_id else "",
             )
             result = ToolResult(
                 tool_name=tool_name,
                 status="error",
-                error=f"tool_timeout after {_tool_timeout_s:.1f}s",
+                data={"retryable": True, "timeout_ms": int(_effective_timeout * 1000)},
+                error=f"tool_timeout after {_effective_timeout:.1f}s",
             )
+            if hasattr(tool_dispatcher, "record_timeout"):
+                try:
+                    tool_dispatcher.record_timeout(
+                        tc,
+                        timeout_ms=int(_effective_timeout * 1000),
+                    )
+                except Exception:
+                    logger.exception("react_loop: failed to record tool timeout")
         return tc, result
 
     logger.info(
@@ -458,7 +1042,9 @@ async def react_loop(
         trace_id[:8] if trace_id else "",
     )
 
-    for iteration in range(max_iterations):
+    for iteration in range(hard_max_iterations):
+        if iteration >= effective_max_iterations:
+            break
         _iter_start = time.monotonic()
 
         # ---- RESTORE TOOLS AFTER DEGENERATE RETRY ----
@@ -474,20 +1060,18 @@ async def react_loop(
 
         # ---- CANCELLATION CHECK (ITEM #14) ----
         if await cancellation_check():
-            return ReactResult(
-                status="cancelled",
-                dispatched_tasks=dispatched_tasks,
-                parallel_tool_calls=_parallel_count,
-                sequential_tool_calls=_sequential_count,
-                iteration_durations_ms=_iteration_durations,
-            )
+            return _make_result("cancelled")
+
+        if _drain_control_events(iteration):
+            _record_loop_event("cancel", iteration, {"source": "control_queue"})
+            return _make_result("cancelled")
 
         # ---- BUILD REQUEST ----
         # On the last iteration for Front, strip tools to force text-only
         # output. Without this, the model may keep calling tools and
         # exhaust the budget without ever producing a text response.
         # tools may already be [] from a degenerate retry (see below).
-        is_last = iteration == max_iterations - 1
+        is_last = iteration == effective_max_iterations - 1
         force_text = (is_last and actor == "front") or not tools
         # For Back on the last iteration, nudge it to call submit_result
         # with whatever partial results it has, rather than exhausting budget.
@@ -495,6 +1079,11 @@ async def react_loop(
         effective_tools = [] if force_text else tools
 
         if force_submit:
+            _record_loop_event(
+                "last_iteration_submit",
+                iteration,
+                {"max_iterations": effective_max_iterations},
+            )
             messages.append(
                 ModelMessage(
                     role="user",
@@ -502,7 +1091,9 @@ async def react_loop(
                         "You are on your LAST iteration. You MUST call "
                         "submit_result now with whatever results you have "
                         "gathered so far. Summarize your findings in "
-                        "final_answer. Use result_type='complete'."
+                        "final_answer. Use result_type='complete' only when "
+                        "the task is actually done; use result_type='needs_human' "
+                        "with hil_type='clarification' when required details are missing."
                     ),
                 )
             )
@@ -512,6 +1103,11 @@ async def react_loop(
             )
 
         if force_text and tools:
+            _record_loop_event(
+                "forced_text",
+                iteration,
+                {"max_iterations": effective_max_iterations},
+            )
             logger.info(
                 "react_loop: iter=%d LAST ITERATION -- forcing text-only (no tools)",
                 iteration,
@@ -578,13 +1174,10 @@ async def react_loop(
             _iter_dur = int((time.monotonic() - _iter_start) * 1000)
             _iteration_durations.append(_iter_dur)
             fallback = get_config().react.front_degenerate_fallback if actor == "front" else ""
-            return ReactResult(
-                status="complete" if actor == "front" else "budget_exhausted",
+            return _make_result(
+                "complete" if actor == "front" else "missing_submit_result",
                 text=fallback if actor == "front" else None,
-                dispatched_tasks=dispatched_tasks,
-                parallel_tool_calls=_parallel_count,
-                sequential_tool_calls=_sequential_count,
-                iteration_durations_ms=_iteration_durations,
+                data={"error_code": "REACT_MISSING_SUBMIT_RESULT"} if actor == "back" else None,
             )
 
         logger.info(
@@ -607,15 +1200,13 @@ async def react_loop(
                 iteration,
                 actor,
             )
-            fallback = get_config().react.front_degenerate_fallback if actor == "front" else ""
-            return ReactResult(
-                status="complete",
-                text=fallback,
-                dispatched_tasks=dispatched_tasks,
-                parallel_tool_calls=_parallel_count,
-                sequential_tool_calls=_sequential_count,
-                iteration_durations_ms=_iteration_durations,
-            )
+            if actor != "front":
+                return _make_result(
+                    "missing_submit_result",
+                    data={"error_code": "LLM_ERROR"},
+                )
+            fallback = get_config().react.front_degenerate_fallback
+            return _make_result("complete", text=fallback)
 
         # ---- VALIDATION (Epic 4.1) ----
         if validator is not None and response.has_tool_calls:
@@ -637,30 +1228,60 @@ async def react_loop(
                         len(vr.fixed_response.tool_calls),
                     )
                 else:
+                    _invalid_schema_count += 1
+                    _record_loop_event(
+                        "schema_repair",
+                        iteration,
+                        {"issues": list(vr.issues), "fixed": False},
+                    )
+                    if _invalid_schema_count >= 3:
+                        _record_loop_event(
+                            "degenerate_loop",
+                            iteration,
+                            {"reason": "repeated_invalid_schema"},
+                        )
+                        return _make_result(
+                            "loop_degenerate",
+                            data={"error_code": "REACT_LOOP_DEGENERATE"},
+                        )
                     # No salvageable tool calls -- treat as degenerate
                     logger.warning(
                         "react_loop: validation failed, no fix possible: %s",
                         "; ".join(vr.issues),
                     )
                     if actor == "front":
-                        return ReactResult(
-                            status="complete",
+                        return _make_result(
+                            "complete",
                             text=get_config().react.front_degenerate_fallback,
-                            dispatched_tasks=dispatched_tasks,
-                            parallel_tool_calls=_parallel_count,
-                            sequential_tool_calls=_sequential_count,
-                            iteration_durations_ms=_iteration_durations,
                         )
+                    # Back actor: inject feedback so the model knows WHY its
+                    # call was rejected and what it must do before submit_result.
+                    messages.append(
+                        ModelMessage(
+                            role="user",
+                            content=(
+                                f"Your tool call was INVALID and was rejected: "
+                                f"{'; '.join(vr.issues)}. "
+                                "You MUST complete the work before submitting: "
+                                "1) call discover_capabilities to find the right capability, "
+                                "2) call invoke_capability to execute it, "
+                                "3) THEN call submit_result with the actual outcome."
+                            ),
+                        )
+                    )
+                    _iter_dur = int((time.monotonic() - _iter_start) * 1000)
+                    _iteration_durations.append(_iter_dur)
                     continue
 
         # ---- MALFORMED TOOL CALL: model tried a tool call but JSON was invalid ----
         if response.finish_reason == FinishReason.MALFORMED_TOOL_CALL:
+            _record_loop_event("schema_repair", iteration, {"reason": "malformed_tool_call"})
             logger.warning(
                 "Malformed tool call from %s on iteration %d -- nudging to simplify",
                 actor,
                 iteration,
             )
-            if iteration < max_iterations - 1:
+            if iteration < effective_max_iterations - 1:
                 messages.append(
                     ModelMessage(
                         role="user",
@@ -685,6 +1306,20 @@ async def react_loop(
 
         # ---- DEGENERATE: no text AND no tool calls ----
         if not response.has_text and not response.has_tool_calls:
+            _empty_response_count += 1
+            _record_loop_event("degenerate_response", iteration, {"count": _empty_response_count})
+            if _empty_response_count >= 3:
+                _record_loop_event(
+                    "degenerate_loop",
+                    iteration,
+                    {"reason": "repeated_empty_response"},
+                )
+                _iter_dur = int((time.monotonic() - _iter_start) * 1000)
+                _iteration_durations.append(_iter_dur)
+                return _make_result(
+                    "loop_degenerate",
+                    data={"error_code": "REACT_LOOP_DEGENERATE"},
+                )
             logger.warning("Degenerate response from %s on iteration %d", actor, iteration)
             if actor == "front":
                 # Retry once with a nudge AND strip tools so the model
@@ -692,7 +1327,7 @@ async def react_loop(
                 # their thinking budget processing tool results and
                 # return empty output. Forcing text-only on the retry
                 # guarantees we get a real answer.
-                if iteration < max_iterations - 1:
+                if iteration < effective_max_iterations - 1:
                     messages.append(
                         ModelMessage(
                             role="user",
@@ -723,46 +1358,20 @@ async def react_loop(
                         "react_loop: degenerate on last iter but have saved text (%d chars)",
                         len(last_text_with_tools),
                     )
-                    return ReactResult(
-                        status="complete",
-                        text=last_text_with_tools,
-                        dispatched_tasks=dispatched_tasks,
-                        parallel_tool_calls=_parallel_count,
-                        sequential_tool_calls=_sequential_count,
-                        iteration_durations_ms=_iteration_durations,
-                    )
+                    return _make_result("complete", text=last_text_with_tools)
                 fallback = get_config().react.front_degenerate_fallback
                 # Do NOT fire on_text_response here; front_handler
                 # controls emission order (dispatches before final).
-                return ReactResult(
-                    status="complete",
-                    text=fallback,
-                    dispatched_tasks=dispatched_tasks,
-                    parallel_tool_calls=_parallel_count,
-                    sequential_tool_calls=_sequential_count,
-                    iteration_durations_ms=_iteration_durations,
-                )
+                return _make_result("complete", text=fallback)
             # Back degenerate: nudge to submit what it has
-            if iteration < max_iterations - 1:
-                # Early iterations: gentle nudge -- Back may still do useful work
-                if iteration < max_iterations // 2:
-                    nudge = (
-                        "Your last response was empty. Continue working on "
-                        "the task -- discover capabilities and invoke them. "
-                        "If you cannot make progress, call submit_result."
-                    )
-                else:
-                    # Late iterations: urgent nudge -- wrap it up
-                    nudge = (
-                        "Your last response was empty. Call submit_result "
-                        "now with the results gathered so far."
-                    )
+            if iteration < effective_max_iterations - 1:
+                nudge = _back_progress_nudge(empty_response=True)
                 messages.append(ModelMessage(role="user", content=nudge))
                 logger.info(
                     "react_loop: back degenerate on iter=%d/%d, nudging (%s)",
                     iteration,
-                    max_iterations,
-                    "gentle" if iteration < max_iterations // 2 else "urgent",
+                    effective_max_iterations,
+                    "state-aware",
                 )
             _iter_dur = int((time.monotonic() - _iter_start) * 1000)
             _iteration_durations.append(_iter_dur)
@@ -778,14 +1387,7 @@ async def react_loop(
                 # before DISPATCHING -> LISTENING.
                 _iter_dur = int((time.monotonic() - _iter_start) * 1000)
                 _iteration_durations.append(_iter_dur)
-                return ReactResult(
-                    status="complete",
-                    text=response.text,
-                    dispatched_tasks=dispatched_tasks,
-                    parallel_tool_calls=_parallel_count,
-                    sequential_tool_calls=_sequential_count,
-                    iteration_durations_ms=_iteration_durations,
-                )
+                return _make_result("complete", text=response.text)
             # Back (ITEM #19): text without tool calls
             # Detect pseudo-code pattern: model writes code instead of
             # making a real tool call (e.g. "tool_code\nprint(...)").
@@ -810,17 +1412,12 @@ async def react_loop(
                     iteration,
                 )
             elif _has_prior_tools:
-                # Back already invoked capabilities but wrote conversational
-                # text instead of calling submit_result -- nudge it.
+                # Back already used tools but wrote conversational text instead
+                # of taking the correct terminal/action step. The nudge must
+                # match the observed tool state: discovery-only work is not the
+                # same as a successful authority invocation.
                 messages.append(
-                    ModelMessage(
-                        role="user",
-                        content=(
-                            "You already invoked capabilities successfully. "
-                            "Now call submit_result to deliver those results. "
-                            "Do NOT write conversational text."
-                        ),
-                    )
+                    ModelMessage(role="user", content=_back_progress_nudge(empty_response=False))
                 )
                 logger.info(
                     "react_loop: back text-only after tools on iter=%d, " "nudging submit_result",
@@ -874,6 +1471,48 @@ async def react_loop(
 
             # Back termination (L2): submit_result
             if tc.name == "submit_result":
+                if (
+                    actor == "back"
+                    and tc.arguments.get("result_type") == "needs_human"
+                    and _back_capability_candidates_seen
+                    and not _back_authority_tool_attempted
+                ):
+                    plan_execution = await _execute_collection_mutation_plan(
+                        discovery_payloads=_back_discovery_payloads,
+                        tool_dispatcher=tool_dispatcher,
+                        messages=messages,
+                        trace_id=trace_id,
+                    )
+                    if plan_execution is not None:
+                        _sequential_count += plan_execution.tool_calls
+                        _iter_dur = int((time.monotonic() - _iter_start) * 1000)
+                        _iteration_durations.append(_iter_dur)
+                        return _make_result("complete", data=plan_execution.submit_args)
+                    logger.warning(
+                        "react_loop: rejected model-authored needs_human after "
+                        "capability discovery without authority attempt. trace=%s",
+                        trace_id[:8] if trace_id else "",
+                    )
+                    messages.append(
+                        ModelMessage(
+                            role="tool",
+                            content=json.dumps(
+                                {
+                                    "error": "needs_human_without_authority_attempt",
+                                    "hint": (
+                                        "Discovery returned capability candidates. Inspect "
+                                        "their schemas and invoke the appropriate read/write "
+                                        "capabilities. Ask the user only when a tool returns "
+                                        "a structured recovery contract or discovery returns "
+                                        "no viable candidates."
+                                    ),
+                                }
+                            ),
+                            tool_call_id=getattr(tc, "id", None),
+                            name="submit_result",
+                        )
+                    )
+                    break
                 result = await tool_dispatcher.dispatch(tc)
                 if result.status == "error":
                     # Schema validation or execution failed -- feed
@@ -899,14 +1538,7 @@ async def react_loop(
                 )
                 _iter_dur = int((time.monotonic() - _iter_start) * 1000)
                 _iteration_durations.append(_iter_dur)
-                return ReactResult(
-                    status=status,
-                    data=tc.arguments,
-                    dispatched_tasks=dispatched_tasks,
-                    parallel_tool_calls=_parallel_count,
-                    sequential_tool_calls=_sequential_count,
-                    iteration_durations_ms=_iteration_durations,
-                )
+                return _make_result(status, data=tc.arguments)
 
         # ---- CLASSIFIED TOOL EXECUTION (M3 E3.4.2/3.4.3/3.4.5) ----
         # Split non-terminal tool calls into parallel-safe and sequential
@@ -959,7 +1591,64 @@ async def react_loop(
         _tc_order = {id(tc): idx for idx, tc in enumerate(non_terminal)}
         paired_results.sort(key=lambda pair: _tc_order.get(id(pair[0]), 999))
 
+        for idx, (tc, result) in enumerate(paired_results):
+            tool_key = _tool_key(tc)
+            _repeated_tool_counts[tool_key] = _repeated_tool_counts.get(tool_key, 0) + 1
+            if _repeated_tool_counts[tool_key] >= 3:
+                _record_loop_event(
+                    "degenerate_loop",
+                    iteration,
+                    {
+                        "reason": "repeated_tool_call",
+                        "tool_name": getattr(tc, "name", ""),
+                        "args_hash": hash_tool_arguments(getattr(tc, "arguments", {}) or {}),
+                    },
+                )
+                _iter_dur = int((time.monotonic() - _iter_start) * 1000)
+                _iteration_durations.append(_iter_dur)
+                return _make_result(
+                    "loop_degenerate",
+                    data={"error_code": "REACT_LOOP_DEGENERATE"},
+                )
+            if result.is_ok():
+                call_id = str(getattr(tc, "id", "") or "")
+                if call_id:
+                    _completed_tool_call_ids.add(call_id)
+                _completed_tool_arg_keys.add(tool_key)
+            elif _is_retryable_error(result):
+                _retryable_error_counts[tool_key] = _retryable_error_counts.get(tool_key, 0) + 1
+                _record_loop_event(
+                    "tool_retryable_error",
+                    iteration,
+                    {
+                        "tool_name": getattr(tc, "name", ""),
+                        "args_hash": hash_tool_arguments(getattr(tc, "arguments", {}) or {}),
+                        "count": _retryable_error_counts[tool_key],
+                    },
+                )
+                if _retryable_error_counts[tool_key] >= 2:
+                    result = ToolResult(
+                        tool_name=getattr(tc, "name", "unknown"),
+                        status="error",
+                        data={"retryable": False},
+                        error=f"terminal repeated retryable error: {result.error}",
+                    )
+                    paired_results[idx] = (tc, result)
+
         for tc, result in paired_results:
+            if actor == "back":
+                tool_name = str(getattr(tc, "name", "") or "")
+                if tool_name:
+                    _back_tool_names_seen.add(tool_name)
+                if tool_name == "discover_capabilities" and result.is_ok():
+                    data = result.data if isinstance(result.data, dict) else {}
+                    count = data.get("count")
+                    capabilities = data.get("capabilities")
+                    if (isinstance(count, int) and count > 0) or bool(capabilities):
+                        _back_capability_candidates_seen = True
+                        _back_discovery_payloads.append(data)
+                elif tool_name in _BACK_AUTHORITY_TOOL_NAMES:
+                    _back_authority_tool_attempted = True
 
             # Collect dispatch_task calls (L3)
             if tc.name == "dispatch_task":
@@ -986,6 +1675,30 @@ async def react_loop(
 
             # Append tool result as observation (ReAct pattern)
             messages.append(_tool_result_to_msg(tc, _result_to_dict(result)))
+
+        if actor == "front" and not dispatched_tasks:
+            if context_read_gap_requires_dispatch(paired_results):
+                policy_result = _front_policy_dispatch("context_read_no_evidence")
+                if policy_result is not None:
+                    _iter_dur = int((time.monotonic() - _iter_start) * 1000)
+                    _iteration_durations.append(_iter_dur)
+                    return policy_result
+
+        if actor == "back":
+            for _, result in paired_results:
+                recovery = ask_human_recovery_from_tool_data(result.data)
+                if recovery is None:
+                    continue
+                logger.info(
+                    "react_loop: back tool recovery contract -> suspended "
+                    "action=%s capability=%s trace=%s",
+                    recovery.get("action"),
+                    recovery.get("capability_name"),
+                    trace_id[:8] if trace_id else "",
+                )
+                _iter_dur = int((time.monotonic() - _iter_start) * 1000)
+                _iteration_durations.append(_iter_dur)
+                return _make_result("suspended", data=_recovery_to_suspended_data(recovery))
 
         # ---- M13.E3 SAFETY SHORT-CIRCUIT ----
         # Detect a safety / policy denial in this iteration's tool
@@ -1027,17 +1740,10 @@ async def react_loop(
             _iteration_durations.append(_iter_dur)
             if actor == "front":
                 _safety_text = "I can't help with that here. I've flagged it for review."
-                return ReactResult(
-                    status="complete",
-                    text=_safety_text,
-                    dispatched_tasks=dispatched_tasks,
-                    parallel_tool_calls=_parallel_count,
-                    sequential_tool_calls=_sequential_count,
-                    iteration_durations_ms=_iteration_durations,
-                )
+                return _make_result("complete", text=_safety_text)
             # Back: mark suspended so the orchestrator surfaces to HIL.
-            return ReactResult(
-                status="suspended",
+            return _make_result(
+                "suspended",
                 data={
                     "safety_denial": True,
                     "tool": _tc.name,
@@ -1047,11 +1753,18 @@ async def react_loop(
                         else "policy_deny"
                     ),
                 },
-                dispatched_tasks=dispatched_tasks,
-                parallel_tool_calls=_parallel_count,
-                sequential_tool_calls=_sequential_count,
-                iteration_durations_ms=_iteration_durations,
             )
+
+        if actor == "front" and any(
+            tc.name == "dispatch_task" and result.is_ok() for tc, result in paired_results
+        ):
+            logger.info(
+                "react_loop: front dispatched task(s) on iter=%d -- ending turn for ack",
+                iteration,
+            )
+            _iter_dur = int((time.monotonic() - _iter_start) * 1000)
+            _iteration_durations.append(_iter_dur)
+            return _make_result("complete", text=last_text_with_tools or "")
 
         # Per-iteration timing for the tool-execution branch
         _iter_dur = int((time.monotonic() - _iter_start) * 1000)
@@ -1072,28 +1785,16 @@ async def react_loop(
                 "react_loop: budget exhausted but recovered text from mixed response (%d chars)",
                 len(last_text_with_tools),
             )
-            return ReactResult(
-                status="complete",
-                text=last_text_with_tools,
-                dispatched_tasks=dispatched_tasks,
-                parallel_tool_calls=_parallel_count,
-                sequential_tool_calls=_sequential_count,
-                iteration_durations_ms=_iteration_durations,
-            )
+            return _make_result("complete", text=last_text_with_tools)
         # Do NOT fire on_text_response here; front_handler handles emission.
-        return ReactResult(
-            status="budget_exhausted",
-            text=get_config().react.front_budget_fallback,
-            dispatched_tasks=dispatched_tasks,
-            parallel_tool_calls=_parallel_count,
-            sequential_tool_calls=_sequential_count,
-            iteration_durations_ms=_iteration_durations,
-        )
+        return _make_result("budget_exhausted", text=get_config().react.front_budget_fallback)
 
-    return ReactResult(
-        status="budget_exhausted",
-        dispatched_tasks=dispatched_tasks,
-        parallel_tool_calls=_parallel_count,
-        sequential_tool_calls=_sequential_count,
-        iteration_durations_ms=_iteration_durations,
+    _record_loop_event(
+        "last_iteration_submit",
+        max(0, effective_max_iterations - 1),
+        {"error_code": "REACT_MISSING_SUBMIT_RESULT"},
+    )
+    return _make_result(
+        "missing_submit_result",
+        data={"error_code": "REACT_MISSING_SUBMIT_RESULT"},
     )

@@ -17,12 +17,11 @@ ConciergeFactory.create_with_ports(
     front_mailbox=front_mailbox,                  # router.register(ACTOR_FRONT)
     back_mailbox=back_mailbox,                    # router.register(ACTOR_BACK)
     ports=PortBundle(
-        delta=DeltaPortAdapter(delta_bus),        # IDeltaPort  → IBus
-        input_=BusInputAdapter(front_mailbox),    # IInputPort  → ACTOR_FRONT mailbox
-        output=BusOutputAdapter(back_mailbox),    # IOutputPort → ACTOR_BACK mailbox
+      delta=session_bus,                        # IDeltaPort  → IBus
+        input_=BusInputAdapter(session_bus),      # IInputPort  → k1.session.user.input.v1 subscriber
+      output=BusOutputAdapter(session_bus),     # IOutputPort → session bus publisher
         state=SSMStateAdapter(ssm),               # IStatePort  → SessionStateManager
         llm=model_hub,                            # ILLMPort    → shared ModelHub
-        classification=phase1_pipeline,           # IClassificationPort → UltraBERT|Stub
         dispatch=FabricDispatchAdapter(           # IDispatchPort → Fabric + Orchestrator
             fabric=session_fabric,
             orchestrator=self._orchestrator,
@@ -35,9 +34,13 @@ ConciergeFactory.create_with_ports(
         writer=ss_writer,                         # SS mutation writer (not a concierge port)
     ),
     config=ConciergeConfig.from_kernel_config(config),
-    hil_port=self._hil_service,                   # HILService | None
+    hil_port=session_hil_service,                 # session-bus-bound HILService | None
 )
 ```
+
+  `ConciergeRuntime` retains `_input_port`, `_output_port`, `_state_port`,
+  `_llm_port`, and `_dispatch_port` so live-kernel probes can verify that the
+  factory-injected API surface is the same object graph used by Front, Back, and FSM.
 
 ---
 
@@ -54,7 +57,7 @@ controller = ConciergeController(bus=session_bus, router=session_router)
 The controller creates these sub-components in its `__init__`:
 
 | Component | Type | Role |
-|---|---|---|
+| --- | --- | --- |
 | `_state` | `ConciergeState` | Current cognitive state (starts `LISTENING`) |
 | `_turn_number` | `int` | Monotonic turn counter |
 | `_turn_state` | `FSMTurnState` | Ephemeral per-turn data (pending/deferred results) |
@@ -94,7 +97,7 @@ ExperienceLayer()     # creates 6 sub-components at fixed cadences
 ```
 
 | Sub-component | Cadence | Output type |
-|---|---|---|
+| --- | --- | --- |
 | `EmotionalProcessor` | every 25th turn (unless high confidence) | `EmotionalTrajectory` (valence, arousal, dominance, trend) |
 | `AffectiveMirror` | chained after EmotionalProcessor | `ToneAdjustment` (warmth, formality, pace, mirror_intensity) |
 | `NarrativeWeaver` | every 20th turn | `NarrativeContext` (stub) |
@@ -170,7 +173,7 @@ inflight→EXECUTOR, >10 turns→PEER, else→GUIDE.
 
 ## 3. Runtime call graph — a single user turn (LISTENING → DELIVERING)
 
-```
+```text
 [User message arrives on session_bus / ACTOR_FRONT mailbox]
         │
         ▼
@@ -215,16 +218,24 @@ Front Actor (front_handler)
   │     3. emit response.final.v1
   │
   ▼
-  [if task.dispatch.v1 emitted]
-  │
-  ▼
-  FSM Controller._on_task_dispatch() → _transition(COMPANIONING)
-  │
-  ▼
-  Back Actor (back_handler) — dispatched to BackPool worker
+    [if task.dispatch.v1 emitted]
+    │
+    ▼
+    FSM Controller._on_task_dispatch() → _transition(COMPANIONING)
+    │
+    ├─ LOW: canonical task.dispatch.v1 → Back Actor (back_handler)
+    └─ MED/HIGH: TaskEnvelope → IDispatchPort.dispatch_envelope()
+      TaskIntent.params are copied to TaskEnvelope.context["params"]
+      keyed by capability name before OrchestratorService.handle_task().
+    │
+    ▼
+    Back Actor / Orchestrator result path
   │
   ├─ SS snapshot read ONCE at start (beliefs, scoreboard, task_state, task_artifacts,
   │   control, history, persona) — snapshot is immutable for ReAct loop duration
+  ├─ Back ToolContext is rebound from the inbound envelope before ReAct
+  │   (cognitive_trace_id, session_id, active_task_id) so dispatch_direct()
+  │   capability calls carry the same turn correlation as task.dispatch.v1
   ├─ back_prompt built (system prompt with task context + SS snapshot)
   ├─ Tools filtered by tier (LOW=3, MEDIUM/HIGH=6)
   ├─ CancellationToken wired (polls cancel_token.is_cancelled() each iteration)
@@ -235,7 +246,9 @@ Front Actor (front_handler)
   ├─ Emits task.complete.v1 / task.failed.v1 / task.suspended.v1
   │
   ▼
-  FSM Controller._on_task_complete() → _transition(DELIVERING)
+  FSM Controller._on_task_complete()
+  │   ├─ same-turn dispatch result → store deferred proactive result and return LISTENING
+  │   └─ older/asynchronous result → _transition(DELIVERING)
   │
   ▼
   WeavePolicy.decide(WeaveSignal)            [M8 adaptive delivery]
@@ -253,15 +266,16 @@ Front Actor (front_handler)
 
 ## 4. HITL (Human-in-the-Loop) wiring
 
-When Back calls `request_clarification` tool:
+When Back returns `submit_result(needs_human)` or calls the legacy clarification tool:
 
-```
+```text
 Back emits task.suspended.v1
   → FSM._on_task_suspended() → _transition(CLARIFYING_WORKER)
   → SuspensionManager.record(task_id, suspension_context)
   → HILCoordinator.route(suspension)
   → Front gets HITL_RELAY mode prompt
   → Front emits hil.requested.v1 to bus
+  → Front emits response.final.v1 for the HITL prompt; FSM stays CLARIFYING_WORKER while the task is active
   → User responds with clarification
   → FSM._on_user_input() in CLARIFYING_WORKER → HITL response path
   → Front gets HITL_RESOLVE mode prompt
@@ -282,7 +296,6 @@ CrashRecoveryOrchestrator.recover(fsm=controller, ledger_store=ledger_store, ses
 
 Recovery order (dependency-safe):
 
-
 1. `project_task_states(entries)` → `TaskBridge.rebuild_from_projection(task_states)`
 2. `project_cancel_state(entries)` → `CancellationHandler.rebuild_from_events(entries)`
 3. `project_suspension_state(entries)` → `SuspensionManager.rebuild_from_events(entries)`
@@ -294,14 +307,26 @@ Recovery order (dependency-safe):
 
 ---
 
-## 6. Dependency graph (construction)
+## 6. Runtime teardown ownership
 
-```
+`ConciergeRuntime.stop()` owns every subscription created during Concierge construction:
+
+1. `ConciergeController.teardown()` unsubscribes controller FSM topic handles.
+2. Runtime unsubscribes `subscribe_front_events(...)` front actor handles.
+3. Runtime calls `BusInputAdapter.close()` to remove the input-port subscriber on `k1.session.user.input.v1`.
+
+Kernel session teardown calls this before closing the per-session bus, so `destroy_session()` can leave no Concierge handler refs in `LocalBus._sub_patterns`.
+
+---
+
+## 7. Dependency graph (construction)
+
+```text
 IBus (session bus)
-  └─ BusInputAdapter     → IInputPort  → Front mailbox consumer
+  └─ BusInputAdapter     → IInputPort  → k1.session.user.input.v1 subscriber
   └─ BusOutputAdapter    → IOutputPort → Front response emitter
   └─ DeltaPortAdapter    → IDeltaPort  → FSM event bus
-  └─ ConciergeController.subscribe_all() [20 topic subscriptions]
+  └─ ConciergeController.subscribe_all() [19 topic subscriptions]
 
 IMailboxRouter (session router)
   └─ front_mailbox (ACTOR_FRONT)

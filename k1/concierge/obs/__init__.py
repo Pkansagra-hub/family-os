@@ -11,7 +11,6 @@ Submodules:
     hitl_metrics -- HITLMetricsSubscriber (lifecycle dashboard)
     arbiter_metrics -- ArbiterMetricsSubscriber (decision distribution)
     weave_metrics -- WeaveMetricsSubscriber (policy effectiveness)
-    phase1_metrics -- Phase1MetricsSubscriber (classification health)
 
 V2 Design Ref: Section 15.4.C (Unified Metrics Emission Layer)
 """
@@ -36,7 +35,6 @@ from k1.concierge.obs.metrics import (
     SlidingWindow,
     TurnTimer,
 )
-from k1.concierge.obs.phase1_metrics import Phase1MetricsSubscriber
 from k1.concierge.obs.react_metrics import (
     ReactLoopOutcome,
     classify_exit_path,
@@ -66,5 +64,4 @@ __all__ = [
     "HITLMetricsSubscriber",
     "ArbiterMetricsSubscriber",
     "WeaveMetricsSubscriber",
-    "Phase1MetricsSubscriber",
 ]

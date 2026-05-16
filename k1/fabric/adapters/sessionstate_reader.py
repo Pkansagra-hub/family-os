@@ -34,6 +34,7 @@ Exports:
 
 from __future__ import annotations
 
+import inspect
 import logging
 import time
 from typing import Any, Dict, List, Optional
@@ -263,8 +264,30 @@ class SessionStateReaderAdapter:
             data = section_obj.to_dict()
             return data if isinstance(data, dict) else None
         if hasattr(section_obj, "get"):
-            data = section_obj.get()
-            return data if isinstance(data, dict) else None
+            get_fn = getattr(section_obj, "get")
+            if callable(get_fn):
+                try:
+                    sig = inspect.signature(get_fn)
+                except (TypeError, ValueError):
+                    sig = None
+                if sig is not None:
+                    required = [
+                        p
+                        for p in sig.parameters.values()
+                        if p.kind
+                        in (
+                            inspect.Parameter.POSITIONAL_ONLY,
+                            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                        )
+                        and p.default is inspect.Signature.empty
+                    ]
+                    if required:
+                        return None
+                try:
+                    data = get_fn()
+                except TypeError:
+                    return None
+                return data if isinstance(data, dict) else None
         return None
 
     @staticmethod

@@ -217,6 +217,8 @@ def _from_hub_response(response: Any) -> PlannerLLMResponse:
             result["content"] = result["text"]
         elif "json_output" in result:
             result["content"] = result["json_output"]
+        elif isinstance(result.get("value"), str):
+            result["content"] = result["value"]
     return PlannerLLMResponse(
         result=result,
         metadata=_coerce_to_dict(getattr(response, "metadata", {})),

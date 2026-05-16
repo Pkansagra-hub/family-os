@@ -164,32 +164,32 @@ class KernelConfig:
 class LlmConfig:
     """Knobs from llm/model_selection.py, llm/gemini_adapter.py, llm/types.py."""
 
-    default_model: str = "gemini-2.5-flash"
+    default_model: str = "gemini-3-flash-preview"
     batch_max_concurrency: int = 5
     default_max_tokens: int = 4096
     default_timeout_ms: int = 30_000
     default_temperature: float = 1.0
     model_hint_overrides: dict[str, str] = field(
         default_factory=lambda: {
-            "fast": "gemini-2.5-flash",
-            "smart": "gemini-2.5-pro",
-            "cheap": "gemini-2.5-flash",
-            "thinking": "gemini-2.5-flash",
-            "pro": "gemini-2.5-pro",
-            "flash": "gemini-2.5-flash",
+            "fast": "gemini-3-flash-preview",
+            "smart": "gemini-3-flash-preview",
+            "cheap": "gemini-3-flash-preview",
+            "thinking": "gemini-3.1-pro-preview",
+            "pro": "gemini-3.1-pro-preview",
+            "flash": "gemini-3-flash-preview",
         }
     )
     model_selection_table: dict[str, dict[str, str]] = field(
         default_factory=lambda: {
-            "CHAT": {"front": "gemini-2.5-flash", "back": "gemini-2.5-flash"},
+            "CHAT": {"front": "gemini-3-flash-preview", "back": "gemini-3.1-pro-preview"},
             "TOOL_CALL": {
-                "front": "gemini-2.5-pro",
-                "back": "gemini-2.5-pro",
-                "planner": "gemini-2.5-pro",
+                "front": "gemini-3-flash-preview",
+                "back": "gemini-3.1-pro-preview",
+                "planner": "gemini-3.1-pro-preview",
             },
-            "STRUCTURED": {"front": "gemini-2.5-flash", "back": "gemini-2.5-flash"},
-            "REASON": {"front": "gemini-2.5-pro", "back": "gemini-2.5-pro"},
-            "STREAM": {"front": "gemini-2.5-flash"},
+            "STRUCTURED": {"front": "gemini-3-flash-preview", "back": "gemini-3.1-pro-preview"},
+            "REASON": {"front": "gemini-3-flash-preview", "back": "gemini-3.1-pro-preview"},
+            "STREAM": {"front": "gemini-3-flash-preview"},
         }
     )
 
@@ -304,7 +304,15 @@ class ToolsConfig:
     """Knobs from tools/dispatcher.py."""
 
     budget_limits: dict[str, int] = field(
-        default_factory=lambda: {"LOW": 5, "MEDIUM": 10, "HIGH": 20, "CRISIS": 3}
+        default_factory=lambda: {
+            "simple": 400,
+            "plan": 400,
+            "crisis": 400,
+            "LOW": 400,
+            "MEDIUM": 400,
+            "HIGH": 400,
+            "CRISIS": 400,
+        }
     )
 
 
@@ -415,34 +423,6 @@ class LedgerConfig:
     max_events_per_session: int = 10_000
     compaction_threshold: int = 1_000
     crash_recovery_timeout_s: float = 30.0
-
-
-# =========================================================================
-# M10: Phase 1 / UltraBERT config
-# =========================================================================
-
-
-@dataclass
-class Phase1Config:
-    """Knobs from fsm/ultrabert_phase1.py (M10: UltraBERT Integration)."""
-
-    pipeline: str = "stub"  # "ultrabert" | "stub" -- default stub for tests
-    intent_confidence_threshold: float = 0.3
-    complexity_thresholds: dict[str, int] = field(
-        default_factory=lambda: {"low_max": 0, "medium_max": 2}
-    )
-    degradation_fallback_enabled: bool = True
-    # Lazy load defers the ~20s familyos_ultrabert model load until first
-    # analyze() call. Combined with warmup_on_startup=False this means the
-    # process boots fast and only pays the load cost on first user input.
-    lazy_load: bool = True
-    warmup_on_startup: bool = False
-    warmup_rounds: int = 3
-    backend: str = "auto"
-    device: str = "auto"
-    cache_size: int = 64
-    cache_ttl_s: float = 30.0
-    target_latency_ms: int = 25
 
 
 # =========================================================================
@@ -747,8 +727,6 @@ class PocConfig:
     weave_policy: WeavePolicyConfig = field(default_factory=WeavePolicyConfig)
     # M9: Protocol Lifecycle Migration
     ledger: LedgerConfig = field(default_factory=LedgerConfig)
-    # M10: UltraBERT Integration
-    phase1: Phase1Config = field(default_factory=Phase1Config)
     # M11: Observability & Telemetry
     obs: ObsConfig = field(default_factory=ObsConfig)
 
@@ -1119,36 +1097,6 @@ def _build_ledger(raw: dict[str, Any]) -> LedgerConfig:
 # -- M10: Phase 1 builder ------------------------------------------------
 
 
-def _build_phase1(raw: dict[str, Any]) -> Phase1Config:
-    cfg = Phase1Config()
-    if not raw:
-        return cfg
-    if "pipeline" in raw:
-        cfg.pipeline = str(raw["pipeline"]).lower()
-    if "intent_confidence_threshold" in raw:
-        cfg.intent_confidence_threshold = float(raw["intent_confidence_threshold"])
-    if "complexity_thresholds" in raw and isinstance(raw["complexity_thresholds"], dict):
-        cfg.complexity_thresholds = {
-            str(k): int(v) for k, v in raw["complexity_thresholds"].items()
-        }
-    for attr in ("degradation_fallback_enabled", "warmup_on_startup", "lazy_load"):
-        if attr in raw:
-            setattr(cfg, attr, bool(raw[attr]))
-    if "warmup_rounds" in raw:
-        cfg.warmup_rounds = int(raw["warmup_rounds"])
-    if "backend" in raw:
-        cfg.backend = str(raw["backend"])
-    if "device" in raw:
-        cfg.device = str(raw["device"])
-    if "cache_size" in raw:
-        cfg.cache_size = int(raw["cache_size"])
-    if "cache_ttl_s" in raw:
-        cfg.cache_ttl_s = float(raw["cache_ttl_s"])
-    if "target_latency_ms" in raw:
-        cfg.target_latency_ms = int(raw["target_latency_ms"])
-    return cfg
-
-
 # -- M11: Observability builders ------------------------------------------
 
 
@@ -1414,7 +1362,6 @@ def _build_config(raw: dict[str, Any]) -> PocConfig:
         arbiter=_build_arbiter(raw.get("arbiter", {})),
         weave_policy=_build_weave_policy(raw.get("weave_policy", {})),
         ledger=_build_ledger(raw.get("ledger", {})),
-        phase1=_build_phase1(raw.get("phase1", {})),
         obs=_build_obs(raw.get("obs", {})),
     )
 

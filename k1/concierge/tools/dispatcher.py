@@ -22,6 +22,7 @@ The 6-step pipeline:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -68,14 +69,14 @@ _TIER_ALIAS: dict[str, str] = {
 }
 
 BUDGET_LIMITS: dict[str, int] = {
-    "simple": 5,
-    "plan": 15,
-    "crisis": 3,
+    "simple": 400,
+    "plan": 400,
+    "crisis": 400,
     # Legacy aliases:
-    "LOW": 5,
-    "MEDIUM": 15,
-    "HIGH": 15,
-    "CRISIS": 3,
+    "LOW": 400,
+    "MEDIUM": 400,
+    "HIGH": 400,
+    "CRISIS": 400,
 }
 
 # =========================================================================
@@ -148,6 +149,57 @@ class DispatchRecord:
     result: ToolResult
     timestamp_ms: int
     iteration: int
+
+
+def hash_tool_arguments(arguments: dict[str, Any] | None) -> str:
+    """Return a stable short hash for tool arguments."""
+    text = json.dumps(arguments or {}, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+@dataclass(frozen=True)
+class ToolExecutionRecord:
+    """Timing and retry metadata for one tool execution attempt."""
+
+    tool_name: str
+    call_id: str
+    args_hash: str
+    start_time_ms: int
+    end_time_ms: int
+    duration_ms: int
+    timeout_ms: int
+    result_status: str
+    retryable: bool
+    iteration: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "tool_name": self.tool_name,
+            "call_id": self.call_id,
+            "args_hash": self.args_hash,
+            "start_time_ms": self.start_time_ms,
+            "end_time_ms": self.end_time_ms,
+            "duration_ms": self.duration_ms,
+            "timeout_ms": self.timeout_ms,
+            "result_status": self.result_status,
+            "retryable": self.retryable,
+            "iteration": self.iteration,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ToolExecutionRecord":
+        return cls(
+            tool_name=str(data.get("tool_name", "")),
+            call_id=str(data.get("call_id", "")),
+            args_hash=str(data.get("args_hash", "")),
+            start_time_ms=int(data.get("start_time_ms", 0) or 0),
+            end_time_ms=int(data.get("end_time_ms", 0) or 0),
+            duration_ms=int(data.get("duration_ms", 0) or 0),
+            timeout_ms=int(data.get("timeout_ms", 0) or 0),
+            result_status=str(data.get("result_status", "")),
+            retryable=bool(data.get("retryable", False)),
+            iteration=int(data.get("iteration", 0) or 0),
+        )
 
 
 # =========================================================================
@@ -277,7 +329,26 @@ class ToolDispatcher:
         self._policy_gate: PolicyGateFn | None = policy_gate
         self.call_count: int = 0
         self.call_history: list[DispatchRecord] = []
-        self._budget_limit = get_config().tools.budget_limits.get(tier, 5)
+        self.execution_history: list[ToolExecutionRecord] = []
+        budget_limits = get_config().tools.budget_limits
+        canonical_tier = _TIER_ALIAS.get(tier, tier)
+        self._budget_limit = budget_limits.get(
+            tier,
+            budget_limits.get(
+                canonical_tier, BUDGET_LIMITS.get(tier, BUDGET_LIMITS.get(canonical_tier, 400))
+            ),
+        )
+        # Per-tool call count remains tracked, but the temporary cap is
+        # intentionally lax while live Front/Back tool behavior is tuned.
+        self._per_tool_counts: dict[str, int] = {}
+        self._per_tool_limits: dict[str, int] = {
+            "update_scoreboard": 400,
+            "update_beliefs": 400,
+            "update_clarifications": 400,
+            "update_narrative": 400,
+            "refine_affect": 400,
+            "promote_belief": 400,
+        }
         logger.info(
             "ToolDispatcher initialized (actor=%s, tier=%s, budget=%d, allowlist=%d tools)",
             actor,
@@ -303,6 +374,101 @@ class ToolDispatcher:
     def policy_gate(self) -> PolicyGateFn | None:
         """Current step-0 policy gate (``None`` when not wired)."""
         return self._policy_gate
+
+    def _record_execution(
+        self,
+        *,
+        name: str,
+        args: dict[str, Any],
+        result: ToolResult,
+        call_id: str = "",
+        start_ms: int | None = None,
+        end_ms: int | None = None,
+        timeout_ms: int = 0,
+        retryable: bool = False,
+        consume_budget: bool = False,
+    ) -> ToolExecutionRecord:
+        """Append execution metadata while preserving legacy history."""
+        now_ms = int(time.time() * 1000)
+        start = start_ms if start_ms is not None else now_ms
+        end = end_ms if end_ms is not None else now_ms
+        if consume_budget:
+            self.call_count += 1
+            self._per_tool_counts[name] = self._per_tool_counts.get(name, 0) + 1
+            iteration = self.call_count
+        else:
+            iteration = len(self.execution_history) + 1
+        record = ToolExecutionRecord(
+            tool_name=name,
+            call_id=call_id,
+            args_hash=hash_tool_arguments(args),
+            start_time_ms=start,
+            end_time_ms=end,
+            duration_ms=max(0, end - start),
+            timeout_ms=max(0, timeout_ms),
+            result_status=result.status,
+            retryable=retryable,
+            iteration=iteration,
+        )
+        self.execution_history.append(record)
+        self.call_history.append(
+            DispatchRecord(
+                tool_name=name,
+                arguments=args,
+                result=result,
+                timestamp_ms=end,
+                iteration=iteration,
+            )
+        )
+        return record
+
+    def record_timeout(
+        self,
+        tool_call: ToolCallResult,
+        *,
+        timeout_ms: int,
+    ) -> ToolExecutionRecord:
+        """Record a timeout synthesized by react_loop's wait_for wrapper."""
+        name = tool_call.name
+        result = ToolResult(
+            tool_name=name,
+            status="error",
+            data={"retryable": True, "timeout_ms": timeout_ms},
+            error=f"tool_timeout after {timeout_ms / 1000.0:.1f}s",
+        )
+        now_ms = int(time.time() * 1000)
+        return self._record_execution(
+            name=name,
+            args=tool_call.arguments,
+            result=result,
+            call_id=getattr(tool_call, "id", "") or "",
+            start_ms=max(0, now_ms - timeout_ms),
+            end_ms=now_ms,
+            timeout_ms=timeout_ms,
+            retryable=True,
+            consume_budget=True,
+        )
+
+    @staticmethod
+    def _result_retryable(result: ToolResult) -> bool:
+        if not result.is_error():
+            return False
+        data = result.data if isinstance(result.data, dict) else {}
+        if "retryable" in data:
+            return bool(data.get("retryable"))
+        error = (result.error or "").lower()
+        terminal_markers = (
+            "not allowed",
+            "budget exhausted",
+            "invalid arguments",
+            "side-effect tools blocked",
+            "submit_result(complete) rejected",
+            "already called",
+            "policy gate",
+        )
+        if any(marker in error for marker in terminal_markers):
+            return False
+        return bool(error)
 
     # -----------------------------------------------------------------
     # The 7-step dispatch pipeline
@@ -356,17 +522,32 @@ class ToolDispatcher:
                     self.actor,
                     name,
                 )
-                return ToolResult(
+                result = ToolResult(
                     tool_name=name,
                     status="error",
                     error="policy gate error (failing closed)",
                 )
+                self._record_execution(
+                    name=name,
+                    args=args,
+                    result=result,
+                    call_id=getattr(tool_call, "id", "") or "",
+                    retryable=False,
+                )
+                return result
             if gated is not None:
                 logger.info(
                     "dispatch BLOCKED (policy_gate)  actor=%s tool=%s status=%s",
                     self.actor,
                     name,
                     gated.status,
+                )
+                self._record_execution(
+                    name=name,
+                    args=args,
+                    result=gated,
+                    call_id=getattr(tool_call, "id", "") or "",
+                    retryable=False,
                 )
                 return gated
 
@@ -378,11 +559,19 @@ class ToolDispatcher:
                 name,
                 self.tier,
             )
-            return ToolResult(
+            result = ToolResult(
                 tool_name=name,
                 status="error",
                 error=f"Tool '{name}' not allowed for actor '{self.actor}'",
             )
+            self._record_execution(
+                name=name,
+                args=args,
+                result=result,
+                call_id=getattr(tool_call, "id", "") or "",
+                retryable=False,
+            )
+            return result
 
         # Step 2: Budget check
         # submit_result is exempt from budget -- it's the Back actor's
@@ -397,11 +586,89 @@ class ToolDispatcher:
                 self.call_count,
                 self._budget_limit,
             )
-            return ToolResult(
+            result = ToolResult(
                 tool_name=name,
                 status="error",
                 error="Tool budget exhausted",
             )
+            self._record_execution(
+                name=name,
+                args=args,
+                result=result,
+                call_id=getattr(tool_call, "id", "") or "",
+                retryable=False,
+            )
+            return result
+
+        # Step 2b: Per-tool call limit (state-mutation tools only).
+        # Prevents the model from burning the shared budget on repeated
+        # bookkeeping calls (update_scoreboard x4, etc.).
+        _per_limit = self._per_tool_limits.get(name)
+        if _per_limit is not None:
+            _tool_uses = self._per_tool_counts.get(name, 0)
+            if _tool_uses >= _per_limit:
+                logger.warning(
+                    "dispatch REJECTED (per-tool limit)  actor=%s tool=%s uses=%d limit=%d",
+                    self.actor,
+                    name,
+                    _tool_uses,
+                    _per_limit,
+                )
+                result = ToolResult(
+                    tool_name=name,
+                    status="error",
+                    error=f"{name} already called {_tool_uses} times this turn (limit={_per_limit}); stop calling it",
+                )
+                self._record_execution(
+                    name=name,
+                    args=args,
+                    result=result,
+                    call_id=getattr(tool_call, "id", "") or "",
+                    retryable=False,
+                )
+                return result
+
+        # Step 2c: Back-actor guard — reject submit_result(complete) if no
+        # invoke_capability / batch_invoke_capabilities has been called yet.
+        # Prevents the model from declaring success without doing any work.
+        # Only applies when budget is still healthy (>= 2 remaining), so the
+        # last-resort submit on a nearly-exhausted budget is still allowed.
+        if (
+            self.actor == "back"
+            and name == "submit_result"
+            and args.get("result_type") == "complete"
+            and self._per_tool_counts.get("invoke_capability", 0) == 0
+            and self._per_tool_counts.get("batch_invoke_capabilities", 0) == 0
+            and self._per_tool_counts.get("recall_memory", 0) == 0
+            and self._per_tool_counts.get("summarize_context", 0) == 0
+            and self.call_count <= self._budget_limit - 2
+        ):
+            logger.warning(
+                "dispatch REJECTED (no-work guard)  actor=back submit_result(complete) "
+                "attempted before any invoke_capability call (budget_remaining=%d/%d)",
+                self._budget_limit - self.call_count,
+                self._budget_limit,
+            )
+            result = ToolResult(
+                tool_name=name,
+                status="error",
+                error=(
+                    "submit_result(complete) rejected: you have not called an authority "
+                    "capability or memory/context tool yet. For live system-of-record work, "
+                    "you MUST: 1) discover_capabilities(intent, domain), 2) invoke_capability "
+                    "or batch_invoke_capabilities with the exact registry-owned name, "
+                    "3) THEN submit_result with the actual result. If discovery returned no "
+                    "viable capability, use submit_result(result_type='needs_human') instead."
+                ),
+            )
+            self._record_execution(
+                name=name,
+                args=args,
+                result=result,
+                call_id=getattr(tool_call, "id", "") or "",
+                retryable=False,
+            )
+            return result
 
         # Step 3: Schema validation
         schema_obj = self.tool_schemas.get(name)
@@ -413,11 +680,19 @@ class ToolDispatcher:
                     name,
                     errors,
                 )
-                return ToolResult(
+                result = ToolResult(
                     tool_name=name,
                     status="error",
                     error=f"Invalid arguments: {'; '.join(errors)}",
                 )
+                self._record_execution(
+                    name=name,
+                    args=args,
+                    result=result,
+                    call_id=getattr(tool_call, "id", "") or "",
+                    retryable=False,
+                )
+                return result
 
         # Step 4: Safety band check (CRISIS blocks side-effect tools)
         if self.tier == "CRISIS" and schema_obj and schema_obj.side_effects:
@@ -425,11 +700,19 @@ class ToolDispatcher:
                 "dispatch REJECTED (crisis-safety)  tool=%s has side_effects in CRISIS tier",
                 name,
             )
-            return ToolResult(
+            result = ToolResult(
                 tool_name=name,
                 status="error",
                 error="Side-effect tools blocked in CRISIS tier",
             )
+            self._record_execution(
+                name=name,
+                args=args,
+                result=result,
+                call_id=getattr(tool_call, "id", "") or "",
+                retryable=False,
+            )
+            return result
 
         # Step 5: Dispatch to implementation (async-aware)
         # Emit tool.started event to bus (for OutputChannel tracking)
@@ -445,8 +728,18 @@ class ToolDispatcher:
                 pass  # Never let observability break execution
 
         start_ms = int(time.time() * 1000)
-        result = await execute_tool(name, args, self.ctx)
-        duration_ms = int(time.time() * 1000) - start_ms
+        try:
+            result = await execute_tool(name, args, self.ctx)
+        except Exception as exc:
+            logger.exception("dispatch  implementation raised actor=%s tool=%s", self.actor, name)
+            result = ToolResult(
+                tool_name=name,
+                status="error",
+                data={"retryable": True},
+                error=f"tool_exception: {exc}",
+            )
+        end_ms = int(time.time() * 1000)
+        duration_ms = end_ms - start_ms
 
         # Emit tool.completed event to bus (includes result data for SS panel)
         if self._bus and build_tool_completed:
@@ -478,15 +771,15 @@ class ToolDispatcher:
                 pass
 
         # Step 6: Record
-        self.call_count += 1
-        self.call_history.append(
-            DispatchRecord(
-                tool_name=name,
-                arguments=args,
-                result=result,
-                timestamp_ms=int(time.time() * 1000),
-                iteration=self.call_count,
-            )
+        self._record_execution(
+            name=name,
+            args=args,
+            result=result,
+            call_id=getattr(tool_call, "id", "") or "",
+            start_ms=start_ms,
+            end_ms=end_ms,
+            retryable=self._result_retryable(result),
+            consume_budget=True,
         )
 
         logger.info(
@@ -534,6 +827,12 @@ class ToolDispatcher:
         """Reset the dispatcher for a new turn (same allowlist/tier)."""
         self.call_count = 0
         self.call_history.clear()
+        self.execution_history.clear()
+        self._per_tool_counts.clear()
+
+    def get_execution_records(self) -> list[ToolExecutionRecord]:
+        """Return a copy of detailed execution records."""
+        return list(self.execution_history)
 
     def get_call_summaries(self) -> list[ToolCallSummary]:
         """Build lightweight summaries from call_history for persistence.
@@ -548,10 +847,12 @@ class ToolDispatcher:
         """
         summaries: list[ToolCallSummary] = []
         records = self.call_history
+        execution_records = getattr(self, "execution_history", [])
         for i, record in enumerate(records):
             summary = _build_summary(record)
-            # Estimate duration from next record's timestamp (if available)
-            if i + 1 < len(records):
+            if i < len(execution_records):
+                duration = execution_records[i].duration_ms
+            elif i + 1 < len(records):
                 duration = records[i + 1].timestamp_ms - record.timestamp_ms
             else:
                 duration = 0

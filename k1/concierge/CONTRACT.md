@@ -2,8 +2,8 @@
 
 `ConciergeRuntime` is the **session-scoped conversational engine** for K1. It owns
 the two-actor LLM model (Front + Back), the 11-state cognitive FSM, response delivery
-timing, and the full SessionState write path. It is not a background service — it is
-the active processing loop for one user session.
+timing, and the full SessionState write path. It is not a shared service — it owns
+one mailbox consumer task for one user session.
 
 ---
 
@@ -16,9 +16,10 @@ async def start(self) -> None      # starts FSM, subscribes to bus, begins mailb
 async def stop(self) -> None       # drains in-flight work, unsubscribes, closes
 ```
 
-`start()` is an **infinite coroutine** — it runs the mailbox consumer loop until
-`stop()` is called. Callers must wrap it in `asyncio.create_task()`, never await
-directly.
+`start()` creates the internal mailbox consumer task and returns after the task is
+scheduled. Callers should `await runtime.start()` during session boot and later
+`await runtime.stop()` during teardown; they should not create an additional task
+around `start()`.
 
 ### 1.2 Self-model integration (set before `start()`)
 
@@ -77,8 +78,9 @@ Used by: Front actor mailbox loop. One envelope = one user turn. The adapter
 async def send(self, envelope: Envelope) -> None
 ```
 
-Used by: Front actor to emit `response.final.v1` and streaming chunk envelopes to
-the session bus. The adapter (`BusOutputAdapter`) publishes to the `ACTOR_FRONT` topic.
+Required at construction as the injected output boundary and retained on the runtime
+for live wiring diagnostics. The production adapter (`BusOutputAdapter`) publishes
+envelopes to the same per-session bus that the FSM owns.
 
 ### 2.3 `IClassificationPort` (≡ `Phase1Pipeline`)
 
@@ -93,6 +95,7 @@ Used by: FSM controller on every user input turn. In production: `UltraBERTPhase
 (local ML model, ~2ms). In test: `StubPhase1Pipeline` (fixed LOW/AMBER defaults).
 
 The classification result drives:
+
 - Which LLM prompt mode Front uses (STANDARD, INTERRUPT, CLARIFY_ASK, etc.)
 - Which tool tier Back is given (LOW=3 tools, MEDIUM/HIGH=6 tools)
 - Whether the Arbiter considers the input a cancel/modify/parallel intent
@@ -111,6 +114,7 @@ Front calls `stream_execute` during normal conversation turns.
 Back calls `execute` (non-streaming, structured JSON output).
 
 **What Concierge requires from ILLMPort:**
+
 - `execute()` must return a `HubResponse` with `.text: str` and `.tool_calls: list`
 - `stream_execute()` must yield `HubChunk` objects with `.delta: str`
 - Both must raise on terminal failure (not return empty); Concierge catches and emits
@@ -127,7 +131,7 @@ This is the **read-only** face of SessionState seen by Concierge actors. The nin
 SessionState sections relevant to Concierge:
 
 | Section name | What it contains | Who reads it |
-|---|---|---|
+| --- | --- | --- |
 | `persona` | family members, preferences, rules, user identity | Front (every turn) |
 | `control` | FSM state, active_task_ids, complexity_tier, intent classification, privacy band | Front + Back + FSM |
 | `history` | Typed conversation history entries | Front (chat context), Back (task context window) |
@@ -153,15 +157,17 @@ orchestration).
 `dispatch_envelope` → Orchestrator MED/HIGH-tier task execution (multi-step workflow,
 DAG, planner).
 
-Used by: Back actor during its ReAct loop. The tier of the current task
-(`ComplexityTier.LOW / MEDIUM / HIGH`) determines which path is taken.
+Used by: Back actor during its ReAct loop for `dispatch_direct()` capability
+calls, and by the FSM dispatch path for MED/HIGH `dispatch_envelope()` task
+handoff. The FSM routes LOW tasks to Back directly and MED/HIGH tasks through
+the orchestrator envelope path.
 
 ### 2.7 `IDeltaPort` (≡ `IBus`)
 
 The per-session bus. All internal events travel on this bus:
 
 | Publisher | Topics emitted | Subscribers |
-|---|---|---|
+| --- | --- | --- |
 | Front | `response.final.v1`, `response.stream.v1`, `task.dispatch.v1`, `task.cancel.v1`, `task.resume.v1` | FSM, Back |
 | Back | `task.complete.v1`, `task.failed.v1`, `task.suspended.v1`, `tool.started.v1`, `tool.completed.v1` | FSM, Front |
 | FSM | `state.updated.v1`, `turn.started.v1`, `turn.completed.v1`, `dead.letter.v1`, `intent.arbitrated.v1`, `hil.requested.v1`, `hil.resolved.v1` | observability, MemoryWriter |
@@ -188,7 +194,7 @@ The `RecallMemoryAdapter` wraps a `recall_fn` closure over the bridge client.
 ## 3. Error surface
 
 | Error | Condition | Handling |
-|---|---|---|
+| --- | --- | --- |
 | `IllegalTransitionError` | FSM guard rejects a bus event in current state | Dead-lettered — published to `dead.letter.v1`; FSM stays in current state |
 | `FrontLockOverflowError` | Front mailbox queue exceeds `DEFAULT_MAX_QUEUE_DEPTH` | Event dropped; logged |
 | LLM failure (any) | `execute()` or `stream_execute()` raises | Back emits `task.failed.v1`; FSM transitions accordingly |
@@ -203,7 +209,8 @@ The `RecallMemoryAdapter` wraps a `recall_fn` closure over the bridge client.
 ## 4. Invariants that callers must respect
 
 1. `set_self_model()` must be called **before** `start()` if self-model gates are
-   required. Calling after start is a data race.
+   required. Calling after start raises `RuntimeError` so a live mailbox turn
+   cannot race the handle swap.
 2. One `ConciergeRuntime` per session. Sessions must not share an instance.
 3. The per-session `IBus` passed to Concierge must be isolated from other sessions.
    Concierge subscribes globally to the bus it receives.

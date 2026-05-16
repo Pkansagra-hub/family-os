@@ -453,3 +453,50 @@ class LiveBridgeAdapter:
 
     def get_client(self) -> Any:
         return self._client
+
+    async def subscribe_sse(
+        self,
+        topics: list[str],
+        space_id: str = "",
+    ) -> Any:
+        """E15.10: Async-generator that yields parsed SSE data frames from K0.
+
+        Streams ``GET /k0/sse/<topic>`` for the **first** topic in *topics*
+        (pseudo-K0 exposes one endpoint per topic).  Each line that starts
+        with ``data: `` is JSON-parsed and yielded; heartbeat comment lines
+        (``:``) are silently dropped.
+
+        Yields a ``dict`` per event frame.  The caller (``_consume_tool_sse``)
+        publishes each dict to the K1 bus.
+
+        Exits on :class:`asyncio.CancelledError`.  Network errors propagate
+        so the caller can implement retry logic.
+        """
+        import json as _json
+
+        if not topics:
+            return
+        topic = topics[0]
+        url = f"{self._endpoint.rstrip('/')}/k0/sse/{topic}"
+        params: dict = {}
+        if space_id:
+            params["space_id"] = space_id
+
+        import httpx
+
+        async with httpx.AsyncClient(timeout=None) as client:
+            async with client.stream("GET", url, params=params) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    line = line.strip()
+                    if not line or line.startswith(":"):
+                        # heartbeat comment — skip
+                        continue
+                    if line.startswith("data: "):
+                        raw = line[6:].strip()
+                        if not raw:
+                            continue
+                        try:
+                            yield _json.loads(raw)
+                        except _json.JSONDecodeError:
+                            yield {"raw": raw}

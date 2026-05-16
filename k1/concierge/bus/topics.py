@@ -121,6 +121,13 @@ TOPIC_BACKPOOL_WORKER_RELEASED = "k1.backpool.worker.released.v1"
 TOPIC_TASK_LEASED = "k1.backpool.task.leased.v1"
 
 # ---------------------------------------------------------------------------
+# M15 Family-tool SSE topics (prefix: k1.tool_state -> BEST_EFFORT) -- E15.10
+# ---------------------------------------------------------------------------
+TOPIC_TOOL_STATE_CHANGED = "k1.tool_state.changed.v1"
+# Written by BusSsePublisher on every family-tool write, and (when K0 is live)
+# by the KernelService._consume_tool_sse() bridge-subscription task.
+
+# ---------------------------------------------------------------------------
 # Arbiter topics (prefix: k1.arbiter -> STRICT) -- M5 E5.1.5
 # ---------------------------------------------------------------------------
 TOPIC_INTENT_ARBITRATED = "k1.arbiter.intent.v1"
@@ -288,6 +295,11 @@ FSM_ROUTED_TOPICS: frozenset[str] = frozenset(
         TOPIC_PROACTIVE_FILL,
         # M6 E6.4: runtime config-update topic delivered to FSM
         TOPIC_CONCIERGE_CONFIG_UPDATE,
+        # HIL Unification (E4): unified HIL request topic is FSM-routed.
+        # The FSM owns session state (pending_hil_data), CLARIFYING_WORKER
+        # transitions, and delivery to Front for HITL_RELAY rendering.
+        # Front-direct subscription would bypass the state machine.
+        TOPIC_HIL_REQUEST,
     }
 )
 
@@ -295,7 +307,6 @@ FRONT_SUBSCRIPTIONS: frozenset[str] = frozenset(
     {
         TOPIC_TASK_ACCEPTED,
         TOPIC_ORCHESTRATION_DELTA,
-        TOPIC_HIL_REQUEST,
         TOPIC_PLAN_READY,
     }
 )

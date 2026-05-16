@@ -137,7 +137,6 @@ class TestCreateWithPorts:
             output=adapters["output"],
             state=adapters["state"],
             llm=adapters["llm"],
-            classification=adapters["classification"],
             dispatch=adapters["dispatch"],
             memory=adapters["memory"],
         )
@@ -236,7 +235,7 @@ class TestPortBundle:
 
     def test_all_port_keys_frozenset(self):
         assert _ALL_PORT_KEYS == frozenset(
-            {"input_", "output", "classification", "llm", "state", "dispatch", "delta", "memory"}
+            {"input_", "output", "llm", "state", "dispatch", "delta", "memory"}
         )
 
     def test_optional_ports_default_to_none(self):
@@ -248,7 +247,6 @@ class TestPortBundle:
             state=adapters["state"],
             llm=adapters["llm"],
         )
-        assert bundle.classification is None
         assert bundle.dispatch is None
         assert bundle.memory is None
 
@@ -375,11 +373,6 @@ class TestWiringVerification:
     def test_fsm_has_session_state(self):
         session = ConciergeFactory.create_standalone()
         assert session.fsm._ss is not None
-
-    def test_fsm_has_phase1_pipeline(self):
-        session = ConciergeFactory.create_standalone()
-        # Standalone uses StubPhase1Pipeline
-        assert session.fsm._phase1_pipeline is not None
 
     def test_dispatchers_wired(self):
         session = ConciergeFactory.create_standalone()

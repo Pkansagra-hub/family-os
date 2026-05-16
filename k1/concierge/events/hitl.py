@@ -51,6 +51,11 @@ class HILRequested(CanonicalEventMeta):
     """
 
     event_type: str = field(default="hil.requested", init=False)
+    hil_request_id: str = ""
+    kind: str = ""
+    caller_key: str = ""
+    created_at_ms: int = 0
+    timeout_ms: int = 0
     hil_type: str = ""
     question: str = ""
     options: list[dict[str, Any]] = field(default_factory=list)
@@ -62,6 +67,11 @@ class HILRequested(CanonicalEventMeta):
 
     def to_payload(self) -> dict[str, Any]:
         d = super().to_payload()
+        d["hil_request_id"] = self.hil_request_id
+        d["kind"] = self.kind
+        d["caller_key"] = self.caller_key
+        d["created_at_ms"] = self.created_at_ms
+        d["timeout_ms"] = self.timeout_ms
         d["hil_type"] = self.hil_type
         d["question"] = self.question
         d["options"] = self.options
@@ -85,6 +95,11 @@ class HILRequested(CanonicalEventMeta):
             ts_utc=data.get("ts_utc", ""),
             priority=data.get("priority", 1),
             payload_schema_version=data.get("payload_schema_version", "1.0.0"),
+            hil_request_id=data.get("hil_request_id", ""),
+            kind=data.get("kind", ""),
+            caller_key=data.get("caller_key", ""),
+            created_at_ms=data.get("created_at_ms", 0),
+            timeout_ms=data.get("timeout_ms", 0),
             hil_type=data.get("hil_type", ""),
             question=data.get("question", ""),
             options=data.get("options", []),
@@ -110,6 +125,8 @@ class HILResolved(CanonicalEventMeta):
     """
 
     event_type: str = field(default="hil.resolved", init=False)
+    hil_request_id: str = ""
+    kind: str = ""
     resolution: dict[str, Any] = field(default_factory=dict)
     resolution_type: str = "selection"
     elapsed_s: float = 0.0
@@ -117,6 +134,8 @@ class HILResolved(CanonicalEventMeta):
 
     def to_payload(self) -> dict[str, Any]:
         d = super().to_payload()
+        d["hil_request_id"] = self.hil_request_id
+        d["kind"] = self.kind
         d["resolution"] = self.resolution
         d["resolution_type"] = self.resolution_type
         d["elapsed_s"] = self.elapsed_s
@@ -136,6 +155,8 @@ class HILResolved(CanonicalEventMeta):
             ts_utc=data.get("ts_utc", ""),
             priority=data.get("priority", 1),
             payload_schema_version=data.get("payload_schema_version", "1.0.0"),
+            hil_request_id=data.get("hil_request_id", ""),
+            kind=data.get("kind", ""),
             resolution=data.get("resolution", {}),
             resolution_type=data.get("resolution_type", "selection"),
             elapsed_s=data.get("elapsed_s", 0.0),
