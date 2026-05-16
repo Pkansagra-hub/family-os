@@ -325,12 +325,12 @@ These hooks must exist before any live test can be written. Check them off first
 
 | Step | Probe type | Target | Flows | Status | Verdict | Test file | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| M7-L1 | MESSAGE-FLOW | `memory.write.v1` round-trip: K1 → Bridge LIVE → pseudo-K0 WAL | F35, F79, F80 | `[ ]` | | | |
-| M7-L2 | MESSAGE-FLOW | `recall.request.v1` → pseudo-K0 LIKE search → `recall.response.v1` | F39, F40 | `[ ]` | | | |
-| M7-L3 | MESSAGE-FLOW | `tool_state.changed.v1` SSE wired end-to-end K0 → K1 EventBus | F82 | `[ ]` | | | |
-| M7-L4 | MESSAGE-FLOW | `connector.execute.*` → Bridge LIVE → pseudo-K0 `ConnectorHost` | F102 | `[ ]` | | | |
-| M7-L5 | NEGATIVE | Kill pseudo-K0 mid-flight → `LocalOutbox` queues; restart → `DrainWorker` drains; Prometheus counter increments | Bridge outbox | `[ ]` | | | |
-| M7-L6 | PORT-IDENTITY | Bridge mode selection at S4: assert correct client class per config (`HttpBridgeClient` / `SinkBridgeClient` / null) | E2.10 | `[ ]` | | | |
+| M7-L1 | MESSAGE-FLOW | `memory.write.v1` round-trip: K1 → Bridge LIVE → pseudo-K0 WAL | F35, F79, F80 | `[x]` | green | `tests/integration/k1/live/m7/test_m7_l1_l6_pseudo_k0_integration.py` | Recipe-C `KernelService` boots `LiveBridgeAdapter`; generated `memory_write_v1.publish()` writes pseudo-K0 WAL with space/actor/band provenance and HMAC envelope fields. |
+| M7-L2 | MESSAGE-FLOW | `recall.request.v1` → pseudo-K0 LIKE search → `recall.response.v1` | F39, F40 | `[x]` | green | `tests/integration/k1/live/m7/test_m7_l1_l6_pseudo_k0_integration.py` | `build_recall_fn()` uses live bridge client; seeded pseudo-K0 WAL returns `pseudo_k0.*` LIKE-search hit. Belief selector limitation is asserted as empty per I7.3.2. |
+| M7-L3 | MESSAGE-FLOW | `tool_state.changed.v1` SSE wired end-to-end K0 → K1 EventBus | F82 | `[x]` | green | `tests/integration/k1/live/m7/test_m7_l1_l6_pseudo_k0_integration.py` | pseudo-K0 SSE subscriber receives `k1.tool_state.*` command and `_consume_tool_sse()` republishes `k1.tool_state.changed.v1` onto the K1 bus; SSE task is retained/cancelled on shutdown. |
+| M7-L4 | MESSAGE-FLOW | `connector.execute.*` → Bridge LIVE → pseudo-K0 `ConnectorHost` | F102 | `[x]` | green | `tests/integration/k1/live/m7/test_m7_l1_l6_pseudo_k0_integration.py` | `LiveBridgeClient.execute_connector()` now routes through `/k0/command.submit` with `connector.execute.<adapter>.<action>` topic; pseudo-K0 `ConnectorHost` callback result returns to K1. |
+| M7-L5 | NEGATIVE | Kill pseudo-K0 mid-flight → `LocalOutbox` queues; restart → `DrainWorker` drains; Prometheus counter increments | Bridge outbox | `[x]` | xfail strict | `tests/integration/k1/live/m7/test_m7_l1_l6_pseudo_k0_integration.py` | Strict xfail locks I7.2.4: live `LiveBridgeClient` has no owned `LocalOutbox`/`DrainWorker` recovery or counter path yet. |
+| M7-L6 | PORT-IDENTITY | Bridge mode selection at S4: assert correct client class per config (`HttpBridgeClient` / `SinkBridgeClient` / null) | E2.10 | `[x]` | green | `tests/integration/k1/live/m7/test_m7_l1_l6_pseudo_k0_integration.py` | S4 selects LIVE `LiveBridgeAdapter` + runtime `HttpBridgeClient`, SINK `SinkBridgeClient`, and OFFLINE null bridge as configured; no asyncio task leaks after teardown. |
 
 ---
 
@@ -341,8 +341,8 @@ These are not in K1_FLOWS.md but are covered by the SOP and require live coverag
 | # | Description | SOP ref | Status | Notes |
 | --- | --- | --- | --- | --- |
 | X1 | Bridge envelope signing round-trip (HMAC + Ed25519, canonical JSON, idem-key excluded) | E2.7.9 → M7-L1 | `[ ]` | |
-| X2 | LocalOutbox durability under 5xx | E2.7.4 + E7.2.4 → M7-L5 | `[ ]` | |
-| X3 | Bridge mode selection at S4 | E2.10 → M7-L6 | `[ ]` | |
+| X2 | LocalOutbox durability under 5xx | E2.7.4 + E7.2.4 → M7-L5 | `[x]` | Covered as strict xfail by M7-L5: live bridge lacks `LocalOutbox`/`DrainWorker` recovery ownership today. |
+| X3 | Bridge mode selection at S4 | E2.10 → M7-L6 | `[x]` | Covered by M7-L6 across LIVE/SINK/OFFLINE configurations. |
 | X4 | MW pipeline → K0 outbox (SINK mode) | MW + outbox | `[ ]` | |
 | X5 | Per-session bus isolation (E2.2 P1) | M5-L5 | `[x]` | Covered by `tests/integration/k1/live/m5/test_m5_l1_l6_bus_ss_mw.py`. |
 | X6 | S6b Mock→real planner swap | E2.3 → M2-L2 | `[x]` | Covered by `tests/integration/k1/live/m2/test_m2_l2_planner_orchestrator_crosswire.py`. |
@@ -412,10 +412,10 @@ To stamp a milestone **production-grade**, all five must be `[x]`:
 | M4 Cross-component (X1–X13) | 13 | 13 | 4 | 0 | 100% |
 | M6 Cross-cutting (L1–L5) | 5 | 5 | 1 | 0 | 100% |
 | M6 Cross-component (X1–X15) | 15 | 15 | 2 | 0 | 100% |
-| M7 Pseudo-K0 | 6 | 0 | 0 | 0 | 0% |
-| Cross-cutting (X1–X9) | 9 | 4 | — | 0 | 44% |
+| M7 Pseudo-K0 | 6 | 6 | 1 | 0 | 100% |
+| Cross-cutting (X1–X9) | 9 | 6 | — | 0 | 67% |
 | LLM-COVERED contracts | 5 | 0 | — | 0 | 0% |
-| **TOTAL** | **146** | **115** | **16** | **0** | **79%** |
+| **TOTAL** | **146** | **123** | **17** | **0** | **84%** |
 
 ---
 

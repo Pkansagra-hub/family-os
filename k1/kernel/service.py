@@ -208,6 +208,7 @@ class KernelService:
         self._model_hub: Any | None = None  # ModelHub
         self._shared_fabric: Any | None = None  # Fabric
         self._bridge: Any | None = None  # IBridgeClient | None
+        self._tool_sse_task: asyncio.Task[Any] | None = None
         self._orchestrator: Any | None = None  # OrchestratorService
         self._orch_storage: Any | None = None  # WorkflowStorageAdapter
         self._planner: Any | None = None  # PlannerAgent
@@ -588,6 +589,18 @@ class KernelService:
                 errors.append(exc)
                 logger.warning("shutdown: selfmodel bundle shutdown failed: %s", exc)
             self._self_model_bundle = None
+
+        if self._tool_sse_task is not None:
+            try:
+                self._tool_sse_task.cancel()
+                try:
+                    await self._tool_sse_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+            except Exception as exc:
+                errors.append(exc)
+                logger.warning("shutdown: tool SSE task cancel failed: %s", exc)
+            self._tool_sse_task = None
 
         # ── Reverse S4: Disconnect Bridge ─────────────────────
         if self._bridge is not None:
@@ -1496,7 +1509,7 @@ class KernelService:
                 # E15.10: subscribe to tool_state.changed.v1 on K0 and
                 # forward to the K1 bus so the web shell can push
                 # "tool_refresh" to the browser.
-                asyncio.create_task(
+                self._tool_sse_task = asyncio.create_task(
                     self._consume_tool_sse(),
                     name="k1-tool-sse-consumer",
                 )
@@ -1883,6 +1896,17 @@ class KernelService:
                 pass
             self._planner_task = None
 
+        if self._tool_sse_task is not None:
+            try:
+                self._tool_sse_task.cancel()
+                try:
+                    await self._tool_sse_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+            except Exception:
+                pass
+            self._tool_sse_task = None
+
         if self._planner is not None:
             try:
                 await self._planner.stop()
@@ -1967,6 +1991,7 @@ class KernelService:
         self._model_hub = None
         self._shared_fabric = None
         self._bridge = None
+        self._tool_sse_task = None
         self._orchestrator = None
         self._orch_storage = None
         self._planner = None
