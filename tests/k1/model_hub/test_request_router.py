@@ -68,8 +68,13 @@ class FakeCredentialPort:
 class FakePlugin:
     """Minimal IProviderPlugin implementation."""
 
-    def __init__(self, response_text: str = "hello") -> None:
+    def __init__(
+        self,
+        response_text: str = "hello",
+        stream_chunks: list[ProviderChunk] | None = None,
+    ) -> None:
         self._response_text = response_text
+        self._stream_chunks = stream_chunks
 
     async def initialize(self, manifest: object) -> None:
         pass
@@ -87,6 +92,10 @@ class FakePlugin:
         )
 
     async def stream_execute(self, request: NormalizedRequest) -> AsyncIterator[ProviderChunk]:
+        if self._stream_chunks is not None:
+            for chunk in self._stream_chunks:
+                yield chunk
+            return
         yield ProviderChunk(text="part1 ", done=False)
         yield ProviderChunk(text="part2", done=True)
 
@@ -172,11 +181,12 @@ def _build_router(
     *,
     with_audit: bool = False,
     plugin_text: str = "response-ok",
+    plugin: FakePlugin | None = None,
 ) -> RequestRouter:
     """Build a fully-wired RequestRouter with all real internal services."""
     config = ModelHubConfig()
     manifest = _make_manifest()
-    plugin = FakePlugin(response_text=plugin_text)
+    plugin = plugin or FakePlugin(response_text=plugin_text)
 
     # Registry + manifest
     registry = ProviderRegistry(config=config)
@@ -208,7 +218,7 @@ def _build_router(
         circuit_mgr=cb_mgr,
         rate_limiter=rate_limiter,
         credential_port=FakeCredentialPort(),
-        plugins={"openai": FakePlugin(response_text=plugin_text)},
+        plugins={"openai": plugin},
     )
 
     audit = AuditLogger() if with_audit else None
@@ -376,6 +386,27 @@ class TestStreamRoute:
         assert last is not None
         assert last.metadata is not None
         assert last.metadata.trace_id == "trace-1"
+
+    @pytest.mark.asyncio
+    async def test_stream_final_chunk_uses_provider_finish_reason(self) -> None:
+        plugin = FakePlugin(
+            stream_chunks=[
+                ProviderChunk(
+                    text="",
+                    done=True,
+                    metadata={"finish_reason": "safety"},
+                )
+            ]
+        )
+        router = _build_router(plugin=plugin)
+
+        last = None
+        async for chunk in router.stream_route(_make_request()):
+            last = chunk
+
+        assert last is not None
+        assert last.metadata is not None
+        assert last.metadata.finish_reason == FinishReason.SAFETY
 
     @pytest.mark.asyncio
     async def test_stream_no_eligible_raises(self) -> None:

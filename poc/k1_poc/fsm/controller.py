@@ -83,7 +83,10 @@ from poc.k1_poc.fsm.front_lock import FrontLock
 from poc.k1_poc.fsm.idempotency import IdempotencyLedger
 from poc.k1_poc.fsm.interrupt_handler import InterruptClassifier, ProactiveWakeHandler
 from poc.k1_poc.fsm.phase1 import Phase1Result, StubPhase1Pipeline, TurnLock
-from poc.k1_poc.fsm.response_final_table import ResponseFinalAction, decide_response_final
+from poc.k1_poc.fsm.response_final_table import (
+    ResponseFinalAction,
+    decide_response_final,
+)
 from poc.k1_poc.fsm.states import ConciergeState
 from poc.k1_poc.fsm.task_bridge import TaskBridge
 from poc.k1_poc.fsm.transition_table import (
@@ -216,8 +219,18 @@ def _build_canonical_event(
     Lazy imports to avoid circular dependencies.
     """
     from poc.k1_poc.events.conversation import UserInputReceived
-    from poc.k1_poc.events.hitl import HILRequested, HILResolved, TaskResumed, TaskSuspended
-    from poc.k1_poc.events.task import TaskCancelled, TaskCompleted, TaskCreated, TaskFailed
+    from poc.k1_poc.events.hitl import (
+        HILRequested,
+        HILResolved,
+        TaskResumed,
+        TaskSuspended,
+    )
+    from poc.k1_poc.events.task import (
+        TaskCancelled,
+        TaskCompleted,
+        TaskCreated,
+        TaskFailed,
+    )
     from poc.k1_poc.events.weave import WeaveEmitted
 
     if entry_type == "user":
@@ -3556,7 +3569,10 @@ class ConciergeController:
         """
         from dataclasses import replace as _dc_replace
 
-        from poc.k1_poc.bus.builders import build_weave_batch, next_synthetic_envelope_id
+        from poc.k1_poc.bus.builders import (
+            build_weave_batch,
+            next_synthetic_envelope_id,
+        )
 
         env = build_weave_batch(
             payload={

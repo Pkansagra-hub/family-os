@@ -139,6 +139,34 @@ class TestNativeToolProviderPath:
         assert wctx.trace_id == request.trace_id
         assert wctx.band == "GREEN"
 
+    async def test_execute_propagates_service_failure_envelope(
+        self,
+        provider: NativeToolProvider,
+        service: PingToolService,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        async def fail_dispatch(action, params, ctx):  # type: ignore[no-untyped-def]
+            return {
+                "success": False,
+                "error_code": "dispatch_failed",
+                "error_message": "missing required field: title",
+            }
+
+        monkeypatch.setattr(service, "dispatch", fail_dispatch)
+        request = CapabilityRequest(
+            capability_name="tool.execute.ping.ping",
+            params={"message": "hello"},
+            caller="test-runner",
+        )
+        ctx = ExecutionContext(trace_id=request.trace_id)
+
+        result = await provider.execute(request, ctx, request.trace_id)
+
+        assert result.success is False
+        assert result.error is not None
+        assert result.error.code == "dispatch_failed"
+        assert "missing required field" in result.error.message
+
     async def test_execute_read_action(
         self,
         provider: NativeToolProvider,

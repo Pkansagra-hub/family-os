@@ -30,7 +30,7 @@ MODEL_SELECTION_TABLE: dict[tuple[str, str], str] = {
     (
         "CHAT",
         "front",
-    ): "gemini-3.1-flash-lite-preview",  # conversational warmth, fast
+    ): "gemini-3-flash-preview",  # conversational warmth, fast
     (
         "TOOL_CALL",
         "front",
@@ -38,7 +38,7 @@ MODEL_SELECTION_TABLE: dict[tuple[str, str], str] = {
     (
         "TOOL_CALL",
         "back",
-    ): "gemini-3-flash-preview",  # action tool execution
+    ): "gemini-3.1-pro-preview",  # action tool execution
     (
         "STRUCTURED",
         "front",
@@ -46,20 +46,20 @@ MODEL_SELECTION_TABLE: dict[tuple[str, str], str] = {
     (
         "STRUCTURED",
         "back",
-    ): "gemini-3-flash-preview",  # final answer formatting
+    ): "gemini-3.1-pro-preview",  # final answer formatting
     (
         "REASON",
         "back",
     ): "gemini-3.1-pro-preview",  # multi-step reasoning
-    ("REASON", "front"): "gemini-3.1-pro-preview",  # complex reasoning
+    ("REASON", "front"): "gemini-3-flash-preview",  # complex reasoning
     (
         "CHAT",
         "back",
-    ): "gemini-3.1-flash-lite-preview",  # error reports (internal, lightweight)
+    ): "gemini-3.1-pro-preview",  # internal reports
     (
         "STREAM",
         "front",
-    ): "gemini-3.1-flash-lite-preview",  # streaming ack/response (speed)
+    ): "gemini-3-flash-preview",  # streaming ack/response (speed)
     (
         "TOOL_CALL",
         "planner",
@@ -68,15 +68,15 @@ MODEL_SELECTION_TABLE: dict[tuple[str, str], str] = {
 }
 
 MODEL_HINT_OVERRIDES: dict[str, str] = {
-    "fast": "gemini-3.1-flash-lite-preview",
+    "fast": "gemini-3-flash-preview",
     "smart": "gemini-3-flash-preview",
-    "cheap": "gemini-3.1-flash-lite-preview",
+    "cheap": "gemini-3-flash-preview",
     "thinking": "gemini-3.1-pro-preview",
     "pro": "gemini-3.1-pro-preview",
     "flash": "gemini-3-flash-preview",
 }
 
-DEFAULT_MODEL = "gemini-3.1-flash-lite-preview"
+DEFAULT_MODEL = "gemini-3-flash-preview"
 
 
 def _get_selection_table() -> dict[tuple[str, str], str]:

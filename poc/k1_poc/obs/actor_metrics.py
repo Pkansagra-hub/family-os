@@ -211,13 +211,13 @@ class BackOutcome:
 
 # Tier budget limits (P3.2: collapsed to simple/plan; legacy aliases kept)
 TIER_BUDGET_LIMITS: dict[str, int] = {
-    "simple": 5,
-    "plan": 15,
-    "crisis": 3,
+    "simple": 400,
+    "plan": 400,
+    "crisis": 400,
     # Legacy aliases
-    "LOW": 5,
-    "MEDIUM": 15,
-    "HIGH": 15,
+    "LOW": 400,
+    "MEDIUM": 400,
+    "HIGH": 400,
 }
 
 # Budget utilization thresholds

@@ -731,12 +731,12 @@ class TestRecordBackMetrics:
             tier="HIGH",
             status="complete",
             iterations_used=6,
-            budget_limit=0,  # Will default to TIER_BUDGET_LIMITS["HIGH"] = 15 (P3.2)
+            budget_limit=0,  # Will default to TIER_BUDGET_LIMITS["HIGH"] = 400 (P3.2)
         )
         alerts = record_back_metrics(mc, outcome)
 
         util = mc.get_histogram("back.tier.budget_utilization", {"tier": "HIGH"})
-        assert abs(util[0] - 6 / 15) < 1e-9  # 6/15 (P3.2 HIGH -> plan budget)
+        assert abs(util[0] - 6 / 400) < 1e-9
 
     def test_multiple_tiers_tracked_separately(self) -> None:
         mc = self._mc()
@@ -812,13 +812,13 @@ class TestClassifyBudgetUtilization:
         assert classify_budget_utilization(1.1) == "exhausted"
 
     def test_tier_budget_limits_defined(self) -> None:
-        assert TIER_BUDGET_LIMITS["simple"] == 5
-        assert TIER_BUDGET_LIMITS["plan"] == 15
-        assert TIER_BUDGET_LIMITS["crisis"] == 3
+        assert TIER_BUDGET_LIMITS["simple"] == 400
+        assert TIER_BUDGET_LIMITS["plan"] == 400
+        assert TIER_BUDGET_LIMITS["crisis"] == 400
         # Legacy aliases kept until P3.3
-        assert TIER_BUDGET_LIMITS["LOW"] == 5
-        assert TIER_BUDGET_LIMITS["MEDIUM"] == 15
-        assert TIER_BUDGET_LIMITS["HIGH"] == 15
+        assert TIER_BUDGET_LIMITS["LOW"] == 400
+        assert TIER_BUDGET_LIMITS["MEDIUM"] == 400
+        assert TIER_BUDGET_LIMITS["HIGH"] == 400
 
 
 # =====================================================================
@@ -830,7 +830,11 @@ class TestE112PackageImport:
     """Verify obs package exports E11.2 symbols."""
 
     def test_import_react_metrics(self) -> None:
-        from poc.k1_poc.obs import ReactLoopOutcome, classify_exit_path, record_react_loop_metrics
+        from poc.k1_poc.obs import (
+            ReactLoopOutcome,
+            classify_exit_path,
+            record_react_loop_metrics,
+        )
 
         assert ReactLoopOutcome is not None
         assert classify_exit_path is not None

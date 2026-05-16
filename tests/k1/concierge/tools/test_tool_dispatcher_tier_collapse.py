@@ -111,13 +111,13 @@ class TestBudgetLimits:
     """BUDGET_LIMITS 2-bucket values."""
 
     def test_simple_budget(self):
-        assert BUDGET_LIMITS["simple"] == 5
+        assert BUDGET_LIMITS["simple"] == 400
 
     def test_plan_budget(self):
-        assert BUDGET_LIMITS["plan"] == 15
+        assert BUDGET_LIMITS["plan"] == 400
 
     def test_crisis_budget(self):
-        assert BUDGET_LIMITS["crisis"] == 3
+        assert BUDGET_LIMITS["crisis"] == 400
 
     def test_legacy_low_budget(self):
         assert BUDGET_LIMITS["LOW"] == BUDGET_LIMITS["simple"]

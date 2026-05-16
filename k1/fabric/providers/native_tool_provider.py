@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import inspect
 import logging
-from typing import Any, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional
 
 from k1.fabric.providers.base_provider import (
     BaseProvider,
@@ -52,8 +52,10 @@ from k1.fabric.types import (
     ProviderHealth,
     ProviderStatus,
 )
-from k1.tools.family.base import WriteContext
-from k1.tools.family.ports import IToolRegistryReader, IToolService
+
+if TYPE_CHECKING:
+    from k1.tools.family.base import WriteContext
+    from k1.tools.family.ports import IToolRegistryReader, IToolService
 
 logger = logging.getLogger(__name__)
 
@@ -254,6 +256,16 @@ class NativeToolProvider(BaseProvider):
                 error_code="invalid_result",
             )
 
+        if data.get("success") is False:
+            return CapabilityResult.failure_result(
+                request_id=request.request_id,
+                error_code=str(data.get("error_code") or "dispatch_failed"),
+                error_message=str(data.get("error_message") or "family-tool dispatch failed"),
+                retriable=False,
+                provider_id=self.provider_id,
+                trace_id=trace_id,
+            )
+
         return CapabilityResult.success_result(
             request_id=request.request_id,
             data=data,
@@ -317,6 +329,8 @@ class NativeToolProvider(BaseProvider):
             key = request.params.get("idempotency_key")
             if isinstance(key, str) and key:
                 idempotency_key = key
+
+        from k1.tools.family.base import WriteContext
 
         return WriteContext(
             user_id=user_id,

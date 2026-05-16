@@ -28,7 +28,11 @@ from __future__ import annotations
 import logging
 from typing import Any, Awaitable, Callable
 
-from k1.concierge.task.classifier import IntentClassification, build_dispatches, classify_intents
+from k1.concierge.task.classifier import (
+    IntentClassification,
+    build_dispatches,
+    classify_intents,
+)
 from k1.concierge.task.complexity import ComplexityTier
 from k1.concierge.task.dispatch import TaskDispatch
 from k1.concierge.task.intent import TaskIntent

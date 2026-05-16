@@ -59,6 +59,7 @@ class FSMTurnState:
 
     # M2 E2.2.3: Configurable depth and TTL guards
     max_depth: int = 16
+    max_deferred_depth: int = 16
     ttl_seconds: int = 300
 
     def set_ledger(self, writer: LedgerWriter) -> None:
@@ -243,7 +244,9 @@ class FSMTurnState:
                 )
                 force_deliver.append(item)
             else:
-                self.deferred_results.append(item)
+                evicted = self.defer_result(item)
+                if evicted is not None:
+                    force_deliver.append(evicted)
                 logger.debug(
                     "FSMTurnState: deferred task %s (defer_count=%d)",
                     item.get("task_id", "?"),
@@ -251,6 +254,44 @@ class FSMTurnState:
                 )
 
         return force_deliver
+
+    def defer_result(self, item: dict[str, Any]) -> dict[str, Any] | None:
+        """Add a result to deferred_results with bounded ownership.
+
+        Deferred results use the same default depth as pending_results. On
+        overflow the oldest deferred result is returned so callers can force
+        delivery instead of leaving an unbounded hidden queue.
+        """
+        evicted: dict[str, Any] | None = None
+        if len(self.deferred_results) >= self.max_deferred_depth:
+            evicted = self.deferred_results.pop(0)
+            logger.warning(
+                "FSMTurnState: deferred overflow at max_deferred_depth=%d, force-delivering task=%s",
+                self.max_deferred_depth,
+                evicted.get("task_id", "?"),
+            )
+        item["deferred"] = True
+        self.deferred_results.append(item)
+        return evicted
+
+    def discard_task(self, task_id: str) -> bool:
+        """Remove a task result from pending and deferred queues.
+
+        Returns True when any result was removed. Used by cancellation and
+        suppression paths to keep a task result owned by at most one queue.
+        """
+        pending_before = len(self.pending_results)
+        deferred_before = len(self.deferred_results)
+        self.pending_results = deque(
+            item for item in self.pending_results if item.get("task_id") != task_id
+        )
+        self.deferred_results = [
+            item for item in self.deferred_results if item.get("task_id") != task_id
+        ]
+        return (
+            len(self.pending_results) != pending_before
+            or len(self.deferred_results) != deferred_before
+        )
 
     def drain_deferred(self) -> list[dict[str, Any]]:
         """Drain all deferred results for injection into STANDARD prompt.

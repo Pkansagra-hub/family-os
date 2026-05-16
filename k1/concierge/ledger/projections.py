@@ -19,7 +19,11 @@ import logging
 from collections import deque
 from typing import TYPE_CHECKING, Any
 
-from k1.concierge.protocols.hitl_persistence import TaskStateEntry, TaskStatus
+from k1.concierge.protocols.hitl_persistence import (
+    HILStateRecord,
+    TaskStateEntry,
+    TaskStatus,
+)
 
 if TYPE_CHECKING:
     from k1.concierge.ledger.store import LedgerEntry
@@ -244,45 +248,70 @@ def project_suspension_state(
 
 def project_hitl_state(
     entries: list[LedgerEntry],
-) -> tuple[dict[str, dict[str, Any]], dict[str, int], dict[str, list[dict[str, Any]]]]:
+) -> tuple[dict[str, HILStateRecord], dict[str, int], dict[str, list[dict[str, Any]]]]:
     """Replay ledger events into HITL coordinator state.
 
     M9 E9.3.2: Pure projection for HILCoordinator recovery.
 
     Returns:
         Tuple of (pending_requests, hil_counts, hil_histories).
-        - pending_requests: task_id -> HIL request payload for tasks
+                - pending_requests: task_id -> HILStateRecord for tasks
           with hil.requested but no hil.resolved yet.
         - hil_counts: task_id -> total number of HIL rounds.
         - hil_histories: task_id -> list of resolved HIL interaction dicts.
     """
-    pending: dict[str, dict[str, Any]] = {}
+    pending: dict[str, HILStateRecord] = {}
     counts: dict[str, int] = {}
     histories: dict[str, list[dict[str, Any]]] = {}
+    request_to_task: dict[str, str] = {}
+
+    def _hil_identity(payload: dict[str, Any]) -> str:
+        return str(
+            payload.get("hil_request_id")
+            or payload.get("pending_hil_id")
+            or payload.get("event_id")
+            or ""
+        )
 
     for entry in entries:
         event_type = entry.event_type
-        task_id = entry.payload.get("task_id", "")
-        if not task_id:
-            continue
+        payload = entry.payload
+        hil_identity = _hil_identity(payload)
+        task_id = str(payload.get("task_id") or (f"hil:{hil_identity}" if hil_identity else ""))
 
         if event_type == "hil.requested":
-            pending[task_id] = dict(entry.payload)
+            if not task_id:
+                continue
+            record = HILStateRecord.from_projection_payload(task_id, payload)
+            pending[task_id] = record
+            for key in {record.hil_request_id, record.pending_hil_id, entry.event_id}:
+                if key:
+                    request_to_task[key] = task_id
             counts[task_id] = counts.get(task_id, 0) + 1
         elif event_type == "hil.resolved":
-            pending.pop(task_id, None)
+            task_id = request_to_task.get(hil_identity, task_id)
+            if not task_id:
+                continue
+            prior = pending.pop(task_id, None)
             if task_id not in histories:
                 histories[task_id] = []
             histories[task_id].append(
                 {
-                    "hil_type": entry.payload.get("hil_type", "resolved"),
-                    "resolution": entry.payload.get("resolution", {}),
-                    "resolution_type": entry.payload.get("resolution_type", ""),
-                    "raw_user_text": entry.payload.get("raw_user_text", ""),
+                    "hil_request_id": hil_identity,
+                    "kind": payload.get("kind", getattr(prior, "kind", "resolved")),
+                    "hil_type": payload.get("hil_type", getattr(prior, "hil_type", "resolved")),
+                    "resolution": payload.get("resolution", {}),
+                    "resolution_type": payload.get("resolution_type", ""),
+                    "raw_user_text": payload.get("raw_user_text", ""),
                 }
             )
+        elif event_type in ("hil.timed_out", "hil.blocked"):
+            task_id = request_to_task.get(hil_identity, task_id)
+            if task_id:
+                pending.pop(task_id, None)
         elif event_type in ("task.completed", "task.failed", "task.cancelled"):
-            pending.pop(task_id, None)
+            if task_id:
+                pending.pop(task_id, None)
 
     return pending, counts, histories
 
@@ -386,6 +415,9 @@ def project_task_states(entries: list[LedgerEntry]) -> dict[str, TaskStateEntry]
             if state is not None and state.status == TaskStatus.SUSPENDED:
                 # Enrich pending_hil with full request data
                 state.pending_hil = {
+                    "hil_request_id": payload.get("hil_request_id", ""),
+                    "pending_hil_id": payload.get("pending_hil_id", ""),
+                    "kind": payload.get("kind", payload.get("hil_type", "")),
                     "hil_type": payload.get("hil_type", ""),
                     "question": payload.get("question", ""),
                     "options": payload.get("options", []),

@@ -223,25 +223,34 @@ class LiveBridgeClient:
         trace_id: str | None = None,
         timeout_ms: int = 30_000,
     ) -> dict[str, Any]:
-        """POST to ``/k0/connector.execute`` and return the JSON result."""
-        client = self._http_client
-        if client is None:
-            raise RuntimeError("LiveBridgeClient: transport has no http client")
-        body = {
-            "adapter_id": adapter_id,
-            "action": action,
-            "params": params,
+        """Route a connector call through ``/k0/command.submit``.
+
+        Pseudo-K0 dispatches connector calls by topic prefix on the same
+        command-ingest endpoint as the rest of the bridge contracts.
+        """
+        topic = f"connector.execute.{adapter_id}.{action}"
+        envelope = self._build_envelope(
+            topic=topic,
+            schema_uri="bridge://contracts/schemas/connector.execute.v1.json",
+            band=None,
+            trace_id=trace_id,
+            body={
+                "adapter_id": adapter_id,
+                "action": action,
+                "params": params,
+                "timeout_ms": timeout_ms,
+            },
+        )
+        result = await self._post_envelope(envelope, topic)
+        if 200 <= getattr(result, "status_code", 0) < 300:
+            return result.body or {}
+        return {
+            "ok": False,
+            "status_code": getattr(result, "status_code", 0),
+            "error": getattr(result, "error", None),
+            "body": getattr(result, "body", None),
             "trace_id": trace_id,
-            "timeout_ms": timeout_ms,
         }
-        response = await client.post("/k0/connector.execute", json=body)
-        try:
-            return response.json()
-        except Exception:
-            return {
-                "success": False,
-                "error": f"non-JSON response: {response.text!r}",
-            }
 
     # ------------------------------------------------------------------
     # Internals
@@ -301,13 +310,13 @@ class LiveBridgeClient:
         }
         return envelope
 
-    async def _post_envelope(self, envelope: dict[str, Any], topic: str) -> None:
+    async def _post_envelope(self, envelope: dict[str, Any], topic: str) -> Any:
         envelope_bytes = json.dumps(envelope, ensure_ascii=False).encode("utf-8")
         result = await self._transport.post_command(envelope_bytes)
         status = getattr(result, "status_code", 0)
         if 200 <= status < 300:
             logger.debug("LiveBridgeClient: K0 accepted topic=%s status=%d", topic, status)
-            return
+            return result
         body = getattr(result, "body", None)
         error = getattr(result, "error", None)
         logger.warning(
@@ -317,6 +326,7 @@ class LiveBridgeClient:
             body,
             error,
         )
+        return result
 
 
 class LiveBridgeAdapter:

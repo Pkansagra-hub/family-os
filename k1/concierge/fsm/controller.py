@@ -39,6 +39,7 @@ if TYPE_CHECKING:
 from k1.bus.envelope import Envelope, PayloadFormat, Priority
 from k1.bus.ports.bus import IBus
 from k1.bus.ports.mailbox import IMailboxRouter
+from k1.concierge.acking.write_elision import WriteElisionGate
 from k1.concierge.bus.builders import (
     build_dead_letter,
     build_final_response,
@@ -91,6 +92,7 @@ from k1.concierge.fsm.idempotency import IdempotencyLedger
 from k1.concierge.fsm.interrupt_handler import InterruptClassifier, ProactiveWakeHandler
 from k1.concierge.fsm.response_final_table import (
     ResponseFinalAction,
+    ResponseFinalDecision,
     decide_response_final,
 )
 from k1.concierge.fsm.states import ConciergeState
@@ -109,10 +111,15 @@ from k1.concierge.fsm.turn_state import FSMTurnState
 from k1.concierge.orchestrator.routing import route_task_sync
 from k1.concierge.protocols.cancel_handler import CancellationHandler
 from k1.concierge.protocols.cancellation import CancellationToken
-from k1.concierge.protocols.hitl_persistence import HILSubTask, scan_for_recovery
+from k1.concierge.protocols.hitl_persistence import (
+    HILStateRecord,
+    HILSubTask,
+    scan_for_recovery,
+)
 from k1.concierge.protocols.hitl_wiring import build_resume_context
 from k1.concierge.protocols.weave_batcher import WEAVE_BATCH_WINDOW_MS
 from k1.concierge.protocols.weave_policy import (
+    EMOTIONAL_GATE_SUPPRESS_ALL_NON_SAFETY,
     UserActivityTracker,
     WeaveDecision,
     WeaveDecisionResult,
@@ -121,6 +128,7 @@ from k1.concierge.protocols.weave_policy import (
     WeaveSignal,
     sort_results_for_delivery,
 )
+from k1.concierge.react.control import BackControlEvent
 from k1.concierge.task.complexity import ComplexityTier
 from k1.concierge.task.dispatch import TaskDispatch
 from k1.concierge.task.intent import TaskIntent
@@ -134,6 +142,8 @@ from k1.sessionstate.public_types import (
 
 logger = logging.getLogger(__name__)
 
+_INLINE_HIL_WIDGET_KINDS = frozenset({"capability_gate", "approval", "override"})
+
 
 def _correlate_envelope(env: Envelope, source: Envelope) -> Envelope:
     """Copy source correlation headers onto an FSM-emitted envelope."""
@@ -143,6 +153,28 @@ def _correlate_envelope(env: Envelope, source: Envelope) -> Envelope:
         session_id=source.session_id,
         request_id=source.request_id,
     )
+
+
+def _hil_requested_payload(
+    *,
+    hil_request_id: str,
+    kind: str,
+    task_id: str,
+    inner: dict[str, Any],
+    envelope: Envelope,
+) -> dict[str, Any]:
+    contract_payload = inner.get("contract")
+    contract = contract_payload if isinstance(contract_payload, dict) else {}
+    return {
+        "pending_hil_id": hil_request_id,
+        "hil_type": kind,
+        "parent_task_id": task_id,
+        "safety_band": contract.get("safety_band_min", "AMBER"),
+        "hil_deadline_ms": int(_parse_payload(envelope).get("timeout_ms", 0) or 0),
+        "resume_token": hil_request_id,
+        "device_id": "",
+        "task_id": task_id,
+    }
 
 
 class OrchestratorNotWired(RuntimeError):
@@ -279,10 +311,32 @@ def _build_canonical_event(
         return TaskSuspended(suspension_type=text, **meta)
     if entry_type == "task_resumed":
         return TaskResumed(resume_instruction=text, **meta)
-    if entry_type == "hil_request":
-        return HILRequested(question=text, **meta)
-    if entry_type == "hil_response":
-        return HILResolved(raw_user_text=text, **meta)
+    if entry_type in ("hil_request", "hitl_request"):
+        md = metadata or {}
+        return HILRequested(
+            question=text,
+            hil_request_id=str(md.get("hil_request_id", "")),
+            kind=str(md.get("kind", md.get("hil_type", ""))),
+            caller_key=str(md.get("caller_key", "")),
+            created_at_ms=int(md.get("created_at_ms", 0) or 0),
+            timeout_ms=int(md.get("timeout_ms", 0) or 0),
+            hil_type=str(md.get("hil_type", md.get("kind", ""))),
+            options=list(md.get("options", []) or []),
+            context=dict(md.get("context", {}) or {}),
+            side_effects=list(md.get("side_effects", []) or []),
+            safety_band=str(md.get("safety_band", "GREEN")),
+            **meta,
+        )
+    if entry_type in ("hil_response", "hitl_response"):
+        md = metadata or {}
+        return HILResolved(
+            raw_user_text=text,
+            hil_request_id=str(md.get("hil_request_id", "")),
+            kind=str(md.get("kind", md.get("hil_type", ""))),
+            resolution=dict(md.get("resolution", {}) or {}),
+            resolution_type=str(md.get("resolution_type", "selection")),
+            **meta,
+        )
     if entry_type == "assistant_response":
         return WeaveEmitted(response_text_preview=text, **meta)
     return None
@@ -294,28 +348,26 @@ def _build_canonical_event(
 
 
 class RunningTaskHandle:
-    """Handle to a running Back task for inter-iteration message injection.
+    """Handle to a running Back task for inter-iteration control events.
 
     The controller creates a handle when dispatching a task. The Back handler
-    registers its mutable ``messages`` list after building it, enabling
-    ``_handle_arbiter_modify()`` to append a synthetic PARAMETER UPDATE
-    message between ReAct iterations.
-
-    GIL safety: both controller and react_loop are coroutines in the same
-    event loop, so list.append() between await boundaries is safe.
+    consumes ``control_queue`` between ReAct iterations so the FSM does not
+    mutate Back's live message list directly.
     """
 
-    __slots__ = ("task_id", "messages", "dispatch_payload", "started_at")
+    __slots__ = ("task_id", "messages", "control_queue", "dispatch_payload", "started_at")
 
     def __init__(
         self,
         task_id: str,
         messages: list[Any] | None,
+        control_queue: asyncio.Queue[BackControlEvent] | None,
         dispatch_payload: dict[str, Any],
         started_at: float,
     ) -> None:
         self.task_id = task_id
         self.messages = messages  # None until Back registers
+        self.control_queue = control_queue or asyncio.Queue()
         self.dispatch_payload = dispatch_payload
         self.started_at = started_at
 
@@ -468,6 +520,8 @@ class ConciergeController:
         self._deferred_proactive_task: asyncio.Task[None] | None = (
             None  # Proactive delivery timer for same-turn completions
         )
+        self._proactive_fill_last_by_key: dict[str, int] = {}
+        self._write_elision_gate = WriteElisionGate()
         # OPP Pipeline: wires all 8 OPP primitives into lifecycle hooks
         self._opp_pipeline: Any | None = None
         logger.info(
@@ -713,7 +767,228 @@ class ConciergeController:
         Queries _pending_hil_subtasks (M6 SOT) for active HITL requests.
         Used by WeaveSignal.from_runtime() to set hitl_pending.
         """
-        return bool(self._pending_hil_subtasks)
+        if self._pending_hil_subtasks:
+            return True
+        try:
+            for entry in self._task_bridge.get_suspended_tasks():
+                data = getattr(entry, "pending_hil_data", None)
+                if isinstance(data, dict) and (
+                    data.get("hil_request_id") or data.get("pending_hil_id")
+                ):
+                    return True
+                if getattr(entry, "pending_hil", False):
+                    return True
+        except Exception:
+            logger.debug("_has_pending_hitl: task bridge check failed", exc_info=True)
+        try:
+            for entry in self._task_bridge.task_state.get_all():
+                data = getattr(entry, "pending_hil_data", None)
+                if isinstance(data, dict) and getattr(entry, "status", "") not in {
+                    "completed",
+                    "failed",
+                    "cancelled",
+                }:
+                    if data.get("hil_request_id") or data.get("pending_hil_id"):
+                        return True
+        except Exception:
+            logger.debug("_has_pending_hitl: task_state scan failed", exc_info=True)
+        return False
+
+    def rebuild_history_from_projection(self, history: list[dict[str, Any]]) -> int:
+        """Replace the runtime history cache from ledger projection data."""
+        self._history.clear()
+        for item in history:
+            self._history.append(
+                TypedHistoryEntry(
+                    turn_number=int(item.get("turn", 0) or 0),
+                    entry_type=str(item.get("type", "")),
+                    role=str(item.get("role", "")),
+                    text=str(item.get("text", "")),
+                    timestamp_ms=int(item.get("timestamp_ms", 0) or 0),
+                    source=str(item.get("source", "")),
+                    task_id=item.get("task_id"),
+                    metadata=dict(item.get("metadata", {}) or {}),
+                )
+            )
+        return len(self._history)
+
+    def rebuild_pending_hil_from_projection(self, records: dict[str, HILStateRecord]) -> int:
+        """Rebuild pending-HIL mirrors from normalized ledger projection records."""
+        self._pending_hil_subtasks.clear()
+        restored = 0
+        for task_id, record in records.items():
+            data = record.to_pending_hil_data()
+            if self._task_bridge.get_task(task_id) is None:
+                try:
+                    from k1.sessionstate.sections.task_state import TaskStatus
+
+                    self._task_bridge.task_state.add_task(
+                        action=f"hil:{record.kind or record.hil_type}",
+                        task_id=task_id,
+                        status=TaskStatus.SUSPENDED,
+                    )
+                except Exception:
+                    logger.debug(
+                        "rebuild_pending_hil_from_projection: could not create task %s",
+                        task_id,
+                        exc_info=True,
+                    )
+            try:
+                self._task_bridge.set_pending_hil_data(task_id, data)
+            except Exception:
+                logger.debug(
+                    "rebuild_pending_hil_from_projection: set pending data failed for %s",
+                    task_id,
+                    exc_info=True,
+                )
+            if record.pending_hil_id and record.react_snapshot and not task_id.startswith("hil:"):
+                try:
+                    self._pending_hil_subtasks[task_id] = HILSubTask.from_persistence(data)
+                except Exception:
+                    logger.debug(
+                        "rebuild_pending_hil_from_projection: HILSubTask rebuild skipped for %s",
+                        task_id,
+                        exc_info=True,
+                    )
+            restored += 1
+        return restored
+
+    def _check_hil_state_coherence(
+        self,
+        *,
+        task_id: str = "",
+        hil_request_id: str = "",
+        context: str = "",
+    ) -> list[str]:
+        """Log non-fatal divergence between pending-HIL mirrors."""
+        anomalies: list[str] = []
+
+        def _add(message: str) -> None:
+            anomalies.append(message)
+            logger.error(
+                "hil_state_coherence anomaly=%s context=%s task_id=%s hil_request_id=%s",
+                message,
+                context,
+                task_id,
+                hil_request_id,
+            )
+
+        try:
+            for pending_task_id, subtask in list(self._pending_hil_subtasks.items()):
+                entry = self._task_bridge.get_task(pending_task_id)
+                if entry is None:
+                    _add(f"pending_subtask_without_task:{pending_task_id}")
+                    continue
+                if getattr(entry, "status", "") in {"completed", "failed", "cancelled"}:
+                    _add(f"terminal_task_has_pending_subtask:{pending_task_id}")
+                if not getattr(entry, "pending_hil", False) and not getattr(
+                    entry, "pending_hil_data", None
+                ):
+                    _add(f"pending_subtask_without_task_pending_data:{pending_task_id}")
+                if hil_request_id and pending_task_id == task_id:
+                    expected = getattr(subtask, "pending_hil_id", "")
+                    if expected and expected != hil_request_id:
+                        _add(f"hil_request_id_mismatch:{expected}!={hil_request_id}")
+
+            for entry in self._task_bridge.task_state.get_all():
+                entry_task_id = getattr(entry, "task_id", "")
+                data = getattr(entry, "pending_hil_data", None)
+                if isinstance(data, dict) and (
+                    data.get("hil_request_id") or data.get("pending_hil_id")
+                ):
+                    if not self._has_pending_hitl():
+                        _add(f"pending_data_invisible_to_has_pending_hitl:{entry_task_id}")
+                    if hil_request_id and entry_task_id == task_id:
+                        data_id = str(
+                            data.get("hil_request_id") or data.get("pending_hil_id") or ""
+                        )
+                        if data_id and data_id != hil_request_id:
+                            _add(f"task_pending_hil_id_mismatch:{data_id}!={hil_request_id}")
+                if getattr(entry, "status", "") in {"completed", "failed", "cancelled"}:
+                    if entry_task_id in self._pending_hil_subtasks:
+                        _add(f"terminal_task_in_pending_subtasks:{entry_task_id}")
+                    if entry_task_id in getattr(self._suspension_manager, "_contexts", {}):
+                        _add(f"terminal_task_in_suspension_contexts:{entry_task_id}")
+                    if entry_task_id in getattr(self._suspension_manager, "_active", {}):
+                        _add(f"terminal_task_in_suspension_active:{entry_task_id}")
+        except Exception:
+            logger.debug("_check_hil_state_coherence failed", exc_info=True)
+        return anomalies
+
+    def _collect_weave_signal(self, task_id: str = "") -> WeaveSignal:
+        """Collect the pure weave signal snapshot for a candidate task."""
+        tracker = self._activity_tracker or UserActivityTracker()
+        return WeaveSignal.from_runtime(
+            fsm_state=self._state,
+            turn_state=self._turn_state,
+            back_pool=self._back_pool,
+            ss=self._ss,
+            activity_tracker=tracker,
+            hitl_pending=self._has_pending_hitl(),
+        )
+
+    def _decide_weave(self, signal: WeaveSignal) -> WeaveDecisionResult:
+        """Return a weave decision with fallback handling."""
+        decision, _fallback_used = self._decide_weave_with_fallback(signal)
+        return decision
+
+    def _decide_weave_with_fallback(
+        self,
+        signal: WeaveSignal,
+    ) -> tuple[WeaveDecisionResult, bool]:
+        """Return a weave decision plus whether static fallback was used."""
+        policy = self._weave_policy
+        if policy is None:
+            return self._weave_fallback.fallback_decide(self._state), True
+        try:
+            return policy.decide(signal), False
+        except Exception:
+            logger.warning("WeavePolicy.decide() raised -- using fallback", exc_info=True)
+            return self._weave_fallback.fallback_decide(self._state), True
+
+    def _apply_weave_decision(
+        self,
+        decision: WeaveDecisionResult,
+        task_id: str,
+        envelope: Envelope,
+    ) -> None:
+        """Apply side effects for a pure weave decision."""
+        if decision.decision == WeaveDecision.IMMEDIATE:
+            self._deliver_weave_immediate(envelope)
+        elif decision.decision == WeaveDecision.BATCH:
+            self._schedule_weave_flush_adaptive(envelope, decision.window_ms)
+        elif decision.decision == WeaveDecision.DEFER:
+            self._mark_results_deferred(envelope)
+        elif decision.decision == WeaveDecision.DIGEST:
+            self._schedule_digest_flush(envelope, decision.window_ms)
+        elif decision.decision == WeaveDecision.SUPPRESS:
+            self._suppress_result(task_id, decision.reasoning)
+
+    def _discard_task_result_ownership(self, task_id: str) -> bool:
+        """Remove a task result from every queue that can own it."""
+        removed = self._turn_state.discard_task(task_id)
+        batcher = self._weave_batcher
+        if batcher is not None and hasattr(batcher, "discard_task"):
+            try:
+                removed = bool(batcher.discard_task(task_id)) or removed
+            except Exception:
+                logger.warning(
+                    "WeaveBatcher.discard_task failed for %s",
+                    task_id,
+                    exc_info=True,
+                )
+        return removed
+
+    def _try_chain_into_current_response(
+        self,
+        task_id: str,
+        payload: dict[str, Any],
+        envelope: Envelope,
+    ) -> bool:
+        """Try to chain a same-turn result into Front's current response."""
+        if not self._front_lock.is_accepting_context():
+            return False
+        return False
 
     # ------------------------------------------------------------------
     # M8 E8.5.6: Task urgency retrieval from TaskBridge
@@ -757,6 +1032,33 @@ class ConciergeController:
                 "FSM.register_running_task_messages: no handle for task_id=%s "
                 "(task may have completed before registration)",
                 task_id,
+            )
+
+    def get_running_task_control_queue(
+        self,
+        task_id: str,
+    ) -> asyncio.Queue[BackControlEvent] | None:
+        """Return the control queue for a running Back task, if present."""
+        handle = self._running_tasks.get(task_id)
+        return handle.control_queue if handle is not None else None
+
+    def register_running_task_control_queue(
+        self,
+        task_id: str,
+        queue: asyncio.Queue[BackControlEvent],
+    ) -> None:
+        """Register a Back-owned control queue for compatibility callers."""
+        handle = self._running_tasks.get(task_id)
+        if handle is not None:
+            handle.control_queue = queue
+            logger.info("FSM.register_running_task_control_queue: task_id=%s", task_id)
+        else:
+            self._running_tasks[task_id] = RunningTaskHandle(
+                task_id=task_id,
+                messages=None,
+                control_queue=queue,
+                dispatch_payload={},
+                started_at=time.monotonic(),
             )
 
     def _remove_running_task(self, task_id: str) -> None:
@@ -1065,6 +1367,9 @@ class ConciergeController:
         Entry types without a canonical mapping are silently skipped.
         """
         from k1.concierge.events.base import from_envelope
+
+        if metadata and metadata.get("ledger_event_already_emitted"):
+            return
 
         # Build metadata kwargs from envelope
         meta: dict[str, Any] = {}
@@ -1496,34 +1801,32 @@ class ConciergeController:
             },
         )
 
-        # Inject modification into Back's messages list if registered
-        if handle is not None and handle.messages is not None:
-            inject_content = json.dumps(
-                {
-                    "type": "PARAMETER_UPDATE",
-                    "source": "arbiter",
-                    "task_id": task_id,
-                    "modifications": mods,
-                    "user_text": text,
-                },
-                indent=2,
+        accepted = False
+        if handle is not None and handle.control_queue is not None:
+            handle.control_queue.put_nowait(
+                BackControlEvent(
+                    event_type="parameter_update",
+                    task_id=task_id,
+                    payload={
+                        "source": "arbiter",
+                        "modifications": mods,
+                        "user_text": text,
+                    },
+                )
             )
-            from k1.concierge.llm.types import ModelMessage
-
-            handle.messages.append(ModelMessage(role="user", content=inject_content))
+            accepted = True
             logger.info(
-                "FSM._handle_arbiter_modify: injected PARAMETER_UPDATE "
-                "into messages for task_id=%s (messages_len=%d)",
+                "FSM._handle_arbiter_modify: queued PARAMETER_UPDATE "
+                "for task_id=%s (queue_size=%d)",
                 task_id,
-                len(handle.messages),
+                handle.control_queue.qsize(),
             )
         else:
-            if handle is not None:
-                logger.warning(
-                    "FSM._handle_arbiter_modify: handle exists for task_id=%s "
-                    "but messages not yet registered (Back still building context)",
-                    task_id,
-                )
+            logger.warning(
+                "FSM._handle_arbiter_modify: no control queue for task_id=%s; "
+                "parameter update could not be accepted",
+                task_id,
+            )
 
         # Emit task.modify event for observability/ledger
         from k1.concierge.bus.builders import build_task_modify
@@ -1534,7 +1837,8 @@ class ConciergeController:
                     "task_id": task_id,
                     "modifications": mods,
                     "source": "arbiter",
-                    "injected": handle is not None and handle.messages is not None,
+                    "injected": accepted,
+                    "accepted": accepted,
                 },
                 parent_id=envelope.envelope_id,
             )
@@ -1726,6 +2030,38 @@ class ConciergeController:
         if control is None:
             return
 
+        payload = _parse_payload(envelope)
+        text = payload.get("text", "") or ""
+        safety_band = "RED" if self._check_crisis_keywords(text) else "GREEN"
+        prior_safety_band = "GREEN"
+        try:
+            safety = control.get_safety() if hasattr(control, "get_safety") else None
+            band = getattr(safety, "band", "GREEN")
+            prior_safety_band = str(getattr(band, "value", band) or "GREEN")
+        except Exception:
+            prior_safety_band = "GREEN"
+        decision = self._write_elision_gate.evaluate(
+            {
+                "intent_class": (
+                    "backchannel"
+                    if text.strip().lower() in {"ok", "okay", "thanks", "thank you"}
+                    else "general"
+                ),
+                "safety_band": safety_band,
+                "prior_safety_band": prior_safety_band,
+                "beliefs": [],
+                "affect_label": "neutral",
+                "affect_detected": False,
+                "temporal_anchor": True,
+            }
+        )
+        if decision.elided_sections:
+            logger.debug(
+                "_write_session_context_to_ss: elided_sections=%s reason=%s",
+                sorted(decision.elided_sections),
+                decision.reason,
+            )
+
         # Temporal anchor (skeleton.mmd -> TIME_RESOLUTION). Reads tz from
         # Persona preferences if available, falls back to UTC.
         tz_name = "UTC"
@@ -1745,8 +2081,6 @@ class ConciergeController:
 
         # Crisis-band escalation (kernel keyword check; LLM-derived nuance
         # comes via cognitive tools later in the turn).
-        payload = _parse_payload(envelope)
-        text = payload.get("text", "") or ""
         if self._check_crisis_keywords(text):
             try:
                 control.escalate_safety(
@@ -1938,6 +2272,50 @@ class ConciergeController:
                 envelope.envelope_id,
             )
 
+    def _drop_queued_front_hitl_for_task(self, task_id: str) -> int:
+        """Remove stale queued Front HIL events for a task that moved on."""
+        if not task_id or not self._front_lock.event_queue:
+            return 0
+        kept: deque[tuple[int, Envelope]] = deque()
+        dropped = 0
+        for priority, queued in self._front_lock.event_queue:
+            should_drop = False
+            if queued.topic in (TOPIC_TASK_SUSPENDED, TOPIC_HIL_REQUEST):
+                payload = _parse_payload(queued)
+                if queued.topic == TOPIC_TASK_SUSPENDED:
+                    should_drop = str(payload.get("task_id", "") or "") == task_id
+                else:
+                    inner_payload = payload.get("payload")
+                    inner = inner_payload if isinstance(inner_payload, dict) else {}
+                    hil_request_id = str(payload.get("hil_request_id", "") or "")
+                    bound_task_id = str(inner.get("task_id", "") or "")
+                    synthetic_task_id = f"hil:{hil_request_id}" if hil_request_id else ""
+                    should_drop = task_id in {bound_task_id, synthetic_task_id}
+            if should_drop:
+                dropped += 1
+                continue
+            kept.append((priority, queued))
+        if dropped:
+            self._front_lock.event_queue = kept
+            logger.info(
+                "FSM: dropped %d stale queued HIL Front events for task_id=%s",
+                dropped,
+                task_id,
+            )
+        return dropped
+
+    def _cleanup_terminal_hitl_state(self, task_id: str) -> None:
+        """Clear pending HIL presentation state once a task is terminal."""
+        if not task_id:
+            return
+        self._pending_hil_subtasks.pop(task_id, None)
+        self._hitl_responded_tasks.pop(task_id, None)
+        self._drop_queued_front_hitl_for_task(task_id)
+        try:
+            self._task_bridge.set_pending_hil_data(task_id, None)
+        except Exception:
+            logger.debug("FSM: pending HIL cleanup skipped for %s", task_id, exc_info=True)
+
     def _deliver_crisis_response(self, envelope: Envelope) -> None:
         """Emit a canned safety-protocol response without invoking Front LLM.
 
@@ -2007,6 +2385,13 @@ class ConciergeController:
         self._control_ext.add_active_task(task_id)
         action = dispatch.intents[0].action if dispatch.intents else ""
         self._task_bridge.dispatch_task(task_id, action)
+        self._running_tasks[task_id] = RunningTaskHandle(
+            task_id=task_id,
+            messages=None,
+            control_queue=None,
+            dispatch_payload=payload,
+            started_at=time.monotonic(),
+        )
 
         # Transition to COMPANIONING (idempotent: skip if already there)
         if self._state != ConciergeState.COMPANIONING:
@@ -2024,15 +2409,6 @@ class ConciergeController:
 
         # Route by tier via authoritative orchestrator router (Section 11.2)
         self._route_via_orchestrator(envelope, dispatch)
-
-        # M5 E5.5.4: Store RunningTaskHandle for potential modify-inflight.
-        # messages is None initially; Back registers it after building messages.
-        self._running_tasks[task_id] = RunningTaskHandle(
-            task_id=task_id,
-            messages=None,
-            dispatch_payload=payload,
-            started_at=time.monotonic(),
-        )
 
         logger.info(
             "Task dispatched: task_id=%s tier=%s active_tasks=%d",
@@ -2321,6 +2697,7 @@ class ConciergeController:
         if self._cancel_handler.is_cancelled(task_id):
             logger.info("task.complete for cancelled task %s -- discarding", task_id)
             self._cancel_handler.handle_late_completion(task_id)
+            self._discard_task_result_ownership(task_id)
             self._active_task_ids.discard(task_id)
             self._task_dispatch_turns.pop(task_id, None)
             self._control_ext.remove_active_task(task_id)
@@ -2350,6 +2727,7 @@ class ConciergeController:
             self._remove_running_task(task_id)
             self._task_bridge.complete_task(task_id)
             self._suspension_manager.cleanup_task(task_id)
+            self._cleanup_terminal_hitl_state(task_id)
 
             # BUG-1 FIX: Release BackPool worker on same-turn completion.
             # Without this, the worker slot leaks permanently.
@@ -2359,23 +2737,26 @@ class ConciergeController:
                 except Exception:
                     logger.warning("BackPool.release_worker failed for %s", task_id, exc_info=True)
 
-            # Store result as deferred so proactive delivery can happen
-            # on the next user interaction via _check_deferred_results_on_input.
-            deferred_item = {
-                "task_id": task_id,
-                "result": payload,
-                "envelope_id": envelope.envelope_id,
-                "urgency": self._get_task_urgency(task_id),
-                "defer_count": 0,
-                "source": "same_turn_completion",
-            }
-            self._turn_state.deferred_results.append(deferred_item)
-            logger.info(
-                "FSM._on_task_complete: stored deferred proactive result "
-                "for task_id=%s (deferred_count=%d)",
-                task_id,
-                len(self._turn_state.deferred_results),
-            )
+            if not self._try_chain_into_current_response(task_id, payload, envelope):
+                # Store result as deferred so proactive delivery can happen
+                # on the next user interaction via _check_deferred_results_on_input.
+                deferred_item = {
+                    "task_id": task_id,
+                    "result": payload,
+                    "envelope_id": envelope.envelope_id,
+                    "urgency": self._get_task_urgency(task_id),
+                    "defer_count": 0,
+                    "source": "same_turn_completion",
+                }
+                evicted = self._turn_state.defer_result(deferred_item)
+                if evicted is not None:
+                    self._turn_state.pending_results.append(evicted)
+                logger.info(
+                    "FSM._on_task_complete: stored deferred proactive result "
+                    "for task_id=%s (deferred_count=%d)",
+                    task_id,
+                    len(self._turn_state.deferred_results),
+                )
 
             if not self._active_task_ids:
                 self._transition(
@@ -2417,6 +2798,7 @@ class ConciergeController:
         )
         self._task_bridge.complete_task(task_id)
         self._suspension_manager.cleanup_task(task_id)
+        self._cleanup_terminal_hitl_state(task_id)
         self._task_dispatch_turns.pop(task_id, None)
 
         # === Step 5: M7 ReadyQueue notification ===
@@ -2450,24 +2832,10 @@ class ConciergeController:
             self._publish_dead_letter(envelope, "overflow")
 
         # === Step 8: Collect WeaveSignal (reads pool AFTER release) ===
-        tracker = self._activity_tracker or UserActivityTracker()
-        signal = WeaveSignal.from_runtime(
-            fsm_state=self._state,
-            turn_state=self._turn_state,
-            back_pool=self._back_pool,
-            ss=self._ss,
-            activity_tracker=tracker,
-            hitl_pending=self._has_pending_hitl(),
-        )
+        signal = self._collect_weave_signal(task_id)
 
         # === Step 9: WeavePolicy decision (with fallback) ===
-        fallback_used = False
-        try:
-            decision = self._weave_policy.decide(signal)
-        except Exception:
-            logger.warning("WeavePolicy.decide() raised -- using fallback", exc_info=True)
-            decision = self._weave_fallback.fallback_decide(self._state)
-            fallback_used = True
+        decision, fallback_used = self._decide_weave_with_fallback(signal)
 
         # === Step 10: Emit weave.decided.v1 event (8.2.4) ===
         self._emit_weave_decided(decision, envelope, signal, fallback_used=fallback_used)
@@ -2507,16 +2875,7 @@ class ConciergeController:
             decision.reasoning[:80],
         )
 
-        if decision.decision == WeaveDecision.IMMEDIATE:
-            self._deliver_weave_immediate(envelope)
-        elif decision.decision == WeaveDecision.BATCH:
-            self._schedule_weave_flush_adaptive(envelope, decision.window_ms)
-        elif decision.decision == WeaveDecision.DEFER:
-            self._mark_results_deferred()
-        elif decision.decision == WeaveDecision.DIGEST:
-            self._schedule_digest_flush(envelope, decision.window_ms)
-        elif decision.decision == WeaveDecision.SUPPRESS:
-            self._suppress_result(task_id, decision.reasoning)
+        self._apply_weave_decision(decision, task_id, envelope)
 
         # === Step 12: M7 auto-dispatch dependent tasks ===
         # (ReadyQueue dependency ordering -- M7 wiring placeholder)
@@ -2681,6 +3040,7 @@ class ConciergeController:
         )
 
         self._cancel_handler.request_cancel(task_id)
+        self._discard_task_result_ownership(task_id)
 
         # M3 E3.3.5: Clean up suspension context on cancel
         self._suspension_manager.cleanup_task(task_id)
@@ -2773,12 +3133,14 @@ class ConciergeController:
         timeout_s = payload.get("timeout_s", 60)
         timeout_ms = int(timeout_s * 1000)
         react_history = payload.get("react_history", [])
+        react_checkpoint = payload.get("react_checkpoint", {})
         # Estimate iteration count from tool call messages in history
         tool_call_count = sum(
             1 for msg in react_history if isinstance(msg, dict) and msg.get("role") == "tool"
         )
         react_snapshot = {
             "prior_messages": react_history,
+            "react_checkpoint": react_checkpoint if isinstance(react_checkpoint, dict) else {},
             "tool_history": [
                 msg
                 for msg in react_history
@@ -2820,7 +3182,34 @@ class ConciergeController:
         )
         self._task_bridge.suspend_task(task_id)
         # M6 E6.4.1: Persist serialized HILSubTask for crash recovery
-        self._task_bridge.set_pending_hil_data(task_id, hil_subtask.to_persistence())
+        compat_hil_envelope = {
+            "hil_request_id": hil_subtask.pending_hil_id,
+            "kind": "needs_human",
+            "caller_key": f"legacy:{task_id}",
+            "trace_id": envelope.cognitive_trace_id or str(payload.get("trace_id", "")),
+            "created_at_ms": int(time.time() * 1000),
+            "timeout_ms": timeout_ms,
+            "payload": {
+                "task_id": task_id,
+                "hil_type": hil_subtask.hil_type,
+                "question": hil_subtask.question,
+                "options": list(hil_subtask.options),
+                "side_effects": list(hil_subtask.side_effects),
+                "safety_band": hil_subtask.safety_band,
+                "legacy_bridge": True,
+            },
+            "legacy_bridge": True,
+        }
+        pending_hil_data = hil_subtask.to_persistence()
+        pending_hil_data.update(
+            {
+                "hil_request_id": hil_subtask.pending_hil_id,
+                "envelope": compat_hil_envelope,
+                "compat_hil_envelope": compat_hil_envelope,
+                "legacy_bridge": True,
+            }
+        )
+        self._task_bridge.set_pending_hil_data(task_id, pending_hil_data)
 
         # M6 E6.3.1: Emit hitl.requested.v1 lifecycle event (observability)
         self._bus.publish(
@@ -2911,6 +3300,27 @@ class ConciergeController:
 
         payload = _parse_payload(envelope)
         task_id = payload.get("task_id", "")
+        self._drop_queued_front_hitl_for_task(task_id)
+
+        pending_entry = self._task_bridge.get_task(task_id) if task_id else None
+        pending_hil_data = getattr(pending_entry, "pending_hil_data", None)
+        if isinstance(pending_hil_data, dict):
+            pending_envelope = pending_hil_data.get("envelope") or pending_hil_data.get(
+                "compat_hil_envelope"
+            )
+            if isinstance(pending_envelope, dict):
+                from k1.concierge.actors.front_hil_envelope import (
+                    is_legacy_bridge_envelope,
+                )
+
+                if not is_legacy_bridge_envelope(pending_envelope):
+                    logger.warning(
+                        "FSM._on_task_resume: dropping legacy task.resume for unified HIL "
+                        "task_id=%s hil_request_id=%s",
+                        task_id,
+                        pending_envelope.get("hil_request_id", ""),
+                    )
+                    return
 
         # M5 E5.4.4: Multi-device dedup for HITL responses
         resume_device_id = payload.get("device_id", "")
@@ -2990,6 +3400,8 @@ class ConciergeController:
                 original_task=stored_context.get("original_task", {}) if stored_context else {},
                 last_iteration=snapshot.get("last_iteration", 0),
                 total_budget=stored_context.get("total_budget", 10) if stored_context else 10,
+                recovery=stored_context.get("recovery", {}) if stored_context else {},
+                react_checkpoint=snapshot.get("react_checkpoint", {}),
             )
             # Inject resume context + resume_token into the envelope
             enriched = dict(payload)
@@ -3039,6 +3451,8 @@ class ConciergeController:
                 original_task=stored_context.get("original_task", {}),
                 last_iteration=stored_context.get("iteration", 0),
                 total_budget=stored_context.get("total_budget", 10),
+                recovery=stored_context.get("recovery", {}),
+                react_checkpoint=stored_context.get("react_checkpoint", {}),
             )
             enriched = dict(payload)
             enriched["resume_context"] = resume_ctx.to_back_context()
@@ -3097,6 +3511,7 @@ class ConciergeController:
             task_id=task_id,
             envelope=envelope,
         )
+        self._check_hil_state_coherence(task_id=task_id, context="task_resume")
 
     def _recover_hitl_on_startup(self) -> None:
         """M6 E6.4.2-6.4.4: Recover pending HITL suspensions after crash/restart.
@@ -3246,6 +3661,7 @@ class ConciergeController:
         self._control_ext.remove_active_task(task_id)
         self._suspension_manager.cleanup_task(task_id)
         self._hitl_responded_tasks.pop(task_id, None)
+        self._check_hil_state_coherence(task_id=task_id, context="hitl_timeout")
 
     def _on_hil_request(self, envelope: Envelope) -> None:
         """Handle k1.hil.request.v1 (HIL Unification E4 unified entry point).
@@ -3291,6 +3707,7 @@ class ConciergeController:
         env_payload = _parse_payload(envelope)
         hil_request_id = str(env_payload.get("hil_request_id") or "")
         kind = str(env_payload.get("kind") or "")
+        caller_key = str(env_payload.get("caller_key") or "")
         inner = env_payload.get("payload") or {}
         if not hil_request_id or not kind:
             logger.warning(
@@ -3299,6 +3716,68 @@ class ConciergeController:
                 kind,
                 hil_request_id,
             )
+            return
+
+        flat: dict[str, Any] = {}
+        try:
+            from k1.concierge.actors.front_hil_envelope import (
+                unwrap_hil_request_payload,
+            )
+
+            flat = unwrap_hil_request_payload(env_payload)
+        except Exception:
+            flat = dict(inner) if isinstance(inner, dict) else {}
+
+        if self._ledger is not None:
+            try:
+                from k1.concierge.events.base import from_envelope
+                from k1.concierge.events.hitl import HILRequested
+
+                meta = from_envelope(envelope, "fsm")
+                meta["session_id"] = getattr(self._ledger, "session_id", "")
+                self._ledger.append_sync(
+                    HILRequested(
+                        task_id=str(inner.get("task_id") or f"hil:{hil_request_id}"),
+                        hil_request_id=hil_request_id,
+                        kind=kind,
+                        caller_key=caller_key,
+                        hil_type=str(flat.get("hil_type", kind) or kind),
+                        question=str(flat.get("question", "") or ""),
+                        options=list(flat.get("options", []) or []),
+                        side_effects=list(flat.get("side_effects", []) or []),
+                        context=dict(inner.get("context", {}) or {}),
+                        safety_band=str(inner.get("safety_band") or "GREEN"),
+                        created_at_ms=int(env_payload.get("created_at_ms", 0) or 0),
+                        timeout_ms=int(env_payload.get("timeout_ms", 0) or 0),
+                        **meta,
+                    )
+                )
+            except Exception:
+                logger.debug("FSM._on_hil_request: canonical ledger write failed", exc_info=True)
+
+        if kind in _INLINE_HIL_WIDGET_KINDS:
+            task_id = str(inner.get("task_id") or f"hil:{hil_request_id}")
+            logger.info(
+                "FSM._on_hil_request: hil_id=%s kind=%s uses direct UI widget; "
+                "skipping Front HITL_RELAY",
+                hil_request_id[:8],
+                kind,
+            )
+            try:
+                self._bus.publish(
+                    build_hitl_requested(
+                        payload=_hil_requested_payload(
+                            hil_request_id=hil_request_id,
+                            kind=kind,
+                            task_id=task_id,
+                            inner=inner,
+                            envelope=envelope,
+                        ),
+                        parent_id=envelope.envelope_id,
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("FSM._on_hil_request: observability emit failed err=%s", exc)
             return
 
         # Bind to an existing back task when present (NEEDS_HUMAN path);
@@ -3358,18 +3837,13 @@ class ConciergeController:
         try:
             self._bus.publish(
                 build_hitl_requested(
-                    payload={
-                        "pending_hil_id": hil_request_id,
-                        "hil_type": kind,
-                        "parent_task_id": task_id,
-                        "safety_band": (inner.get("contract") or {}).get(
-                            "safety_band_min", "AMBER"
-                        ),
-                        "hil_deadline_ms": int(env_payload.get("timeout_ms", 0) or 0),
-                        "resume_token": hil_request_id,
-                        "device_id": "",
-                        "task_id": task_id,
-                    },
+                    payload=_hil_requested_payload(
+                        hil_request_id=hil_request_id,
+                        kind=kind,
+                        task_id=task_id,
+                        inner=inner,
+                        envelope=envelope,
+                    ),
                     parent_id=envelope.envelope_id,
                 )
             )
@@ -3402,11 +3876,6 @@ class ConciergeController:
 
         # History entry (BEFORE delivery so order is final -> hitl_request -> resolve).
         try:
-            from k1.concierge.actors.front_hil_envelope import (
-                unwrap_hil_request_payload,
-            )
-
-            flat = unwrap_hil_request_payload(env_payload)
             self._write_history(
                 entry_type="hitl_request",
                 role="assistant",
@@ -3414,10 +3883,28 @@ class ConciergeController:
                 source="front",
                 task_id=task_id,
                 envelope=envelope,
-                metadata={"hil_type": flat.get("hil_type", kind), "hil_request_id": hil_request_id},
+                metadata={
+                    "hil_type": flat.get("hil_type", kind),
+                    "kind": kind,
+                    "hil_request_id": hil_request_id,
+                    "caller_key": caller_key,
+                    "created_at_ms": int(env_payload.get("created_at_ms", 0) or 0),
+                    "timeout_ms": int(env_payload.get("timeout_ms", 0) or 0),
+                    "options": list(flat.get("options", []) or []),
+                    "side_effects": list(flat.get("side_effects", []) or []),
+                    "context": dict(inner.get("context", {}) or {}),
+                    "safety_band": str(inner.get("safety_band") or "GREEN"),
+                    "ledger_event_already_emitted": True,
+                },
             )
         except Exception as exc:  # noqa: BLE001
             logger.debug("FSM._on_hil_request: history write skipped err=%s", exc)
+
+        self._check_hil_state_coherence(
+            task_id=task_id,
+            hil_request_id=hil_request_id,
+            context="hil_request",
+        )
 
         if self._front_lock.try_deliver(envelope):
             self._deliver_to_front(envelope)
@@ -3533,7 +4020,7 @@ class ConciergeController:
 
     def _execute_response_final_decision(
         self,
-        decision: "ResponseFinalDecision",
+        decision: ResponseFinalDecision,
         envelope: Envelope,
     ) -> None:
         """Execute a ResponseFinalDecision produced by decide_response_final().
@@ -3830,6 +4317,25 @@ class ConciergeController:
         )
         return _dc_replace(env, envelope_id=next_synthetic_envelope_id())
 
+    def _prepare_weave_results_for_delivery(
+        self,
+        results: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Sort results and run the OPP weave-flush hook once."""
+        sorted_results = sort_results_for_delivery(results)
+        if self._opp_pipeline is not None:
+            pacing = self._opp_pipeline.on_weave_flush(
+                results=sorted_results,
+                batch_count=len(sorted_results),
+            )
+            if getattr(pacing, "use_pacing", False):
+                logger.info(
+                    "FSM._prepare_weave_results_for_delivery: OPP-1 pacing strategy=%s groups=%d",
+                    getattr(pacing, "strategy", "unknown"),
+                    getattr(pacing, "group_count", 0),
+                )
+        return sorted_results
+
     # ------------------------------------------------------------------
     # BUG-6 FIX: Proactive delivery for same-turn deferred results
     # ------------------------------------------------------------------
@@ -3883,6 +4389,19 @@ class ConciergeController:
         """
         deferred = self._turn_state.drain_deferred()
         if not deferred:
+            return
+
+        signal = self._collect_weave_signal()
+        if (
+            signal.user_typing
+            or signal.hitl_pending
+            or signal.emotional_gate == EMOTIONAL_GATE_SUPPRESS_ALL_NON_SAFETY
+        ):
+            for item in deferred:
+                evicted = self._turn_state.defer_result(item)
+                if evicted is not None:
+                    self._turn_state.pending_results.append(evicted)
+            logger.debug("FSM._flush_deferred_proactive: gated, re-deferred results")
             return
 
         logger.info(
@@ -3941,30 +4460,18 @@ class ConciergeController:
         if not results:
             return
 
-        # OPP-1: Compute pacing plan for batch delivery
-        if self._opp_pipeline is not None and len(results) > 1:
-            pacing = self._opp_pipeline.on_weave_flush(
-                results=results,
-                batch_count=len(results),
-            )
-            if pacing.use_pacing:
-                logger.info(
-                    "FSM._flush_weave_now: OPP-1 pacing strategy=%s groups=%d",
-                    pacing.strategy,
-                    pacing.group_count,
-                )
-
-        weave_envelope = self._build_weave_envelope(results, parent_id)
+        prepared_results = self._prepare_weave_results_for_delivery(results)
+        weave_envelope = self._build_weave_envelope(prepared_results, parent_id)
         if self._front_lock.try_deliver(weave_envelope):
             self._deliver_to_front(weave_envelope)
         else:
             # BUG-4a FIX: Re-enqueue results when FrontLock rejects delivery
             # so they are not permanently lost.
-            for item in results:
+            for item in prepared_results:
                 self._turn_state.pending_results.append(item)
             logger.debug(
                 "FSM._flush_weave_now: FrontLock busy, re-enqueued %d results",
-                len(results),
+                len(prepared_results),
             )
 
     # ------------------------------------------------------------------
@@ -3998,7 +4505,7 @@ class ConciergeController:
                 "expired",
             )
         if results:
-            sorted_results = sort_results_for_delivery(results)
+            sorted_results = self._prepare_weave_results_for_delivery(results)
             weave_env = self._build_weave_envelope(sorted_results, envelope.envelope_id)
             if self._front_lock.try_deliver(weave_env):
                 self._deliver_to_front(weave_env)
@@ -4048,7 +4555,7 @@ class ConciergeController:
 
         self._weave_flush_task = loop.create_task(_delayed_flush())
 
-    def _mark_results_deferred(self) -> None:
+    def _mark_results_deferred(self, envelope: Envelope | None = None) -> None:
         """M8 E8.5.4: Move pending results to deferred_results.
 
         Results will be re-evaluated and injected into the next STANDARD
@@ -4065,15 +4572,18 @@ class ConciergeController:
             # the next weave flush picks them up for BATCH delivery.
             for item in force_deliver:
                 self._turn_state.pending_results.append(item)
-            self._schedule_weave_flush(
-                Envelope(
-                    topic=TOPIC_TASK_COMPLETE,
-                    priority=Priority.INTERACTIVE,
-                    payload=b"{}",
-                    parent_id=0,
-                    payload_format=PayloadFormat.JSON,
+            if envelope is not None:
+                self._schedule_weave_flush_adaptive(envelope, WEAVE_BATCH_WINDOW_MS)
+            else:
+                self._schedule_weave_flush(
+                    Envelope(
+                        topic=TOPIC_TASK_COMPLETE,
+                        priority=Priority.INTERACTIVE,
+                        payload=b"{}",
+                        parent_id=0,
+                        payload_format=PayloadFormat.JSON,
+                    )
                 )
-            )
 
     def _schedule_digest_flush(self, envelope: Envelope, window_ms: int) -> None:
         """M8 E8.5.5: Accumulate results for digest_window_ms then compress.
@@ -4150,15 +4660,9 @@ class ConciergeController:
             task_id,
             reason[:80],
         )
-        # BUG-3 FIX: Only remove the targeted task's result from the queue,
-        # not ALL pending results.  Other tasks' results must be preserved.
-        kept: deque[dict[str, Any]] = deque()
-        for item in self._turn_state.pending_results:
-            if item.get("task_id") == task_id:
-                logger.debug("FSM._suppress_result: discarded result for task=%s", task_id)
-            else:
-                kept.append(item)
-        self._turn_state.pending_results = kept
+        removed = self._discard_task_result_ownership(task_id)
+        if removed:
+            logger.debug("FSM._suppress_result: discarded queued result for task=%s", task_id)
 
     def _emit_weave_decided(
         self,
@@ -4247,15 +4751,7 @@ class ConciergeController:
         deliver_now: list[dict[str, Any]] = []
         still_deferred: list[dict[str, Any]] = []
 
-        tracker = self._activity_tracker or UserActivityTracker()
-        signal = WeaveSignal.from_runtime(
-            fsm_state=self._state,
-            turn_state=self._turn_state,
-            back_pool=self._back_pool,
-            ss=self._ss,
-            activity_tracker=tracker,
-            hitl_pending=self._has_pending_hitl(),
-        )
+        signal = self._collect_weave_signal()
 
         for item in deferred:
             defer_count = item.get("defer_count", 0)
@@ -4432,13 +4928,51 @@ class ConciergeController:
         logger.debug("Affect update received (RELAXED)")
 
     def _on_proactive_fill(self, envelope: Envelope) -> None:
-        """Handle k1.proactive.fill.v1 -- RELAXED, observability only."""
+        """Handle k1.proactive.fill.v1 by routing safe fills to Front."""
         # M2 E2.1.2: Guard gate
         guard = self._guard_dispatch(envelope)
         if guard == GuardAction.DEAD_LETTER:
             self._publish_dead_letter(envelope, "proactive_fill_invalid_state")
             return
-        logger.debug("Proactive fill received (RELAXED)")
+        payload = _parse_payload(envelope)
+        if not self._should_deliver_proactive_fill(payload):
+            return
+        logger.debug("Proactive fill received (RELAXED), delivering to Front")
+        if self._front_lock.try_deliver(envelope):
+            self._deliver_to_front(envelope)
+
+    def _should_deliver_proactive_fill(self, payload: dict[str, Any]) -> bool:
+        """Return True when a proactive fill can safely reach Front."""
+        message = str(payload.get("message") or payload.get("text") or "").strip()
+        if not message:
+            logger.debug("Proactive fill suppressed: empty message")
+            return False
+        if self._state == ConciergeState.CLARIFYING_WORKER or self._has_pending_hitl():
+            logger.debug("Proactive fill suppressed: HITL active")
+            return False
+        signal = self._collect_weave_signal()
+        if signal.user_typing:
+            logger.debug("Proactive fill suppressed: user typing")
+            return False
+        if signal.emotional_gate == EMOTIONAL_GATE_SUPPRESS_ALL_NON_SAFETY:
+            logger.debug("Proactive fill suppressed: crisis/safety gate")
+            return False
+
+        task_state_payload = payload.get("task_state")
+        task_state = task_state_payload if isinstance(task_state_payload, dict) else {}
+        task_id = str(
+            payload.get("task_id") or payload.get("task") or task_state.get("task_id") or "session"
+        ).strip()
+        fill_kind = str(payload.get("kind") or payload.get("style") or "wait_status")
+        key = f"{task_id}:{fill_kind}"
+        now_ns = time.monotonic_ns()
+        cooldown_ms = int(getattr(get_config().experience, "proactive_fill_cooldown_ms", 15_000))
+        last_ns = self._proactive_fill_last_by_key.get(key, 0)
+        if last_ns and (now_ns - last_ns) / 1_000_000 < cooldown_ms:
+            logger.debug("Proactive fill suppressed: cooldown key=%s", key)
+            return False
+        self._proactive_fill_last_by_key[key] = now_ns
+        return True
 
     def _on_ui_typing(self, envelope: Envelope) -> None:
         """Handle k1.ui.typing.v1 -- user typing signal (M8 E8.5.1).
@@ -4535,6 +5069,12 @@ class ConciergeController:
 
     def _reset_all_components(self) -> None:
         """Reset all components to their initial state."""
+        if self._weave_batcher is not None and hasattr(self._weave_batcher, "reset"):
+            try:
+                self._weave_batcher.reset()
+            except Exception:
+                logger.warning("WeaveBatcher.reset failed during controller reset", exc_info=True)
+
         # Reset control and coordination components
         self._turn_state.reset()
         self._front_lock.clear()
@@ -4548,6 +5088,7 @@ class ConciergeController:
         self._history.clear()
         self._active_task_ids.clear()
         self._task_dispatch_turns.clear()
+        self._proactive_fill_last_by_key.clear()
 
         # Reset to None attributes
         self._hil_port = None  # E4.M1.4: unified HIL service handle
@@ -4567,8 +5108,15 @@ class ConciergeController:
         self._history.clear()
         self._active_task_ids.clear()
         self._task_dispatch_turns.clear()
+        self._proactive_fill_last_by_key.clear()
 
         # Reset to None attributes
+        self._hil_port = None  # E4.M1.4: unified HIL service handle
+        self._weave_batcher = None
+
+        # Reset state variables (BUG-7 FIX: removed duplicate block)
+        self._state = ConciergeState.LISTENING
+        self._turn_number = 0
         self._hil_port = None  # E4.M1.4: unified HIL service handle
         self._weave_batcher = None
 

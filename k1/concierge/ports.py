@@ -28,7 +28,7 @@ from k1.bus.envelope import Envelope
 from k1.bus.ports.bus import IBus
 from k1.concierge.fabric.ports import IFabricPort
 from k1.concierge.orchestrator.types import AggregatedResult, TaskEnvelope
-from k1.fabric.types import CapabilityRequest, CapabilityResult
+from k1.fabric.types import CapabilityRequest, CapabilityResult, RetrievalResult
 from k1.model_hub.ports.hub_port import IModelHubPort
 from k1.model_hub.types import HubChunk, HubRequest, HubResponse
 
@@ -111,6 +111,16 @@ class IDispatchPort(Protocol):
       MED+: OrchestratorStub.handle_task(TaskEnvelope) → AggregatedResult
     Source: k1/concierge/fabric/ports.py, k1/concierge/orchestrator/stub.py
     """
+
+    async def discover_capabilities(
+        self,
+        intent: str,
+        domain: Any = None,
+        top_k: int = 5,
+        safety_band: str = "AMBER",
+    ) -> RetrievalResult:
+        """Find candidate capabilities with their contracts/input schemas."""
+        ...
 
     async def dispatch_direct(self, request: CapabilityRequest) -> CapabilityResult:
         """Execute a single capability via Fabric (LOW tier path)."""

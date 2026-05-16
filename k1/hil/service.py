@@ -476,6 +476,13 @@ class HumanInTheLoopService:
         async with self._lock:
             fut = self._pending.get(resp.hil_request_id)
         if fut is None:
+            if bool(resp.payload.get("legacy_bridge")):
+                logger.debug(
+                    "hil_response_legacy_bridge_ignored hil_request_id=%s kind=%s",
+                    resp.hil_request_id,
+                    resp.kind.value,
+                )
+                return
             logger.warning(
                 "hil_response_unknown_id hil_request_id=%s kind=%s",
                 resp.hil_request_id,

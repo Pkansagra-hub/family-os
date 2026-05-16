@@ -11,6 +11,7 @@ Issue coverage:
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 from k1.concierge.bus.builders import build_user_input
@@ -446,6 +447,22 @@ class TestModifyInflightPath:
         fsm._on_user_input(env)
         state_events = _captured_by_topic(bus, TOPIC_STATE_UPDATED)
         assert len(state_events) == 0, "No state transition for modify"
+
+    def test_modify_enqueues_back_control_event(self) -> None:
+        """MODIFY_INFLIGHT queues a typed control event for Back."""
+        fsm, bus = self._make_fsm_with_overlapping_task()
+        queue = asyncio.Queue()
+        fsm.register_running_task_control_queue("task-hotel", queue)
+
+        env = build_user_input({"text": "make that 2 nights"})
+        fsm._on_user_input(env)
+
+        event = queue.get_nowait()
+        assert event.event_type == "parameter_update"
+        assert event.task_id == "task-hotel"
+        assert event.payload["modifications"]["nights"] == "2"
+        modify_payload = _payload(_captured_by_topic(bus, TOPIC_TASK_MODIFY)[0])
+        assert modify_payload["accepted"] is True
 
 
 # ===================================================================

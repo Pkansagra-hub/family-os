@@ -21,7 +21,10 @@ from poc.k1_poc.llm.types import ToolSchema
 # P1.1 -- Front gains direct Fabric access for LOW-tier single-step lookups.
 # Both schemas live in schemas_fabric to avoid a cycle with schemas_back
 # (which imports RECALL_MEMORY_SCHEMA from this module).
-from poc.k1_poc.tools.schemas_fabric import DISCOVER_CAPABILITIES_SCHEMA, INVOKE_CAPABILITY_SCHEMA
+from poc.k1_poc.tools.schemas_fabric import (
+    DISCOVER_CAPABILITIES_SCHEMA,
+    INVOKE_CAPABILITY_SCHEMA,
+)
 
 # ===================================================================
 # COGNITIVE (6)

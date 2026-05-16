@@ -68,7 +68,7 @@ We should run this as a milestone train, not one huge refactor. The goal is: Fro
 
 - Keep `M1-L7` as xfail/open: `EpisodicCompressor` is not wired into the live `ExperienceLayer` path.
 - Keep `M1-X9` as xfail/open: `WriteElisionGate` is still design-only.
-- Keep `M1-X10` as xfail/open until legacy HITL emits `k1.hil.response.v1` before `task.resume.v1` or the test is intentionally retired in favor of unified-only flow.
+- `M1-X10` is closed by M1: legacy HITL now emits bridge-only `k1.hil.response.v1` before `task.resume.v1`.
 - Close or annotate any row claiming ReAct tool timeout is absent.
 - Close or annotate any row claiming `ResponseDelivered` is absent.
 
@@ -91,6 +91,13 @@ We should run this as a milestone train, not one huge refactor. The goal is: Fro
 
 **Acceptance:** the next implementer does not spend time rediscovering which items are stale.
 
+**M0 completion evidence (May 2026):**
+
+- ReAct tool timeout is implemented in `k1/concierge/react/loop.py` and locked by `tests/k1/concierge/react/test_loop_tool_timeout.py`.
+- `ResponseDelivered` exists, is registered, and is written before `_execute_response_final_decision(...)`; `tests/k1/concierge/fsm/test_response_delivered.py` locks the delivery-intent ordering.
+- `k1/concierge/OPEN_ISSUES.md` now marks ISSUE-C03 and ISSUE-C04 closed with residual semantics documented.
+- `docs/architecture/kernel_sweep_status.md` now carries the true remaining Concierge gap register for M1-M6.
+
 ## M1 -- HIL Unification
 
 **Purpose:** Human-in-the-loop must feel like one conversation, even when a Back worker, Fabric, Planner, or Orchestrator is waiting for a human decision.
@@ -101,6 +108,14 @@ We should run this as a milestone train, not one huge refactor. The goal is: Fro
 - Legacy path: Back emits `task.suspended.v1`; FSM moves to `CLARIFYING_WORKER`; Front asks the user; user reply causes `task.resume.v1`; `back_resume_handler(...)` resumes from stored context. This path exists only for recovery, legacy tests, or no-HIL-service fallback.
 
 **State/API coherence rule for M1:** For one human decision, exactly one canonical `hil_request_id` must exist. Unified path consumes it through `k1.hil.response.v1`. Legacy bridge may also emit a compatibility `k1.hil.response.v1`, but must mark it as bridge-only and must still resume Back exactly once.
+
+**M1 completion evidence (May 2026):**
+
+- Unified HIL remains service-owned: `TOPIC_HIL_REQUEST` routes to the FSM for presentation state, while `TOPIC_HIL_RESPONSE` is not routed to the FSM and resolves through `HumanInTheLoopService`.
+- Legacy `task.suspended.v1` now persists a compatibility `HILEnvelope` with `legacy_bridge=True`; Front publishes the bridge-only `k1.hil.response.v1` before the legacy `task.resume.v1`.
+- Front `HITL_RESOLVE` scenario data now carries `_hil_envelope`, HIL kind, options, side effects, pending HIL id, `legacy_bridge`, and `task_id`; `_build_resolution(...)` parses approval, capability gate, needs-human selection, override, and clarification answers into structured resolution fields.
+- `back_resume_handler(...)` accepts both `react_history` and `findings_so_far` resume-context keys, so HILSubTask resume history is not dropped.
+- Verification: `tests/k1/concierge/test_front_hil_unified_envelope.py` + `tests/k1/hil/test_service_front_roundtrip.py` (`55 passed`), `tests/k1/concierge/fsm/test_hil_resume_guard.py` (`1 passed`), `test_m1_x10_legacy_hitl_resolution_emits_hil_response_before_resume` (`1 passed`), and `tests/integration/k1/live/m1/test_m1_l6_l9_concierge_lifecycle.py` (`3 passed`).
 
 **Epic M1.E1 -- Make Unified HIL The Live Path**
 
@@ -156,7 +171,7 @@ We should run this as a milestone train, not one huge refactor. The goal is: Fro
 - `k1/concierge/actors/front_hil_envelope.py` only if helper support is missing
 - `tests/integration/k1/live/m1/test_m1_x3_x12_concierge_cross_component.py`
 
-**Current behavior:** legacy HITL currently goes `task.suspended.v1 -> user input -> task.resume.v1` and does not emit protocol-level `k1.hil.response.v1`. This is why M1-X10 remains strict-xfail.
+**Current behavior:** legacy HITL now goes `task.suspended.v1 -> user input -> bridge-only k1.hil.response.v1 -> task.resume.v1`, preserving protocol evidence before Back resumes. M1-X10 is no longer strict-xfail.
 
 **Implementation directive:**
 
@@ -268,6 +283,15 @@ We should run this as a milestone train, not one huge refactor. The goal is: Fro
 **Purpose:** Back can be technical internally, but Front must receive typed presentation material rather than loose worker prose. This milestone prevents Back's scratchpad, JSON, tool traces, or `final_answer` from leaking into the user-visible voice.
 
 **State/API coherence rule for M2:** Back owns execution facts. Front owns language. `final_answer` remains a legacy compatibility field only; new Front prompt paths consume typed frames.
+
+**M2 completion evidence (May 2026):**
+
+- `k1/concierge/actors/frames.py` now defines frozen/slotted `BackResultFrame`, `HILResolutionFrame`, and `WeavePresentationFrame` handoff types.
+- Back complete payloads now include `frame` while preserving legacy `final_answer`, `results`, and `artifacts_created` fields.
+- Front PRESENT and WEAVE scenario data now prefer typed frame facts/artifacts/next actions; WEAVE skips before ReAct when no concrete result summary exists.
+- Front HIL resolution now builds `HILResolutionFrame` internally; unified HIL still uses `build_hil_response_envelope_dict(...)`, while legacy resume carries `resolution_frame` and Back consumes typed command fields instead of raw user text for approval/gate authority.
+- Front final text cleanup now strips Back frame JSON, tool traces, scratchpad/iteration markers, and `<think>...</think>` blocks before publishing.
+- Verification: `tests/k1/concierge/test_back_result_frame.py`, `test_front_present_frame.py`, `test_front_weave_frame.py`, `test_weave_presentation_frame.py`, `test_front_leak_guards.py`, `test_hil_resolution_frame.py`, and `test_back_resume_resolution_frame.py` (`14 passed`), plus existing `tests/k1/concierge/test_front_hil_unified_envelope.py` (`26 passed`). Diagnostics are clean on touched implementation and test files.
 
 **Epic M2.E1 -- Back Result Frame**
 

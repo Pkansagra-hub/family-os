@@ -98,6 +98,7 @@ markers = [
     "benchmark: benchmark tests for algorithm performance validation",
     "invariant: empty-set invariant tests (k1.selfmodel)",
     "perf: latency / throughput budget tests (k1.selfmodel)",
+    "xfail_on_real_k0: pseudo-K0 tests that are expected to need additional policy/gate/idempotency work on real K0",
 ]
 
 [tool.coverage.run]

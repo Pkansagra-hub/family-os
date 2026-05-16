@@ -18,6 +18,7 @@ from k1.concierge.ports import IDispatchPort
 from k1.concierge.tools.implementations import (
     ToolContext,
     ToolResult,
+    execute_batch_invoke_capabilities,
     execute_discover_capabilities,
     execute_execute_workflow,
     execute_invoke_capability,
@@ -27,6 +28,7 @@ from k1.fabric.types import (
     CapabilityContract,
     CapabilityRequest,
     CapabilityResult,
+    InputSpec,
     RetrievalResult,
     ScoredCapability,
 )
@@ -49,6 +51,8 @@ def _make_ctx(
     active_task_id: str | None = None,
     *,
     allow_dispatch_passthrough: bool = True,
+    session_id: str = "",
+    safety_band: str = "AMBER",
 ) -> ToolContext:
     """Build a minimal ToolContext for tool-handler tests.
 
@@ -66,6 +70,8 @@ def _make_ctx(
         dispatch=dispatch,
         active_task_id=active_task_id,
         allow_dispatch_passthrough=allow_dispatch_passthrough,
+        session_id=session_id,
+        safety_band=safety_band,
     )
 
 
@@ -165,15 +171,88 @@ class TestDiscoverWithFabricPort:
         assert isinstance(cap["score"], float)
 
     @pytest.mark.asyncio
+    async def test_capability_dict_has_input_schema_and_caches_contract(self) -> None:
+        contract = CapabilityContract(
+            name="tool.execute.tasks.create_task",
+            description="Create a task",
+            domain=["family", "tasks"],
+            required_inputs=[InputSpec(name="title", type="string", description="Task title")],
+            optional_inputs=[InputSpec(name="assigned_to", type="string", description="Member id")],
+        )
+        mock_port = AsyncMock(spec=FabricDispatchAdapter)
+        mock_port.discover_capabilities.return_value = RetrievalResult(
+            capabilities=[ScoredCapability(contract=contract, score=1.0)],
+            total_matched=1,
+        )
+        ctx = _make_ctx(dispatch=mock_port)
+
+        result = await execute_discover_capabilities({"intent": "create task"}, ctx)
+
+        cap = result.data["capabilities"][0]
+        assert cap["schema"]["required_inputs"] == [
+            {"name": "title", "type": "string", "description": "Task title"}
+        ]
+        assert cap["schema"]["optional_inputs"] == [
+            {"name": "assigned_to", "type": "string", "description": "Member id"}
+        ]
+        assert ctx.capability_cache[("capability_contract", contract.name)] is contract
+
+    @pytest.mark.asyncio
+    async def test_capability_dict_has_contract_metadata_for_planning(self) -> None:
+        contract = CapabilityContract(
+            name="tool.read.records.list_records",
+            description="List records",
+            domain=["system", "records"],
+            capabilities=["read", "adapter:records"],
+            output={
+                "type": "object",
+                "properties": {"records": {"type": "array"}},
+                "required": ["records"],
+            },
+        )
+        mock_port = AsyncMock(spec=FabricDispatchAdapter)
+        mock_port.discover_capabilities.return_value = RetrievalResult(
+            capabilities=[ScoredCapability(contract=contract, score=1.0)],
+            total_matched=1,
+        )
+        ctx = _make_ctx(dispatch=mock_port)
+
+        result = await execute_discover_capabilities({"intent": "list records"}, ctx)
+
+        cap = result.data["capabilities"][0]
+        assert cap["domains"] == ["system", "records"]
+        assert cap["schema"]["capabilities"] == ["read", "adapter:records"]
+        assert cap["schema"]["output"]["properties"]["records"]["type"] == "array"
+
+    @pytest.mark.asyncio
     async def test_domain_passed_as_list(self) -> None:
         mock_port = AsyncMock(spec=FabricDispatchAdapter)
         mock_port.discover_capabilities.return_value = _retrieval_result()
         ctx = _make_ctx(dispatch=mock_port)
         await execute_discover_capabilities({"intent": "send", "domain": "messaging"}, ctx)
-        call_kwargs = mock_port.discover_capabilities.call_args
+        call_kwargs = mock_port.discover_capabilities.call_args_list[0]
         assert call_kwargs.kwargs.get("domain") == ["messaging"] or call_kwargs[1].get(
             "domain"
         ) == ["messaging"]
+
+    @pytest.mark.asyncio
+    async def test_domain_is_soft_hint_and_global_results_are_merged(self) -> None:
+        mock_port = AsyncMock(spec=FabricDispatchAdapter)
+        mock_port.discover_capabilities.side_effect = [
+            _retrieval_result(["tool.read.records.list_records"]),
+            _retrieval_result(["tool.execute.records.delete_record"]),
+        ]
+        ctx = _make_ctx(dispatch=mock_port)
+
+        result = await execute_discover_capabilities(
+            {"intent": "delete all matching records", "domain": "operations"}, ctx
+        )
+
+        assert mock_port.discover_capabilities.await_count == 2
+        names = [cap["name"] for cap in result.data["capabilities"]]
+        assert names == ["tool.read.records.list_records", "tool.execute.records.delete_record"]
+        assert mock_port.discover_capabilities.call_args_list[0].kwargs["domain"] == ["operations"]
+        assert mock_port.discover_capabilities.call_args_list[1].kwargs["domain"] is None
 
     @pytest.mark.asyncio
     async def test_empty_intent_returns_error(self) -> None:
@@ -235,6 +314,94 @@ class TestInvokeWithFabricPort:
         assert call_args.params == {"key": "val"}
         assert call_args.caller == "concierge"
         assert call_args.caller_id == "concierge.back"
+        assert call_args.safety_band == "AMBER"
+
+    @pytest.mark.asyncio
+    async def test_uses_context_safety_band(self) -> None:
+        mock_port = AsyncMock(spec=IDispatchPort)
+        mock_port.dispatch_direct.return_value = _success_result()
+        ctx = _make_ctx(dispatch=mock_port, actor="back", safety_band="RED")
+        await execute_invoke_capability(
+            {"capability_name": "tool.execute.test", "params": {}}, ctx
+        )
+        call_args = mock_port.dispatch_direct.call_args[0][0]
+        assert call_args.safety_band == "RED"
+
+    @pytest.mark.asyncio
+    async def test_synthesizes_trace_id_when_context_trace_missing(self) -> None:
+        mock_port = AsyncMock(spec=IDispatchPort)
+        mock_port.dispatch_direct.return_value = _success_result()
+        ctx = _make_ctx(dispatch=mock_port, actor="back")
+        ctx.cognitive_trace_id = ""
+        await execute_invoke_capability({"capability_name": "tool.execute.test", "params": {}}, ctx)
+        call_args = mock_port.dispatch_direct.call_args[0][0]
+        assert call_args.trace_id.startswith("tool-")
+        assert ctx.cognitive_trace_id == call_args.trace_id
+
+    @pytest.mark.asyncio
+    async def test_normalizes_task_create_alias_params(self) -> None:
+        mock_port = AsyncMock(spec=IDispatchPort)
+        mock_port.dispatch_direct.return_value = _success_result()
+        ctx = _make_ctx(dispatch=mock_port, actor="back")
+        await execute_invoke_capability(
+            {
+                "capability_name": "tool.execute.tasks.create_task",
+                "params": {"description": "clean her bedroom", "assignee": "Riley"},
+            },
+            ctx,
+        )
+        call_args = mock_port.dispatch_direct.call_args[0][0]
+        assert call_args.params["title"] == "clean her bedroom"
+        assert call_args.params["assigned_to"] == "riley"
+
+    @pytest.mark.asyncio
+    async def test_normalizes_task_create_content_param(self) -> None:
+        mock_port = AsyncMock(spec=IDispatchPort)
+        mock_port.dispatch_direct.return_value = _success_result()
+        ctx = _make_ctx(dispatch=mock_port, actor="back")
+        await execute_invoke_capability(
+            {
+                "capability_name": "tool.execute.tasks.create_task",
+                "params": {"content": "start washer and dryer for Jordan"},
+            },
+            ctx,
+        )
+        call_args = mock_port.dispatch_direct.call_args[0][0]
+        assert call_args.params["title"] == "start washer and dryer for Jordan"
+        assert call_args.params["assigned_to"] == "jordan"
+
+    @pytest.mark.asyncio
+    async def test_missing_required_capability_param_returns_recovery_contract(self) -> None:
+        contract = CapabilityContract(
+            name="tool.execute.tasks.create_task",
+            description="Create a task",
+            domain=["family", "tasks"],
+            required_inputs=[InputSpec(name="title", type="string", description="Task title")],
+            optional_inputs=[InputSpec(name="assigned_to", type="string", description="Member id")],
+        )
+        mock_port = AsyncMock(spec=IDispatchPort)
+        mock_port.discover_capabilities.return_value = RetrievalResult(
+            capabilities=[ScoredCapability(contract=contract, score=1.0)],
+            total_matched=1,
+        )
+        ctx = _make_ctx(dispatch=mock_port, actor="back")
+
+        result = await execute_invoke_capability(
+            {
+                "capability_name": "tool.execute.tasks.create_task",
+                "params": {"assigned_to": "jordan"},
+            },
+            ctx,
+        )
+
+        assert result.status == "error"
+        assert result.error == "capability_params_incomplete"
+        assert result.data["status"] == "needs_human"
+        assert result.data["recovery"]["schema_version"] == "k1.concierge.tool_recovery.v1"
+        assert result.data["recovery"]["action"] == "ask_human"
+        assert result.data["recovery"]["capability_name"] == "tool.execute.tasks.create_task"
+        assert result.data["recovery"]["missing_fields"] == ["title"]
+        mock_port.dispatch_direct.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_success_returns_ok(self) -> None:
@@ -288,6 +455,34 @@ class TestInvokeWithFabricPort:
         ctx = _make_ctx(dispatch=mock_port)
         result = await execute_invoke_capability({"capability_name": "cap1", "params": {}}, ctx)
         assert "duration_ms" in result.data
+
+
+class TestBatchInvokeWithFabricPort:
+    """execute_batch_invoke_capabilities preserves Back context on Fabric requests."""
+
+    @pytest.mark.asyncio
+    async def test_forwards_session_and_safety_band(self) -> None:
+        mock_port = AsyncMock(spec=IDispatchPort)
+        mock_port.dispatch_direct.return_value = _success_result()
+        ctx = _make_ctx(dispatch=mock_port, session_id="sess-123", safety_band="AMBER")
+
+        result = await execute_batch_invoke_capabilities(
+            {
+                "invocations": [
+                    {
+                        "capability_name": "tool.execute.calendar.create_event",
+                        "params": {"title": "Dentist"},
+                    }
+                ]
+            },
+            ctx,
+        )
+
+        assert result.status == "ok"
+        call_args = mock_port.dispatch_direct.call_args[0][0]
+        assert isinstance(call_args, CapabilityRequest)
+        assert call_args.session_id == "sess-123"
+        assert call_args.safety_band == "AMBER"
 
 
 # =====================================================================

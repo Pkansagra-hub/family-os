@@ -75,6 +75,9 @@ class CalendarToolService(BaseToolService):
 
     async def create_event(self, params: dict[str, Any], ctx: WriteContext) -> dict[str, Any]:
         action = self._spec("create_event")
+        metadata = params.get("metadata") or {}
+        if not isinstance(metadata, dict):
+            raise ValueError("create_event metadata must be an object")
         try:
             ev = CalendarEvent(
                 id=_new_id(),
@@ -89,6 +92,7 @@ class CalendarToolService(BaseToolService):
                 notes=params.get("notes", "") or "",
                 attendees=list(params.get("attendees") or []),
                 rrule=params.get("rrule"),
+                metadata=dict(metadata),
             )
         except KeyError as exc:
             raise ValueError(f"create_event missing required field: {exc.args[0]}") from exc
@@ -123,6 +127,10 @@ class CalendarToolService(BaseToolService):
         for field in ("title", "start", "end", "location", "notes", "rrule", "attendees"):
             if field in params and params[field] is not None:
                 updates[field] = params[field]
+        if "metadata" in params and params["metadata"] is not None:
+            if not isinstance(params["metadata"], dict):
+                raise ValueError("update_event metadata must be an object")
+            updates["metadata"] = {**existing.metadata, **params["metadata"]}
 
         # ``BaseEntity.bump`` only refreshes the audit columns; apply the
         # business-field updates first, then bump, so the version counter

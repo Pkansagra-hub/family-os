@@ -61,7 +61,7 @@ class TaskDispatch:
                            Determines Back's iteration budget and tool allowlist.
         budget_hint:       Max tool-call iterations for Back ReAct loop.
                            Auto-computed from tier if not explicitly set.
-        reference_context: Front-resolved pronoun and reference mappings.
+        reference_context: Front-resolved references, artifacts, and context.
                            Example: {"it": "Vineyard Inn", "those dates": "June 15-17"}
                            Back reads this in STEP 1 (ORIENT) to resolve references.
         safety_band:       GREEN / AMBER / RED. Copied from SS control.safety_band.
@@ -72,16 +72,19 @@ class TaskDispatch:
         context_snapshot:  Relevant SessionState sections at dispatch time.
                            Provides Back with cognitive context without
                            requiring a separate SS read.
+        execution_profiles: Optional selected profile metadata for Back resume
+                   and audit. Profiles are guidance, not authority.
     """
 
     intents: list[TaskIntent]
     tier: ComplexityTier = ComplexityTier.LOW
     task_id: str = field(default_factory=lambda: f"task-{uuid.uuid4().hex[:8]}")
     budget_hint: int | None = None
-    reference_context: dict[str, str] | None = None
+    reference_context: dict[str, Any] | None = None
     safety_band: str = "AMBER"
     depends_on: str | None = None
     context_snapshot: dict[str, Any] | None = None
+    execution_profiles: list[dict[str, Any]] | None = None
 
     def __post_init__(self) -> None:
         if not self.intents:
@@ -133,6 +136,8 @@ class TaskDispatch:
             d["depends_on"] = self.depends_on
         if self.context_snapshot is not None:
             d["context_snapshot"] = self.context_snapshot
+        if self.execution_profiles is not None:
+            d["execution_profiles"] = self.execution_profiles
         return d
 
     @classmethod
@@ -147,6 +152,7 @@ class TaskDispatch:
             safety_band=data.get("safety_band", "AMBER"),
             depends_on=data.get("depends_on"),
             context_snapshot=data.get("context_snapshot"),
+            execution_profiles=data.get("execution_profiles"),
         )
 
     @classmethod

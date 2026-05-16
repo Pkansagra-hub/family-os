@@ -215,16 +215,16 @@ kernel:
 
 llm:
   # Fallback model when selection table has no match (model_selection.py)
-  default_model: "gemini-3.1-flash-lite-preview"
+  default_model: "gemini-3-flash-preview"
 
   # Max concurrent requests in generate_batch() (gemini_adapter.py)
   batch_max_concurrency: 5
 
   # Hint string -> model name overrides (model_selection.py)
   model_hint_overrides:
-    fast: "gemini-3.1-flash-lite-preview"
+    fast: "gemini-3-flash-preview"
     smart: "gemini-3-flash-preview"
-    cheap: "gemini-3.1-flash-lite-preview"
+    cheap: "gemini-3-flash-preview"
     thinking: "gemini-3.1-pro-preview"
     pro: "gemini-3.1-pro-preview"
     flash: "gemini-3-flash-preview"
@@ -245,20 +245,20 @@ llm:
   # fast chat+stream paths.
   model_selection_table:
     CHAT:
-      front: "gemini-3.1-flash-lite-preview"   # latest lite conversational path
-      back: "gemini-3.1-flash-lite-preview"   # cheap internal reports
+      front: "gemini-3-flash-preview"          # front conversational path
+      back: "gemini-3.1-pro-preview"           # back internal reports
     TOOL_CALL:
       front: "gemini-3-flash-preview"          # tool selection / dispatch planning
-      back: "gemini-3-flash-preview"           # capability execution planning
+      back: "gemini-3.1-pro-preview"           # capability execution planning
       planner: "gemini-3.1-pro-preview"        # strongest planning path
     STRUCTURED:
       front: "gemini-3-flash-preview"          # dispatch intent parsing
-      back: "gemini-3-flash-preview"           # structured result formatting
+      back: "gemini-3.1-pro-preview"           # structured result formatting
     REASON:
-      front: "gemini-3.1-pro-preview"          # complex reasoning / weave
+      front: "gemini-3-flash-preview"          # complex reasoning / weave
       back: "gemini-3.1-pro-preview"           # multi-step planning
     STREAM:
-      front: "gemini-3.1-flash-lite-preview"   # speed-first streaming
+      front: "gemini-3-flash-preview"          # speed-first streaming
 
 
 # ── orchestrator/ ───────────────────────────────────────────────────────
@@ -383,10 +383,13 @@ react:
 tools:
   # Max tool calls per tier per turn (tools/dispatcher.py)
   budget_limits:
-    LOW: 10
-    MEDIUM: 16
-    HIGH: 30
-    CRISIS: 5
+    simple: 400
+    plan: 400
+    crisis: 400
+    LOW: 400
+    MEDIUM: 400
+    HIGH: 400
+    CRISIS: 400
 
   # Front tier allowlists (V2 Section 15.3, tools/dispatcher.py)
   front_tier_allowlists:

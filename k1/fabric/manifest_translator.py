@@ -37,7 +37,7 @@ References
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from k1.fabric.types import CapabilityContract, InputSpec, SafetyBand
 
@@ -98,6 +98,39 @@ def _field_to_input_spec(f: "FieldSpec") -> InputSpec:
     )
 
 
+def _json_schema_type(field_type: str) -> str:
+    normalized = str(field_type or "").lower()
+    type_map = {
+        "str": "string",
+        "string": "string",
+        "datetime": "string",
+        "int": "integer",
+        "integer": "integer",
+        "float": "number",
+        "number": "number",
+        "bool": "boolean",
+        "boolean": "boolean",
+        "list": "array",
+        "array": "array",
+        "dict": "object",
+        "object": "object",
+    }
+    return type_map.get(normalized, "string")
+
+
+def _fields_to_output_schema(fields: list["FieldSpec"]) -> dict[str, Any]:
+    properties: dict[str, dict[str, Any]] = {}
+    required: list[str] = []
+    for field in fields:
+        properties[field.name] = {
+            "type": _json_schema_type(field.type),
+            "description": field.description,
+        }
+        if field.required:
+            required.append(field.name)
+    return {"type": "object", "properties": properties, "required": required}
+
+
 def _risk_class_for_action(action: "ActionSpec") -> str:
     """Map action kind + safety band to a Fabric ``risk_class`` value.
 
@@ -146,10 +179,19 @@ def build_contract(
 
     now_iso = datetime.now(timezone.utc).isoformat()
 
+    domains = list(
+        dict.fromkeys(
+            ["family", definition.adapter_id, definition.category, *definition.domain_tags]
+        )
+    )
+    tool_instructions = action.tool_instructions
+    if tool_instructions is None and action.llm.examples:
+        tool_instructions = "Examples: " + " | ".join(action.llm.examples[:3])
+
     return CapabilityContract(
         name=_capability_name(definition.adapter_id, action),
         version=definition.version,
-        domain=["family", definition.adapter_id, definition.category],
+        domain=domains,
         description=_description_for_action(action),
         capabilities=[action.kind, f"adapter:{definition.adapter_id}"],
         limitations=list(action.llm.avoid_when),
@@ -157,10 +199,13 @@ def build_contract(
         optional_inputs=optional,
         required_context=[],
         optional_context=["control"],
-        output={},
+        output=_fields_to_output_schema(list(action.result)),
         provider_type=NATIVE_PROVIDER_TYPE,
         provider_id=NATIVE_PROVIDER_ID,
         provider_endpoint=NATIVE_PROVIDER_ENDPOINT,
+        prompt_template=action.prompt_template,
+        activity_profile=action.activity_profile or definition.activity_profile,
+        tool_instructions=tool_instructions,
         safety_band_min=action.min_band if action.min_band != "CRISIS" else SafetyBand.CRISIS.value,
         cost_per_call=0.0,
         avg_latency_ms=10,
@@ -172,6 +217,8 @@ def build_contract(
         created_at_iso=now_iso,
         session_scoped=False,
         risk_class=_risk_class_for_action(action),
+        social_act=action.social_act,
+        side_effects=list(action.side_effects),
     )
 
 

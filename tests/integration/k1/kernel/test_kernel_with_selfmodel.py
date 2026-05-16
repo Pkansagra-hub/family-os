@@ -35,15 +35,15 @@ class TestEnableSelfModelFlag:
         cfg = KernelConfig()
         assert cfg.enable_self_model is False
         assert cfg.selfmodel_projection_db_path is None
-        assert cfg.selfmodel_family_space_id == "family:default"
+        assert cfg.selfmodel_space_id == "family:default"
 
     def test_can_enable(self) -> None:
         cfg = KernelConfig(
             enable_self_model=True,
-            selfmodel_family_space_id="family:abc",
+            selfmodel_space_id="family:abc",
         )
         assert cfg.enable_self_model is True
-        assert cfg.selfmodel_family_space_id == "family:abc"
+        assert cfg.selfmodel_space_id == "family:abc"
 
 
 # =====================================================================
@@ -51,11 +51,20 @@ class TestEnableSelfModelFlag:
 # =====================================================================
 async def _start(tmp_path, *, enable_self_model: bool) -> KernelService:
     cfg = KernelConfig(
+        test_mode=True,
+        model_mode="test",
+        ordered_bus=True,
+        session_mode="standalone",
+        bridge_enabled=False,
+        bridge_offline_ok=True,
+        otel_enabled=False,
+        enable_hil_service=False,
+        enable_family_tools=False,
         sessionstate_db_path=str(tmp_path / "ssm.db"),
         bridge_outbox_path=str(tmp_path / "bridge_outbox.db"),
         workflow_db_path=str(tmp_path / "workflows.db"),
         enable_self_model=enable_self_model,
-        selfmodel_family_space_id="family:test",
+        selfmodel_space_id="family:test",
     )
     svc = KernelService(config=cfg)
     await svc.startup()
@@ -88,7 +97,7 @@ class TestS2_6StartupBundle:
             assert bundle.bootstrap.created is True
             assert bundle.bootstrap.snapshot.version
             # Family space honored.
-            assert bundle.family_space_id == "family:test"
+            assert bundle.space_id == "family:test"
         finally:
             await svc.shutdown()
         # Reverse-S2.6 cleared the field.

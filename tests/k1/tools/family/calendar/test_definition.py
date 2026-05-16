@@ -53,6 +53,15 @@ def test_idempotent_actions_declared() -> None:
     assert idem_names == {"create_event", "connect_feed"}
 
 
+def test_calendar_write_actions_expose_generic_metadata() -> None:
+    for name in ("create_event", "update_event"):
+        spec = CALENDAR_DEFINITION.find_action(name)
+        assert spec is not None
+        params = {param.name: param for param in spec.params}
+        assert params["metadata"].type == "object"
+        assert "_semantic" in params["metadata"].description
+
+
 def test_action_kinds_partition_correctly() -> None:
     by_kind: dict[str, set[str]] = {}
     for a in CALENDAR_DEFINITION.actions:

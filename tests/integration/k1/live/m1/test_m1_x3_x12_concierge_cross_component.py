@@ -319,10 +319,6 @@ async def test_m1_x8_crisis_turn_short_circuits_llm_and_fabric(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    strict=True,
-    reason="WriteElisionGate is still design-only; no production gate enforces backchannel section elision",
-)
 async def test_m1_x9_backchannel_write_elision_gate_is_wired(tmp_path: Path) -> None:
     """M1-X9: desired backchannel gate exists and owns low-signal writes."""
     baseline_tasks = _active_task_snapshot()
@@ -373,10 +369,6 @@ async def test_m1_x9_backchannel_write_elision_gate_is_wired(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    strict=True,
-    reason="Legacy submit_result(needs_human) resumes via task.resume without protocol-level hil.response.v1",
-)
 async def test_m1_x10_legacy_hitl_resolution_emits_hil_response_before_resume(
     tmp_path: Path,
 ) -> None:
@@ -438,6 +430,19 @@ async def test_m1_x10_legacy_hitl_resolution_emits_hil_response_before_resume(
         scripted.queue(
             make_tool_call_response(
                 (
+                    "invoke_capability",
+                    {
+                        "capability_name": capability,
+                        "params": {"intent": "travel prompt", "top_k": 1},
+                    },
+                )
+            ),
+            predicate=_is_back_request,
+            label="back-resume-invoke-x10",
+        )
+        scripted.queue(
+            make_tool_call_response(
+                (
                     "submit_result",
                     {
                         "result_type": "complete",
@@ -455,6 +460,18 @@ async def test_m1_x10_legacy_hitl_resolution_emits_hil_response_before_resume(
         trace_id = "trace-m1-x10"
         await svc.create_session(session_id)
         session = svc._sessions[session_id]
+
+        transport = _install_test_mcp_transport(session.fabric)
+        from k1.fabric.providers.mcp_provider import MCPResponse
+
+        transport.add_response(
+            capability,
+            MCPResponse(
+                success=True,
+                content=[{"type": "text", "text": "Paris prompt found"}],
+                latency_ms=2,
+            ),
+        )
 
         recorder = TopicRecorder(
             session.bus,

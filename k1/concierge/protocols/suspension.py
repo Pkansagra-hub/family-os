@@ -94,6 +94,7 @@ class SuspensionRequest:
         question:          The question for the user.
         options:           Structured options (selection/approval).
         react_history:     Serialized ReAct message history for resume.
+        react_checkpoint:  Versioned ReAct checkpoint for resume.
         tool_state:        Serialized tool state for resume.
         suspension_count:  How many times this task has been suspended.
         created_at_ns:     When the suspension was created (monotonic).
@@ -104,6 +105,7 @@ class SuspensionRequest:
     question: str
     options: list[dict[str, Any]] = field(default_factory=list)
     react_history: list[dict[str, Any]] = field(default_factory=list)
+    react_checkpoint: dict[str, Any] = field(default_factory=dict)
     tool_state: dict[str, Any] = field(default_factory=dict)
     suspension_count: int = 1
     created_at_ns: int = field(default_factory=time.monotonic_ns)
@@ -122,6 +124,7 @@ class SuspensionRequest:
             "question": self.question,
             "options": self.options,
             "react_history": self.react_history,
+            "react_checkpoint": self.react_checkpoint,
             "tool_state": self.tool_state,
             "suspension_count": self.suspension_count,
         }
@@ -135,6 +138,7 @@ class SuspensionRequest:
             question=data["question"],
             options=data.get("options", []),
             react_history=data.get("react_history", []),
+            react_checkpoint=data.get("react_checkpoint", {}),
             tool_state=data.get("tool_state", {}),
             suspension_count=data.get("suspension_count", 1),
         )

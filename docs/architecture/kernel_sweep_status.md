@@ -43,6 +43,31 @@ For every milestone row, use the same co-develop / co-test / co-integration loop
 
 Critical-path blockers from `kernel_tracing_plan.md` are **not** a separate pre-sweep batch. Treat them as priority issue rows that land during their owning milestone execution. When the sweep reaches one of those blocker rows, complete the full loop above — read, fix if needed, update docs, test, then stamp the row — before moving past it.
 
+## M0 -- Contract Freeze And Evidence Cleanup
+
+M0 reconciles stale tracker claims before behavior work continues. It does not stamp a
+runtime milestone; it records which alleged gaps are already implemented and which gaps
+remain intentionally open for M1-M6.
+
+| Item | Status | Evidence | Notes |
+| --- | --- | --- | --- |
+| M0-C03 | `[x]` | `tests/k1/concierge/react/test_loop_tool_timeout.py` | ReAct tool dispatch is already wrapped in `asyncio.wait_for(...)`; M0 added focused coverage for normal and HIL-aware timeouts. |
+| M0-C04 | `[x]` | `tests/k1/concierge/test_m01_event_validator.py`; `tests/k1/concierge/fsm/test_response_delivered.py` | `ResponseDelivered` exists and is written before `_execute_response_final_decision(...)`. Treat it as delivery intent, not post-render confirmation. |
+| M1-L7 | `[x]` | `tests/integration/k1/live/m1/test_m1_l6_l9_concierge_lifecycle.py` | Keep strict xfail/open: `EpisodicCompressor` remains unwired from the live `ExperienceLayer` path. |
+| M1-X9 | `[x]` | `tests/integration/k1/live/m1/test_m1_x3_x12_concierge_cross_component.py`; `tests/k1/concierge/acking/test_write_elision_gate.py` | Closed by M5: production gate is `k1.concierge.acking.write_elision.WriteElisionGate`, wired on `ConciergeController._write_elision_gate`; strict xfail removed. |
+| M1-X10 | `[x]` | `tests/integration/k1/live/m1/test_m1_x3_x12_concierge_cross_component.py` | Closed by M1: legacy HITL emits bridge-only `k1.hil.response.v1` before `task.resume.v1`; targeted test is green. |
+
+### True Remaining Concierge Gap Register
+
+| Gap | Owning milestone | Notes |
+| --- | --- | --- |
+| HIL protocol drift and structured Front resolution | M1 | Closed by M1: unified responses stay service-owned, legacy emits bridge-only protocol evidence before adapter resume, and Front parses typed resolution fields. |
+| Typed Back/Front handoff frames | M2 | Closed by M2: Back emits typed result frames; Front PRESENT/WEAVE consume frame facts; HIL resume carries typed resolution frames; leak guards strip Back frame/tool/scratchpad artifacts. |
+| ReAct checkpoint, control events, and tool execution records | M3 | Timeout exists; checkpoint/resume/idempotent tool records remain future work. |
+| Weave side-effect split, queue coherence, and proactive fill | M4 | Preserve policy purity and delivery timing without interrupting HIL/crisis. |
+| `WriteElisionGate` | M5 | Closed by M5: pure decision gate exists, controller wiring preserves temporal and crisis safety writes, and M1-X9 is no longer strict xfail. |
+| Live `EpisodicCompressor` / OPP wiring | M6 | Compressor implementation exists; live factory/session/experience wiring remains open. |
+
 ## Within-Milestone Probe Order
 
 Use the SOP §3 probe pattern inside each milestone. Prefer this order when choosing the next test to write:
@@ -210,8 +235,8 @@ These hooks must exist before any live test can be written. Check them off first
 | M1-X6 | MESSAGE-FLOW | same-turn `task.complete.v1` closes from LISTENING; older/asynchronous completions use DELIVERING | I1.X.6 | `[x]` | green | `tests/integration/k1/live/m1/test_m1_l3_low_tier_message_flow.py`; `k1/concierge/WIRING.md` | Live M1-L4 records FSM state when `task.complete.v1` is observed: current MED same-turn branch stores a deferred proactive result and returns to `LISTENING` before `turn.completed`; docs updated to distinguish this from the older DELIVERING branch. |
 | M1-X7 | MESSAGE-FLOW | `turn_end()` → `k1.session.turn.completed.v1`; `_emitted_turn_ids` blocks re-emit | I1.X.7 | `[x]` | green | `tests/integration/k1/live/m1/test_m1_l3_low_tier_message_flow.py` | Live M1-L4 publishes one ledger-scoped `turn.completed`; a second `_emit_turn_completed()` call with the same final envelope is skipped by `_emitted_turn_ids`. |
 | M1-X8 | NEGATIVE | CRISIS safety_band turn → FSM stays LISTENING, hardcoded CRISIS_STATIC reply, zero Fabric/LLM calls | I1.X.8 | `[x]` | green | `tests/integration/k1/live/m1/test_m1_x3_x12_concierge_cross_component.py` | Recipe A crisis turn short-circuits before arbiter/Front LLM/Fabric, emits static `crisis_protocol` final with `988`, transitions back to LISTENING, and escalates control safety to RED. Production fix: crisis final response now copies source trace/session headers. |
-| M1-X9 | NEGATIVE | `WriteElisionGate` on backchannel turn → only `control.safety_band` mutated; other 5 sections elided | I1.X.9 | `[x]` | xfail strict | `tests/integration/k1/live/m1/test_m1_x3_x12_concierge_cross_component.py` | Strict xfail confirms live backchannel turns can complete, but the desired `WriteElisionGate` module/FSM gate is absent from production code; scan docs remain design-only for this row. |
-| M1-X10 | MESSAGE-FLOW | HITL suspend → `hil.response.v1` → `task.resume.v1` → Back resumes with remaining budget | I1.X.10 | `[x]` | xfail strict | `tests/integration/k1/live/m1/test_m1_x3_x12_concierge_cross_component.py`; `tests/integration/k1/live/m1/test_m1_l6_l9_concierge_lifecycle.py` | Strict xfail documents protocol drift: current legacy HITL path is green through `task.suspended` → Front relay/resolve → correlated `task.resume` → Back resume, but it does not emit protocol-level `hil.response.v1` before resume. |
+| M1-X9 | NEGATIVE | `WriteElisionGate` on backchannel turn → temporal/safety writes preserved while optional low-signal sections are elided | I1.X.9 | `[x]` | green | `tests/integration/k1/live/m1/test_m1_x3_x12_concierge_cross_component.py`; `tests/k1/concierge/acking/test_write_elision_gate.py` | M5 added `k1.concierge.acking.write_elision.WriteElisionGate` and wires it as `ConciergeController._write_elision_gate`; the live probe now asserts the production module/controller attribute instead of strict-xfail design absence. |
+| M1-X10 | MESSAGE-FLOW | HITL suspend → `hil.response.v1` → `task.resume.v1` → Back resumes with remaining budget | I1.X.10 | `[x]` | green | `tests/integration/k1/live/m1/test_m1_x3_x12_concierge_cross_component.py`; `tests/integration/k1/live/m1/test_m1_l6_l9_concierge_lifecycle.py` | Legacy HITL now persists a bridge-only HIL envelope, Front emits `k1.hil.response.v1` before correlated `task.resume.v1`, and Back resumes with retained HILSubTask history. The former strict xfail marker was removed. |
 | M1-X11 | NEGATIVE | `set_self_model()` after `start()` raises guarded error; FSM unchanged | I1.X.11 / I1.10.2 | `[x]` | green | `tests/integration/k1/live/m1/test_m1_l6_l9_concierge_lifecycle.py` | Covered by M1-L6; stale xfail expectation retired because the runtime now has an explicit post-start guard. |
 | M1-X12 | NEGATIVE | Duplicate `dag.completed` subscription fires handler once per event | I1.X.12 | `[x]` | green | `tests/integration/k1/live/m5/test_m5_x16_x19_mw_cb_concierge_guards.py` | Covered by M5-X19; live session bus has exactly one `TOPIC_DAG_COMPLETED` subscription and zero bare `k1.orchestration.dag.completed` subscriptions; one event produces one normalized `task.complete.v1`. |
 
@@ -237,18 +262,18 @@ These hooks must exist before any live test can be written. Check them off first
 | Step | Probe type | Target | Tracing refs | Status | Verdict | Test file | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | M4-X1 | PORT-IDENTITY | `orch._planner_port` is real `PlannerAdapter` over live planner mailbox (extends M2-L2) | I4.X.1 | `[x]` | green | `tests/integration/k1/live/m2/test_m2_l2_planner_orchestrator_crosswire.py` | Covered by M2-L2. |
-| M4-X2 | PORT-IDENTITY | `orch._state_adapter._reader` is `svc._session_routing_reader` (shared with Fabric + Planner) | I4.X.2 | `[ ]` | | | |
-| M4-X3 | PORT-IDENTITY | `FabricDispatchAdapter._orchestrator is svc._orchestrator` per session | I4.X.3 | `[ ]` | | | |
-| M4-X4 | MESSAGE-FLOW | HIGH envelope → planner mailbox depth>0 → Planner emits `k1.planner.plan.ready.v1` on **kernel bus** → Orchestrator receives `CommittedPlan` | I4.X.4 | `[ ]` | | | |
-| M4-X5 | MESSAGE-FLOW | 2-wave `CommittedPlan` → `DAGEngine` calls `execute_batch()` twice → `AggregatedResult` returned to Back | I4.X.5 | `[ ]` | | | |
-| M4-X6 | NEGATIVE | Planner `query_planning_context(sid1)` reads `sid1`'s SS, not `sid2`'s (sentinel `""` blast-radius) | I4.X.6 / I2.5.2 | `[ ]` | xfail | | |
-| M4-X7 | NEGATIVE | CB_PLANNER OPEN → HIGH envelope degrades to MED (`PlannerAdapter.request_plan` called 0 times) | I4.X.7 | `[ ]` | | | |
-| M4-X8 | NEGATIVE | `k1.planner.plan.failed.v1` → `dispatch_envelope()` returns within timeout (Back not hung) | I4.X.8 / I1.5.1 | `[ ]` | | | |
-| M4-X9 | MESSAGE-FLOW | Planner Stage-1 SKETCH `discover_capabilities()` returns freshly-registered test capability | I4.X.9 | `[ ]` | | | |
-| M4-X10 | MESSAGE-FLOW | MicroReplan: ORCH-13 → `PlannerAdapter.micro_replan()` → partial `CommittedPlan` (remaining steps only) | I4.X.10 | `[ ]` | | | |
-| M4-X11 | LIFECYCLE | S6 → S6a → S6b ordering: Orch.start, Planner.start, then cross-wire verification | I4.X.11 | `[ ]` | | | |
-| M4-X12 | NEGATIVE | Workflow-triggered (cron) plan has no Back handle → return-path gap; xfail strict | I4.X.12 | `[ ]` | xfail | | |
-| M4-X13 | MESSAGE-FLOW | `k1.hil.progress.v1` emitted on kernel bus by `ExecutionMonitor` reaches Concierge PROGRESSING via session bus (cross-bus bridge) | I4.X.13 | `[ ]` | | | |
+| M4-X2 | PORT-IDENTITY | `orch._state_port._reader` is `svc._session_routing_reader` (shared with Fabric + Planner) | I4.X.2 | `[x]` | green | `tests/integration/k1/live/m4/test_m4_x2_x13_orchestrator_planner_cross_component.py` | Corrected stale `_state_adapter` wording to production `_state_port`; asserts Orchestrator, Planner `SessionStateReadAdapter`, and Fabric context builder all share `svc._session_routing_reader`. |
+| M4-X3 | PORT-IDENTITY | `FabricDispatchAdapter._orchestrator is svc._orchestrator` per session | I4.X.3 | `[x]` | green | `tests/integration/k1/live/m4/test_m4_x2_x13_orchestrator_planner_cross_component.py` | Live Recipe A creates two sessions and asserts each front/back dispatch adapter targets the shared live `OrchestratorService`. |
+| M4-X4 | MESSAGE-FLOW | HIGH envelope → planner mailbox depth>0 → Planner emits `k1.planner.plan.ready.v1` on **kernel bus** → Orchestrator receives `CommittedPlan` | I4.X.4 | `[x]` | green | `tests/integration/k1/live/m4/test_m4_x2_x13_orchestrator_planner_cross_component.py` | Live HIGH path with real Planner mailbox, mailbox-depth spy, `PLAN_READY` capture, `CommittedPlan.request_id` correlation, DAG completion, and controlled MCP edge. |
+| M4-X5 | MESSAGE-FLOW | 2-wave `CommittedPlan` → `DAGExecutor.execute_wave()` twice → `AggregatedResult` bridged to Back/session bus | I4.X.5 | `[x]` | green | `tests/integration/k1/live/m4/test_m4_x2_x13_orchestrator_planner_cross_component.py` | Corrected stale `DAGEngine.execute_batch()` wording; deterministic planner port publishes `PLAN_READY`, DAG executes waves `[0, 1]`, and `FabricDispatchAdapter` publishes session `task.complete.v1`. |
+| M4-X6 | NEGATIVE | Planner `query_planning_context(sid1)` reads `sid1`'s SS, not `sid2`'s (sentinel `""` blast-radius) | I4.X.6 / I2.5.2 | `[x]` | green | `tests/integration/k1/live/m4/test_m4_x2_x13_orchestrator_planner_cross_component.py` | Removed stale xfail: Planner tool router forwards per-call `session_id` and returns distinct `SessionSnapshot` data for `sid1` vs `sid2`. |
+| M4-X7 | NEGATIVE | CB_PLANNER OPEN → HIGH envelope degrades to MED (`PlannerAdapter.request_plan` called 0 times) | I4.X.7 | `[x]` | xfail strict | `tests/integration/k1/live/m4/test_m4_x2_x13_orchestrator_planner_cross_component.py` | Strict xfail locks current gap: CB_OPEN raises through `PlannerAdapter.request_plan()` and returns `FAILED`; there is no HIGH→MED fallback path. |
+| M4-X8 | NEGATIVE | `k1.planner.plan.failed.v1` → `dispatch_envelope()` returns within timeout (Back not hung) | I4.X.8 / I1.5.1 | `[x]` | xfail strict | `tests/integration/k1/live/m4/test_m4_x2_x13_orchestrator_planner_cross_component.py` | Strict xfail locks current gap: bus `PLAN_FAILED` clears pending context but does not resolve `handle_task()`/Back waiters promptly. |
+| M4-X9 | MESSAGE-FLOW | Planner Stage-1 SKETCH `discover_capabilities()` returns freshly-registered test capability | I4.X.9 | `[x]` | green | `tests/integration/k1/live/m4/test_m4_x2_x13_orchestrator_planner_cross_component.py` | Registers valid `tool.read.m4_x9_fresh_capability` in shared Fabric and asserts Planner SKETCH `ToolCallRouter.discover()` returns it. |
+| M4-X10 | MESSAGE-FLOW | MicroReplan: ORCH-13 → `PlannerAdapter.micro_replan()` → partial `CommittedPlan` (remaining steps only) | I4.X.10 | `[x]` | green | `tests/integration/k1/live/m4/test_m4_x2_x13_orchestrator_planner_cross_component.py` | Live `MicroReplanCheckpoint` receives post-wave discoveries, sends only remaining steps in `MicroReplanRequest`, and returns the replacement partial `CommittedPlan`. |
+| M4-X11 | LIFECYCLE | S6 → S6b → S7 ordering: Planner built, Orchestrator↔Planner cross-wired, then Planner started | I4.X.11 | `[x]` | green | `tests/integration/k1/live/m4/test_m4_x2_x13_orchestrator_planner_cross_component.py` | Corrected stale S6a wording; lifecycle log asserts `S6_complete < S6b_complete < S7_complete` and live `PlannerAdapter._mailbox is svc._planner.get_mailbox()`. |
+| M4-X12 | NEGATIVE | Workflow-triggered (cron) plan has no Back handle → return-path gap; xfail strict | I4.X.12 | `[x]` | xfail strict | `tests/integration/k1/live/m4/test_m4_x2_x13_orchestrator_planner_cross_component.py` | Strict xfail locks current gap: `WorkflowRunRequest` has no `session_id`/`reply_to` Back return handle. |
+| M4-X13 | MESSAGE-FLOW | `k1.hil.progress.v1` emitted on kernel bus reaches Concierge PROGRESSING via session bus (cross-bus bridge) | I4.X.13 | `[x]` | xfail strict | `tests/integration/k1/live/m4/test_m4_x2_x13_orchestrator_planner_cross_component.py` | Strict xfail locks current gap: Orchestrator progress/HIL deltas emit on kernel bus (`k1.hil.progress.v1` / `k1.agent.orchestrator.delta.v1`) and are not bridged to the per-session bus. |
 
 ---
 
@@ -260,31 +285,31 @@ These hooks must exist before any live test can be written. Check them off first
 
 | Step | Probe type | Target | Tracing refs | Status | Verdict | Test file | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| M6-L1 | PORT-IDENTITY | All three SS readers (Orch/Planner/Fabric) point to real per-session SSM — NOT Null/Mock | I6.11.C6 | `[ ]` | | | |
-| M6-L2 | MESSAGE-FLOW | HIL approval gate end-to-end | E1.8, M6 HIL | `[ ]` | | | |
-| M6-L3 | PORT-IDENTITY | SelfModel handle installed as step-0 on both Front and Back dispatchers | selfmodel test I3 | `[ ]` | | | |
-| M6-L4 | LIFECYCLE | SelfModel bundle `health()` returns `status=ok` on live kernel | selfmodel test I4 | `[ ]` | | | |
-| M6-L5 | NEGATIVE | Cancel parent task → all child traces cancelled, no orphan envelopes | M6 supervision | `[ ]` | | | |
+| M6-L1 | PORT-IDENTITY | All three SS readers (Orch/Planner/Fabric) point to real per-session SSM — NOT Null/Mock | I6.11.C6 | `[x]` | green | `tests/integration/k1/live/m6/test_m6_l1_l5_cross_cutting.py` | Recipe A live `KernelService`; shared Fabric, Orchestrator, and Planner all share `SessionRoutingStateReader`, it resolves the live session SSM, and per-session Fabric holds `SessionStateReaderAdapter`; Null/Test/Mock readers forbidden. |
+| M6-L2 | MESSAGE-FLOW | HIL approval gate end-to-end | E1.8, M6 HIL | `[x]` | green | `tests/integration/k1/live/m6/test_m6_l1_l5_cross_cutting.py` | Recipe B live session HIL uses `HumanInTheLoopService` bound to the session bus; `request_approval()` publishes `k1.hil.request.v1`, a session-bus `k1.hil.response.v1` resolves the Future, and the typed response returns `decision=approve`. |
+| M6-L3 | PORT-IDENTITY | SelfModel handle installed as step-0 on both Front and Back dispatchers | selfmodel test I3 | `[x]` | green | `tests/integration/k1/live/m6/test_m6_l1_l5_cross_cutting.py` | Recipe C live session builds `SelfModelHandle`, attaches it to `ConciergeRuntime`, and installs `handle.gate.evaluate` as the policy gate on both dispatchers before start. |
+| M6-L4 | LIFECYCLE | SelfModel bundle `health()` returns `status=ok` on live kernel | selfmodel test I4 | `[x]` | green | `tests/integration/k1/live/m6/test_m6_l1_l5_cross_cutting.py` | Recipe C live kernel exposes `SelfModelServiceBundle.health()` with `status=ok`, active non-safe-mode constitution, and SQLite projection store for `family:m6`. |
+| M6-L5 | NEGATIVE | Cancel parent task → all child traces cancelled, no orphan envelopes | M6 supervision | `[x]` | xfail strict | `tests/integration/k1/live/m6/test_m6_l1_l5_cross_cutting.py` | Strict xfail locks current supervision gap: `k1/supervision` is empty and `KernelService` has no parent/child cancellation tree; only per-task `CancellationToken` exists today. |
 
 ### M6 — Cross-component integration probes
 
 | Step | Probe type | Target | Tracing refs | Status | Verdict | Test file | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| M6-X1 | PORT-IDENTITY | Front + Back dispatchers' `_policy_gate is self_model_handle.gate.evaluate` after P3.5 | I6.X.1 | `[ ]` | | | |
-| M6-X2 | LIFECYCLE | `install_into_session` idempotent; `uninstall_from_session` restores originals exactly | I6.X.2 | `[ ]` | | | |
-| M6-X3 | MESSAGE-FLOW | Tool call REQUIRE_CONFIRMATION → policy gate blocks → `HIL.ask_approval()` → `hil.response.v1` → Back resumes | I6.X.3 | `[ ]` | | | |
-| M6-X4 | LIFECYCLE | `SelfModelServiceBundle.shutdown()` closes owned SQLite; second call is idempotent | I6.X.4 | `[ ]` | | | |
-| M6-X5 | NEGATIVE | `enable_self_model=False` → bundle None, P3.5 skipped, no SelfModel topics fire | I6.X.5 | `[ ]` | | | |
-| M6-X6 | LIFECYCLE | `bundle.health()` returns `ok` / `degraded` / `safe_mode` per Constitution state | I6.X.6 | `[ ]` | | | |
-| M6-X7 | SUBSCRIPTION | HIL subscribes to `k1.hil.response.v1` on session bus; `ask_approval()` publishes `k1.hil.request.v1` and resolves Future on response | I6.X.7 | `[ ]` | | | |
-| M6-X8 | NEGATIVE | `SafetyBandPolicy` ALLOW early-exit: GREEN + no side-effects → zero `hil.request.v1` emissions | I6.X.8 | `[ ]` | | | |
-| M6-X9 | LIFECYCLE | `SuspensionManager` limits: 3rd suspension same task raises; per-mode timeouts auto-cancel FSM | I6.X.9 | `[ ]` | | | |
-| M6-X10 | MESSAGE-FLOW | `back_resume_handler` re-reads SS at resume time (fresh snapshot, not stale stored) | I6.X.10 | `[ ]` | | | |
-| M6-X11 | NEGATIVE | `enable_hil_service=False` → `_hil_service is None`; `_NullHILAdapter` injected; no `k1.hil.*` topics fire | I6.X.11 | `[ ]` | | | |
-| M6-X12 | NEGATIVE | `k1/supervision/__init__.py` empty; no supervision tree wired; xfail strict lock-in | I6.X.12 | `[ ]` | xfail | | |
-| M6-X13 | MESSAGE-FLOW | `back_cancel_handler` → `CancellationToken.cancel()` → ReAct loop exits before `max_iterations` | I6.X.13 | `[ ]` | | | |
-| M6-X14 | NEGATIVE | `k1/learning/`, `k1/retention/`, `k1/scheduler/`, `k1/tracing/` `__init__.py` empty; no session-bus subs; no SSM touches; xfail strict lock-in | I6.X.14 | `[ ]` | xfail | | |
-| M6-X15 | NEGATIVE | Learning loop never writes SSM (LEARN-01 single-writer invariant; guard for when learning ships) | I6.X.15 | `[ ]` | | | |
+| M6-X1 | PORT-IDENTITY | Front + Back dispatchers' `_policy_gate is self_model_handle.gate.evaluate` after P3.5 | I6.X.1 | `[x]` | green | `tests/integration/k1/live/m6/test_m6_x1_x15_cross_component.py` | Recipe C live session asserts both dispatchers carry `handle.gate.evaluate` after P3.5 and are tracked by the handle. |
+| M6-X2 | LIFECYCLE | `install_into_session` idempotent; `uninstall_from_session` restores originals exactly | I6.X.2 | `[x]` | green | `tests/integration/k1/live/m6/test_m6_x1_x15_cross_component.py` | Production fix: repeated install no longer duplicates dispatcher tracking; uninstall clears gates once and restores wrapped recall callbacks. |
+| M6-X3 | MESSAGE-FLOW | Tool call REQUIRE_CONFIRMATION → policy gate blocks → `HIL.ask_approval()` → `hil.response.v1` → Back resumes | I6.X.3 | `[x]` | green | `tests/integration/k1/live/m6/test_m6_x1_x15_cross_component.py` | Production fix: task-scoped Back dispatcher rebind preserves the SelfModel policy gate; forced REQUIRE_CONFIRMATION flows through session HIL approval and resumes dispatch. |
+| M6-X4 | LIFECYCLE | `SelfModelServiceBundle.shutdown()` closes owned SQLite; second call is idempotent | I6.X.4 | `[x]` | green | `tests/integration/k1/live/m6/test_m6_x1_x15_cross_component.py` | Owned SQLite projection store is closed on first shutdown, `_owns_store` flips false, and second shutdown is a no-op. |
+| M6-X5 | NEGATIVE | `enable_self_model=False` → bundle None, P3.5 skipped, no SelfModel topics fire | I6.X.5 | `[x]` | green | `tests/integration/k1/live/m6/test_m6_x1_x15_cross_component.py` | Recipe A leaves bundle/session handle/runtime handle/gates unset and has no `S2.6_complete` lifecycle event. |
+| M6-X6 | LIFECYCLE | `bundle.health()` returns `ok` / `degraded` / `safe_mode` per Constitution state | I6.X.6 | `[x]` | green | `tests/integration/k1/live/m6/test_m6_x1_x15_cross_component.py` | Live bundle reports `ok`; monkeypatched constitution failure reports `degraded`; `bundle.safe_mode=True` reports `safe_mode`. |
+| M6-X7 | SUBSCRIPTION | HIL subscribes to `k1.hil.response.v1` on session bus; `ask_approval()` publishes `k1.hil.request.v1` and resolves Future on response | I6.X.7 | `[x]` | green | `tests/integration/k1/live/m6/test_m6_x1_x15_cross_component.py` | Recipe B session HIL subscribes on the session bus, request resolves from session-bus response, and no kernel-bus request is emitted. |
+| M6-X8 | NEGATIVE | `SafetyBandPolicy` ALLOW early-exit: GREEN + no side-effects → zero `hil.request.v1` emissions | I6.X.8 | `[x]` | green | `tests/integration/k1/live/m6/test_m6_x1_x15_cross_component.py` | GREEN capability with no side effects returns `GateOutcome.ALLOW` with no HIL request. |
+| M6-X9 | LIFECYCLE | `SuspensionManager` limits: 3rd suspension same task raises; per-mode timeouts auto-cancel FSM | I6.X.9 | `[x]` | green | `tests/integration/k1/live/m6/test_m6_x1_x15_cross_component.py` | Concurrent same-task suspension raises, third suspension raises `SuspensionLimitExceeded`, and timeout callback clears active state. |
+| M6-X10 | MESSAGE-FLOW | `back_resume_handler` re-reads SS at resume time (fresh snapshot, not stale stored) | I6.X.10 | `[x]` | green | `tests/integration/k1/live/m6/test_m6_x1_x15_cross_component.py` | Resume handler uses a fresh SS read for the resumed prompt instead of the stale pre-suspension snapshot. |
+| M6-X11 | NEGATIVE | `enable_hil_service=False` → `_hil_service is None`; `_NullHILAdapter` injected; no `k1.hil.*` topics fire | I6.X.11 | `[x]` | green | `tests/integration/k1/live/m6/test_m6_x1_x15_cross_component.py` | Kernel/session HIL ports are None where expected; Planner/Orchestrator use `_NullHILAdapter`; null approvals emit no HIL topics. |
+| M6-X12 | NEGATIVE | `k1/supervision/__init__.py` empty; no supervision tree wired; xfail strict lock-in | I6.X.12 | `[x]` | xfail strict | `tests/integration/k1/live/m6/test_m6_x1_x15_cross_component.py` | Strict xfail locks current supervision gap: no shipped `SupervisionTree` and no KernelService supervision member yet. |
+| M6-X13 | MESSAGE-FLOW | `back_cancel_handler` → `CancellationToken.cancel()` → ReAct loop exits before `max_iterations` | I6.X.13 | `[x]` | green | `tests/integration/k1/live/m6/test_m6_x1_x15_cross_component.py` | `back_cancel_handler` sets `CancelReason.USER_REQUESTED`; `react_loop` exits `cancelled` before model execution. |
+| M6-X14 | NEGATIVE | `k1/learning/`, `k1/retention/`, `k1/scheduler/`, `k1/tracing/` `__init__.py` empty; no session-bus subs; no SSM touches; xfail strict lock-in | I6.X.14 | `[x]` | xfail strict | `tests/integration/k1/live/m6/test_m6_x1_x15_cross_component.py` | Strict xfail locks current stub-cluster gap: these packages have no shipped Python implementation or session-bus wiring. |
+| M6-X15 | NEGATIVE | Learning loop never writes SSM (LEARN-01 single-writer invariant; guard for when learning ships) | I6.X.15 | `[x]` | green | `tests/integration/k1/live/m6/test_m6_x1_x15_cross_component.py` | Static guard scans `k1/learning/**/*.py` for direct SessionState write surfaces; none exist today. |
 
 ---
 
@@ -300,12 +325,12 @@ These hooks must exist before any live test can be written. Check them off first
 
 | Step | Probe type | Target | Flows | Status | Verdict | Test file | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| M7-L1 | MESSAGE-FLOW | `memory.write.v1` round-trip: K1 → Bridge LIVE → pseudo-K0 WAL | F35, F79, F80 | `[ ]` | | | |
-| M7-L2 | MESSAGE-FLOW | `recall.request.v1` → pseudo-K0 LIKE search → `recall.response.v1` | F39, F40 | `[ ]` | | | |
-| M7-L3 | MESSAGE-FLOW | `tool_state.changed.v1` SSE wired end-to-end K0 → K1 EventBus | F82 | `[ ]` | | | |
-| M7-L4 | MESSAGE-FLOW | `connector.execute.*` → Bridge LIVE → pseudo-K0 `ConnectorHost` | F102 | `[ ]` | | | |
-| M7-L5 | NEGATIVE | Kill pseudo-K0 mid-flight → `LocalOutbox` queues; restart → `DrainWorker` drains; Prometheus counter increments | Bridge outbox | `[ ]` | | | |
-| M7-L6 | PORT-IDENTITY | Bridge mode selection at S4: assert correct client class per config (`HttpBridgeClient` / `SinkBridgeClient` / null) | E2.10 | `[ ]` | | | |
+| M7-L1 | MESSAGE-FLOW | `memory.write.v1` round-trip: K1 → Bridge LIVE → pseudo-K0 WAL | F35, F79, F80 | `[x]` | green | `tests/integration/k1/live/m7/test_m7_l1_l6_pseudo_k0_integration.py` | Recipe-C `KernelService` boots `LiveBridgeAdapter`; generated `memory_write_v1.publish()` writes pseudo-K0 WAL with space/actor/band provenance and HMAC envelope fields. |
+| M7-L2 | MESSAGE-FLOW | `recall.request.v1` → pseudo-K0 LIKE search → `recall.response.v1` | F39, F40 | `[x]` | green | `tests/integration/k1/live/m7/test_m7_l1_l6_pseudo_k0_integration.py` | `build_recall_fn()` uses live bridge client; seeded pseudo-K0 WAL returns `pseudo_k0.*` LIKE-search hit. Belief selector limitation is asserted as empty per I7.3.2. |
+| M7-L3 | MESSAGE-FLOW | `tool_state.changed.v1` SSE wired end-to-end K0 → K1 EventBus | F82 | `[x]` | green | `tests/integration/k1/live/m7/test_m7_l1_l6_pseudo_k0_integration.py` | pseudo-K0 SSE subscriber receives `k1.tool_state.*` command and `_consume_tool_sse()` republishes `k1.tool_state.changed.v1` onto the K1 bus; SSE task is retained/cancelled on shutdown. |
+| M7-L4 | MESSAGE-FLOW | `connector.execute.*` → Bridge LIVE → pseudo-K0 `ConnectorHost` | F102 | `[x]` | green | `tests/integration/k1/live/m7/test_m7_l1_l6_pseudo_k0_integration.py` | `LiveBridgeClient.execute_connector()` now routes through `/k0/command.submit` with `connector.execute.<adapter>.<action>` topic; pseudo-K0 `ConnectorHost` callback result returns to K1. |
+| M7-L5 | NEGATIVE | Kill pseudo-K0 mid-flight → `LocalOutbox` queues; restart → `DrainWorker` drains; Prometheus counter increments | Bridge outbox | `[x]` | xfail strict | `tests/integration/k1/live/m7/test_m7_l1_l6_pseudo_k0_integration.py` | Strict xfail locks I7.2.4: live `LiveBridgeClient` has no owned `LocalOutbox`/`DrainWorker` recovery or counter path yet. |
+| M7-L6 | PORT-IDENTITY | Bridge mode selection at S4: assert correct client class per config (`HttpBridgeClient` / `SinkBridgeClient` / null) | E2.10 | `[x]` | green | `tests/integration/k1/live/m7/test_m7_l1_l6_pseudo_k0_integration.py` | S4 selects LIVE `LiveBridgeAdapter` + runtime `HttpBridgeClient`, SINK `SinkBridgeClient`, and OFFLINE null bridge as configured; no asyncio task leaks after teardown. |
 
 ---
 
@@ -316,8 +341,8 @@ These are not in K1_FLOWS.md but are covered by the SOP and require live coverag
 | # | Description | SOP ref | Status | Notes |
 | --- | --- | --- | --- | --- |
 | X1 | Bridge envelope signing round-trip (HMAC + Ed25519, canonical JSON, idem-key excluded) | E2.7.9 → M7-L1 | `[ ]` | |
-| X2 | LocalOutbox durability under 5xx | E2.7.4 + E7.2.4 → M7-L5 | `[ ]` | |
-| X3 | Bridge mode selection at S4 | E2.10 → M7-L6 | `[ ]` | |
+| X2 | LocalOutbox durability under 5xx | E2.7.4 + E7.2.4 → M7-L5 | `[x]` | Covered as strict xfail by M7-L5: live bridge lacks `LocalOutbox`/`DrainWorker` recovery ownership today. |
+| X3 | Bridge mode selection at S4 | E2.10 → M7-L6 | `[x]` | Covered by M7-L6 across LIVE/SINK/OFFLINE configurations. |
 | X4 | MW pipeline → K0 outbox (SINK mode) | MW + outbox | `[ ]` | |
 | X5 | Per-session bus isolation (E2.2 P1) | M5-L5 | `[x]` | Covered by `tests/integration/k1/live/m5/test_m5_l1_l6_bus_ss_mw.py`. |
 | X6 | S6b Mock→real planner swap | E2.3 → M2-L2 | `[x]` | Covered by `tests/integration/k1/live/m2/test_m2_l2_planner_orchestrator_crosswire.py`. |
@@ -384,13 +409,13 @@ To stamp a milestone **production-grade**, all five must be `[x]`:
 | M1 Concierge (L1–L9) | 9 | 9 | 1 | 0 | 100% |
 | M1 Cross-component (X1–X12) | 12 | 12 | 2 | 0 | 100% |
 | M4 Orch + Planner (L1–L6) | 6 | 6 | 2 | 0 | 100% |
-| M4 Cross-component (X1–X13) | 13 | 1 | 0 | 0 | 8% |
-| M6 Cross-cutting (L1–L5) | 5 | 0 | 0 | 0 | 0% |
-| M6 Cross-component (X1–X15) | 15 | 0 | 0 | 0 | 0% |
-| M7 Pseudo-K0 | 6 | 0 | 0 | 0 | 0% |
-| Cross-cutting (X1–X9) | 9 | 4 | — | 0 | 44% |
+| M4 Cross-component (X1–X13) | 13 | 13 | 4 | 0 | 100% |
+| M6 Cross-cutting (L1–L5) | 5 | 5 | 1 | 0 | 100% |
+| M6 Cross-component (X1–X15) | 15 | 15 | 2 | 0 | 100% |
+| M7 Pseudo-K0 | 6 | 6 | 1 | 0 | 100% |
+| Cross-cutting (X1–X9) | 9 | 6 | — | 0 | 67% |
 | LLM-COVERED contracts | 5 | 0 | — | 0 | 0% |
-| **TOTAL** | **146** | **98** | **11** | **0** | **67%** |
+| **TOTAL** | **146** | **123** | **17** | **0** | **84%** |
 
 ---
 

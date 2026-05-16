@@ -52,6 +52,14 @@ def is_new_hil_envelope(payload: dict[str, Any]) -> bool:
     )
 
 
+def is_legacy_bridge_envelope(payload: dict[str, Any] | None) -> bool:
+    """True when a HIL envelope is a legacy task.resume bridge marker."""
+    if not isinstance(payload, dict):
+        return False
+    inner = payload.get("payload") if isinstance(payload.get("payload"), dict) else {}
+    return bool(payload.get("legacy_bridge") or inner.get("legacy_bridge"))
+
+
 def unwrap_hil_request_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """Return a flat dict suitable for HITL_RELAY scenario rendering.
 
@@ -174,6 +182,8 @@ def build_hil_response_envelope_dict(
         ) from exc
 
     payload = _build_response_payload(kind, resolution, raw_user_text)
+    if is_legacy_bridge_envelope(incoming_envelope):
+        payload["legacy_bridge"] = True
     env = HILResponseEnvelope(
         hil_request_id=str(incoming_envelope["hil_request_id"]),
         kind=kind,

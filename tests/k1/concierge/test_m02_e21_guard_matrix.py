@@ -483,6 +483,7 @@ class TestHardcodedConstantsReplaced:
             TOPIC_TASK_FAILED,
             TOPIC_FINDINGS_READY,
             TOPIC_WEAVE_BATCH,
+            TOPIC_PROACTIVE_FILL,
         }
         assert set(TOPIC_PRIORITY.keys()) == known
 

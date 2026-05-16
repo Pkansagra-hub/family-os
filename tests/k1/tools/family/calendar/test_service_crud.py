@@ -34,6 +34,32 @@ async def test_get_event_returns_full_row(svc) -> None:
     assert out["event"]["version"] == 1
 
 
+async def test_create_event_persists_generic_metadata(svc) -> None:
+    service, _, _ = svc
+    created = await service.dispatch(
+        "create_event",
+        _evt_params(
+            metadata={
+                "_semantic": {
+                    "authority": {
+                        "guidance_scope": "general",
+                        "requires_external_authority": True,
+                    },
+                    "future_weave": {"prep_notes": ["bring paperwork"]},
+                }
+            }
+        ),
+        make_ctx(),
+    )
+
+    out = await service.dispatch("get_event", {"event_id": created["event_id"]}, make_ctx())
+
+    assert out["event"]["metadata"]["_semantic"]["authority"]["guidance_scope"] == "general"
+    assert out["event"]["metadata"]["_semantic"]["future_weave"]["prep_notes"] == [
+        "bring paperwork"
+    ]
+
+
 async def test_update_event_bumps_version(svc) -> None:
     service, _, _ = svc
     created = await service.dispatch("create_event", _evt_params(), make_ctx())
