@@ -43,6 +43,7 @@ from typing import TYPE_CHECKING, Any, List, Optional
 from k1.fabric.providers.base_provider import (
     BaseProvider,
     ProviderExecutionError,
+    build_provider_metadata,
 )
 from k1.fabric.types import (
     CapabilityRequest,
@@ -332,6 +333,9 @@ class NativeToolProvider(BaseProvider):
 
         from k1.tools.family.base import WriteContext
 
+        provider_metadata = build_provider_metadata(request, context)
+        extras = {"fabric_prompt_metadata": provider_metadata} if provider_metadata else {}
+
         return WriteContext(
             user_id=user_id,
             space_id=space_id_raw,
@@ -341,6 +345,7 @@ class NativeToolProvider(BaseProvider):
             face=face,
             band=band,
             idempotency_key=idempotency_key,
+            extras=extras,
         )
 
 

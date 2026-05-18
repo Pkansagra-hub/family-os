@@ -92,6 +92,26 @@ CHORES_DEFINITION = ToolDefinition(
         "display.  Distinct from Tasks (one-shot) and Reminders (time/location "
         "alerts)."
     ),
+    entity_type="chore_occurrence",
+    views=["board", "list", "leaderboard"],
+    activity_profile="chores.v1",
+    domain_tags=["chores", "recurrence", "gamification", "reward_tracking"],
+    filters=[
+        FieldSpec(
+            name="assigned_to",
+            type="string",
+            required=False,
+            description="Filter by assignee ``member_id``.",
+        ),
+        FieldSpec(
+            name="status",
+            type="string",
+            required=False,
+            description="Filter by status: pending | done | skipped.",
+        ),
+    ],
+    can_reference=["task_item", "calendar_event", "reminder"],
+    feature_flags=["m15_chores"],
     tables_sql=_CHORES_DDL,
     actions=[
         # ── Template management ──────────────────────────────────────────
@@ -99,8 +119,9 @@ CHORES_DEFINITION = ToolDefinition(
             name="create_template",
             kind="write",
             summary="Create a new recurring chore template.",
-            min_band="AMBER",
+            min_band="GREEN",
             idempotent=True,
+            prompt_template="chores_activity_v1",
             allowed_roles=_PARENT_PLUS,
             params=[
                 FieldSpec(
@@ -159,7 +180,8 @@ CHORES_DEFINITION = ToolDefinition(
             name="update_template",
             kind="write",
             summary="Edit a chore template (title, frequency, base_points, assigned_to).",
-            min_band="AMBER",
+            min_band="GREEN",
+            prompt_template="chores_activity_v1",
             allowed_roles=_PARENT_PLUS,
             params=[
                 _TEMPLATE_ID_FIELD,
@@ -198,7 +220,8 @@ CHORES_DEFINITION = ToolDefinition(
             name="delete_template",
             kind="delete",
             summary="Soft-delete a chore template and all its pending occurrences.",
-            min_band="AMBER",
+            min_band="GREEN",
+            prompt_template="chores_activity_v1",
             allowed_roles=_PARENT_PLUS,
             params=[_TEMPLATE_ID_FIELD],
             sse=SSESpec(
@@ -216,7 +239,8 @@ CHORES_DEFINITION = ToolDefinition(
             name="assign_chore",
             kind="write",
             summary="Create or re-assign a chore occurrence to a family member.",
-            min_band="AMBER",
+            min_band="GREEN",
+            prompt_template="chores_activity_v1",
             allowed_roles=_GUARDIAN_PLUS,
             params=[
                 _TEMPLATE_ID_FIELD,
@@ -261,7 +285,8 @@ CHORES_DEFINITION = ToolDefinition(
             name="complete_chore",
             kind="write",
             summary="Mark a chore occurrence as done and award points.",
-            min_band="AMBER",
+            min_band="GREEN",
+            prompt_template="chores_activity_v1",
             allowed_roles=_WRITE_ROLES,
             params=[
                 _OCCURRENCE_ID_FIELD,
@@ -300,7 +325,8 @@ CHORES_DEFINITION = ToolDefinition(
             name="skip_chore",
             kind="write",
             summary="Mark a chore occurrence as skipped (no points awarded).",
-            min_band="AMBER",
+            min_band="GREEN",
+            prompt_template="chores_activity_v1",
             allowed_roles=_WRITE_ROLES,
             params=[
                 _OCCURRENCE_ID_FIELD,
@@ -332,7 +358,8 @@ CHORES_DEFINITION = ToolDefinition(
             name="reopen_chore",
             kind="write",
             summary="Revert a done or skipped occurrence back to pending.",
-            min_band="AMBER",
+            min_band="GREEN",
+            prompt_template="chores_activity_v1",
             allowed_roles=_PARENT_PLUS,
             params=[
                 _OCCURRENCE_ID_FIELD,
@@ -365,6 +392,7 @@ CHORES_DEFINITION = ToolDefinition(
             kind="read",
             summary="List chore occurrences for a space, optionally filtered by assignee, status, or due window.",
             min_band="GREEN",
+            prompt_template="chores_activity_v1",
             allowed_roles=_ALL_ROLES,
             params=[
                 FieldSpec(
@@ -413,6 +441,7 @@ CHORES_DEFINITION = ToolDefinition(
             kind="read",
             summary="Return per-member points tally and completion stats for the space.",
             min_band="GREEN",
+            prompt_template="chores_activity_v1",
             allowed_roles=_ALL_ROLES,
             params=[
                 FieldSpec(

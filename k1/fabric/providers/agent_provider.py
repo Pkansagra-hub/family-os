@@ -1492,6 +1492,8 @@ class AgentFactory:
                     request.params,
                     trace_id,
                     session_id=request.session_id,
+                    prompt_template_name=request.prompt_template,
+                    context_override=request.context_override,
                 )
             except AgentSpawnError as exc:
                 return AgentResult(
@@ -1607,6 +1609,8 @@ class AgentFactory:
         params: Dict[str, Any],
         trace_id: str,
         session_id: str = "",
+        prompt_template_name: Optional[str] = None,
+        context_override: Optional[Dict[str, Any]] = None,
     ) -> Agent:
         """
         Steps 2-7 of the 8-step instantiation flow.
@@ -1668,6 +1672,8 @@ class AgentFactory:
                     params=params,
                     trace_id=trace_id,
                     session_id=session_id,
+                    prompt_template_name=prompt_template_name or contract.prompt_template,
+                    context_override=context_override,
                 )
                 initial_context = build_result.context
             except Exception as exc:

@@ -413,7 +413,7 @@ def build_back_prompt(
     referents: dict[str, Any] | None = None,
     task_state: str = "",
     task_artifacts: str = "",
-    safety_band: str = "AMBER",
+  safety_band: str = "GREEN",
     persona_prefs: dict[str, Any] | None = None,
     max_tool_calls: int | None = None,
     execution_profile_block: str = "",

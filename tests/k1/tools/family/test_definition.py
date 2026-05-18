@@ -89,6 +89,30 @@ class TestToolDefinition:
         assert d.title == "Demo"
         assert d.views == ["list", "calendar"]
 
+    def test_prompt_profile_defaults_are_backward_compatible(self) -> None:
+        d = ToolDefinition(
+            adapter_id="demo",
+            summary="demo",
+            tables_sql=_TABLES,
+            actions=[_action()],
+        )
+
+        assert d.activity_profile is None
+        assert d.domain_tags == []
+
+    def test_prompt_profile_fields_can_be_declared(self) -> None:
+        d = ToolDefinition(
+            adapter_id="demo",
+            summary="demo",
+            tables_sql=_TABLES,
+            actions=[_action()],
+            activity_profile="demo.default.v1",
+            domain_tags=["coordination", "diagnostic"],
+        )
+
+        assert d.activity_profile == "demo.default.v1"
+        assert d.domain_tags == ["coordination", "diagnostic"]
+
 
 class TestActionSpec:
     def test_allowed_roles_default(self) -> None:
@@ -106,6 +130,33 @@ class TestActionSpec:
     def test_name_pattern_enforced(self) -> None:
         with pytest.raises(ValidationError):
             ActionSpec(name="BadName", kind="read", summary="x")
+
+    def test_prompt_profile_defaults_are_backward_compatible(self) -> None:
+        a = ActionSpec(name="x", kind="read", summary="x")
+
+        assert a.prompt_template is None
+        assert a.activity_profile is None
+        assert a.tool_instructions is None
+        assert a.social_act is None
+        assert a.side_effects == []
+
+    def test_prompt_profile_fields_can_be_declared(self) -> None:
+        a = ActionSpec(
+            name="create_item",
+            kind="write",
+            summary="Create item",
+            prompt_template="demo_activity_v1",
+            activity_profile="demo.action.v1",
+            tool_instructions="Copy the returned id into the final result.",
+            social_act="create_record",
+            side_effects=[{"kind": "data_write", "target": "demo.item"}],
+        )
+
+        assert a.prompt_template == "demo_activity_v1"
+        assert a.activity_profile == "demo.action.v1"
+        assert a.tool_instructions == "Copy the returned id into the final result."
+        assert a.social_act == "create_record"
+        assert a.side_effects == [{"kind": "data_write", "target": "demo.item"}]
 
 
 class TestFieldSpec:

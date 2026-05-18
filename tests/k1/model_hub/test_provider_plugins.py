@@ -1,6 +1,6 @@
-"""M7 Provider Plugins -- Tests for 5 provider plugins + 5 manifests [F21-F25].
+"""M7 Provider Plugins -- Tests for provider plugins + manifests [F21-F25].
 
-Tests the OpenAI, Anthropic, Google, vLLM, and Ollama provider plugins:
+Tests the OpenAI, Anthropic, Google, Vertex/Agent Platform, vLLM, and Ollama provider plugins:
   - IProviderPlugin protocol conformance
   - initialize()/close() lifecycle
   - supports() capability matching
@@ -9,7 +9,7 @@ Tests the OpenAI, Anthropic, Google, vLLM, and Ollama provider plugins:
   - Response parsing (native response -> ProviderResponse)
   - Tool call parsing
   - Error handling
-  - Manifest loading for all 5 providers
+    - Manifest loading for all providers
 
 NO real HTTP calls.  All HTTP mocked via aiohttp test helpers or monkeypatch.
 """
@@ -17,22 +17,31 @@ NO real HTTP calls.  All HTTP mocked via aiohttp test helpers or monkeypatch.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
 
 from k1.model_hub.manifest import ProviderManifest, load_manifest
+from k1.model_hub.plugins import google_plugin as google_plugin_module
 from k1.model_hub.plugins.anthropic_plugin import AnthropicPlugin
 from k1.model_hub.plugins.base import IProviderPlugin, NormalizedRequest
 from k1.model_hub.plugins.google_plugin import GooglePlugin
 from k1.model_hub.plugins.ollama_plugin import OllamaPlugin
 
 # ---------------------------------------------------------------------------
-# Import all 5 plugins
+# Import all provider plugins
 # ---------------------------------------------------------------------------
 from k1.model_hub.plugins.openai_plugin import OpenAIPlugin
+from k1.model_hub.plugins.vertex_plugin import VertexPlugin
 from k1.model_hub.plugins.vllm_plugin import VLLMPlugin
-from k1.model_hub.types import CapabilityType, FinishReason, Message, ProviderError, RateLimitError
+from k1.model_hub.types import (
+    CapabilityType,
+    FinishReason,
+    Message,
+    ProviderError,
+    RateLimitError,
+)
 
 # ===========================================================================
 # Helpers
@@ -40,11 +49,12 @@ from k1.model_hub.types import CapabilityType, FinishReason, Message, ProviderEr
 
 MANIFEST_DIR = Path(__file__).resolve().parents[3] / "k1" / "config" / "providers"
 
-ALL_PLUGINS = [OpenAIPlugin, AnthropicPlugin, GooglePlugin, VLLMPlugin, OllamaPlugin]
+ALL_PLUGINS = [OpenAIPlugin, AnthropicPlugin, GooglePlugin, VertexPlugin, VLLMPlugin, OllamaPlugin]
 ALL_MANIFEST_FILES = [
     "openai.manifest.yaml",
     "anthropic.manifest.yaml",
     "google.manifest.yaml",
+    "vertex.manifest.yaml",
     "vllm.manifest.yaml",
     "ollama.manifest.yaml",
 ]
@@ -603,6 +613,97 @@ class TestGoogleRequestBuilding:
         assert has_search
 
 
+class TestVertexRequestBuilding:
+    """Gemini Enterprise Agent Platform SDK client configuration."""
+
+    def _plugin(self) -> VertexPlugin:
+        p = VertexPlugin()
+        p._capabilities = {CapabilityType.CHAT, CapabilityType.TOOL_CALL}
+        return p
+
+    def test_create_client_uses_cloud_project_location_and_api_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class _HttpOptions:
+            def __init__(self, *, api_version: str) -> None:
+                self.api_version = api_version
+
+        class _FakeTypes:
+            HttpOptions = _HttpOptions
+
+        class _FakeGenai:
+            @staticmethod
+            def Client(**kwargs):
+                return kwargs
+
+        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "project-test")
+        monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+        monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
+        p = self._plugin()
+        p.set_api_key("cloud-key")
+
+        client_kwargs = p._create_client(_FakeGenai, _FakeTypes)
+
+        assert client_kwargs["vertexai"] is True
+        assert client_kwargs["project"] == "project-test"
+        assert client_kwargs["location"] == "us-central1"
+        assert client_kwargs["api_key"] == "cloud-key"
+        assert client_kwargs["http_options"].api_version == "v1"
+        assert os.environ["GOOGLE_GENAI_USE_VERTEXAI"] == "True"
+
+    def test_ensure_client_allows_adc_without_api_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        class _HttpOptions:
+            def __init__(self, *, api_version: str) -> None:
+                self.api_version = api_version
+
+        class _FakeTypes:
+            HttpOptions = _HttpOptions
+
+        class _FakeGenai:
+            @staticmethod
+            def Client(**kwargs):
+                return kwargs
+
+        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "project-test")
+        monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+        monkeypatch.setattr(
+            google_plugin_module,
+            "_ensure_genai",
+            lambda: (_FakeGenai, _FakeTypes),
+        )
+        p = self._plugin()
+
+        client_kwargs = p._ensure_client()
+
+        assert client_kwargs["vertexai"] is True
+        assert "api_key" not in client_kwargs
+
+    def test_legacy_project_location_aliases(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+        monkeypatch.delenv("GOOGLE_CLOUD_LOCATION", raising=False)
+        monkeypatch.setenv("GOOGLE_PROJECT_ID", "legacy-project")
+        monkeypatch.setenv("GOOGLE_LOCATION", "europe-west4")
+
+        assert self._plugin()._resolve_project_location() == ("legacy-project", "europe-west4")
+
+    def test_missing_project_raises_provider_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+        monkeypatch.delenv("GOOGLE_PROJECT_ID", raising=False)
+
+        with pytest.raises(ProviderError, match="GOOGLE_CLOUD_PROJECT"):
+            self._plugin()._resolve_project_location()
+
+    def test_vertex_model_env_overrides_manifest_choice(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("VERTEX_MODEL", "gemini-2.5-flash")
+        req = _make_request(model_id="gemini-3-flash-preview")
+
+        assert self._plugin()._resolve_model_id(req) == "gemini-2.5-flash"
+
+
 class TestGoogleResponseParsing:
     """Google Gemini SDK response normalization."""
 
@@ -845,7 +946,6 @@ class TestOllamaRequestBuilding:
 
     def test_json_output_format(self) -> None:
         p = self._plugin()
-        req = _make_request(model_id="llama3.3")
         req2 = NormalizedRequest(
             capability=CapabilityType.CHAT,
             messages=[Message(role="user", content="Hi")],
@@ -940,7 +1040,7 @@ class TestOllamaResponseParsing:
 
 
 class TestManifestLoading:
-    """All 5 manifest YAML files parse correctly via load_manifest()."""
+    """All manifest YAML files parse correctly via load_manifest()."""
 
     @pytest.mark.parametrize("filename", ALL_MANIFEST_FILES)
     def test_manifest_loads(self, filename: str) -> None:
@@ -985,6 +1085,24 @@ class TestManifestLoading:
         assert m.provider_id == "google"
         model_ids = {s.id for s in m.models}
         assert "gemini-2.5-flash" in model_ids
+
+    def test_vertex_manifest_models(self) -> None:
+        m = load_manifest(MANIFEST_DIR / "vertex.manifest.yaml")
+        assert m.provider_id == "vertex"
+        assert m.api_base == "https://aiplatform.googleapis.com/v1"
+        assert m.auth.type == "none"
+        assert m.auth.credential_key == "GOOGLE_API_KEY"
+        model_ids = {s.id for s in m.models}
+        assert {
+            "gemini-3.1-pro-preview",
+            "gemini-3.1-pro-preview-customtools",
+            "gemini-3-flash-preview",
+            "gemini-3.1-flash-lite",
+            "gemini-2.5-pro",
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
+            "gemini-embedding-001",
+        }.issubset(model_ids)
 
     def test_vllm_manifest_models(self) -> None:
         m = load_manifest(MANIFEST_DIR / "vllm.manifest.yaml")

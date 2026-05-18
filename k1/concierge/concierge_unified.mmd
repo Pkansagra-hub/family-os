@@ -335,6 +335,7 @@ subgraph CONCIERGE["🧠 Concierge — Conversation Conductor (K1's Only User-Fa
     direction TB
 
     BACK_HANDLER["BackHandler<br/>ReAct Agent — Precise, tool-focused, no personality<br/>NEVER talks to user, NEVER streams text"]:::back
+    BACK_PROFILE_SELECTOR["BackExecutionProfile Renderer<br/>prompt-contract-backed metadata selection<br/>render bounded operating hints"]:::builder
 
     subgraph BACK_SUBSCRIBES["Subscribes To (4 topics)"]
       direction LR
@@ -362,11 +363,12 @@ subgraph CONCIERGE["🧠 Concierge — Conversation Conductor (K1's Only User-Fa
       subgraph BT_READ["Read (2)"]
         TOOL_RECALL_B["recall_memory()<br/>Task-specific history"]:::tool_read
         TOOL_DISCOVER["discover_capabilities()<br/>Fabric Registry search"]:::tool_read
+        TOOL_BINDER["bind_capability()<br/>Exact registry name or typed degrade"]:::adapter
       end
 
       subgraph BT_ACTION["Action (4) — The Real Work"]
-        TOOL_INVOKE["invoke_capability()<br/>UNIVERSAL EXECUTOR<br/>Any registered Fabric capability"]:::tool_action
-        TOOL_BATCH_INVOKE["batch_invoke_capabilities()<br/>Multi-capability in one call"]:::tool_action
+        TOOL_INVOKE["invoke_capability()<br/>Strict exact Fabric capability"]:::tool_action
+        TOOL_BATCH_INVOKE["batch_invoke_capabilities()<br/>Strict exact Fabric capabilities"]:::tool_action
         TOOL_SPAWN["spawn_via_fabric()<br/>Dynamic specialist agents"]:::tool_action
         TOOL_WORKFLOW["execute_workflow()<br/>Multi-step DAG execution"]:::tool_action
       end
@@ -702,7 +704,7 @@ subgraph CONCIERGE["🧠 Concierge — Conversation Conductor (K1's Only User-Fa
   subgraph TIERS["Complexity Tiers & Task Model"]
     direction TB
 
-    TASK_DISPATCH_TYPE["TaskDispatch: task_id, intents[], tier,<br/>budget_hint, reference_context, safety_band,<br/>depends_on, context_snapshot"]:::task
+    TASK_DISPATCH_TYPE["TaskDispatch: task_id, intents[], tier,<br/>budget_hint, reference_context, safety_band,<br/>depends_on, context_snapshot,<br/>execution_profiles"]:::task
 
     subgraph TIER_PATHS["Tier Routing"]
       LOW_PATH["LOW (<2s): Front → dispatch → Back → invoke → submit<br/>Budget: 4 tool calls, 500 tokens"]:::tier_low
@@ -1072,8 +1074,10 @@ ST_DELIVERING -->|"user.ack"| ST_LISTENING
 ST_INTERRUPT -->|"re-classify"| ST_DISPATCHING
 
 %% --- Back Tools → Fabric (via IDispatchPort) ---
-TOOL_INVOKE -->|"dispatch_direct"| PORT_DISPATCH
-TOOL_BATCH_INVOKE -->|"dispatch_direct (batch)"| PORT_DISPATCH
+TOOL_INVOKE -->|"active Back task"| TOOL_BINDER
+TOOL_BATCH_INVOKE -->|"active Back task"| TOOL_BINDER
+TOOL_BINDER -->|"bound exact + prompt/profile context"| PORT_DISPATCH
+TOOL_BINDER -->|"invalid/ambiguous/not_found"| TOOL_SUBMIT
 TOOL_DISCOVER -->|"search"| PORT_DISPATCH
 TOOL_SPAWN -->|"create agent"| PORT_DISPATCH
 TOOL_WORKFLOW -->|"run DAG"| PORT_DISPATCH
@@ -1086,6 +1090,7 @@ PORT_MEMORY -->|"recall"| BRIDGE_CLIENT
 
 %% --- Prompt Assembly ---
 DYN_PROMPT_BUILDER -->|"build context"| FRONT_HANDLER
+BACK_PROFILE_SELECTOR -->|"execution_profile_block"| BACK_PROMPT_BUILDER
 BACK_PROMPT_BUILDER -->|"build context"| BACK_HANDLER
 DYN_PROMPT_BUILDER -.->|"read SS"| PORT_STATE
 DYN_PROMPT_BUILDER -->|"determine_mode"| PROMPT_MODES

@@ -36,6 +36,9 @@ def lifecycle_events(self) -> list[dict[str, Any]]
 `describe_wiring()` returns a plain dict snapshot of Tier 1 component types,
 selected Tier 1 port adapter types, selected PORT-IDENTITY booleans, per-session
 component types, bridge mode, running state, and planner task name.
+It also reports `prompt_system.template_count` when the production prompt
+adapter has been constructed, so activity profile prompt inventory is observable
+without reaching into private Fabric internals.
 `lifecycle_events()` returns append-only phase-completion records with `phase`,
 `component`, and monotonic timestamp `ts`. Live-kernel tests use these methods for
 PORT-IDENTITY and LIFECYCLE-ORDER probes; production code must not branch on them.
@@ -153,6 +156,16 @@ await hil_service.shutdown()     # cancels pending futures, unsubscribes from bu
 
 All other interaction happens inside Fabric, Orchestrator, Planner, and Concierge.
 When `hil_service is None`, each subsystem falls back to its internal `_NullHILAdapter`.
+
+### 2.3.1 Activity profile prompt store
+
+KernelService constructs `PromptSystemProdAdapter("k1/contracts/prompts")` at S3
+and passes it to shared Fabric. Per-session Fabric reuses the verified prompt
+adapter. `KernelConfig.enable_activity_profiles` defaults to `True`; when enabled,
+startup logs the prompt template count. `enable_activity_profiles_strict=False`
+by default, so an empty prompt store warns but does not prevent native family
+tools from registering. Strict mode turns an empty prompt store into startup
+failure for CI/profile-gated deployments.
 
 **Required constructor inputs:**
 ```python

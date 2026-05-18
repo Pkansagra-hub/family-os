@@ -47,7 +47,7 @@ async def dispatch_task(
     urgency: str = "normal",
     depends_on: str | None = None,
     context_snapshot: dict[str, Any] | None = None,
-    safety_band: str = "AMBER",
+    safety_band: str = "GREEN",
     publish_fn: Callable[[TaskDispatch], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
     """Front tool: dispatch task(s) to Back for execution.

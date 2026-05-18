@@ -126,11 +126,23 @@ class ModelSelector:
         if not eligible_providers:
             return None
 
-        avoid: set[str] = set(preference.avoid_providers) if preference else set()
-        target_tier = _PRIORITY_TO_TIER.get(request.constraints.priority, ModelTier.FAST)
+        effective_preference = preference or request.constraints.model_preference
+        avoid: set[str] = (
+            set(effective_preference.avoid_providers) if effective_preference else set()
+        )
+        preferred_provider = (
+            effective_preference.preferred_provider if effective_preference else None
+        )
+        preferred_model = effective_preference.preferred_model if effective_preference else None
+        target_tier = _preferred_tier(effective_preference) or _PRIORITY_TO_TIER.get(
+            request.constraints.priority,
+            ModelTier.FAST,
+        )
 
         # Partition by health: healthy first, degraded last-resort
+        healthy_preferred: list[tuple[str, str]] = []
         healthy: list[tuple[str, str]] = []
+        degraded_preferred: list[tuple[str, str]] = []
         degraded: list[tuple[str, str]] = []
 
         for ep in eligible_providers:
@@ -138,10 +150,21 @@ class ModelSelector:
                 continue  # hard exclude
             if ep.provider_info.provider_id in avoid:
                 continue  # preference-avoided: skip entirely
-            bucket = healthy if ep.health_status == HealthStatus.HEALTHY else degraded
-            _add_candidates(ep, target_tier, bucket)
+            if ep.health_status == HealthStatus.HEALTHY:
+                bucket = (
+                    healthy_preferred
+                    if preferred_provider == ep.provider_info.provider_id
+                    else healthy
+                )
+            else:
+                bucket = (
+                    degraded_preferred
+                    if preferred_provider == ep.provider_info.provider_id
+                    else degraded
+                )
+            _add_candidates(ep, target_tier, bucket, preferred_model=preferred_model)
 
-        all_candidates = healthy + degraded
+        all_candidates = healthy_preferred + healthy + degraded_preferred + degraded
         if not all_candidates:
             return None
 
@@ -163,20 +186,33 @@ def _add_candidates(
     ep: EligibleProvider,
     target_tier: ModelTier,
     bucket: list[tuple[str, str]],
+    *,
+    preferred_model: str | None = None,
 ) -> None:
     """Append (provider_id, model_id) pairs to bucket.
 
-    Tier-matched models go first within the bucket; unmatched after.
+    Explicit model preferences go first, then tier-matched models, then unmatched.
     """
     provider_id = ep.provider_info.provider_id
     if not ep.eligible_models:
         bucket.append((provider_id, ""))
         return
 
-    matched = [m for m in ep.eligible_models if m.tier == target_tier]
-    unmatched = [m for m in ep.eligible_models if m.tier != target_tier]
-    for m in matched + unmatched:
+    preferred = [m for m in ep.eligible_models if preferred_model and m.id == preferred_model]
+    remaining = [m for m in ep.eligible_models if m not in preferred]
+    matched = [m for m in remaining if m.tier == target_tier]
+    unmatched = [m for m in remaining if m.tier != target_tier]
+    for m in preferred + matched + unmatched:
         bucket.append((provider_id, m.id))
+
+
+def _preferred_tier(preference: ModelPreference | None) -> ModelTier | None:
+    if not preference or not preference.preferred_tier:
+        return None
+    try:
+        return ModelTier(preference.preferred_tier.upper())
+    except ValueError:
+        return None
 
 
 __all__ = [

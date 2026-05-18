@@ -160,7 +160,8 @@ def _llm_spec_to_contract(spec: dict[str, Any]) -> CapabilityContract:
             optional_inputs.append(inp)
 
     # Infer safety band from capability name prefix.
-    safety_band_min = "AMBER" if ".execute." in cap_name or ".write." in cap_name else "GREEN"
+    # Writes/executes are GREEN by default; only payment/purchase flows warrant AMBER+.
+    safety_band_min = "GREEN"
 
     now_iso = datetime.now(timezone.utc).isoformat()
 

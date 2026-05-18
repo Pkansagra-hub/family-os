@@ -41,7 +41,7 @@ Concierge is K1's **user-facing conversational agent** — the L1 layer that rec
 | **FSM** | `fsm/` | 11-state machine, guard matrix, concurrency |
 | **Actors** | `actors/` | Front (user-facing) + Back (tool-executing) LLM actors |
 | **Protocols** | `protocols/` | Cancellation, Suspension, HITL, Weave, Trust, OPP |
-| **Prompt** | `prompt/` | 10-mode dynamic prompt builder, affect modulation |
+| **Prompt** | `prompt/` | 10-mode dynamic prompt builder, prompt-contract-backed Back profile rendering, affect modulation |
 | **LLM** | `llm/` | Model port, Gemini adapter, ModelHub bridge |
 | **Tools** | `tools/` | ReAct tool loop, capability discovery, tool schemas |
 | **Task** | `task/` | Intent classification, complexity scoring, dispatch |
@@ -444,17 +444,18 @@ The Front actor is the **user-facing conversational handler**. Never cancellable
 
 The Back actor is the **tool-executing worker**. Operates on a SessionState snapshot-at-start (immutable during execution), uses tier-based tool filtering, and supports cooperative cancellation.
 
-#### 7-Step Execution Flow
+#### 8-Step Execution Flow
 
 | Step | Action |
 |------|--------|
 | 1 | Snapshot SS at start (immutable for duration) |
 | 2 | Resolve complexity tier → tool allowlist |
-| 3 | Build back prompt via `build_back_prompt()` (~1,800-word template) |
-| 4 | Create `ToolDispatcher` (back, tier-filtered) |
-| 5 | Run `react_loop()` with `cancellation_check` wired to `CancellationToken` |
-| 6 | Extract `submit_result` data from ReactResult |
-| 7 | Return BackResult with submission payload + metrics |
+| 3 | Reuse or select prompt-contract-backed Back execution profiles from metadata and render a bounded profile block |
+| 4 | Build back prompt via `build_back_prompt(execution_profile_block=...)` (~1,800-word template) |
+| 5 | Create `ToolDispatcher` (back, tier-filtered) |
+| 6 | Run `react_loop()` with `cancellation_check` wired to `CancellationToken` |
+| 7 | Extract `submit_result` data from ReactResult |
+| 8 | Return BackResult with submission payload + metrics |
 
 **Tier-Based Tool Filtering**:
 
@@ -648,6 +649,7 @@ Simple template substitution (~1,800-word constant template):
 | Artifacts | Previous task outputs |
 | Safety band | Current safety level |
 | Persona preferences | User preferences |
+| Execution profiles | Optional bounded domain/activity procedure selected for this task |
 | Tier-based tool notes | Tool budget and allowed tools per tier |
 
 ### 7.8 LLM Port & Types (`llm/types.py`, `llm/ports.py`)
@@ -847,9 +849,21 @@ Factory functions: `create_front_dispatcher(tier, ctx)`, `create_back_dispatcher
 | `bundle_idempotency_cache` | dict | Per-session dedup for bundle ops |
 | `capability_cache` | dict | Per-session discover_capabilities cache |
 | `active_task_id` | str | Current task ID |
+| `active_execution_profiles` | list[dict] | Back-selected profile metadata for direct Fabric request context |
 | `actor` | str | "front" or "back" |
+| `dispatch` | IDispatchPort | Fabric/Orchestrator dispatch surface |
 
 **HITL Safety Gate** (`invoke_capability`): Checks `hil_coordinator.get_pending_request()` before execution. Blocks if HITL pending. Checks `validate_before_invoke()` → may return `block_red` or `block_needs_approval`.
+
+**M6 Capability Binding** (`invoke_capability`, `batch_invoke_capabilities`):
+For active Back tasks, direct capability requests call `bind_capability()` before
+Fabric dispatch. The binder accepts action/domain metadata plus an optional
+candidate name and returns either an exact registry name or typed degradation
+(`invalid_candidate`, `ambiguous`, `not_found`, `needs_discovery`,
+`needs_human`). Bound requests can attach `prompt_template` and
+`context_override` (`activity_profile`, active execution profiles, and prompt
+variables). Prompt/profile metadata stays outside business `params` and never
+changes tool authority.
 
 ### 8.5 Parallel Execution Rules (`tools/parallelism.py`)
 
@@ -1207,7 +1221,7 @@ Pure data-model layer — no bus, no async, no I/O. Defines all task payloads, i
 |------|---------|
 | `TaskIntent` (frozen DC) | Single discrete action: action, params, domain, urgency. Supports `$ref` placeholders for chained tasks |
 | `ComplexityTier` (enum) | LOW / MEDIUM / HIGH with budget mapping (6 / 10 / 14 tool calls) |
-| `TaskDispatch` (DC) | Front → Back payload: intents, tier, budget_hint, safety_band, depends_on, context_snapshot |
+| `TaskDispatch` (DC) | Front → Back payload: intents, tier, budget_hint, safety_band, depends_on, context_snapshot, execution_profiles |
 | `TaskComplete` (DC) | Back → Front success: final_answer, results, artifacts_created, tool_calls count |
 | `TaskFailed` (DC) | Back → Front error: reason (8 valid values), error_code, partial_results, retries_attempted |
 

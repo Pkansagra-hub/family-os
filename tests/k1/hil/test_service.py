@@ -545,11 +545,27 @@ async def test_gate_capability_timeout() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_response_with_unknown_id_dropped() -> None:
+async def test_response_with_unknown_id_dropped(caplog) -> None:
     bus = FakeBus()
     svc = _svc(bus)
+    caplog.set_level(logging.WARNING, logger="k1.hil.service")
+
     # Deliver a response for a hil_request_id we never created.
     await bus.deliver_response("ghost-id", HILKind.CLARIFICATION, {"answer": "x"})
+
+    # Warning must carry both hil_request_id and kind as structured fields
+    # (M5 G2/G4 -- observability boundary).
+    unknown_records = [
+        rec
+        for rec in caplog.records
+        if rec.name == "k1.hil.service" and rec.getMessage().startswith("hil_response_unknown_id")
+    ]
+    assert len(unknown_records) == 1
+    rec = unknown_records[0]
+    assert getattr(rec, "hil_request_id", None) == "ghost-id"
+    assert getattr(rec, "kind", None) == HILKind.CLARIFICATION.value
+    # Counter must increment (M5 G2).
+    assert svc.get_counters()["unknown_id"] == 1
 
     # No crash; service still functional.
     async def r():
@@ -565,6 +581,7 @@ async def test_response_with_unknown_id_dropped() -> None:
         )
     )
     assert resp.answer == "ok"
+    assert svc.get_counters()["resolved"] == 1
     await svc.shutdown()
 
 

@@ -197,6 +197,11 @@ tool_contract:                              # Root key (REQUIRED) — must be ex
   # --- Provider binding ---
   provider_type: "MCP"                      # MCP, WASM, BRIDGE, AGENT, WORKFLOW, CONCIERGE
   provider_id: "weather_mcp"                # Unique ID matching your provider registration
+    prompt_template: "mcp_generic_activity_v1" # Optional reviewed PromptContract name
+    activity_profile: "mcp.generic.v1"         # Optional operating-guidance profile id
+    tool_instructions: >                       # Optional inline guidance; schemas remain authority
+        Inspect the selected contract schema before execution. Do not invent
+        capability names, provider ids, or side-effect permission.
   safety_band_min: "GREEN"                  # Minimum safety band: GREEN, AMBER, RED, CRISIS
   cost_per_call: 0.001                      # Estimated cost (for budgeting)
   avg_latency_ms: 500                       # Expected average latency
@@ -207,6 +212,12 @@ tool_contract:                              # Root key (REQUIRED) — must be ex
     - "read_only"
     - "external_api"
 ```
+
+Prompt/profile metadata is advisory. It can guide an LLM or provider about how
+to use the tool, but it does not grant the tool, authorize side effects, bypass
+HIL, or replace schema inspection. Production prompt text should live under
+`k1/prompts/activities/` and be referenced by a PromptContract in
+`k1/contracts/prompts/`.
 
 ### Input Types
 
@@ -720,6 +731,11 @@ tool_contract:
 
   provider_type: "WASM"
   provider_id: "date_calc_wasm"
+    prompt_template: "wasm_generic_activity_v1"
+    activity_profile: "wasm.generic.v1"
+    tool_instructions: >
+        Use only for deterministic date math. This tool does not inspect calendar
+        records and must not be treated as proof that an event exists.
   safety_band_min: "GREEN"
   cost_per_call: 0.0
   avg_latency_ms: 5

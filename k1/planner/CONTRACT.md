@@ -86,10 +86,18 @@ HIL:     None
 Timeout: expand_timeout_ms=5,000ms
 ```
 
-LLM produces step IDs matching `^s[0-9]+$`. Each step becomes a `PlanStep` (from
-`k1.orchestrator.types`). 6 infrastructure fields are injected deterministically from
-`CapabilityContract` (timeout_ms, output_schema, compensation_fn, safety_band,
-required_context, etc.) — not from LLM.
+LLM produces step IDs shaped as `s` followed by digits. Each step becomes a
+`PlanStep` (from `k1.orchestrator.types`). Infrastructure fields are injected
+from `CapabilityContract` metadata (timeout_ms, output_schema,
+compensation_fn, safety_band, required_context, etc.) — not from LLM.
+
+Prompt/profile binding is exact-evidence only. If the LLM proposes
+`prompt_template`, EXPAND preserves it only when the name is returned by
+`find_prompts` or present in the injected prompt inventory. Unverified prompt
+names are cleared and logged. EXPAND does not infer replacements from domain
+labels, prompt scores, compatible prompt metadata, or capability-name text.
+`activity_profile` is copied from capability-contract metadata or from the
+exact validated prompt descriptor.
 
 ### Stage 3: VALIDATE (`ValidateService.execute()`)
 
@@ -247,7 +255,7 @@ Input to the planner. Contains: `request_id`, `trace_id`, `intent`, `session_sna
 Output of the planner. Contains: `plan_id`, `request_id`, `intent`, `steps: List[PlanStep]`, `dependencies: Dict[str, List[str]]`, `trace_id`, `estimated_duration_ms`, `created_at`.
 
 ### `PlanStep` (from `k1.orchestrator.types`)
-One executable step. Fields: `step_id` (`^s[0-9]+$`), `capability`, `params`, `timeout_ms`, `output_schema`, `compensation_fn`, `safety_band`, `is_optional`, `tools_granted`, `prompt_template`.
+One executable step. Fields: `step_id` (`s` followed by digits), `capability`, `params`, `timeout_ms`, `output_schema`, `compensation_fn`, `safety_band`, `is_optional`, `tools_granted`, `prompt_template`, `activity_profile`.
 
 ### `MicroReplanRequest` (from `k1.orchestrator.types`)
 Micro-replan input. Contains: `request_id`, `trace_id`, `original_plan_id`, `remaining_steps`, `completed_results: Dict[str, StepResult]`, `reason`, `trigger_wave_index`.

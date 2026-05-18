@@ -2,8 +2,8 @@
 
 > **Status:** Doc-only stub. No implementation. M10.E2.I3 records the
 > shape of the V1 conversational onboarding flow so the typed L3
-> writers and seed YAML schema (see [`scripts/onboarding_seed.py`](../../scripts/onboarding_seed.py)
-> and [`examples/seeds/`](../../examples/seeds/)) remain forward-
+> writers and seed YAML schema (see [`scripts/onboarding_seed.py`](../../../scripts/onboarding_seed.py)
+> and [`examples/seeds/`](../../../examples/seeds)) remain forward-
 > compatible.
 
 ## Goal

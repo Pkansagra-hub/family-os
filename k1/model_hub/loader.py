@@ -18,7 +18,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Mapping
 
 from k1.model_hub.manifest import load_manifest
 
@@ -42,6 +42,27 @@ _KNOWN_PROVIDERS: tuple[str, ...] = (
     "openai",
     "anthropic",
 )
+
+_PROVIDER_ALIASES: dict[str, str] = {
+    "ai-studio": "google",
+    "ai_studio": "google",
+    "developer": "google",
+    "gemini": "google",
+    "google-ai": "google",
+    "google_ai": "google",
+    "agent-platform": "vertex",
+    "agent_platform": "vertex",
+    "gemini-enterprise": "vertex",
+    "gemini_enterprise": "vertex",
+    "google-cloud": "vertex",
+    "google_cloud": "vertex",
+    "vertex-ai": "vertex",
+    "vertex_ai": "vertex",
+}
+
+
+def _truthy(value: str | None) -> bool:
+    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 @dataclass(frozen=True)
@@ -69,6 +90,23 @@ class ProviderConfig:
     def default(cls) -> "ProviderConfig":
         """Enable every known provider; loader skips ones with missing env vars."""
         return cls(providers=tuple(ProviderEntry(provider_id=pid) for pid in _KNOWN_PROVIDERS))
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> "ProviderConfig":
+        """Build provider config from ``LLM_PROVIDER``.
+
+        Empty/``auto`` keeps the legacy default. An explicit provider loads
+        only that provider, which prevents ``LLM_PROVIDER=vertex`` from also
+        registering the Gemini Developer API provider.
+        """
+        source = os.environ if env is None else env
+        raw_provider = (source.get("LLM_PROVIDER") or "").strip().lower()
+        if not raw_provider and _truthy(source.get("GOOGLE_GENAI_USE_VERTEXAI")):
+            raw_provider = "vertex"
+        if not raw_provider or raw_provider in {"auto", "default"}:
+            return cls.default()
+        provider_id = _PROVIDER_ALIASES.get(raw_provider, raw_provider)
+        return cls(providers=(ProviderEntry(provider_id=provider_id),))
 
 
 @dataclass(frozen=True)

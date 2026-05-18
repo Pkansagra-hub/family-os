@@ -18,7 +18,7 @@ Key invariants:
     - TaskDispatch.intents is non-empty (at least one intent required)
     - budget_hint auto-computed from tier if not explicitly set
     - depends_on must be a valid task ID (task-...) if provided
-    - safety_band defaults to AMBER (assume side effects need approval)
+    - safety_band defaults to GREEN (ordinary tasks stay no-friction)
     - TaskComplete.status is always "success"
     - TaskFailed.status is always "error"
 """
@@ -66,7 +66,7 @@ class TaskDispatch:
                            Back reads this in STEP 1 (ORIENT) to resolve references.
         safety_band:       GREEN / AMBER / RED. Copied from SS control.safety_band.
                            Back checks this in STEP 5 (SAFETY CHECK) before invoke.
-                           Default AMBER: assume side effects require approval.
+                   Default GREEN: ordinary tasks stay in the no-friction lane.
         depends_on:        Task ID this depends on (chained tasks, V2 Section 17.4).
                            None = independent task.
         context_snapshot:  Relevant SessionState sections at dispatch time.
@@ -81,7 +81,7 @@ class TaskDispatch:
     task_id: str = field(default_factory=lambda: f"task-{uuid.uuid4().hex[:8]}")
     budget_hint: int | None = None
     reference_context: dict[str, Any] | None = None
-    safety_band: str = "AMBER"
+    safety_band: str = "GREEN"
     depends_on: str | None = None
     context_snapshot: dict[str, Any] | None = None
     execution_profiles: list[dict[str, Any]] | None = None
@@ -149,7 +149,7 @@ class TaskDispatch:
             tier=ComplexityTier(data["tier"]),
             budget_hint=data.get("budget_hint"),
             reference_context=data.get("reference_context"),
-            safety_band=data.get("safety_band", "AMBER"),
+            safety_band=data.get("safety_band", "GREEN"),
             depends_on=data.get("depends_on"),
             context_snapshot=data.get("context_snapshot"),
             execution_profiles=data.get("execution_profiles"),

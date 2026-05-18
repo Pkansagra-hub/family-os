@@ -6,9 +6,9 @@ Loads prompt templates from YAML contract files on disk and provides
 
 Design:
   - Scans a directory for ``*.yaml`` / ``*.yml`` prompt contract files.
-  - Each file has a ``prompt_contract`` top-level key with ``name``,
-    ``template_file``, ``variables``, ``version``, ``description``,
-    ``metadata`` fields (see ``tests/k1/fabric/fixtures/prompts/``).
+    - Each file has a ``prompt_contract`` top-level key with ``name``,
+        ``template_file`` or inline ``template``, ``variables``, ``version``,
+        ``description``, and metadata fields.
   - ``resolve()`` returns a ``PromptTemplate`` loaded from the contract.
   - ``compile()`` performs ``{variable}`` substitution (same as test adapter).
   - Thread-safe via RLock (supports concurrent ContextBuilder calls).
@@ -66,7 +66,7 @@ class PromptSystemProdAdapter:
                 contract files.  Non-existent directory is tolerated
                 (adapter starts with zero templates and logs a warning).
         """
-        self._prompts_dir = Path(prompts_dir)
+        self._prompts_dir = self._resolve_prompts_dir(Path(prompts_dir))
         self._templates: Dict[str, PromptTemplate] = {}
         self._lock = threading.RLock()
         self._resolve_count = 0
@@ -219,8 +219,8 @@ class PromptSystemProdAdapter:
             self._prompts_dir,
         )
 
-    @staticmethod
-    def _parse_prompt_file(path: Path) -> Optional[PromptTemplate]:
+    @classmethod
+    def _parse_prompt_file(cls, path: Path) -> Optional[PromptTemplate]:
         """Parse a single YAML prompt contract file into a PromptTemplate."""
         import yaml
 
@@ -238,13 +238,17 @@ class PromptSystemProdAdapter:
             logger.debug("Skipping prompt file with no name: %s", path)
             return None
 
-        # Build template string from template_file reference or inline
+        # Build template string from template_file reference or inline.
+        # Production contracts use template_file; inline templates remain
+        # supported for old fixtures and narrow tests.
         template_str = contract.get("template", "")
         template_file = contract.get("template_file", "")
+        template_source = "inline" if template_str else "empty"
+        resolved_template_path: Optional[Path] = None
         if not template_str and template_file:
-            # Store the file reference in the template — actual file
-            # loading happens at compile-time if needed.
-            template_str = f"{{{{template_file:{template_file}}}}}"
+            resolved_template_path = cls._resolve_template_file(path, template_file)
+            template_str = resolved_template_path.read_text(encoding="utf-8")
+            template_source = "template_file"
 
         # Extract variable names from the variables list
         raw_vars = contract.get("variables", [])
@@ -260,15 +264,21 @@ class PromptSystemProdAdapter:
         metadata: Dict[str, Any] = {}
         for key in (
             "description",
+            "activity_profile",
             "domain",
             "intent_match",
             "max_tokens",
             "output_format",
             "compatible_agents",
+            "compatible_tools",
             "template_file",
         ):
             if key in contract:
                 metadata[key] = contract[key]
+        metadata["contract_file"] = str(path)
+        metadata["template_source"] = template_source
+        if resolved_template_path is not None:
+            metadata["template_file_resolved"] = str(resolved_template_path)
 
         return PromptTemplate(
             name=name,
@@ -277,6 +287,41 @@ class PromptSystemProdAdapter:
             variables=[v for v in var_names if v],
             metadata=metadata,
         )
+
+    @classmethod
+    def _resolve_prompts_dir(cls, prompts_dir: Path) -> Path:
+        """Resolve production relative prompt dirs from the repository root."""
+        if prompts_dir.is_absolute():
+            return prompts_dir
+        repo_candidate = cls._repo_root() / prompts_dir
+        if repo_candidate.exists():
+            return repo_candidate
+        return prompts_dir
+
+    @classmethod
+    def _resolve_template_file(cls, contract_path: Path, template_file: str) -> Path:
+        """Resolve a template_file path from repo root, then contract directory."""
+        template_path = Path(template_file)
+        candidates: List[Path]
+        if template_path.is_absolute():
+            candidates = [template_path]
+        else:
+            candidates = [cls._repo_root() / template_path, contract_path.parent / template_path]
+
+        for candidate in candidates:
+            if candidate.is_file():
+                return candidate
+
+        candidate_list = ", ".join(str(candidate) for candidate in candidates)
+        raise FileNotFoundError(
+            f"Prompt template_file not found for {contract_path}: {template_file} "
+            f"(checked: {candidate_list})"
+        )
+
+    @staticmethod
+    def _repo_root() -> Path:
+        """Return the repository root for the in-tree adapter module."""
+        return Path(__file__).resolve().parents[3]
 
     def __repr__(self) -> str:
         with self._lock:

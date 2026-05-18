@@ -49,26 +49,20 @@ from k1.model_hub.types import (
     CapabilityType,
     ChatPayload,
     ChatResult,
-)
-from k1.model_hub.types import FinishReason as K1FinishReason
-from k1.model_hub.types import (
     HubChunk,
     HubRequest,
     HubResponse,
-)
-from k1.model_hub.types import Message as K1Message
-from k1.model_hub.types import (
     ReasonResult,
     RequestConstraints,
     ResponseMetadata,
     StructuredResult,
     TokenUsage,
     ToolCallPayload,
-)
-from k1.model_hub.types import ToolCallResult as K1ToolCallResult
-from k1.model_hub.types import (
     ToolCallResultSet,
 )
+from k1.model_hub.types import FinishReason as K1FinishReason
+from k1.model_hub.types import Message as K1Message
+from k1.model_hub.types import ToolCallResult as K1ToolCallResult
 from k1.model_hub.types import ToolDefinition as K1ToolDefinition
 
 logger = logging.getLogger(__name__)
@@ -352,6 +346,23 @@ def _has_discovery_candidates(payload: dict[str, Any]) -> bool:
     return (isinstance(count, int) and count > 0) or bool(capabilities)
 
 
+def _authority_payload_succeeded(payload: dict[str, Any]) -> bool:
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    if payload.get("error") or data.get("error"):
+        return False
+    status = str(data.get("status") or "").lower()
+    if status in {"error", "failed", "failure"}:
+        return False
+    total = data.get("total")
+    succeeded = data.get("succeeded")
+    failed = data.get("failed")
+    if isinstance(total, int) and total > 0:
+        return isinstance(succeeded, int) and succeeded > 0
+    if isinstance(failed, int) and failed > 0 and not succeeded:
+        return False
+    return True
+
+
 def _seed_back_capability_state(messages: list[ModelMessage]) -> tuple[bool, bool]:
     candidates_seen = False
     authority_attempted = False
@@ -364,7 +375,9 @@ def _seed_back_capability_state(messages: list[ModelMessage]) -> tuple[bool, boo
                 _json_object(message.content)
             )
         elif name in _BACK_AUTHORITY_TOOL_NAMES:
-            authority_attempted = True
+            authority_attempted = authority_attempted or _authority_payload_succeeded(
+                _json_object(message.content)
+            )
     return candidates_seen, authority_attempted
 
 
@@ -384,6 +397,13 @@ class _CollectionMutationPlan:
     output_field: str
     id_param: str
     record_id_field: str = "id"
+
+
+@dataclass(frozen=True)
+class _CollectionReadPlan:
+    adapter: str
+    read_capability: str
+    output_field: str
 
 
 @dataclass(frozen=True)
@@ -534,6 +554,39 @@ def _build_collection_mutation_plans(
     return plans
 
 
+def _build_collection_read_plans(
+    discovery_payloads: list[dict[str, Any]],
+) -> list[_CollectionReadPlan]:
+    capabilities = _discovered_capabilities(discovery_payloads)
+    reads_by_adapter: dict[str, dict[str, Any]] = {}
+
+    for capability in capabilities:
+        adapter = _adapter_key(capability)
+        if not adapter:
+            continue
+        kinds = _capability_kinds(capability)
+        output_fields = _array_output_fields(capability)
+        if "read" not in kinds or _required_input_names(capability) or not output_fields:
+            continue
+        current = reads_by_adapter.get(adapter)
+        if current is None or _score(capability) > _score(current):
+            reads_by_adapter[adapter] = capability
+
+    plans: list[_CollectionReadPlan] = []
+    for adapter, read in reads_by_adapter.items():
+        output_fields = _array_output_fields(read)
+        if not output_fields:
+            continue
+        plans.append(
+            _CollectionReadPlan(
+                adapter=adapter,
+                read_capability=str(read.get("name") or ""),
+                output_field=output_fields[0],
+            )
+        )
+    return plans
+
+
 def _records_from_list_result(result: ToolResult, output_field: str) -> list[dict[str, Any]]:
     if not result.is_ok():
         return []
@@ -567,6 +620,83 @@ def _collection_plan_answer(plan_results: list[dict[str, Any]]) -> str:
     if failed:
         return f"Processed {succeeded} of {total} {label}; {failed} failed."
     return f"Processed {succeeded} {label}."
+
+
+def _collection_read_answer(plan_results: list[dict[str, Any]]) -> str:
+    total = sum(int(result.get("count", 0)) for result in plan_results)
+    failed = sum(1 for result in plan_results if result.get("status") != "success")
+    labels = sorted({str(result.get("adapter") or "records") for result in plan_results})
+    label = ", ".join(labels) if labels else "records"
+    if failed:
+        return f"Fetched live {label}; {failed} read request(s) failed."
+    if total == 0:
+        return f"No matching live {label} were found."
+    return f"Fetched {total} live {label}."
+
+
+async def _execute_collection_read_plan(
+    *,
+    discovery_payloads: list[dict[str, Any]],
+    tool_dispatcher: ToolDispatcher,
+    messages: list[ModelMessage],
+    trace_id: str,
+) -> _ContractPlanExecution | None:
+    plans = _build_collection_read_plans(discovery_payloads)
+    if not plans:
+        return None
+
+    tool_calls = 0
+    plan_results: list[dict[str, Any]] = []
+    for plan in plans[:4]:
+        read_call = ToolCallResult(
+            id=f"kernel-plan-read-{uuid.uuid4().hex[:8]}",
+            name="invoke_capability",
+            arguments={"capability_name": plan.read_capability, "params": {}},
+        )
+        read_result = await tool_dispatcher.dispatch(read_call)
+        tool_calls += 1
+        messages.append(_tool_result_to_msg(read_call, _result_to_dict(read_result)))
+        records = _records_from_list_result(read_result, plan.output_field)
+        data = read_result.data if isinstance(read_result.data, dict) else {}
+        plan_results.append(
+            {
+                "adapter": plan.adapter.replace("_", " "),
+                "read_capability": plan.read_capability,
+                "output_field": plan.output_field,
+                "status": "success" if read_result.is_ok() else "error",
+                "count": len(records),
+                "result": data.get("result") if isinstance(data.get("result"), dict) else data,
+                "error": read_result.error or "",
+            }
+        )
+
+    submit_args = {
+        "result_type": "complete",
+        "final_answer": _collection_read_answer(plan_results),
+        "results": plan_results,
+        "artifacts_created": [],
+    }
+    submit_call = ToolCallResult(
+        id=f"kernel-plan-submit-{uuid.uuid4().hex[:8]}",
+        name="submit_result",
+        arguments=submit_args,
+    )
+    submit_result = await tool_dispatcher.dispatch(submit_call)
+    tool_calls += 1
+    messages.append(_tool_result_to_msg(submit_call, _result_to_dict(submit_result)))
+    if submit_result.is_error():
+        logger.warning(
+            "react_loop: contract read plan submit failed error=%s trace=%s",
+            submit_result.error,
+            trace_id[:8] if trace_id else "",
+        )
+        return None
+    logger.info(
+        "react_loop: contract read plan executed plans=%d trace=%s",
+        len(plan_results),
+        trace_id[:8] if trace_id else "",
+    )
+    return _ContractPlanExecution(submit_args=submit_args, tool_calls=tool_calls)
 
 
 async def _execute_collection_mutation_plan(
@@ -790,6 +920,8 @@ async def react_loop(
     _completed_tool_arg_keys = set(completed_tool_arg_keys or set())
     _retryable_error_counts: dict[str, int] = {}
     _repeated_tool_counts: dict[str, int] = {}
+    _tool_name_counts: dict[str, int] = {}  # name-only spin guard (Front)
+    _back_capability_spin_nudge_sent = False
     _empty_response_count = 0
     _invalid_schema_count = 0
     effective_max_iterations = max_iterations
@@ -849,11 +981,33 @@ async def react_loop(
             "not allowed",
             "budget exhausted",
             "invalid arguments",
+            "capability_binding_",
+            "batch_invoke_all_failed",
             "side-effect tools blocked",
             "submit_result(complete) rejected",
             "needs_human_without_authority_attempt",
         )
         return bool(error) and not any(marker in error for marker in terminal)
+
+    def _capability_binding_repair_message(result: ToolResult) -> str:
+        data = result.data if isinstance(result.data, dict) else {}
+        candidates = data.get("candidates") or []
+        names = [
+            str(candidate.get("name") or "")
+            for candidate in candidates
+            if isinstance(candidate, dict) and candidate.get("name")
+        ]
+        recovery = data.get("recovery") if isinstance(data.get("recovery"), dict) else {}
+        rejected = str(recovery.get("rejected_name") or "") if recovery else ""
+        rejected_text = f" Rejected name: {rejected}." if rejected else ""
+        candidate_text = ", ".join(names[:8]) if names else "none returned"
+        return (
+            "The last capability invocation failed during registry binding."
+            f"{rejected_text} Do not retry the same capability name with the "
+            "same parameters. Use an exact capability name from the registry "
+            f"candidates if one fits: {candidate_text}. If no candidate fits, "
+            "call submit_result with result_type='needs_human'."
+        )
 
     def _control_message(event: BackControlEvent) -> ModelMessage:
         payload = event.to_dict()
@@ -875,8 +1029,9 @@ async def react_loop(
                     "Discovery returned viable capability candidates, but you have not "
                     "invoked an authority capability yet. Inspect the discovered schemas "
                     "and call invoke_capability or batch_invoke_capabilities with the "
-                    "exact registry-owned name. Ask the user only if every candidate is "
-                    "unsuitable or required inputs are missing."
+                    "exact registry-owned name. Do NOT call discover_capabilities or "
+                    "recall_memory again for the same task. Ask the user only if every "
+                    "candidate is unsuitable or required inputs are missing."
                 )
             return (
                 "Discovery returned no viable capability candidates for this live or "
@@ -1471,48 +1626,6 @@ async def react_loop(
 
             # Back termination (L2): submit_result
             if tc.name == "submit_result":
-                if (
-                    actor == "back"
-                    and tc.arguments.get("result_type") == "needs_human"
-                    and _back_capability_candidates_seen
-                    and not _back_authority_tool_attempted
-                ):
-                    plan_execution = await _execute_collection_mutation_plan(
-                        discovery_payloads=_back_discovery_payloads,
-                        tool_dispatcher=tool_dispatcher,
-                        messages=messages,
-                        trace_id=trace_id,
-                    )
-                    if plan_execution is not None:
-                        _sequential_count += plan_execution.tool_calls
-                        _iter_dur = int((time.monotonic() - _iter_start) * 1000)
-                        _iteration_durations.append(_iter_dur)
-                        return _make_result("complete", data=plan_execution.submit_args)
-                    logger.warning(
-                        "react_loop: rejected model-authored needs_human after "
-                        "capability discovery without authority attempt. trace=%s",
-                        trace_id[:8] if trace_id else "",
-                    )
-                    messages.append(
-                        ModelMessage(
-                            role="tool",
-                            content=json.dumps(
-                                {
-                                    "error": "needs_human_without_authority_attempt",
-                                    "hint": (
-                                        "Discovery returned capability candidates. Inspect "
-                                        "their schemas and invoke the appropriate read/write "
-                                        "capabilities. Ask the user only when a tool returns "
-                                        "a structured recovery contract or discovery returns "
-                                        "no viable candidates."
-                                    ),
-                                }
-                            ),
-                            tool_call_id=getattr(tc, "id", None),
-                            name="submit_result",
-                        )
-                    )
-                    break
                 result = await tool_dispatcher.dispatch(tc)
                 if result.status == "error":
                     # Schema validation or execution failed -- feed
@@ -1593,6 +1706,8 @@ async def react_loop(
 
         for idx, (tc, result) in enumerate(paired_results):
             tool_key = _tool_key(tc)
+            _tool_name = getattr(tc, "name", "") or ""
+            _tool_name_counts[_tool_name] = _tool_name_counts.get(_tool_name, 0) + 1
             _repeated_tool_counts[tool_key] = _repeated_tool_counts.get(tool_key, 0) + 1
             if _repeated_tool_counts[tool_key] >= 3:
                 _record_loop_event(
@@ -1647,7 +1762,7 @@ async def react_loop(
                     if (isinstance(count, int) and count > 0) or bool(capabilities):
                         _back_capability_candidates_seen = True
                         _back_discovery_payloads.append(data)
-                elif tool_name in _BACK_AUTHORITY_TOOL_NAMES:
+                elif tool_name in _BACK_AUTHORITY_TOOL_NAMES and result.is_ok():
                     _back_authority_tool_attempted = True
 
             # Collect dispatch_task calls (L3)
@@ -1675,6 +1790,14 @@ async def react_loop(
 
             # Append tool result as observation (ReAct pattern)
             messages.append(_tool_result_to_msg(tc, _result_to_dict(result)))
+            if (
+                actor == "back"
+                and result.is_error()
+                and str(result.error or "").startswith("capability_binding_")
+            ):
+                messages.append(
+                    ModelMessage(role="user", content=_capability_binding_repair_message(result))
+                )
 
         if actor == "front" and not dispatched_tasks:
             if context_read_gap_requires_dispatch(paired_results):
@@ -1683,6 +1806,76 @@ async def react_loop(
                     _iter_dur = int((time.monotonic() - _iter_start) * 1000)
                     _iteration_durations.append(_iter_dur)
                     return policy_result
+
+            # Front spin guard: inject a synthesis nudge when recall_memory
+            # has been called 3+ times across iterations without the model
+            # producing a response.  The hash-based _repeated_tool_counts
+            # guard doesn't fire because each query has different text.
+            _spin_recall = _tool_name_counts.get("recall_memory", 0)
+            if _spin_recall >= 3 and iteration < effective_max_iterations - 2:
+                messages.append(
+                    ModelMessage(
+                        role="user",
+                        content=(
+                            "You have queried memory multiple times and have enough context. "
+                            "Now respond directly to the user using the information above. "
+                            "If the task needs a background action, call dispatch_task once. "
+                            "Do NOT call recall_memory again."
+                        ),
+                    )
+                )
+                logger.info(
+                    "react_loop: front spin guard — recall_memory called %d times "
+                    "without response, injecting synthesis nudge iter=%d trace=%s",
+                    _spin_recall,
+                    iteration,
+                    trace_id[:8] if trace_id else "",
+                )
+                _record_loop_event(
+                    "front_spin_nudge",
+                    iteration,
+                    {"recall_count": _spin_recall},
+                )
+
+        if (
+            actor == "back"
+            and _back_capability_candidates_seen
+            and not _back_authority_tool_attempted
+            and not _back_capability_spin_nudge_sent
+        ):
+            _back_spin_count = (
+                _tool_name_counts.get("discover_capabilities", 0)
+                + _tool_name_counts.get("recall_memory", 0)
+                + _tool_name_counts.get("summarize_context", 0)
+            )
+            if _back_spin_count >= 2 and iteration < effective_max_iterations - 1:
+                messages.append(
+                    ModelMessage(
+                        role="user",
+                        content=(
+                            "You have already discovered viable capability candidates and "
+                            "checked enough context. Do NOT call discover_capabilities, "
+                            "recall_memory, or summarize_context again for this same task. "
+                            "Use invoke_capability or batch_invoke_capabilities with an exact "
+                            "registry-owned capability name and schema-valid params. If a "
+                            "required input is missing, call submit_result with "
+                            "result_type='needs_human' and ask only for that missing detail."
+                        ),
+                    )
+                )
+                _back_capability_spin_nudge_sent = True
+                logger.info(
+                    "react_loop: back capability spin guard — observed %d discovery/context "
+                    "tools without authority invocation, injecting nudge iter=%d trace=%s",
+                    _back_spin_count,
+                    iteration,
+                    trace_id[:8] if trace_id else "",
+                )
+                _record_loop_event(
+                    "back_capability_spin_nudge",
+                    iteration,
+                    {"tool_count": _back_spin_count},
+                )
 
         if actor == "back":
             for _, result in paired_results:

@@ -106,14 +106,12 @@ async def test_m1_l6_set_self_model_after_start_is_guarded(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    strict=True,
-    reason="ISSUE-C02: ExperienceLayer does not wire EpisodicCompressor yet",
-)
 async def test_m1_l7_experience_layer_compresses_after_sixteen_turns(
     tmp_path: Path,
 ) -> None:
-    """M1-L7: desired OPP-6 behavior after a 16-turn live session history."""
+    """M1-L7: OPP-6 EpisodicCompressor wired -- a 16-turn live session must
+    trigger at least one compression. M6.E1 closed ISSUE-C02.
+    """
     baseline_tasks = _active_task_snapshot()
     svc = KernelService(config=_recipe_a(tmp_path))
 

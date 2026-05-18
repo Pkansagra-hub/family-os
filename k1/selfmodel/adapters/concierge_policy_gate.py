@@ -90,6 +90,13 @@ _WRAPPER_INNER_KEYS: tuple[str, ...] = (
     "workflow_name",
 )
 
+_RISK_ORDER: dict[RiskClass, int] = {
+    RiskClass.LOW: 0,
+    RiskClass.MEDIUM: 1,
+    RiskClass.HIGH: 2,
+    RiskClass.SAFETY_SENSITIVE: 3,
+}
+
 
 def _resolve_effective_tool(tool_call: ToolCallResult) -> tuple[str, bool]:
     """Return ``(effective_name, was_unwrapped)``.
@@ -110,6 +117,35 @@ def _resolve_effective_tool(tool_call: ToolCallResult) -> tuple[str, bool]:
         if isinstance(candidate, str) and candidate:
             return candidate, True
     return name, False
+
+
+def _resolve_effective_tools(tool_call: ToolCallResult) -> tuple[tuple[str, ...], bool]:
+    name = tool_call.name
+    if name not in _WRAPPER_TOOLS:
+        return (name,), False
+    args = tool_call.arguments or {}
+    if not isinstance(args, dict):
+        return (name,), False
+    if name == "batch_invoke_capabilities":
+        invocations = args.get("invocations")
+        if isinstance(invocations, list):
+            names: list[str] = []
+            for invocation in invocations:
+                if not isinstance(invocation, dict):
+                    continue
+                candidate = invocation.get("capability_name")
+                if isinstance(candidate, str) and candidate:
+                    names.append(candidate)
+            if names:
+                return tuple(dict.fromkeys(names)), True
+    effective, unwrapped = _resolve_effective_tool(tool_call)
+    return (effective,), unwrapped
+
+
+def _max_risk(risks: list[RiskClass]) -> RiskClass:
+    if not risks:
+        return RiskClass.SAFETY_SENSITIVE
+    return max(risks, key=lambda risk: _RISK_ORDER.get(risk, 99))
 
 
 def _now_ms() -> int:
@@ -227,10 +263,9 @@ class ConciergePolicyGate:
                 "frame_provider must return a SituationFrame, " f"got {type(frame).__name__}"
             )
 
-        risk = self._lookup_risk(tool_call.name)
-        effective_name, unwrapped = _resolve_effective_tool(tool_call)
-        if unwrapped:
-            risk = self._lookup_risk(effective_name)
+        effective_names, unwrapped = _resolve_effective_tools(tool_call)
+        risks = [self._lookup_risk(name) for name in effective_names]
+        risk = _max_risk(risks)
 
         # M13.E1.I1 -- Front whitelist enforcement. When the wrapper was
         # ``invoke_capability`` AND the actor is the Front voice, only
@@ -242,40 +277,62 @@ class ConciergePolicyGate:
                 FRONT_READ_CAPABILITY_WHITELIST,
             )
 
-            if effective_name not in FRONT_READ_CAPABILITY_WHITELIST:
+            denied = [
+                name for name in effective_names if name not in FRONT_READ_CAPABILITY_WHITELIST
+            ]
+            if denied:
                 logger.warning(
                     "policy_gate front_invoke_denied actor_id=%s capability=%s",
                     self._actor_id,
-                    effective_name,
+                    denied[0],
                 )
                 return ToolResult(
                     tool_name=tool_call.name,
                     status="error",
                     error=(
-                        f"capability '{effective_name}' is not allowed for the "
+                        f"capability '{denied[0]}' is not allowed for the "
                         f"Front actor; route via dispatch_task instead"
                     ),
                     data={
                         "policy_decision": "DENY",
                         "reason": "front_capability_not_whitelisted",
-                        "capability_name": effective_name,
+                        "capability_name": denied[0],
                     },
                 )
 
+        freshness_state = _freshness_from_frame(frame)
         request = PolicyRequest(
             actor_id=self._actor_id,
-            tool_name=effective_name,
+            tool_name=effective_names[0],
             risk_class=risk,
             arguments=dict(tool_call.arguments or {}),
             trace_id=self._trace_id_fn(),
         )
-        freshness_state = _freshness_from_frame(frame)
-        verdict = self._evaluator.evaluate(
-            request,
-            frame,
-            freshness_state=freshness_state,
-            current_tier=int(self._current_tier_fn()),
-        )
+        verdict = None
+        for effective_name, effective_risk in zip(effective_names, risks):
+            current_request = PolicyRequest(
+                actor_id=self._actor_id,
+                tool_name=effective_name,
+                risk_class=effective_risk,
+                arguments=dict(tool_call.arguments or {}),
+                trace_id=request.trace_id,
+            )
+            current_verdict = self._evaluator.evaluate(
+                current_request,
+                frame,
+                freshness_state=freshness_state,
+                current_tier=int(self._current_tier_fn()),
+            )
+            if current_verdict.decision not in (
+                PolicyDecision.ALLOW,
+                PolicyDecision.ALLOW_WITH_CAUTION,
+            ):
+                request = current_request
+                risk = effective_risk
+                verdict = current_verdict
+                break
+            verdict = current_verdict
+        assert verdict is not None
 
         # ALLOW (matrix base or emergency override) → passthrough.
         if verdict.decision == PolicyDecision.ALLOW:
@@ -355,7 +412,8 @@ class ConciergePolicyGate:
             caller_key=f"selfmodel:gate:{self._actor_id}",
             trace_id=request.trace_id or "",
             summary=(
-                f"Approve tool '{tool_call.name}' (risk={risk.value}) "
+                f"Approve tool '{request.tool_name}' via '{tool_call.name}' "
+                f"(risk={risk.value}) "
                 f"for actor {self._actor_id} in situation "
                 f"'{frame.situation_kind}'"
             ),
@@ -363,7 +421,7 @@ class ConciergePolicyGate:
                 {"id": "approve", "label": "Approve"},
                 {"id": "reject", "label": "Reject"},
             ],
-            side_effects=[tool_call.name],
+            side_effects=[request.tool_name],
             safety_assessment=verdict.reason.value,
             timeout_ms=self._approval_timeout_ms,
         )

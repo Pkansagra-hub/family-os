@@ -38,6 +38,7 @@ _DEFAULT_PREFIXES: tuple[str, ...] = (
     "k1.capsule.",
     "k1.concierge.",
     "k1.constitution.",
+    "k1.conversation.",  # weave / decision events (k1.conversation.weave.decided.v1 ...)
     "k1.dag.",
     "k1.dead_letter.",
     "k1.delta.",

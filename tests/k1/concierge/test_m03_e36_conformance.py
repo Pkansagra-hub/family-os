@@ -428,6 +428,7 @@ class TestBackTopicRouting:
 
         env = _make_envelope(topic=TOPIC_TASK_DISPATCH, payload={"task_id": "t1"})
         deps = _make_mock_deps()
+        hil_port = object()
 
         with (
             patch("k1.concierge.actors.back.back_handler", new_callable=AsyncMock) as mock_back,
@@ -436,9 +437,10 @@ class TestBackTopicRouting:
             ) as mock_resume,
         ):
             mock_back.return_value = ReactResult(status="complete")
-            await route_back_envelope(envelope=env, **deps)
+            await route_back_envelope(envelope=env, hil_port=hil_port, **deps)
 
             mock_back.assert_called_once()
+            assert mock_back.call_args.kwargs["hil_port"] is hil_port
             mock_resume.assert_not_called()
 
     @pytest.mark.asyncio

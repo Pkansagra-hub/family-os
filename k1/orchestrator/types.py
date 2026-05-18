@@ -636,16 +636,19 @@ class StepResult:
 
 @dataclass(frozen=True)
 class PlanStep:
-    """Orchestrator's 14-field PlanStep for DAG execution.
+    """Orchestrator's 15-field PlanStep for DAG execution.
 
     Re-defined (not subclassed) from Fabric's 6-field PlanStep to avoid
     tight coupling. Map from Fabric PlanStep via from_fabric() classmethod.
 
     Fields 1-6: match Fabric PlanStep (id, capability, params, deps,
                 prompt_template, tools_granted).
-    Fields 7-14: Orchestrator extensions for DAG execution (output_schema,
+    Fields 7-15: Orchestrator extensions for DAG execution (output_schema,
                  condition, is_optional, has_side_effects, compensation,
-                 timeout_ms, required_context, safety_band_min).
+                 timeout_ms, required_context, safety_band_min,
+                 activity_profile).
+
+    Additional planner metadata: intent_tags.
 
     V1 scope: token_budget field REMOVED (no upstream data).
 
@@ -673,6 +676,7 @@ class PlanStep:
     timeout_ms: Optional[int] = None
     required_context: Optional[List[str]] = None
     safety_band_min: Optional[str] = None
+    activity_profile: Optional[str] = None
     # M5.3.3: intent tags inherited from the planner sketch step or copied
     # from the resolved RegistryEntry. Used by ConstraintResolver to filter
     # alternative capabilities and by ExecutionMonitor heuristics.
@@ -719,6 +723,8 @@ class PlanStep:
             result["required_context"] = list(self.required_context)
         if self.safety_band_min is not None:
             result["safety_band_min"] = self.safety_band_min
+        if self.activity_profile is not None:
+            result["activity_profile"] = self.activity_profile
         if self.intent_tags:
             result["intent_tags"] = list(self.intent_tags)
         return result
@@ -752,6 +758,7 @@ class PlanStep:
             timeout_ms=data.get("timeout_ms"),
             required_context=data.get("required_context"),
             safety_band_min=data.get("safety_band_min"),
+            activity_profile=data.get("activity_profile"),
             intent_tags=list(data.get("intent_tags", [])),
         )
 
@@ -769,7 +776,7 @@ class PlanStep:
             **extensions: Orchestrator-specific fields (output_schema,
                           condition, is_optional, has_side_effects,
                           compensation, timeout_ms, required_context,
-                          safety_band_min).
+                          safety_band_min, activity_profile).
         """
         return cls(
             id=fabric_step.id,
@@ -786,6 +793,7 @@ class PlanStep:
             timeout_ms=extensions.get("timeout_ms"),
             required_context=extensions.get("required_context"),
             safety_band_min=extensions.get("safety_band_min"),
+            activity_profile=extensions.get("activity_profile"),
             intent_tags=list(extensions.get("intent_tags", [])),
         )
 

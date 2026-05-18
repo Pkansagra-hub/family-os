@@ -32,7 +32,11 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Protocol
 
-from k1.fabric.core.context_budget import BudgetResult, ContextBudget, ContextBudgetConfig
+from k1.fabric.core.context_budget import (
+    BudgetResult,
+    ContextBudget,
+    ContextBudgetConfig,
+)
 from k1.fabric.metrics import get_default_metrics
 from k1.fabric.types import CapabilityContract, ExecutionContext
 
@@ -69,18 +73,18 @@ class IPromptSystemPort(Protocol):
     Fabric only defines this port interface.
     """
 
-    def resolve(self, template_name: str) -> Optional[Dict[str, Any]]:
+    def resolve(self, template_name: str) -> Optional[Any]:
         """
         Resolve a prompt template by name.
 
         Returns:
-            Template dict with at least ``{"text": str}`` key, or None.
+            Prompt template object or raw template representation, or None.
         """
         ...  # pragma: no cover
 
     def compile(
         self,
-        template: Dict[str, Any],
+        template: Any,
         variables: Dict[str, Any],
     ) -> str:
         """
@@ -254,6 +258,7 @@ class ContextBuilder:
         trace_id: str = "",
         prompt_template_name: Optional[str] = None,
         prompt_variables: Optional[Dict[str, Any]] = None,
+        context_override: Optional[Dict[str, Any]] = None,
     ) -> ContextBuildResult:
         """
         Assemble an ``ExecutionContext`` for the given contract.
@@ -265,6 +270,8 @@ class ContextBuilder:
             trace_id: Tracing identifier from the originating request.
             prompt_template_name: Optional prompt template to resolve.
             prompt_variables: Variables for prompt compilation.
+            context_override: Optional non-authoritative prompt/profile
+                metadata to preserve under ``session_sections["context_override"]``.
 
         Returns:
             ContextBuildResult with the packaged ExecutionContext and
@@ -274,9 +281,20 @@ class ContextBuilder:
             ContextAssemblyError: If a fatal error prevents assembly.
         """
         t0 = time.perf_counter()
-        params = params or {}
+        params = dict(params or {})
         session_id = session_id or self._config.default_session_id
-        prompt_variables = prompt_variables or {}
+        override_section = self._build_context_override_section(
+            contract=contract,
+            prompt_template_name=prompt_template_name,
+            context_override=context_override,
+        )
+        selected_prompt_template = prompt_template_name or contract.prompt_template
+        prompt_variables = self._build_prompt_variables(
+            contract=contract,
+            params=params,
+            prompt_variables=prompt_variables,
+            context_override=override_section,
+        )
 
         # ----- Step 1: Read contract context requirements -----
         required_sections: List[str] = list(contract.required_context)
@@ -320,6 +338,9 @@ class ContextBuilder:
                 len(missing_required),
             )
 
+        if override_section:
+            session_data["context_override"] = override_section
+
         # ----- Step 3: Inject request params -----
         # params are passed through directly; no transformation needed.
 
@@ -327,20 +348,23 @@ class ContextBuilder:
         compiled_prompt: Optional[str] = None
         prompt_resolved = False
 
-        if prompt_template_name and self._prompt_system is not None:
+        if selected_prompt_template and self._prompt_system is not None:
             try:
-                template = self._prompt_system.resolve(prompt_template_name)
+                template = self._prompt_system.resolve(str(selected_prompt_template))
                 if template is not None:
                     compiled_prompt = self._prompt_system.compile(template, prompt_variables)
                     prompt_resolved = True
                 else:
-                    logger.warning("Prompt template '%s' not found", prompt_template_name)
+                    logger.warning("Prompt template '%s' not found", selected_prompt_template)
             except Exception:
                 logger.warning(
                     "Prompt resolution failed for '%s'",
-                    prompt_template_name,
+                    selected_prompt_template,
                     exc_info=True,
                 )
+        elif not selected_prompt_template and contract.tool_instructions:
+            compiled_prompt = contract.tool_instructions
+            prompt_resolved = True
 
         # ----- Step 5: Apply token budget -----
         budget_result = self._budget.apply(
@@ -373,6 +397,65 @@ class ContextBuilder:
             assembly_ms=assembly_ms,
             prompt_resolved=prompt_resolved,
         )
+
+    @staticmethod
+    def _build_context_override_section(
+        *,
+        contract: CapabilityContract,
+        prompt_template_name: Optional[str],
+        context_override: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        section: Dict[str, Any] = {}
+
+        if contract.activity_profile:
+            section["activity_profile"] = contract.activity_profile
+
+        if isinstance(context_override, dict):
+            section.update(
+                {key: value for key, value in context_override.items() if key != "prompt_template"}
+            )
+
+        selected_prompt_template = prompt_template_name or contract.prompt_template
+        if selected_prompt_template:
+            section["prompt_template"] = selected_prompt_template
+
+        if contract.tool_instructions and "tool_instructions" not in section:
+            section["tool_instructions"] = contract.tool_instructions
+
+        return section
+
+    @staticmethod
+    def _build_prompt_variables(
+        *,
+        contract: CapabilityContract,
+        params: Dict[str, Any],
+        prompt_variables: Optional[Dict[str, Any]],
+        context_override: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        variables = ContextBuilder._prompt_variable_defaults(contract.prompt_variables_schema)
+        variables.update(params)
+
+        if isinstance(prompt_variables, dict):
+            variables.update(prompt_variables)
+
+        override_vars = context_override.get("prompt_variables")
+        if isinstance(override_vars, dict):
+            variables.update(override_vars)
+
+        return variables
+
+    @staticmethod
+    def _prompt_variable_defaults(schema: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        if not isinstance(schema, dict):
+            return {}
+        properties = schema.get("properties")
+        if not isinstance(properties, dict):
+            return {}
+        defaults: Dict[str, Any] = {}
+        for name, spec in properties.items():
+            if isinstance(name, str) and isinstance(spec, dict) and "default" in spec:
+                defaults[name] = spec["default"]
+        return defaults
 
     def build_minimal(
         self,

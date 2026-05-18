@@ -486,6 +486,7 @@ class UiCoordinator:
                 "k1.tools.family.tasks.service:TasksToolService",
                 "k1.tools.family.reminders.service:RemindersToolService",
                 "k1.tools.family.chores.service:ChoresToolService",
+                "k1.tools.family.shopping.service:ShoppingToolService",
                 "k1.tools.family.family_settings.service:FamilySettingsService",
             ),
         )
@@ -708,12 +709,12 @@ class UiCoordinator:
     def _wire_web_timeline_hooks(self) -> None:
         """Subscribe FSM/affect/tool topics; forward to the WebSocketRenderer."""
         from k1.bus import Envelope
+        from k1.concierge.bus.topics import TOPIC_TOOL_STATE_CHANGED  # E15.10
         from k1.concierge.bus.topics import (
             TOPIC_AFFECT_UPDATE,
             TOPIC_STATE_UPDATED,
             TOPIC_TOOL_COMPLETED,
             TOPIC_TOOL_STARTED,
-            TOPIC_TOOL_STATE_CHANGED,  # E15.10
         )
         from k1.hil.topics import TOPIC_HIL_REQUEST as _TOPIC_HIL_REQUEST
 

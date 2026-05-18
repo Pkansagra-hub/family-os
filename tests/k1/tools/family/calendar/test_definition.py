@@ -24,6 +24,8 @@ def test_definition_basics() -> None:
     assert d.category == "coordination"
     assert d.entity_type == "calendar_event"
     assert d.version == "1.0.0"
+    assert d.activity_profile == "calendar.v1"
+    assert set(d.domain_tags) >= {"scheduling", "availability", "external_calendar"}
     assert d.summary  # non-empty
 
 
@@ -60,6 +62,13 @@ def test_calendar_write_actions_expose_generic_metadata() -> None:
         params = {param.name: param for param in spec.params}
         assert params["metadata"].type == "object"
         assert "_semantic" in params["metadata"].description
+
+
+def test_core_calendar_actions_reference_activity_prompt_template() -> None:
+    for name in _EXPECTED_ACTIONS:
+        spec = CALENDAR_DEFINITION.find_action(name)
+        assert spec is not None
+        assert spec.prompt_template == "calendar_activity_v1"
 
 
 def test_action_kinds_partition_correctly() -> None:

@@ -1032,6 +1032,7 @@ class PromptContract:
     version: str = ""
     domain: List[str] = field(default_factory=list)
     description: str = ""
+    activity_profile: str = ""
 
     # ---- Retrieval Matching ----
     intent_match: List[str] = field(default_factory=list)
@@ -1059,6 +1060,7 @@ class PromptContract:
             "version": self.version,
             "domain": list(self.domain),
             "description": self.description,
+            "activity_profile": self.activity_profile,
             "intent_match": list(self.intent_match),
             "variables": [v.to_dict() for v in self.variables],
             "template_file": self.template_file,
@@ -1078,6 +1080,7 @@ class PromptContract:
             version=data.get("version", ""),
             domain=data.get("domain", []),
             description=data.get("description", ""),
+            activity_profile=data.get("activity_profile", ""),
             intent_match=data.get("intent_match", []),
             variables=[VariableSpec.from_dict(v) for v in data.get("variables", [])],
             template_file=data.get("template_file", ""),

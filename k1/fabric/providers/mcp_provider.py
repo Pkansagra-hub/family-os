@@ -57,6 +57,8 @@ from k1.fabric.providers.base_provider import (
     BaseProvider,
     ProviderExecutionError,
     ProviderTimeoutError,
+    attach_provider_metadata,
+    build_provider_metadata,
 )
 from k1.fabric.types import (
     CapabilityRequest,
@@ -380,10 +382,14 @@ class MCPProvider(BaseProvider):
         tool_name = self._resolve_tool_name(request.capability_name)
 
         # --- Step 3: Build MCP request ---
+        arguments = attach_provider_metadata(
+            dict(request.params),
+            build_provider_metadata(request, context),
+        )
         mcp_request = MCPRequest(
             method="tools/call",
             tool_name=tool_name,
-            arguments=dict(request.params),
+            arguments=arguments,
             timeout_ms=self.config.max_execution_ms,
             trace_id=trace_id,
         )

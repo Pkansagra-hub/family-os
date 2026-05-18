@@ -574,6 +574,49 @@ class TestLivePolicyReload:
         # Now insurance is a sensitive keyword → band tightens to adults.
         assert policy.apply(entity, "parent") == "adults"
 
+    async def test_source_rule_overrides_cover_all_configurable_sources(self, svc):
+        service, _, _, policy = svc
+        ctx = _ctx(role="parent", band="AMBER")
+
+        from k1.tools.family.base import BaseEntity
+
+        entities = {
+            "native_default": BaseEntity(
+                id="n1", space_id="h1", actor="u1", source="native", visibility="family"
+            ),
+            "google_work": BaseEntity(
+                id="g1",
+                space_id="h1",
+                actor="u1",
+                source="google",
+                source_label="work",
+                visibility="family",
+            ),
+            "google_personal": BaseEntity(
+                id="g2",
+                space_id="h1",
+                actor="u1",
+                source="google",
+                source_label="personal",
+                visibility="family",
+            ),
+            "outlook_default": BaseEntity(
+                id="o1", space_id="h1", actor="u1", source="outlook", visibility="family"
+            ),
+            "classroom": BaseEntity(
+                id="c1", space_id="h1", actor="u1", source="classroom", visibility="family"
+            ),
+        }
+
+        await service.dispatch(
+            "update_visibility_policy",
+            {"rules": {key: "private" for key in entities}},
+            ctx,
+        )
+
+        for entity in entities.values():
+            assert policy.apply(entity, "parent") == "private"
+
     async def test_policy_sensitive_keywords_field_updated(self, svc):
         """policy.sensitive_keywords mirrors the active keyword set."""
         service, _, _, policy = svc

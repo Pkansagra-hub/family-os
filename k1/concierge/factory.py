@@ -322,6 +322,7 @@ class ConciergeFactory:
         ports: PortBundle,
         config: ConciergeConfig | None = None,
         hil_port: "IHILPort | None" = None,
+        ledger_store: Any | None = None,
     ) -> ConciergeRuntime:
         """Create a fully-wired ConciergeRuntime from explicit ports.
 
@@ -350,6 +351,7 @@ class ConciergeFactory:
             ports=ports,
             config=config,
             hil_port=hil_port,
+            ledger_store=ledger_store,
         )
 
     @classmethod
@@ -565,6 +567,7 @@ class ConciergeFactory:
         ports: PortBundle,
         config: ConciergeConfig,
         hil_port: "IHILPort | None" = None,
+        ledger_store: Any | None = None,
     ) -> ConciergeRuntime:
         """16-step wiring sequence -- returns un-started ConciergeRuntime."""
         from k1.concierge.fsm.controller import ConciergeController
@@ -579,15 +582,20 @@ class ConciergeFactory:
 
         # Step 3: Wire ledger (optional)
         ledger = None
-        ledger_store = None
         if config.enable_ledger:
             from k1.concierge.ledger.store import InMemoryLedgerStore
             from k1.concierge.ledger.writer import LedgerWriter
 
             session_id = config.session_id or f"k-{uuid.uuid4().hex[:8]}"
-            ledger_store = InMemoryLedgerStore()
+            # M5 G5: prefer a caller-supplied store so warm-starts can
+            # replay events written by a prior boot of the same session.
+            if ledger_store is None:
+                ledger_store = InMemoryLedgerStore()
             ledger = LedgerWriter(store=ledger_store, session_id=session_id)
             fsm.set_ledger(ledger)
+            # M5 G5: opt into ledger-driven recovery in set_session_state.
+            if config.enable_ledger_recovery:
+                fsm.enable_ledger_recovery_on_attach()
             logger.info("Ledger created for session=%s", session_id)
 
         # Step 4: Wire history sink from state_port
@@ -649,11 +657,40 @@ class ConciergeFactory:
         )
 
         # Step 9: ExperienceLayer (optional)
+        # M6.E1.I1 / E3.I1: per-session OPP singletons -- one EpisodicCompressor
+        # and one DynamicIdentityContext shared between the Front prompt path
+        # (OppPipeline -> on_pre_prompt_build) and the ExperienceLayer.tick
+        # boundary so prompt enrichment and experience telemetry observe the
+        # SAME compression state. Wiring is unconditional under
+        # ``config.enable_experience`` -- no separate kernel flag.
         experience = None
+        opp_pipeline_obj = None
         if config.enable_experience:
+            from k1.concierge.compression.episodic_compressor import (
+                CompressionConfig,
+                EpisodicCompressor,
+            )
             from k1.concierge.experience.layer import ExperienceLayer
+            from k1.concierge.identity.dynamic_identity import (
+                DynamicIdentityConfig,
+                DynamicIdentityContext,
+            )
+            from k1.concierge.protocols.opp_pipeline import (
+                OppPipeline,
+                OppPipelineConfig,
+            )
 
-            experience = ExperienceLayer()
+            episodic_compressor = EpisodicCompressor(CompressionConfig())
+            dynamic_identity = DynamicIdentityContext(DynamicIdentityConfig())
+            opp_pipeline_obj = OppPipeline(OppPipelineConfig())
+            opp_pipeline_obj.set_episodic_compressor(episodic_compressor)
+            opp_pipeline_obj.set_dynamic_identity(dynamic_identity)
+            fsm.set_opp_pipeline(opp_pipeline_obj)
+            experience = ExperienceLayer(episodic_compressor=episodic_compressor)
+            logger.info(
+                "ConciergeFactory: OPP pipeline wired (compressor + identity); "
+                "experience_layer shares compressor instance"
+            )
 
         # Step 10: Delta aggregator + applicator (optional)
         delta_aggregator = None

@@ -25,8 +25,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-# Issue 2.4.3: Default timeout for component teardown (seconds).
-_TEARDOWN_TIMEOUT: float = 10.0
 from bridge.bus_guard import BridgeAwareLocalBus
 
 # Issue 2.3.5: MemoryWriter factory + adapters (per-session)
@@ -87,9 +85,7 @@ from k1.memory_writer.health.circuit_breaker import CircuitBreaker as MWCircuitB
 from k1.model_hub.adapters.config_adapter import ConfigAdapter
 from k1.model_hub.adapters.credential_store_adapter import CredentialStoreAdapter
 from k1.model_hub.adapters.event_bus_adapter import EventBusAdapter as MHEventBusAdapter
-from k1.model_hub.adapters.health_report_adapter import (
-    HealthReportAdapter as MHHealthReportAdapter,
-)
+from k1.model_hub.adapters.health_report_adapter import HealthReportAdapter as MHHealthReportAdapter
 from k1.model_hub.adapters.prometheus_adapter import PrometheusAdapter
 from k1.model_hub.adapters.session_state_prod import SessionStateProdAdapter
 from k1.model_hub.factory import ModelHubFactory
@@ -111,19 +107,13 @@ from k1.orchestrator.config import OrchestratorConfig
 from k1.orchestrator.factory import OrchestratorFactory
 from k1.orchestrator.workflows.persistence import SQLiteWorkflowAdapter
 from k1.planner.adapters.bridge_adapter import BridgeAdapter as PlannerBridgeAdapter
-from k1.planner.adapters.delta_bus_adapter import (
-    DeltaBusAdapter as PlannerDeltaBusAdapter,
-)
-from k1.planner.adapters.event_bus_adapter import (
-    EventBusAdapter as PlannerEventBusAdapter,
-)
+from k1.planner.adapters.delta_bus_adapter import DeltaBusAdapter as PlannerDeltaBusAdapter
+from k1.planner.adapters.event_bus_adapter import EventBusAdapter as PlannerEventBusAdapter
 from k1.planner.adapters.fabric_registry_adapter import FabricRegistryAdapter
 from k1.planner.adapters.fabric_retrieval_adapter import FabricRetrievalAdapter
 from k1.planner.adapters.llm_gateway_adapter import LLMGatewayAdapter
 from k1.planner.adapters.mailbox_adapter import MailboxAdapter as PlannerMailboxAdapter
-from k1.planner.adapters.session_state_adapter import (
-    SessionStateReadAdapter as PlannerStateAdapter,
-)
+from k1.planner.adapters.session_state_adapter import SessionStateReadAdapter as PlannerStateAdapter
 from k1.planner.factory import PlannerFactory
 
 # M5.E3.I2 + I3: k1.selfmodel kernel wiring (S2.6 + P3.5).
@@ -141,6 +131,9 @@ from k1.sessionstate.adapters.sqlite_storage import SQLiteStorageAdapter
 from k1.sessionstate.adapters.standalone_lifecycle import StandaloneLifecycle
 from k1.sessionstate.async_bridge import AsyncSSMBridge
 from k1.sessionstate.factory import SessionStateFactory
+
+# Issue 2.4.3: Default timeout for component teardown (seconds).
+_TEARDOWN_TIMEOUT: float = 10.0
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +200,7 @@ class KernelService:
         self._router: Any | None = None  # IMailboxRouter
         self._model_hub: Any | None = None  # ModelHub
         self._shared_fabric: Any | None = None  # Fabric
+        self._prompt_system: Any | None = None  # PromptSystemProdAdapter
         self._bridge: Any | None = None  # IBridgeClient | None
         self._tool_sse_task: asyncio.Task[Any] | None = None
         self._orchestrator: Any | None = None  # OrchestratorService
@@ -342,6 +336,9 @@ class KernelService:
             "shared_fabric": (
                 type(self._shared_fabric).__name__ if self._shared_fabric is not None else None
             ),
+            "prompt_system": (
+                type(self._prompt_system).__name__ if self._prompt_system is not None else None
+            ),
             "bridge": type(self._bridge).__name__ if self._bridge is not None else None,
             "orchestrator": (
                 type(self._orchestrator).__name__ if self._orchestrator is not None else None
@@ -391,7 +388,7 @@ class KernelService:
         planner_mailbox = get_planner_mailbox() if callable(get_planner_mailbox) else None
         planner_port_mailbox = getattr(planner_port, "_mailbox", None)
 
-        tier1_ports: dict[str, str | None] = {
+        tier1_ports: dict[str, Any] = {
             "orchestrator.planner_port": (
                 type(planner_port).__name__ if planner_port is not None else None
             ),
@@ -400,6 +397,11 @@ class KernelService:
             ),
             "planner.mailbox": (
                 type(planner_mailbox).__name__ if planner_mailbox is not None else None
+            ),
+            "prompt_system.template_count": (
+                getattr(self._prompt_system, "template_count", None)
+                if self._prompt_system is not None
+                else None
             ),
         }
         port_identities: dict[str, bool | None] = {
@@ -1249,6 +1251,54 @@ class KernelService:
                 "PL-B1: agent.start() should run indefinitely."
             )
 
+    def _verify_activity_prompt_system(self, prompt_system: Any, *, scope: str) -> int:
+        """Log and optionally enforce activity prompt inventory visibility."""
+        raw_count = getattr(prompt_system, "template_count", 0)
+        try:
+            template_count = int(raw_count)
+        except (TypeError, ValueError):
+            template_count = 0
+
+        template_names: list[str] = []
+        list_names = getattr(prompt_system, "list_names", None)
+        if callable(list_names):
+            try:
+                template_names = [str(name) for name in list_names()]
+            except Exception:
+                logger.debug(
+                    "Activity profile prompt inventory name listing failed (scope=%s)",
+                    scope,
+                    exc_info=True,
+                )
+
+        enabled = bool(getattr(self._config, "enable_activity_profiles", True))
+        strict = bool(getattr(self._config, "enable_activity_profiles_strict", False))
+        if not enabled:
+            logger.info(
+                "Activity profiles disabled by config (scope=%s, templates=%d)",
+                scope,
+                template_count,
+            )
+            return template_count
+
+        if template_count <= 0:
+            message = (
+                "Activity profile prompt store is empty "
+                f"(scope={scope}, strict={strict}). Native family tools remain available."
+            )
+            if strict:
+                raise RuntimeError(message)
+            logger.warning(message)
+            return template_count
+
+        logger.info(
+            "Activity profile prompt store ready (scope=%s, templates=%d, names=%s)",
+            scope,
+            template_count,
+            template_names[:20],
+        )
+        return template_count
+
     def _verify_planner_orchestrator_crosswire(self) -> None:
         """Issue 2.1.9 (S6b): Verify Orchestrator↔Planner cross-wire.
 
@@ -1355,7 +1405,7 @@ class KernelService:
             }
             if self._config.model_mode == "hub":
                 self._model_hub, load_result = await ModelHubFactory.from_config(
-                    ProviderConfig.default(),
+                    ProviderConfig.from_env(),
                     ports=mh_ports,
                 )
                 logger.info(
@@ -1545,6 +1595,8 @@ class KernelService:
             delta_bus = DeltaBusProdAdapter(bus)
             model_gateway = ModelGatewayBridgeAdapter(hub=self._model_hub)
             prompt_system = PromptSystemProdAdapter(prompts_dir="k1/contracts/prompts")
+            self._verify_activity_prompt_system(prompt_system, scope="shared")
+            self._prompt_system = prompt_system
             bridge_client = self._bridge.get_client()
             bridge_adapter = BridgeConnectionAdapter(client=bridge_client)
 
@@ -1990,6 +2042,7 @@ class KernelService:
         self._router = None
         self._model_hub = None
         self._shared_fabric = None
+        self._prompt_system = None
         self._bridge = None
         self._tool_sse_task = None
         self._orchestrator = None
@@ -2156,7 +2209,13 @@ class KernelService:
             session_event_port = EventPortProdAdapter(session_bus)
             session_delta_bus = DeltaBusProdAdapter(session_bus)
             session_model_gw = ModelGatewayBridgeAdapter(hub=self._model_hub)
-            session_prompt_sys = PromptSystemProdAdapter(prompts_dir="k1/contracts/prompts")
+            session_prompt_sys = self._prompt_system or PromptSystemProdAdapter(
+                prompts_dir="k1/contracts/prompts"
+            )
+            self._verify_activity_prompt_system(
+                session_prompt_sys,
+                scope=f"session:{session_id}",
+            )
             session_bridge_client = self._bridge.get_client()
             session_bridge_adapter = BridgeConnectionAdapter(client=session_bridge_client)
 
@@ -2221,6 +2280,14 @@ class KernelService:
         if self._self_model_bundle is not None:
             try:
                 actor_id, device_meta = self._derive_session_actor(ssm, session_id, device_id)
+                risk_catalog = None
+                risk_registry = getattr(session_fabric, "registry", None) or _shared_registry
+                if risk_registry is not None:
+                    from k1.selfmodel.adapters.fabric_risk_catalog import (
+                        FabricRiskCatalog,
+                    )
+
+                    risk_catalog = FabricRiskCatalog(risk_registry, bus=session_bus)
                 session_self_model = build_self_model_handle(
                     self._self_model_bundle,
                     session_id=session_id,
@@ -2228,6 +2295,7 @@ class KernelService:
                     device_id=device_meta,
                     situation_kind=self._config.selfmodel_situation_kind,
                     hil_service=session_hil_service,
+                    risk_catalog=risk_catalog,
                 )
                 logger.debug(
                     "selfmodel P3.5 wired session=%s actor=%s device=%s",

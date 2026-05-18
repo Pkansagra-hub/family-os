@@ -1,0 +1,91 @@
+# k1/contracts/tools/unit_convert.yaml
+# WASM contract for deterministic unit conversion utilities.
+
+tool_contract:
+  name: "tool.execute.unit_convert"
+  version: "1.0.0"
+  domain:
+    - "UTILITY"
+    - "CONVERSION"
+    - "WASM"
+  description: >
+    Convert values between supported temperature, distance, weight, and volume
+    units in a WASM sandbox. Does not read or mutate family system-of-record data.
+  capabilities:
+    - "unit_conversion"
+    - "sandboxed_compute"
+  limitations:
+    - "no_state_mutation"
+    - "supported_units_only"
+    - "no_currency_conversion"
+
+  required_inputs:
+    - name: "category"
+      type: "STRING"
+      description: "Conversion category."
+      enum:
+        - "temperature"
+        - "distance"
+        - "weight"
+        - "volume"
+    - name: "from_unit"
+      type: "STRING"
+      description: "Source unit in the selected category."
+    - name: "to_unit"
+      type: "STRING"
+      description: "Target unit in the selected category."
+    - name: "value"
+      type: "NUMBER"
+      description: "Numeric value to convert."
+
+  output:
+    type: "object"
+    properties:
+      result:
+        type: "number"
+        description: "Converted numeric value."
+      from_unit:
+        type: "string"
+        description: "Normalized source unit."
+      to_unit:
+        type: "string"
+        description: "Normalized target unit."
+      category:
+        type: "string"
+        description: "Normalized conversion category."
+    required:
+      - "result"
+      - "from_unit"
+      - "to_unit"
+      - "category"
+
+  provider_type: "WASM"
+  provider_id: "unit_convert_wasm"
+  provider_endpoint: "wasm://sandbox/unit_convert"
+  prompt_template: "wasm_generic_activity_v1"
+  activity_profile: "wasm.generic.v1"
+  tool_instructions: >
+    Use only for deterministic conversions among supported units. It is not a
+    finance, medicine, dosage, or family-record authority.
+  prompt_variables_schema:
+    type: "object"
+    properties:
+      category:
+        type: "string"
+      from_unit:
+        type: "string"
+      to_unit:
+        type: "string"
+      value:
+        type: "number"
+  safety_band_min: "GREEN"
+  risk_class: "low"
+  cost_per_call: 0.0
+  avg_latency_ms: 5
+  max_latency_ms: 100
+  availability: "ONLINE"
+  tags:
+    - "utility"
+    - "conversion"
+    - "wasm"
+    - "read_only"

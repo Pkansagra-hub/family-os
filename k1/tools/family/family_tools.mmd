@@ -1,0 +1,28 @@
+---
+config:
+  layout: elk
+---
+flowchart TB
+  subgraph FAMILY["K1 Family Tools"]
+    DEF["ToolDefinition<br/>adapter_id, DDL, actions[]<br/>activity_profile?, domain_tags[]<br/>M8: calendar/tasks/reminders"]
+    ACTION["ActionSpec<br/>params/result/roles/band<br/>prompt_template?, activity_profile?<br/>tool_instructions?, social_act?, side_effects[]<br/>M8: concrete prompt templates"]
+    SERVICE["BaseToolService<br/>role + band gates<br/>idempotency + dispatch<br/>audit emission"]
+    REGISTRY["ToolRegistry<br/>live services"]
+    BOOT["bootstrap_family_tools()<br/>store + registry + provider"]
+  end
+
+  subgraph FABRIC["Fabric"]
+    TRANSLATOR["manifest_translator.build_contract()"]
+    CONTRACT["CapabilityContract<br/>prompt/profile metadata<br/>provider_type=LOCAL<br/>provider_id=k1_native_tools"]
+    PROVIDER["NativeToolProvider"]
+  end
+
+  DEF --> ACTION
+  DEF --> SERVICE
+  ACTION --> SERVICE
+  SERVICE --> REGISTRY
+  BOOT --> REGISTRY
+  REGISTRY --> TRANSLATOR
+  TRANSLATOR --> CONTRACT
+  CONTRACT --> PROVIDER
+  PROVIDER --> SERVICE

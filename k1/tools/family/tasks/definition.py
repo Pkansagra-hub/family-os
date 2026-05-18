@@ -81,6 +81,8 @@ TASKS_DEFINITION = ToolDefinition(
     ),
     entity_type="task_item",
     views=["list", "board", "calendar"],
+    activity_profile="tasks.v1",
+    domain_tags=["task_management", "delegation", "deadline"],
     filters=[
         FieldSpec(
             name="assigned_to",
@@ -114,7 +116,8 @@ TASKS_DEFINITION = ToolDefinition(
             summary="Create a new one-shot family task.",
             label="New task",
             primary=True,
-            min_band="AMBER",
+            min_band="GREEN",
+            prompt_template="tasks_activity_v1",
             allowed_roles=["parent", "child", "guardian", "elder", "system"],
             idempotent=True,
             params=[
@@ -190,7 +193,8 @@ TASKS_DEFINITION = ToolDefinition(
             kind="write",
             summary="Patch fields of an existing task (title, due_at, priority, list_id, etc.).",
             label="Edit task",
-            min_band="AMBER",
+            min_band="GREEN",
+            prompt_template="tasks_activity_v1",
             allowed_roles=["parent", "child", "guardian", "elder", "system"],
             params=[
                 _TASK_ID_FIELD,
@@ -215,6 +219,10 @@ TASKS_DEFINITION = ToolDefinition(
                 use_when=[
                     "user wants to change the title, deadline, or priority of an existing task"
                 ],
+                examples=[
+                    "Move the permission slip deadline to Friday -> get_task(task_id) first, then update_task(task_id, due_at=friday)",
+                    "Make pickup Riley high priority -> update_task(task_id, priority='high')",
+                ],
             ),
             sse=SSESpec(emits=["family.tasks.update_task.write.v1"]),
         ),
@@ -226,7 +234,8 @@ TASKS_DEFINITION = ToolDefinition(
             kind="write",
             summary="Mark a task done and stamp completed_at.",
             label="Mark done",
-            min_band="AMBER",
+            min_band="GREEN",
+            prompt_template="tasks_activity_v1",
             allowed_roles=["parent", "child", "guardian", "elder", "system"],
             params=[_TASK_ID_FIELD],
             result=[
@@ -239,6 +248,10 @@ TASKS_DEFINITION = ToolDefinition(
                     "user says a task is done, finished, or completed",
                     "user marks their own or another member's task as complete",
                 ],
+                examples=[
+                    "Riley finished the permission slip task -> complete_task(task_id)",
+                    "Mark grocery pickup done -> get_task(task_id) first, then complete_task(task_id)",
+                ],
             ),
             sse=SSESpec(emits=["family.tasks.complete_task.write.v1"]),
         ),
@@ -250,7 +263,8 @@ TASKS_DEFINITION = ToolDefinition(
             kind="write",
             summary="Reopen a completed or cancelled task (reset to open).",
             label="Reopen task",
-            min_band="AMBER",
+            min_band="GREEN",
+            prompt_template="tasks_activity_v1",
             allowed_roles=["parent", "child", "guardian", "elder", "system"],
             params=[_TASK_ID_FIELD],
             result=[
@@ -264,6 +278,10 @@ TASKS_DEFINITION = ToolDefinition(
                     "a previously cancelled task needs to be revived",
                 ],
                 avoid_when=["task is already open"],
+                examples=[
+                    "Undo marking pickup as done -> reopen_task(task_id)",
+                    "Revive the cancelled weekend errands task -> reopen_task(task_id)",
+                ],
             ),
             sse=SSESpec(emits=["family.tasks.reopen_task.write.v1"]),
         ),
@@ -275,7 +293,8 @@ TASKS_DEFINITION = ToolDefinition(
             kind="write",
             summary="Change the assignee of a task (cross-member requires parent role).",
             label="Reassign",
-            min_band="AMBER",
+            min_band="GREEN",
+            prompt_template="tasks_activity_v1",
             allowed_roles=["parent", "child", "guardian", "elder", "system"],
             params=[
                 _TASK_ID_FIELD,
@@ -297,6 +316,10 @@ TASKS_DEFINITION = ToolDefinition(
                     "parent delegates a task originally created for themselves",
                 ],
                 avoid_when=["new_assignee is the same as the current assignee"],
+                examples=[
+                    "Give pickup duty to dad -> get_task(task_id) first, then reassign_task(task_id, new_assignee=dad_id)",
+                    "Move Riley's homework check to mom -> reassign_task(task_id, new_assignee=mom_id)",
+                ],
             ),
             sse=SSESpec(emits=["family.tasks.reassign_task.write.v1"]),
         ),
@@ -308,14 +331,21 @@ TASKS_DEFINITION = ToolDefinition(
             kind="delete",
             summary="Soft-delete a task.",
             label="Delete task",
-            min_band="AMBER",
+            min_band="GREEN",
+            prompt_template="tasks_activity_v1",
             allowed_roles=["parent", "child", "guardian", "elder", "system"],
             params=[_TASK_ID_FIELD],
             result=[
                 FieldSpec(name="success", type="boolean", required=True),
                 FieldSpec(name="task_id", type="string", required=True),
             ],
-            llm=LLMHints(use_when=["user wants to permanently remove a task"]),
+            llm=LLMHints(
+                use_when=["user wants to permanently remove a task"],
+                examples=[
+                    "Delete the duplicate pickup task -> get_task(task_id) to confirm, then delete_task(task_id)",
+                    "Remove the old permission slip task -> list_tasks(...) to find id, then delete_task(task_id)",
+                ],
+            ),
             sse=SSESpec(emits=["family.tasks.delete_task.delete.v1"]),
         ),
         # ------------------------------------------------------------------
@@ -327,6 +357,7 @@ TASKS_DEFINITION = ToolDefinition(
             summary="Return tasks in the family space, ACL-filtered for the caller.",
             label="List tasks",
             min_band="GREEN",
+            prompt_template="tasks_activity_v1",
             allowed_roles=["parent", "child", "guardian", "elder", "system", "guest"],
             params=[
                 FieldSpec(
@@ -371,6 +402,11 @@ TASKS_DEFINITION = ToolDefinition(
                     "user asks what tasks are assigned to a specific person",
                     "user asks what tasks are due soon",
                 ],
+                examples=[
+                    "What tasks does Riley have today? -> list_tasks(assigned_to=riley_id, due_before=end_of_day)",
+                    "Check for duplicate before creating -> list_tasks(assigned_to=member_id, status='open')",
+                    "Show high priority open tasks -> list_tasks(status='open', priority='high')",
+                ],
             ),
         ),
         # ------------------------------------------------------------------
@@ -382,13 +418,20 @@ TASKS_DEFINITION = ToolDefinition(
             summary="Fetch a single task by id (ACL-filtered).",
             label="Get task",
             min_band="GREEN",
+            prompt_template="tasks_activity_v1",
             allowed_roles=["parent", "child", "guardian", "elder", "system", "guest"],
             params=[_TASK_ID_FIELD],
             result=[
                 FieldSpec(name="success", type="boolean", required=True),
                 FieldSpec(name="task", type="object", required=True),
             ],
-            llm=LLMHints(use_when=["user asks about the details of a specific task"]),
+            llm=LLMHints(
+                use_when=["user asks about the details of a specific task"],
+                examples=[
+                    "Read current state before mutating -> get_task(task_id)",
+                    "Verify reassignment landed -> get_task(task_id) after write",
+                ],
+            ),
         ),
         # ------------------------------------------------------------------
         # 9. create_list
@@ -398,7 +441,8 @@ TASKS_DEFINITION = ToolDefinition(
             kind="write",
             summary="Create a named task list (bucket for grouping tasks).",
             label="New list",
-            min_band="AMBER",
+            min_band="GREEN",
+            prompt_template="tasks_activity_v1",
             allowed_roles=["parent", "child", "guardian", "elder", "system"],
             idempotent=True,
             params=[
@@ -422,6 +466,10 @@ TASKS_DEFINITION = ToolDefinition(
             ],
             llm=LLMHints(
                 use_when=["user wants to group tasks under a named category"],
+                examples=[
+                    "Create a Weekend errands list -> list_lists() first, then create_list(name='Weekend errands')",
+                    "Make a School list for assignments -> create_list(name='School')",
+                ],
             ),
             sse=SSESpec(emits=["family.tasks.create_list.write.v1"]),
         ),
@@ -434,6 +482,7 @@ TASKS_DEFINITION = ToolDefinition(
             summary="Return all task lists in the family space (ACL-filtered).",
             label="List task lists",
             min_band="GREEN",
+            prompt_template="tasks_activity_v1",
             allowed_roles=["parent", "child", "guardian", "elder", "system", "guest"],
             params=[],
             result=[
@@ -443,6 +492,10 @@ TASKS_DEFINITION = ToolDefinition(
             ],
             llm=LLMHints(
                 use_when=["planner needs a list_id before creating a task in a named list"],
+                examples=[
+                    "Find the Household list id -> list_lists()",
+                    "Check for duplicate list before creating -> list_lists()",
+                ],
             ),
         ),
     ],

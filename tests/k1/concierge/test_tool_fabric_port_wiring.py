@@ -203,7 +203,11 @@ class TestDiscoverWithFabricPort:
             name="tool.read.records.list_records",
             description="List records",
             domain=["system", "records"],
+            prompt_template="records_activity_v1",
+            activity_profile="records.v1",
+            tool_instructions="Read records before writing summaries.",
             capabilities=["read", "adapter:records"],
+            limitations=["do not use for writes"],
             output={
                 "type": "object",
                 "properties": {"records": {"type": "array"}},
@@ -221,6 +225,10 @@ class TestDiscoverWithFabricPort:
 
         cap = result.data["capabilities"][0]
         assert cap["domains"] == ["system", "records"]
+        assert cap["prompt_template"] == "records_activity_v1"
+        assert cap["activity_profile"] == "records.v1"
+        assert cap["tool_instructions"] == "Read records before writing summaries."
+        assert cap["limitations"] == ["do not use for writes"]
         assert cap["schema"]["capabilities"] == ["read", "adapter:records"]
         assert cap["schema"]["output"]["properties"]["records"]["type"] == "array"
 
@@ -321,9 +329,7 @@ class TestInvokeWithFabricPort:
         mock_port = AsyncMock(spec=IDispatchPort)
         mock_port.dispatch_direct.return_value = _success_result()
         ctx = _make_ctx(dispatch=mock_port, actor="back", safety_band="RED")
-        await execute_invoke_capability(
-            {"capability_name": "tool.execute.test", "params": {}}, ctx
-        )
+        await execute_invoke_capability({"capability_name": "tool.execute.test", "params": {}}, ctx)
         call_args = mock_port.dispatch_direct.call_args[0][0]
         assert call_args.safety_band == "RED"
 
@@ -456,6 +462,64 @@ class TestInvokeWithFabricPort:
         result = await execute_invoke_capability({"capability_name": "cap1", "params": {}}, ctx)
         assert "duration_ms" in result.data
 
+    @pytest.mark.asyncio
+    async def test_active_back_task_blocks_non_exact_candidate_before_fabric(self) -> None:
+        contract = CapabilityContract(
+            name="tool.execute.tasks.create_task",
+            description="Create a task",
+            domain=["tasks"],
+        )
+        mock_port = AsyncMock(spec=IDispatchPort)
+        mock_port.discover_capabilities.return_value = RetrievalResult(
+            capabilities=[ScoredCapability(contract=contract, score=1.0)],
+            total_matched=1,
+        )
+        mock_port.dispatch_direct.return_value = _success_result()
+        ctx = _make_ctx(dispatch=mock_port, actor="back", active_task_id="task-1")
+
+        result = await execute_invoke_capability(
+            {"capability_name": "tool.execute.tasks.add_task", "params": {}},
+            ctx,
+        )
+
+        assert result.status == "error"
+        assert result.error == "capability_binding_invalid_candidate"
+        assert result.data["status"] == "invalid_candidate"
+        assert result.data["candidates"][0]["name"] == "tool.execute.tasks.create_task"
+        mock_port.dispatch_direct.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_active_back_task_attaches_contract_prompt_profile_metadata(self) -> None:
+        contract = CapabilityContract(
+            name="tool.execute.tasks.create_task",
+            description="Create a task",
+            domain=["tasks"],
+            prompt_template="tasks_activity_v1",
+            activity_profile="tasks.v1",
+        )
+        mock_port = AsyncMock(spec=IDispatchPort)
+        mock_port.discover_capabilities.return_value = RetrievalResult(
+            capabilities=[ScoredCapability(contract=contract, score=1.0)],
+            total_matched=1,
+        )
+        mock_port.dispatch_direct.return_value = _success_result()
+        ctx = _make_ctx(dispatch=mock_port, actor="back", active_task_id="task-1")
+
+        await execute_invoke_capability(
+            {
+                "capability_name": "tool.execute.tasks.create_task",
+                "params": {"title": "Clean room"},
+            },
+            ctx,
+        )
+
+        request = mock_port.dispatch_direct.call_args[0][0]
+        assert request.prompt_template == "tasks_activity_v1"
+        assert request.context_override == {
+            "activity_profile": "tasks.v1",
+            "prompt_variables": {"title": "Clean room"},
+        }
+
 
 class TestBatchInvokeWithFabricPort:
     """execute_batch_invoke_capabilities preserves Back context on Fabric requests."""
@@ -483,6 +547,113 @@ class TestBatchInvokeWithFabricPort:
         assert isinstance(call_args, CapabilityRequest)
         assert call_args.session_id == "sess-123"
         assert call_args.safety_band == "AMBER"
+
+    @pytest.mark.asyncio
+    async def test_active_back_batch_attaches_contract_prompt_profile_metadata(self) -> None:
+        contract = CapabilityContract(
+            name="tool.execute.calendar.create_event",
+            description="Create calendar event",
+            domain=["calendar"],
+            prompt_template="calendar_activity_v1",
+            activity_profile="calendar.v1",
+        )
+        mock_port = AsyncMock(spec=IDispatchPort)
+        mock_port.discover_capabilities.return_value = RetrievalResult(
+            capabilities=[ScoredCapability(contract=contract, score=1.0)],
+            total_matched=1,
+        )
+        mock_port.dispatch_direct.return_value = _success_result()
+        ctx = _make_ctx(dispatch=mock_port, active_task_id="task-1")
+
+        result = await execute_batch_invoke_capabilities(
+            {
+                "invocations": [
+                    {
+                        "capability_name": "tool.execute.calendar.create_event",
+                        "params": {"title": "Dentist"},
+                    }
+                ]
+            },
+            ctx,
+        )
+
+        assert result.status == "ok"
+        request = mock_port.dispatch_direct.call_args[0][0]
+        assert request.prompt_template == "calendar_activity_v1"
+        assert request.context_override == {
+            "activity_profile": "calendar.v1",
+            "prompt_variables": {"title": "Dentist"},
+        }
+
+    @pytest.mark.asyncio
+    async def test_batch_all_failed_returns_outer_error(self) -> None:
+        mock_port = AsyncMock(spec=IDispatchPort)
+        mock_port.dispatch_direct.return_value = _failure_result(error_message="provider down")
+        ctx = _make_ctx(dispatch=mock_port)
+
+        result = await execute_batch_invoke_capabilities(
+            {
+                "invocations": [
+                    {
+                        "capability_name": "tool.execute.calendar.create_event",
+                        "params": {"title": "Dentist"},
+                    }
+                ]
+            },
+            ctx,
+        )
+
+        assert result.status == "error"
+        assert result.error == "batch_invoke_all_failed"
+        assert result.data["succeeded"] == 0
+        assert result.data["failed"] == 1
+        assert result.data["retryable"] is False
+
+    @pytest.mark.asyncio
+    async def test_active_back_exact_lookup_binds_registered_capability_without_semantic_match(
+        self,
+    ) -> None:
+        contract = CapabilityContract(
+            name="tool.read.shopping.list_lists",
+            description="Return shopping lists",
+            domain=["shopping"],
+            prompt_template="shopping_activity_v1",
+            activity_profile="shopping.v1",
+        )
+        mock_port = AsyncMock(spec=IDispatchPort)
+        mock_port.lookup_capability.return_value = contract
+        mock_port.discover_capabilities.return_value = RetrievalResult(
+            capabilities=[
+                ScoredCapability(
+                    contract=CapabilityContract(
+                        name="tool.execute.shopping.add_item",
+                        description="Add shopping item",
+                        domain=["shopping"],
+                    ),
+                    score=1.0,
+                )
+            ],
+            total_matched=1,
+        )
+        mock_port.dispatch_direct.return_value = _success_result()
+        ctx = _make_ctx(dispatch=mock_port, actor="back", active_task_id="task-1")
+
+        result = await execute_invoke_capability(
+            {
+                "capability_name": "tool.read.shopping.list_lists",
+                "params": {"category": "groceries"},
+            },
+            ctx,
+        )
+
+        assert result.status == "ok"
+        request = mock_port.dispatch_direct.call_args[0][0]
+        assert request.capability_name == "tool.read.shopping.list_lists"
+        assert request.prompt_template == "shopping_activity_v1"
+        assert request.context_override == {
+            "activity_profile": "shopping.v1",
+            "prompt_variables": {"category": "groceries"},
+        }
 
 
 # =====================================================================

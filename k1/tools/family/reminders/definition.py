@@ -80,6 +80,8 @@ REMINDERS_DEFINITION = ToolDefinition(
     ),
     entity_type="reminder",
     views=["list", "timeline"],
+    activity_profile="reminders.v1",
+    domain_tags=["alerting", "notification", "scheduler"],
     filters=[
         FieldSpec(
             name="recipient",
@@ -107,7 +109,8 @@ REMINDERS_DEFINITION = ToolDefinition(
             summary="Create a new reminder for self or another family member.",
             label="New reminder",
             primary=True,
-            min_band="AMBER",
+            min_band="GREEN",
+            prompt_template="reminders_activity_v1",
             allowed_roles=["parent", "child", "guardian", "elder", "system"],
             idempotent=True,
             params=[
@@ -186,7 +189,8 @@ REMINDERS_DEFINITION = ToolDefinition(
             kind="write",
             summary="Change the title, message, or trigger of a scheduled reminder.",
             label="Edit reminder",
-            min_band="AMBER",
+            min_band="GREEN",
+            prompt_template="reminders_activity_v1",
             allowed_roles=["parent", "child", "guardian", "elder", "system"],
             params=[
                 _REMINDER_ID_FIELD,
@@ -213,6 +217,10 @@ REMINDERS_DEFINITION = ToolDefinition(
                     "reminder has already fired or been dismissed — immutable at that point",
                     "user wants to delay a fired reminder → snooze_reminder",
                 ],
+                examples=[
+                    "Change the medication reminder to 9pm → get_reminder(reminder_id) first, then update_reminder(reminder_id, trigger={kind:'time', fire_at:'...T21:00:00Z'})",
+                    "Update the 'grab milk' reminder message → update_reminder(reminder_id, message='Also grab bread')",
+                ],
             ),
             sse=SSESpec(emits=["family.reminders.update_reminder.write.v1"]),
         ),
@@ -224,7 +232,8 @@ REMINDERS_DEFINITION = ToolDefinition(
             kind="write",
             summary="Re-arm a fired reminder to fire again at a new time.",
             label="Snooze",
-            min_band="AMBER",
+            min_band="GREEN",
+            prompt_template="reminders_activity_v1",
             allowed_roles=["parent", "child", "guardian", "elder", "system"],
             params=[
                 _REMINDER_ID_FIELD,
@@ -248,6 +257,10 @@ REMINDERS_DEFINITION = ToolDefinition(
                 avoid_when=[
                     "reminder has not fired yet — use update_reminder to shift the trigger instead",
                 ],
+                examples=[
+                    "Snooze the medication alert for 30 minutes → snooze_reminder(reminder_id, snooze_until=now+30min)",
+                    "Remind me again at 10pm → snooze_reminder(reminder_id, snooze_until='...T22:00:00Z')",
+                ],
             ),
             sse=SSESpec(emits=["family.reminders.snooze_reminder.write.v1"]),
         ),
@@ -259,7 +272,8 @@ REMINDERS_DEFINITION = ToolDefinition(
             kind="write",
             summary="Acknowledge a fired reminder — no further action needed.",
             label="Dismiss",
-            min_band="AMBER",
+            min_band="GREEN",
+            prompt_template="reminders_activity_v1",
             allowed_roles=["parent", "child", "guardian", "elder", "system"],
             params=[_REMINDER_ID_FIELD],
             result=[
@@ -270,6 +284,10 @@ REMINDERS_DEFINITION = ToolDefinition(
                 use_when=[
                     "recipient acknowledged the alert and no further action is needed",
                     "user says 'got it', 'ok', 'done' in response to a reminder notification",
+                ],
+                examples=[
+                    "Riley says 'got it' after the homework alert → dismiss_reminder(reminder_id)",
+                    "Mark the dentist reminder as done → dismiss_reminder(reminder_id)",
                 ],
             ),
             sse=SSESpec(emits=["family.reminders.dismiss_reminder.write.v1"]),
@@ -285,8 +303,13 @@ REMINDERS_DEFINITION = ToolDefinition(
                 "LLM must never call this action."
             ),
             label="Fire reminder",
-            min_band="AMBER",
+            min_band="GREEN",
             allowed_roles=["system"],
+            tool_instructions=(
+                "Scheduler-only reminder lifecycle action. LLM callers must not invoke "
+                "this action; user-facing reminder work should use create/update/snooze/"
+                "dismiss/delete contracts as permitted by schema and policy."
+            ),
             params=[_REMINDER_ID_FIELD],
             result=[
                 FieldSpec(name="success", type="boolean", required=True),
@@ -314,7 +337,8 @@ REMINDERS_DEFINITION = ToolDefinition(
             kind="delete",
             summary="Cancel and soft-delete a reminder before it fires.",
             label="Delete reminder",
-            min_band="AMBER",
+            min_band="GREEN",
+            prompt_template="reminders_activity_v1",
             allowed_roles=["parent", "child", "guardian", "elder", "system"],
             params=[_REMINDER_ID_FIELD],
             result=[
@@ -325,6 +349,10 @@ REMINDERS_DEFINITION = ToolDefinition(
                 use_when=["user wants to cancel a reminder that hasn't fired yet"],
                 avoid_when=[
                     "reminder already fired — use dismiss_reminder to acknowledge instead",
+                ],
+                examples=[
+                    "Cancel the 'take out trash' reminder → get_reminder(reminder_id) to confirm status=scheduled, then delete_reminder(reminder_id)",
+                    "Remove the pickup reminder → list_reminders(recipient, status=scheduled) to find id, then delete_reminder(reminder_id)",
                 ],
             ),
             sse=SSESpec(emits=["family.reminders.delete_reminder.delete.v1"]),
@@ -338,6 +366,7 @@ REMINDERS_DEFINITION = ToolDefinition(
             summary="Return reminders in the family space, ACL-filtered for the caller.",
             label="List reminders",
             min_band="GREEN",
+            prompt_template="reminders_activity_v1",
             allowed_roles=["parent", "child", "guardian", "elder", "system", "guest"],
             params=[
                 FieldSpec(
@@ -370,6 +399,11 @@ REMINDERS_DEFINITION = ToolDefinition(
                     "user asks 'what reminders do I have today?'",
                     "user asks what reminders are set for a specific family member",
                 ],
+                examples=[
+                    "Check for duplicate before creating → list_reminders(recipient=member_id, status='scheduled')",
+                    "What reminders does Riley have? → list_reminders(recipient=riley_id)",
+                    "Show all pending alerts → list_reminders(status='scheduled')",
+                ],
             ),
         ),
         # ------------------------------------------------------------------
@@ -381,6 +415,7 @@ REMINDERS_DEFINITION = ToolDefinition(
             summary="Fetch a single reminder by id (ACL-filtered).",
             label="Get reminder",
             min_band="GREEN",
+            prompt_template="reminders_activity_v1",
             allowed_roles=["parent", "child", "guardian", "elder", "system", "guest"],
             params=[_REMINDER_ID_FIELD],
             result=[
@@ -389,6 +424,10 @@ REMINDERS_DEFINITION = ToolDefinition(
             ],
             llm=LLMHints(
                 use_when=["user asks about the details of a specific reminder"],
+                examples=[
+                    "Read current state before mutating → get_reminder(reminder_id)",
+                    "Verify the snooze landed → get_reminder(reminder_id) after write",
+                ],
             ),
         ),
     ],

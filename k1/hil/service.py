@@ -69,6 +69,7 @@ class HumanInTheLoopService:
         "_response_subscription",
         "_lock",
         "_shutdown",
+        "_counters",
     )
 
     def __init__(
@@ -91,6 +92,12 @@ class HumanInTheLoopService:
         self._round_budget: dict[str, int] = {}
         self._lock = asyncio.Lock()
         self._shutdown = False
+        self._counters: dict[str, int] = {
+            "unknown_id": 0,
+            "legacy_bridge_ignored": 0,
+            "resolved": 0,
+            "timed_out": 0,
+        }
         self._response_subscription = event_port.subscribe(TOPIC_HIL_RESPONSE, self._on_response)
 
     # ------------------------------------------------------------------
@@ -343,6 +350,14 @@ class HumanInTheLoopService:
         # any in-flight request for the same caller_key (planner LC hook).
         self._round_budget.pop(caller_key, None)
 
+    def get_counters(self) -> dict[str, int]:
+        """Return a shallow copy of the in-process HIL boundary counters.
+
+        Keys: ``unknown_id``, ``legacy_bridge_ignored``, ``resolved``, ``timed_out``.
+        Monotonic per-process. Read by tests and observability; not published.
+        """
+        return dict(self._counters)
+
     async def shutdown(self) -> None:
         """Unsubscribe and cancel all pending futures."""
         if self._shutdown:
@@ -421,6 +436,7 @@ class HumanInTheLoopService:
 
         try:
             resp = await asyncio.wait_for(fut, timeout=timeout_ms / 1000.0)
+            self._counters["resolved"] = self._counters.get("resolved", 0) + 1
             self._ledger.write_resolved(env, resp)
             await self._maybe_audit(
                 {
@@ -433,6 +449,7 @@ class HumanInTheLoopService:
             )
             return resp
         except asyncio.TimeoutError:
+            self._counters["timed_out"] = self._counters.get("timed_out", 0) + 1
             timeout_resp = HILResponseEnvelope(
                 hil_request_id=hil_id,
                 kind=kind,
@@ -477,16 +494,28 @@ class HumanInTheLoopService:
             fut = self._pending.get(resp.hil_request_id)
         if fut is None:
             if bool(resp.payload.get("legacy_bridge")):
+                self._counters["legacy_bridge_ignored"] = (
+                    self._counters.get("legacy_bridge_ignored", 0) + 1
+                )
                 logger.debug(
                     "hil_response_legacy_bridge_ignored hil_request_id=%s kind=%s",
                     resp.hil_request_id,
                     resp.kind.value,
+                    extra={
+                        "hil_request_id": resp.hil_request_id,
+                        "kind": resp.kind.value,
+                    },
                 )
                 return
+            self._counters["unknown_id"] = self._counters.get("unknown_id", 0) + 1
             logger.warning(
                 "hil_response_unknown_id hil_request_id=%s kind=%s",
                 resp.hil_request_id,
                 resp.kind.value,
+                extra={
+                    "hil_request_id": resp.hil_request_id,
+                    "kind": resp.kind.value,
+                },
             )
             return
         if not fut.done():

@@ -134,6 +134,7 @@ class IContextBuilder(Protocol):
         trace_id: str = "",
         prompt_template_name: Optional[str] = None,
         prompt_variables: Optional[Dict[str, Any]] = None,
+        context_override: Optional[Dict[str, Any]] = None,
     ) -> Any: ...
 
 
@@ -957,6 +958,7 @@ class CapabilityFabric:
             session_id=request.session_id,
             trace_id=request.trace_id,
             prompt_template_name=request.prompt_template,
+            context_override=request.context_override,
         )
         return build_result.context
 

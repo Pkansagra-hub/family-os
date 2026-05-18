@@ -9,7 +9,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/styles.css?v=6">
+    <link rel="stylesheet" href="/static/styles.css?v=11">
     <style>
         html { background: #f9fafb; color: #111827; }
     </style>
@@ -265,18 +265,20 @@
             </div>
         </section>
 
-        <!-- ===== SHOPPING (placeholder — adapter not registered) ===== -->
+        <!-- ===== SHOPPING ===== -->
         <section id="view-shopping" class="view">
             <div class="view-container">
-                <header class="page-header">
-                    <h2>Shopping List</h2>
-                    <p>Family grocery list</p>
+                <header class="page-header page-header--with-action">
+                    <div>
+                        <h2>Shopping</h2>
+                        <p>Groceries, clothes, household needs, and parent-approved requests</p>
+                    </div>
+                    <button class="btn-primary" data-app-action="shopping:add_item">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                        Add Item
+                    </button>
                 </header>
-                <div class="card card--empty">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="empty-icon"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg>
-                    <h3>Shopping adapter not registered yet</h3>
-                    <p>The Shopping K1 adapter will appear here once it's wired into the kernel.</p>
-                </div>
+                <div id="view-shopping-body" class="view-body"></div>
             </div>
         </section>
 
@@ -305,9 +307,9 @@
                         <h2>Chores</h2>
                         <p>Recurring household responsibilities</p>
                     </div>
-                    <button class="btn-primary" data-app-action="chores:create_chore">
+                    <button class="btn-primary" data-app-action="chores:create_template">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                        Add Chore
+                        New Template
                     </button>
                 </header>
                 <div id="view-chores-body" class="view-body"></div>
@@ -319,7 +321,7 @@
             <div class="view-container">
                 <header class="page-header">
                     <h2>Family Settings</h2>
-                    <p>Feature flags, visibility policy, and family-wide preferences</p>
+                    <p>Privacy, kid permissions, and family feature controls</p>
                 </header>
                 <div id="view-settings-body" class="view-body"></div>
             </div>
@@ -385,7 +387,7 @@
             <div class="view-container">
                 <header class="page-header">
                     <h2>Session State</h2>
-                    <p>HOT / WARM / COLD memory tier utilization</p>
+                    <p>Inspect HOT / WARM / COLD memory sections and stored data</p>
                 </header>
 
                 <div id="ss-loading" class="ss-loading">Loading session state...</div>
@@ -398,13 +400,18 @@
                         <h4 class="card-subtitle">Tier Utilization</h4>
                         <div id="ss-tier-bars" class="ss-tier-bars"></div>
                     </div>
-                    <div class="card card--padded">
-                        <h4 class="card-subtitle">HOT Tier (In-Memory)</h4>
-                        <div id="ss-hot-sections" class="ss-sections"></div>
-                    </div>
-                    <div class="card card--padded">
-                        <h4 class="card-subtitle">WARM Tier (Evictable)</h4>
-                        <div id="ss-warm-sections" class="ss-sections"></div>
+                    <div class="ss-content-grid">
+                        <div class="ss-section-stack">
+                            <div class="card card--padded">
+                                <h4 class="card-subtitle">HOT Tier (In-Memory)</h4>
+                                <div id="ss-hot-sections" class="ss-sections"></div>
+                            </div>
+                            <div class="card card--padded">
+                                <h4 class="card-subtitle">WARM Tier (Evictable)</h4>
+                                <div id="ss-warm-sections" class="ss-sections"></div>
+                            </div>
+                        </div>
+                        <div class="card card--padded ss-inspector" id="ss-inspector"></div>
                     </div>
                     <div class="card card--padded">
                         <h4 class="card-subtitle">LOCAL COLD (Archive)</h4>
@@ -452,6 +459,6 @@
     <div id="member-list"></div>
 </div>
 
-<script src="/static/app.js?v=7"></script>
+    <script src="/static/app.js?v=11"></script>
 </body>
 </html>

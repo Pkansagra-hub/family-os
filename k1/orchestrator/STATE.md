@@ -93,6 +93,7 @@ RESET (interrupt_flag=False, merged_results={}, _cancelled_steps=set())
                    │       ├─ step in _cancelled_steps → emit STEP_CANCELLED, skip
                    │       ├─ ParamResolver.resolve() ($ refs)
                    │       ├─ StepRunner.run() → StepResult
+                   │       │     ├─ activity_profile → CapabilityRequest.context_override
                    │       │     ├─ COMPLETED → merged_results[step_id] = result
                    │       │     ├─ FAILED → cancel_dependents(BFS) → _cancelled_steps
                    │       │     ├─ SCHEMA_RETRY → re-run once with __schema_hint

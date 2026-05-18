@@ -140,12 +140,20 @@ self._shared_fabric = FabricFactory.create_shared(
     event_port=EventPortProdAdapter(self._bus),
     bridge=BridgeConnectionAdapter(client=bridge_client),
     model_gateway=ModelGatewayBridgeAdapter(hub=self._model_hub),
-    prompt_system=PromptSystemProdAdapter("k1/contracts/prompts"),
+    prompt_system=prompt_system,  # PromptSystemProdAdapter("k1/contracts/prompts")
     delta_bus=DeltaBusProdAdapter(self._bus),
     state_reader=self._session_routing_reader,
     hil_port=self._hil_service,
 )
 ```
+
+Before Fabric construction, KernelService verifies the prompt store through
+`_verify_activity_prompt_system(prompt_system, scope="shared")`. The check logs
+the loaded template count and names. An empty prompt inventory warns by default;
+it raises only when `KernelConfig.enable_activity_profiles_strict=True`.
+`KernelConfig.enable_activity_profiles=False` suppresses the warning/strict
+policy but the prompt adapter remains wired because prompt/profile metadata is
+advisory.
 
 `FabricFactory.create_shared` defaults `production_mode=True`.
 When `state_reader=None`, Fabric uses a `NullSessionStateReaderAdapter` internally.
@@ -333,15 +341,25 @@ session_fabric = FabricFactory.create_with_ports(
     event_port=EventPortProdAdapter(session_bus),
     bridge=BridgeConnectionAdapter(client=bridge_client),
     model_gateway=ModelGatewayBridgeAdapter(hub=self._model_hub),
-    prompt_system=PromptSystemProdAdapter("k1/contracts/prompts"),
+    prompt_system=session_prompt_sys,  # self._prompt_system unless S3 is absent
     delta_bus=DeltaBusProdAdapter(session_bus),
     production_mode=True,
-    hil_port=self._hil_service,
+    hil_port=session_hil_service,
+    capability_registry=self._shared_fabric.registry,
 )
 ```
 
 `model_hub` is the shared Tier 1 instance.
 `bridge_client` is the shared Tier 1 bridge client.
+`session_prompt_sys` is the verified shared adapter in normal startup; the fallback
+creates `PromptSystemProdAdapter("k1/contracts/prompts")` only if S3 did not store
+one. KernelService verifies it with `scope="session:<session_id>"` before passing
+it to Fabric.
+The per-session Fabric reuses the shared `CapabilityRegistry`, so family tool
+contracts registered during S8 retain `prompt_template` and `activity_profile`
+metadata in session discovery. P3.1 re-registers the singleton
+`NativeToolProvider` with the per-session provider factory; this does not mutate
+capability contracts.
 Per-session fabric is **not torn down** on `destroy_session()` — see OPEN_ISSUES §3.
 
 ---

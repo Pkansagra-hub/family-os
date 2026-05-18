@@ -99,16 +99,26 @@ _VALID_BANDS = frozenset({"family", "adults", "named", "private"})
 def _make_override_rule(key: str, band: str) -> VisibilityRule:
     """Return a visibility rule that pins ``key``-matched entities to ``band``."""
 
-    base = _RULE_BASE_CALLABLES[key]
-
     def _rule(entity: BaseEntity, role) -> Optional[str]:
-        # Reuse the base callable's match logic by checking for non-None.
-        matched = base(entity, role)
-        if matched is not None:
+        if _matches_rule_key(key, entity):
             return band
         return None
 
     return _rule
+
+
+def _matches_rule_key(key: str, entity: BaseEntity) -> bool:
+    if key == "google_work":
+        return entity.source == "google" and entity.source_label == "work"
+    if key == "google_personal":
+        return entity.source == "google" and entity.source_label == "personal"
+    if key == "outlook_default":
+        return entity.source == "outlook"
+    if key == "classroom":
+        return entity.source == "classroom"
+    if key == "native_default":
+        return entity.source == "native"
+    return False
 
 
 # ---------------------------------------------------------------------------

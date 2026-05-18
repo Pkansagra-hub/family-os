@@ -189,6 +189,50 @@ Used by: Front actor during prompt assembly. Returns recalled memories from brid
 (K0 long-term store). Returns `[]` when bridge is offline (`OfflineBridgeAdapter`).
 The `RecallMemoryAdapter` wraps a `recall_fn` closure over the bridge client.
 
+### 2.9 Back execution profile payloads
+
+Back execution profiles are optional task-scoped guidance metadata. They are not
+SessionState, not authorization, and not a capability binding.
+
+`TaskDispatch.execution_profiles` has type `list[dict[str, Any]] | None`. When
+present, Back reuses it for prompt guidance and HITL resume stability. When absent,
+Back may select profiles from explicit task metadata or exact structured domain
+metadata and attach the selected profile list to the in-memory task payload before
+prompt construction and possible suspension.
+
+Profile metadata items currently contain:
+
+| Field | Meaning |
+| --- | --- |
+| `profile_id` | Prompt-contract-backed Back profile id such as `calendar.v1` or `tasks.v1` |
+| `score` | Selector confidence score for diagnostics only |
+| `evidence` | Compact metadata evidence strings for prompt/audit visibility |
+| `intent_index` | Optional index of the intent that selected the profile |
+
+`build_back_prompt(..., execution_profile_block="")` accepts the rendered bounded
+profile block. An empty block preserves the previous Back prompt shape. Rendered
+profile guidance must never grant tools, bypass policy/HIL, or override Fabric
+contracts, registry schemas, or tool recovery contracts.
+
+### 2.10 Back capability binding for direct dispatch
+
+Active Back tasks bind direct `invoke_capability` and `batch_invoke_capabilities`
+requests before calling Fabric. Binding is metadata-only: it uses the existing
+dispatch discovery surface and exact registry names, never local cue lists or
+business-parameter inference.
+
+`CapabilityBindingRequest` carries `action`, optional `domain`, `params`, an
+optional `candidate_capability_name`, and Back correlation metadata. The result
+status is one of `bound`, `needs_discovery`, `ambiguous`, `not_found`,
+`invalid_candidate`, or `needs_human`.
+
+When bound, the tool implementation builds a strict `CapabilityRequest` with the
+exact capability name. If discovery shows that a supplied candidate is not an
+exact registry name, Back returns a typed binding error with candidate recovery
+data and does not call Fabric. Bound prompt/profile metadata may populate
+`CapabilityRequest.prompt_template` and `context_override`; it is never copied
+into business `params`.
+
 ---
 
 ## 3. Error surface

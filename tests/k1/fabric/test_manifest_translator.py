@@ -9,6 +9,7 @@ from k1.fabric.manifest_translator import (
     build_contract,
     register_definition,
 )
+from k1.tools.family.definition import ActionSpec, FieldSpec, LLMHints, ToolDefinition
 from tests.k1.tools.family._stubs import PingToolService
 
 
@@ -51,6 +52,59 @@ class TestBuildContract:
         assert c.output["type"] == "object"
         assert c.output["properties"]["items"]["type"] == "array"
         assert c.output["required"] == ["items"]
+
+    def test_prompt_profile_metadata_propagates_from_action(self) -> None:
+        action = ActionSpec(
+            name="create_item",
+            kind="write",
+            summary="Create an item",
+            params=[FieldSpec(name="title", type="string", required=True)],
+            result=[FieldSpec(name="id", type="string", required=True)],
+            prompt_template="demo_activity_v1",
+            activity_profile="demo.action.v1",
+            tool_instructions="Use exact schema fields and preserve the returned id.",
+            social_act="create_record",
+            side_effects=[{"kind": "data_write", "target": "demo.item"}],
+        )
+        definition = ToolDefinition(
+            adapter_id="demo",
+            summary="Demo adapter",
+            tables_sql="CREATE TABLE IF NOT EXISTS demo_schema_version (version INTEGER);",
+            activity_profile="demo.default.v1",
+            domain_tags=["coordination"],
+            actions=[action],
+        )
+
+        contract = build_contract(definition, action)
+
+        assert contract.prompt_template == "demo_activity_v1"
+        assert contract.activity_profile == "demo.action.v1"
+        assert contract.tool_instructions == "Use exact schema fields and preserve the returned id."
+        assert contract.social_act == "create_record"
+        assert contract.side_effects == [{"kind": "data_write", "target": "demo.item"}]
+        assert "coordination" in contract.domain
+
+    def test_definition_profile_and_llm_examples_fill_contract_defaults(self) -> None:
+        action = ActionSpec(
+            name="summarize_item",
+            kind="compute",
+            summary="Summarize an item",
+            llm=LLMHints(examples=["Summarize the soccer checklist"]),
+        )
+        definition = ToolDefinition(
+            adapter_id="demo",
+            summary="Demo adapter",
+            tables_sql="CREATE TABLE IF NOT EXISTS demo_schema_version (version INTEGER);",
+            activity_profile="demo.default.v1",
+            domain_tags=["coordination", "demo"],
+            actions=[action],
+        )
+
+        contract = build_contract(definition, action)
+
+        assert contract.activity_profile == "demo.default.v1"
+        assert contract.tool_instructions == "Examples: Summarize the soccer checklist"
+        assert contract.domain == ["family", "demo", "coordination"]
 
 
 class TestRegisterDefinition:

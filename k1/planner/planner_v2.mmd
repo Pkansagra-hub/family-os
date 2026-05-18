@@ -184,8 +184,8 @@ subgraph PIPELINE["4-STAGE PLANNING PIPELINE"]
     S2_ENTRY["Receive SketchResult\nMap rough steps to concrete tools"]:::step
     S2_TOOLS["2-3 Discovery Tool Calls:\n1. discover_capabilities(specific)\n2. find_relevant_prompts(intent, domain)\n3. (optional) discover_capabilities(refined)"]:::tool_fabric
     S2_LLM["LLM EXPAND Call\nCapability: CHAT\nmax_tokens: 1024 | timeout: 5s | temp: 0.3\nPrompt: sketch + caps + prompts\nOutput: steps with params, deps, schemas"]:::llm
-    S2_ENRICH["Deterministic Enrichment\n7/14 PlanStep fields from LLM\n7/14 from CapabilityContract metadata:\nhas_side_effects, compensation, timeout_ms,\nrequired_context, safety_band_min, tools_granted"]:::engine
-    S2_OUTPUT["ExpandedPlan\nsteps: PlanStep[14 fields]\ndependencies: Dict[str, List[str]]\ntool_mappings | rationale"]:::step
+    S2_ENRICH["Contract-Backed Enrichment\nPlanStep fields from LLM plus CapabilityContract metadata\nhas_side_effects, compensation, timeout_ms,\nrequired_context, safety_band_min, activity_profile\nPrompt binding: preserve exact discovered/inventory names or clear"]:::engine
+    S2_OUTPUT["ExpandedPlan\nsteps: PlanStep[15 fields]\ndependencies: Dict[str, List[str]]\ntool_mappings | rationale"]:::step
   end
 
   subgraph STAGE3["STAGE 3: VALIDATE -- LLM ~500 tokens, 1-3s"]
@@ -328,7 +328,7 @@ subgraph SERVICES["7 INTERNAL SERVICES (~335 tests)"]
 
   SVC_SKETCH["SketchService (~60 tests)\nSlot-based prompt composition\n3 discovery tools via ToolCallRouter\nHIL clarification trigger\nPorts: ILLMPort (via TCR: Fabric, State, Bridge)"]:::service
 
-  SVC_EXPAND["ExpandService (~50 tests)\nTool mapping + parameterization\n2-3 discovery tools via ToolCallRouter\nDeterministic field enrichment post-LLM\nPorts: ILLMPort (via TCR: Fabric, Bridge)"]:::service
+  SVC_EXPAND["ExpandService (~50 tests)\nTool mapping + parameterization\n2-3 discovery tools via ToolCallRouter\nContract-backed field enrichment post-LLM\nExact prompt binding: preserve or clear\nPorts: ILLMPort (via TCR: Fabric, Bridge)"]:::service
 
   SVC_VALIDATE["ValidateService (~45 tests)\nDAG cycle detection (Kahn's)\nCapability existence check\nLLM arbiter (STRUCTURED)\nHIL approval trigger\nPorts: ILLMPort, IFabricRetrievalPort"]:::service
 
@@ -953,7 +953,7 @@ ERR_CB -->|"bypass -> MEDIUM tier"| EXT_ORCH
 %% PlanRequest        | k1/orchestrator/types.py | Orchestrator -> Planner
 %% PlanAck            | k1/orchestrator/types.py | Planner -> Orchestrator
 %% CommittedPlan      | k1/orchestrator/types.py | Planner -> Orchestrator -> DAGExecutor
-%% PlanStep (14 flds) | k1/orchestrator/types.py | CommittedPlan.steps[]
+%% PlanStep (15 flds) | k1/orchestrator/types.py | CommittedPlan.steps[]
 %% MicroReplanRequest | k1/orchestrator/types.py | Orchestrator -> Planner
 %% HubRequest         | k1/model_hub/types.py    | Planner -> Model Hub
 %% HubResponse        | k1/model_hub/types.py    | Model Hub -> Planner
@@ -971,9 +971,10 @@ ERR_CB -->|"bypass -> MEDIUM tier"| EXT_ORCH
 %% PlanAck:            request_id, status (ACCEPTED|REJECTED), estimated_duration_ms
 %% CommittedPlan:      plan_id, request_id, intent, steps[], trace_id, dependencies,
 %%                     estimated_duration_ms, created_at
-%% PlanStep (14):      id, capability, params, deps, prompt_template, tools_granted,
+%% PlanStep (15):      id, capability, params, deps, prompt_template, tools_granted,
 %%                     output_schema, condition, is_optional, has_side_effects,
-%%                     compensation, timeout_ms, required_context, safety_band_min
+%%                     compensation, timeout_ms, required_context, safety_band_min,
+%%                     activity_profile
 %%
 %% =====================================================================================
 %% STYLES

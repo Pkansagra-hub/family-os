@@ -1,0 +1,91 @@
+# k1/contracts/tools/date_calc.yaml
+# WASM contract for deterministic date arithmetic utilities.
+
+tool_contract:
+  name: "tool.execute.date_calc"
+  version: "1.0.0"
+  domain:
+    - "UTILITY"
+    - "DATE"
+    - "WASM"
+  description: >
+    Perform deterministic date arithmetic in a WASM sandbox. Supports days
+    between two ISO dates, adding days to an ISO date, weekday lookup, and
+    weekend checks. Does not read or mutate family system-of-record data.
+  capabilities:
+    - "date_arithmetic"
+    - "weekday_lookup"
+    - "sandboxed_compute"
+  limitations:
+    - "no_state_mutation"
+    - "no_calendar_lookup"
+    - "iso_date_inputs_only"
+
+  required_inputs:
+    - name: "operation"
+      type: "STRING"
+      description: "Operation to run: days_between, add_days, weekday, or is_weekend."
+      enum:
+        - "days_between"
+        - "add_days"
+        - "weekday"
+        - "is_weekend"
+    - name: "date"
+      type: "STRING"
+      description: "Primary ISO 8601 date in YYYY-MM-DD form."
+
+  optional_inputs:
+    - name: "date2"
+      type: "STRING"
+      description: "Second ISO date required for days_between."
+    - name: "days"
+      type: "NUMBER"
+      description: "Number of days to add or subtract for add_days."
+      default: 0
+
+  output:
+    type: "object"
+    properties:
+      result:
+        description: "Operation result: number, date string, weekday string, or boolean."
+      operation:
+        type: "string"
+        description: "Echo of the executed operation."
+      input_date:
+        type: "string"
+        description: "Echo of the primary input date."
+    required:
+      - "result"
+      - "operation"
+      - "input_date"
+
+  provider_type: "WASM"
+  provider_id: "date_calc_wasm"
+  provider_endpoint: "wasm://sandbox/date_calc"
+  prompt_template: "wasm_generic_activity_v1"
+  activity_profile: "wasm.generic.v1"
+  tool_instructions: >
+    Use only for deterministic date math. It does not inspect the family
+    calendar and must not be used as proof that an event or reminder exists.
+  prompt_variables_schema:
+    type: "object"
+    properties:
+      operation:
+        type: "string"
+      date:
+        type: "string"
+      date2:
+        type: "string"
+      days:
+        type: "number"
+  safety_band_min: "GREEN"
+  risk_class: "low"
+  cost_per_call: 0.0
+  avg_latency_ms: 5
+  max_latency_ms: 100
+  availability: "ONLINE"
+  tags:
+    - "utility"
+    - "date"
+    - "wasm"
+    - "read_only"

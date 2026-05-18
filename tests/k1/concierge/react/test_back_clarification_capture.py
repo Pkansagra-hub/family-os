@@ -284,8 +284,77 @@ class _ContractPlanDispatcher:
         return ToolResult(tool_name=tc.name, status="ok", data={"delivered": True})
 
 
+class _ReadPlanDispatcher:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
+
+    async def dispatch(self, tc) -> ToolResult:  # type: ignore[no-untyped-def]
+        self.calls.append((tc.name, tc.arguments))
+        if tc.name == "discover_capabilities":
+            return ToolResult(
+                tool_name=tc.name,
+                status="ok",
+                data={
+                    "count": 2,
+                    "capabilities": [
+                        {
+                            "name": "tool.read.tasks.list_tasks",
+                            "score": 0.96,
+                            "domains": ["family", "tasks"],
+                            "schema": {
+                                "capabilities": ["read", "adapter:tasks"],
+                                "required_inputs": [],
+                                "optional_inputs": [
+                                    {"name": "due_before", "type": "datetime"},
+                                ],
+                                "output": {
+                                    "type": "object",
+                                    "properties": {"tasks": {"type": "array"}},
+                                    "required": ["tasks"],
+                                },
+                            },
+                        },
+                        {
+                            "name": "tool.read.calendar.list_events",
+                            "score": 0.94,
+                            "domains": ["family", "calendar"],
+                            "schema": {
+                                "capabilities": ["read", "adapter:calendar"],
+                                "required_inputs": [],
+                                "optional_inputs": [
+                                    {"name": "start", "type": "datetime"},
+                                    {"name": "end", "type": "datetime"},
+                                ],
+                                "output": {
+                                    "type": "object",
+                                    "properties": {"events": {"type": "array"}},
+                                    "required": ["events"],
+                                },
+                            },
+                        },
+                    ],
+                },
+            )
+        if tc.name == "invoke_capability":
+            capability_name = tc.arguments["capability_name"]
+            if capability_name == "tool.read.tasks.list_tasks":
+                result = {"success": True, "tasks": [{"id": "t1", "title": "Pack"}], "count": 1}
+            else:
+                result = {
+                    "success": True,
+                    "events": [{"id": "e1", "title": "Soccer"}],
+                    "count": 1,
+                }
+            return ToolResult(
+                tool_name=tc.name,
+                status="ok",
+                data={"status": "success", "result": result},
+            )
+        return ToolResult(tool_name=tc.name, status="ok", data={"delivered": True})
+
+
 @pytest.mark.asyncio
-async def test_back_rejects_uncontracted_needs_human_after_capability_discovery() -> None:
+async def test_back_accepts_needs_human_after_capability_discovery() -> None:
     model = _Model(
         [
             make_hub_tool_response(
@@ -348,19 +417,16 @@ async def test_back_rejects_uncontracted_needs_human_after_capability_discovery(
         scenario="task_execution",
     )
 
-    assert result.status == "complete"
+    assert result.status == "suspended"
     assert result.data is not None
-    assert result.data["final_answer"] == "Deleted the matching records."
-    assert dispatcher.calls == [
-        "discover_capabilities",
-        "invoke_capability",
-        "submit_result",
-    ]
-    assert model.calls == 4
+    assert result.data["result_type"] == "needs_human"
+    assert result.data["question"] == "Should I delete them one by one?"
+    assert dispatcher.calls == ["discover_capabilities", "submit_result"]
+    assert model.calls == 2
 
 
 @pytest.mark.asyncio
-async def test_back_executes_contract_collection_plan_after_invalid_clarification() -> None:
+async def test_back_does_not_auto_execute_collection_plan_after_needs_human() -> None:
     model = _Model(
         [
             make_hub_tool_response(
@@ -401,20 +467,70 @@ async def test_back_executes_contract_collection_plan_after_invalid_clarificatio
         scenario="task_execution",
     )
 
-    assert result.status == "complete"
+    assert result.status == "suspended"
     assert result.data is not None
-    assert result.data["final_answer"] == "Processed 2 records."
+    assert result.data["result_type"] == "needs_human"
     assert [name for name, _ in dispatcher.calls] == [
         "discover_capabilities",
-        "invoke_capability",
-        "batch_invoke_capabilities",
         "submit_result",
     ]
     assert model.calls == 2
 
 
 @pytest.mark.asyncio
-async def test_back_resume_rejects_repeated_uncontracted_needs_human_from_history() -> None:
+async def test_back_does_not_auto_execute_collection_read_plan_after_needs_human() -> None:
+    model = _Model(
+        [
+            make_hub_tool_response(
+                [
+                    {
+                        "name": "discover_capabilities",
+                        "arguments": {"intent": "list tasks and calendar events"},
+                    }
+                ]
+            ),
+            make_hub_tool_response(
+                [
+                    {
+                        "name": "submit_result",
+                        "arguments": {
+                            "result_type": "needs_human",
+                            "hil_type": "clarification",
+                            "question": "Should I try another source?",
+                        },
+                    }
+                ]
+            ),
+        ]
+    )
+    dispatcher = _ReadPlanDispatcher()
+
+    result = await react_loop(
+        actor="back",
+        system_prompt="system",
+        messages=[],
+        tools=_tools(),
+        max_iterations=6,
+        model=model,  # type: ignore[arg-type]
+        tool_dispatcher=dispatcher,  # type: ignore[arg-type]
+        on_text_response=lambda text: None,  # type: ignore[arg-type]
+        cancellation_check=_never_cancel,
+        trace_id="trace-read-plan",
+        scenario="task_execution",
+    )
+
+    assert result.status == "suspended"
+    assert result.data is not None
+    assert result.data["result_type"] == "needs_human"
+    assert [name for name, _ in dispatcher.calls] == [
+        "discover_capabilities",
+        "submit_result",
+    ]
+    assert model.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_back_resume_accepts_needs_human_from_history() -> None:
     model = _Model(
         [
             make_hub_tool_response(
@@ -481,8 +597,8 @@ async def test_back_resume_rejects_repeated_uncontracted_needs_human_from_histor
         scenario="task_execution",
     )
 
-    assert result.status == "complete"
+    assert result.status == "suspended"
     assert result.data is not None
-    assert result.data["final_answer"] == "Deleted the matching records."
-    assert dispatcher.calls == ["invoke_capability", "submit_result"]
-    assert model.calls == 3
+    assert result.data["result_type"] == "needs_human"
+    assert dispatcher.calls == ["submit_result"]
+    assert model.calls == 1

@@ -229,9 +229,19 @@ async def test_m1_x3_low_tier_dispatch_uses_back_direct_session_fabric(
 
             captured = transport.drain()
             assert [call.tool_name for call in captured] == [capability]
-            assert captured[0].arguments == {"intent": "direct family prompt", "top_k": 1}
+            mcp_arguments = dict(captured[0].arguments)
+            mcp_metadata = mcp_arguments.pop("__metadata__", {})
+            assert mcp_arguments == {"intent": "direct family prompt", "top_k": 1}
+            assert mcp_metadata["__activity_profile__"] == "mcp.generic.v1"
+            assert mcp_metadata["__prompt_template__"] == "mcp_generic_activity_v1"
             assert captured[0].trace_id == trace_id
             assert orchestrator_calls == []
+
+            back_request_text = "\n".join(
+                _request_text(call) for call in scripted.calls if _is_back_request(call)
+            )
+            assert "== EXECUTION PROFILES ==" in back_request_text
+            assert "system_of_record.generic.v1" in back_request_text
 
             fired_labels = [rule.label for rule in scripted.rules if rule.fired]
             assert fired_labels == [
@@ -362,6 +372,111 @@ async def test_m1_x9_backchannel_write_elision_gate_is_wired(tmp_path: Path) -> 
             write_elision = importlib.import_module("k1.concierge.acking.write_elision")
             assert hasattr(write_elision, "WriteElisionGate")
             assert getattr(session.concierge._fsm, "_write_elision_gate", None) is not None
+
+            # M5 G3: mutation-level regression -- the controller must consult
+            # the gate during the neutral backchannel turn, the gate must
+            # decide to elide the optional sections (intents/beliefs/affect),
+            # and Session State must not have grown any `beliefs_active`
+            # facts or non-neutral affect rows as a side effect.
+            gate = session.concierge._fsm._write_elision_gate
+            original_evaluate = gate.evaluate
+            captured: list[write_elision.WriteElisionDecision] = []
+
+            def _spy(phase1_output):  # type: ignore[no-untyped-def]
+                decision = original_evaluate(phase1_output)
+                captured.append(decision)
+                return decision
+
+            gate.evaluate = _spy  # type: ignore[method-assign]
+            try:
+                # Snapshot SS belief / affect rows before the second turn.
+                ss = getattr(session.concierge._fsm, "_ss", None)
+                beliefs_before: int = 0
+                affect_labels_before: list[str] = []
+                if ss is not None:
+                    beliefs_section = getattr(ss, "beliefs_active", None) or getattr(
+                        ss, "beliefs", None
+                    )
+                    if beliefs_section is not None and hasattr(beliefs_section, "get_all"):
+                        beliefs_before = len(list(beliefs_section.get_all()))
+                    affect_section = getattr(ss, "affect", None)
+                    if affect_section is not None and hasattr(affect_section, "get_all"):
+                        affect_labels_before = [
+                            str(getattr(row, "label", "")).lower()
+                            for row in affect_section.get_all()
+                        ]
+
+                scripted.queue(
+                    make_text_response("Okay."),
+                    predicate=_is_front_request,
+                    label="front-backchannel-text-2",
+                )
+                recorder2 = TopicRecorder(
+                    session.bus,
+                    topics=(TOPIC_FINAL_RESPONSE, TOPIC_TURN_COMPLETED, TOPIC_DEAD_LETTER),
+                )
+                recorder2.start()
+                try:
+                    _publish_user_input(
+                        session,
+                        session_id=session_id,
+                        trace_id=trace_id + "-2",
+                        text="ok",
+                    )
+                    await recorder2.wait_for_topics(
+                        {TOPIC_FINAL_RESPONSE, TOPIC_TURN_COMPLETED},
+                        timeout_s=20.0,
+                    )
+                    assert recorder2.by_topic(TOPIC_DEAD_LETTER) == []
+                finally:
+                    recorder2.stop()
+
+                # The gate was consulted at least once for this neutral turn.
+                assert captured, "WriteElisionGate.evaluate was never called"
+                # At least one decision for this turn must elide every optional
+                # section. Safety-band/temporal writes remain True regardless.
+                neutral_decisions = [
+                    d
+                    for d in captured
+                    if not d.write_intents and not d.write_beliefs and not d.write_affect
+                ]
+                assert neutral_decisions, (
+                    "expected at least one elide-optional decision for neutral "
+                    f"backchannel, got {[d.__dict__ for d in captured]}"
+                )
+                for d in neutral_decisions:
+                    assert d.write_safety_band is True
+                    assert d.write_temporal is True
+                    assert {"intents", "beliefs", "affect"}.issubset(d.elided_sections)
+
+                # No new belief / non-neutral affect rows must have been
+                # written through the controller path on this neutral turn.
+                if ss is not None:
+                    beliefs_section = getattr(ss, "beliefs_active", None) or getattr(
+                        ss, "beliefs", None
+                    )
+                    if beliefs_section is not None and hasattr(beliefs_section, "get_all"):
+                        beliefs_after = len(list(beliefs_section.get_all()))
+                        assert beliefs_after == beliefs_before, (
+                            "neutral backchannel must not add beliefs_active rows "
+                            f"(before={beliefs_before}, after={beliefs_after})"
+                        )
+                    affect_section = getattr(ss, "affect", None)
+                    if affect_section is not None and hasattr(affect_section, "get_all"):
+                        affect_labels_after = [
+                            str(getattr(row, "label", "")).lower()
+                            for row in affect_section.get_all()
+                        ]
+                        new_labels = affect_labels_after[len(affect_labels_before) :]
+                        non_neutral = [
+                            label for label in new_labels if label and label != "neutral"
+                        ]
+                        assert not non_neutral, (
+                            "neutral backchannel must not add non-neutral affect rows: "
+                            f"{non_neutral}"
+                        )
+            finally:
+                gate.evaluate = original_evaluate  # type: ignore[method-assign]
         finally:
             recorder.stop()
     finally:

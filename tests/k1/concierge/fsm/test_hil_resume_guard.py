@@ -4,11 +4,61 @@ from __future__ import annotations
 
 from typing import Any
 
-from k1.concierge.bus.builders import build_hil_response, build_task_resume
+from k1.concierge.bus.builders import (
+    build_hil_request,
+    build_hil_response,
+    build_task_resume,
+)
 from k1.concierge.bus.setup import create_poc_bus, create_poc_router
 from k1.concierge.fsm.controller import ConciergeController
 from k1.concierge.fsm.states import ConciergeState
 from k1.concierge.fsm.transition_table import GuardAction
+from k1.sessionstate.sections.task_state import TaskStatus
+
+
+def test_unified_hil_request_suspends_bound_back_task(monkeypatch) -> None:
+    bus = create_poc_bus(capture=True)
+    router = create_poc_router()
+    ctrl = ConciergeController(bus=bus, router=router)
+    ctrl._state = ConciergeState.PROGRESSING
+
+    task_id = "task-bound-hil"
+    hil_request_id = "hil-bound-1"
+    ctrl.task_bridge.dispatch_task(task_id, "needs a human")
+    ctrl.task_bridge.activate_task(task_id)
+    monkeypatch.setattr(ctrl._front_lock, "try_deliver", lambda _env: False)
+
+    ctrl._on_hil_request(
+        build_hil_request(
+            {
+                "hil_request_id": hil_request_id,
+                "kind": "needs_human",
+                "caller_key": f"back:{task_id}",
+                "trace_id": "trace-bound",
+                "created_at_ms": 1,
+                "timeout_ms": 60_000,
+                "payload": {
+                    "task_id": task_id,
+                    "hil_type": "clarification",
+                    "question": "Which city?",
+                    "options": [],
+                    "context": {},
+                    "side_effects": [],
+                    "safety_band": "GREEN",
+                    "react_history": [],
+                },
+            }
+        )
+    )
+
+    entry = ctrl.task_bridge.get_task(task_id)
+    assert entry is not None
+    assert entry.status == TaskStatus.SUSPENDED
+    assert entry.pending_hil is True
+    assert entry.pending_hil_data is not None
+    assert entry.pending_hil_data["hil_request_id"] == hil_request_id
+    assert entry.pending_hil_data["envelope"]["kind"] == "needs_human"
+    assert entry.pending_hil_data["synthetic"] is False
 
 
 def test_unified_pending_hil_drops_legacy_task_resume(monkeypatch) -> None:

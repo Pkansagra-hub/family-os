@@ -53,6 +53,8 @@ from k1.fabric.providers.base_provider import (
     BaseProvider,
     ProviderExecutionError,
     ProviderTimeoutError,
+    attach_provider_metadata,
+    build_provider_metadata,
 )
 from k1.fabric.types import (
     CapabilityRequest,
@@ -434,11 +436,15 @@ class WASMProvider(BaseProvider):
         )
 
         # --- Step 4: Execute within sandbox ---
+        params = attach_provider_metadata(
+            dict(request.params),
+            build_provider_metadata(request, context),
+        )
         try:
             wasm_result = await self._runtime.execute(
                 handle=handle,
                 function_name=self._function_name,
-                params=dict(request.params),
+                params=params,
                 sandbox_config=sandbox_config,
             )
         except Exception as exc:

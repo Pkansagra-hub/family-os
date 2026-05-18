@@ -34,6 +34,9 @@ const state = {
     fsmState: "INITIALIZING",
     currentView: "home",
     memberDropdownOpen: false,
+    tasksSelectedListId: null,
+    shoppingSelectedListId: null,
+    sessionStateSelectedSection: null,
 };
 
 const DEFAULT_STREAMING_LABEL = "Concierge is thinking...";
@@ -71,6 +74,7 @@ const ADAPTER_VIEW_IDS = ["calendar", "tasks", "shopping", "reminders", "chores"
 const ADAPTER_BACKEND_NAME = {
     calendar: "calendar",
     tasks: "tasks",
+    shopping: "shopping",
     reminders: "reminders",
     chores: "chores",
     settings: "family_settings",
@@ -122,6 +126,7 @@ const dom = {
     viewBody: {
         calendar:  $("#view-calendar-body"),
         tasks:     $("#view-tasks-body"),
+        shopping:  $("#view-shopping-body"),
         reminders: $("#view-reminders-body"),
         chores:    $("#view-chores-body"),
         settings:  $("#view-settings-body"),
@@ -141,6 +146,7 @@ const dom = {
     ssTierBars:     $("#ss-tier-bars"),
     ssHotSections:  $("#ss-hot-sections"),
     ssWarmSections: $("#ss-warm-sections"),
+    ssInspector:    $("#ss-inspector"),
     ssColdInfo:     $("#ss-cold-info"),
 };
 
@@ -193,7 +199,7 @@ function navigateTo(viewId) {
     else if (viewId === "timeline") {/* live-updated */}
     else if (viewId === "dashboard") {/* live-updated */}
     else if (viewId === "sessionstate") fetchSessionState();
-    else if (ADAPTER_VIEW_IDS.includes(viewId) && viewId !== "shopping") {
+    else if (ADAPTER_VIEW_IDS.includes(viewId)) {
         loadAdapterView(viewId);
     }
 }
@@ -205,13 +211,12 @@ function navigateTo(viewId) {
 async function loadHomeDashboard() {
     if (dom.welcomeName) dom.welcomeName.textContent = state.member;
 
-    // Counts via list endpoints (best effort; shows -- on failure)
-    const fetchCount = async (adapter, action, qs = "") => {
+    // Family app data for counts + human-readable activity (best effort).
+    const fetchData = async (adapter, action, qs = "") => {
         try {
             const r = await fetch(`/k1/tools/${adapter}/${action}${qs}`, { headers: buildAppsHeaders() });
             if (!r.ok) return null;
-            const data = await r.json();
-            return _extractItems(data).length;
+            return r.json();
         } catch { return null; }
     };
 
@@ -222,37 +227,185 @@ async function loadHomeDashboard() {
         return d.toISOString().slice(0, 10);
     })();
 
-    const [tasks, events, reminders, chores] = await Promise.all([
-        fetchCount("tasks", "list_tasks"),
-        fetchCount("calendar", "list_events", `?start_date=${todayIso}&end_date=${endIso}`),
-        fetchCount("reminders", "list_reminders"),
-        fetchCount("chores", "list_chores"),
+    const [taskData, eventData, reminderData, choreData, shoppingListData, shoppingItemData] = await Promise.all([
+        fetchData("tasks", "list_tasks"),
+        fetchData("calendar", "list_events", `?start_date=${todayIso}&end_date=${endIso}`),
+        fetchData("reminders", "list_reminders"),
+        fetchData("chores", "list_chores"),
+        fetchData("shopping", "list_lists"),
+        fetchData("shopping", "list_items"),
     ]);
 
-    dom.statTasks     && (dom.statTasks.textContent     = tasks     ?? "—");
-    dom.statEvents    && (dom.statEvents.textContent    = events    ?? "—");
-    dom.statReminders && (dom.statReminders.textContent = reminders ?? "—");
-    dom.statChores    && (dom.statChores.textContent    = chores    ?? "—");
+    const tasks = taskData ? _extractItems(taskData) : [];
+    const events = eventData ? _extractItems(eventData) : [];
+    const reminders = reminderData ? _extractItems(reminderData) : [];
+    const chores = choreData ? _extractItems(choreData) : [];
+    const shoppingLists = Array.isArray(shoppingListData?.lists) ? shoppingListData.lists : _extractItems(shoppingListData);
+    const shoppingItems = Array.isArray(shoppingItemData?.items) ? shoppingItemData.items : _extractItems(shoppingItemData);
 
-    // Recent activity from timeline entries
+    dom.statTasks     && (dom.statTasks.textContent     = taskData     ? tasks.length     : "—");
+    dom.statEvents    && (dom.statEvents.textContent    = eventData    ? events.length    : "—");
+    dom.statReminders && (dom.statReminders.textContent = reminderData ? reminders.length : "—");
+    dom.statChores    && (dom.statChores.textContent    = choreData    ? chores.length    : "—");
+
     if (dom.homeActivity) {
-        const recent = state.timelineEntries.slice(-6).reverse();
-        if (recent.length === 0) {
-            dom.homeActivity.innerHTML = `<p class="muted-empty">Activity will appear as the family hub becomes active.</p>`;
-        } else {
-            dom.homeActivity.innerHTML = recent.map((e) => {
-                const meta = MEMBERS[state.member] || { initials: "?", color: "#9ca3af" };
-                return `
-                    <div class="activity-row">
-                        <div class="activity-avatar" style="background:linear-gradient(135deg, ${meta.color}, ${meta.color}cc)">${meta.initials}</div>
-                        <div style="flex:1;min-width:0">
-                            <p class="activity-text"><strong>${escapeHtml(e.component || "system")}</strong> — ${escapeHtml(e.summary || "")}</p>
-                            <p class="activity-time">${(e.elapsed_ms || 0).toFixed(0)}ms</p>
-                        </div>
-                    </div>`;
-            }).join("");
+        _renderHomeActivity(_buildHomeActivityFeed({ tasks, events, reminders, chores, shoppingLists, shoppingItems }).slice(0, 6));
+    }
+}
+
+function _renderHomeActivity(items) {
+    if (!dom.homeActivity) return;
+    if (!items.length) {
+        dom.homeActivity.innerHTML = `<p class="muted-empty">Family activity will appear as people update the apps.</p>`;
+        return;
+    }
+    dom.homeActivity.innerHTML = items.map((item) => {
+        const actor = _actorDisplay(item.actorId);
+        const target = item.target ? ` ${escapeHtml(item.targetPrefix || "in")} <span class="activity-object">${escapeHtml(item.target)}</span>` : "";
+        const detail = [item.detail, _relativeTimeAgo(item.timestamp)].filter(Boolean).join(" · ");
+        return `
+            <div class="activity-row">
+                <div class="activity-avatar" style="background:linear-gradient(135deg, ${actor.color}, ${actor.color}cc)">${escapeHtml(actor.initials)}</div>
+                <div class="activity-body">
+                    <p class="activity-text"><strong>${escapeHtml(actor.name)}</strong> ${escapeHtml(item.verb)} <span class="activity-object">${escapeHtml(item.title)}</span>${target}</p>
+                    <p class="activity-time"><span class="activity-app">${escapeHtml(item.app)}</span>${detail ? ` · ${escapeHtml(detail)}` : ""}</p>
+                </div>
+            </div>`;
+    }).join("");
+}
+
+function _buildHomeActivityFeed({ tasks = [], events = [], reminders = [], chores = [], shoppingLists = [], shoppingItems = [] } = {}) {
+    const listNameById = new Map(shoppingLists.map((list) => [list.id, list.name || "Shopping"]));
+    const activity = [];
+    const push = (entity, app, verb, title, opts = {}) => {
+        if (!entity || !title) return;
+        const timestamp = _activityTimestamp(entity, opts.timestampFields || []);
+        activity.push({
+            app,
+            verb,
+            title,
+            target: opts.target || "",
+            targetPrefix: opts.targetPrefix || "in",
+            detail: opts.detail || "",
+            timestamp,
+            sortTime: _timestampMs(timestamp),
+            actorId: _activityActor(entity, opts.actorCandidates || []),
+        });
+    };
+
+    events.forEach((event) => {
+        push(event, "Calendar", Number(event.version || 1) > 1 ? "updated" : "added", event.title || "event", {
+            detail: event.start ? _relativeDate(event.start) : "",
+        });
+    });
+    tasks.forEach((task) => {
+        const done = task.status === "done";
+        push(task, "Tasks", done ? "completed" : (Number(task.version || 1) > 1 ? "updated" : "added"), task.title || "task", {
+            target: task.assigned_to ? _actorDisplay(task.assigned_to).name : "",
+            targetPrefix: "for",
+            detail: task.due_at ? _relativeDate(task.due_at) : (task.priority ? `${task.priority} priority` : ""),
+            timestampFields: done ? ["completed_at"] : [],
+        });
+    });
+    reminders.forEach((reminder) => {
+        const statusVerb = ({ dismissed: "dismissed", snoozed: "snoozed", fired: "fired" })[reminder.status];
+        push(reminder, "Reminders", statusVerb || (Number(reminder.version || 1) > 1 ? "updated" : "set"), reminder.title || "reminder", {
+            target: reminder.recipient ? _actorDisplay(reminder.recipient).name : "",
+            targetPrefix: "for",
+            detail: _reminderTriggerLabel(reminder.trigger) || reminder.status || "",
+            timestampFields: ["fired_at", "snoozed_until"],
+        });
+    });
+    chores.forEach((chore) => {
+        const done = chore.status === "done";
+        const skipped = chore.status === "skipped";
+        push(chore, "Chores", done ? "completed" : (skipped ? "skipped" : "assigned"), chore.title || "chore", {
+            target: chore.assigned_to ? _actorDisplay(chore.assigned_to).name : "",
+            targetPrefix: "to",
+            detail: done && chore.points_awarded ? `${chore.points_awarded} pts` : (chore.due_at ? _relativeDate(chore.due_at) : ""),
+            actorCandidates: done ? [chore.completed_by] : [],
+            timestampFields: done ? ["completed_at"] : (skipped ? ["skipped_at"] : []),
+        });
+    });
+    shoppingItems.forEach((item) => {
+        const checked = item.status === "checked";
+        const pending = item.approval_status === "pending_parent_approval";
+        const rejected = item.approval_status === "rejected";
+        push(item, "Shopping", checked ? "checked off" : (rejected ? "rejected" : (pending ? "requested" : "added")), item.name || "item", {
+            target: listNameById.get(item.list_id) || "Shopping",
+            targetPrefix: checked ? "from" : "to",
+            detail: item.quantity || item.category || "",
+            actorCandidates: checked ? [item.checked_by] : (rejected ? [item.rejected_by] : [item.requested_by]),
+            timestampFields: checked ? ["checked_at"] : (rejected ? ["rejected_at"] : ["approved_at"]),
+        });
+    });
+
+    return activity.sort((a, b) => b.sortTime - a.sortTime);
+}
+
+function _activityTimestamp(entity, preferredFields = []) {
+    const fields = [...preferredFields, "updated_at", "created_at", "start", "due_at"];
+    for (const field of fields) {
+        const value = entity?.[field];
+        if (value && !Number.isNaN(new Date(value).getTime())) return value;
+    }
+    return "";
+}
+
+function _timestampMs(value) {
+    const ms = value ? new Date(value).getTime() : 0;
+    return Number.isNaN(ms) ? 0 : ms;
+}
+
+function _activityActor(entity, candidates = []) {
+    const metadata = entity?.metadata && typeof entity.metadata === "object" ? entity.metadata : {};
+    return [metadata._last_actor, ...candidates, entity?.actor].find((value) => value && String(value).trim()) || "system";
+}
+
+function _actorDisplay(actorId) {
+    const raw = String(actorId || "family").trim();
+    const normalized = raw.toLowerCase();
+    const familyMember = (state.family?.members || []).find((member) =>
+        String(member.actor_id || "").toLowerCase() === normalized || String(member.name || "").toLowerCase() === normalized
+    );
+    if (familyMember) {
+        const memberMeta = MEMBERS[familyMember.name] || {};
+        return { name: familyMember.name, initials: _initials(familyMember.name), color: memberMeta.color || _memberColor(familyMember.actor_id) };
+    }
+    for (const [name, meta] of Object.entries(MEMBERS)) {
+        if (meta.key === normalized || name.toLowerCase() === normalized) {
+            return { name, initials: meta.initials || _initials(name), color: meta.color };
         }
     }
+    if (normalized.includes("concierge")) return { name: "Concierge", initials: "C", color: "#2563eb" };
+    if (normalized === "system") return { name: "System", initials: "S", color: "#6b7280" };
+    const name = _humanizeLabel(raw.replace(/[.:]/g, "_"));
+    return { name, initials: _initials(name), color: _memberColor(raw) };
+}
+
+function _initials(name) {
+    return String(name || "?").split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase() || "").join("") || "?";
+}
+
+function _relativeTimeAgo(isoStr) {
+    const ms = _timestampMs(isoStr);
+    if (!ms) return "recently";
+    const diff = Date.now() - ms;
+    if (diff < 60_000) return "just now";
+    const minutes = Math.round(diff / 60_000);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.round(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.round(hours / 24);
+    if (days < 8) return `${days}d ago`;
+    return new Date(ms).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function _reminderTriggerLabel(trigger) {
+    if (!trigger || typeof trigger !== "object") return "";
+    if (trigger.fire_at) return _relativeDate(trigger.fire_at);
+    if (trigger.kind) return _humanizeLabel(trigger.kind);
+    return "";
 }
 
 // ============================================================================
@@ -1078,7 +1231,7 @@ function _memberColor(nameOrId) {
 }
 
 // ============================================================================
-// Adapter views (Calendar / Tasks / Reminders / Chores / Settings)
+// Adapter views (Calendar / Tasks / Shopping / Reminders / Chores / Settings)
 // ============================================================================
 
 const adapterCache = {
@@ -1090,15 +1243,44 @@ const adapterCache = {
 const ADAPTER_FIELDS = {
     calendar:        ["start", "end", "all_day", "visibility"],
     tasks:           ["status", "priority", "due_at", "assigned_to"],
+    shopping:        ["category", "status", "approval_status", "requested_by"],
     reminders:       ["recipient", "status", "trigger"],
     chores:          ["recurrence", "default_assignee", "reward_amount"],
     family_settings: ["enabled", "description", "scope"],
 };
 
+const SETTINGS_VISIBILITY_BANDS = [
+    { value: "family",  label: "Family" },
+    { value: "adults",  label: "Adults" },
+    { value: "named",   label: "Named" },
+    { value: "private", label: "Private" },
+];
+
+const SETTINGS_SOURCE_RULES = [
+    { key: "native_default",   label: "Family-created items", meta: "Calendar, tasks, chores, shopping", defaultBand: "family" },
+    { key: "google_work",      label: "Google work",          meta: "Work calendar imports",             defaultBand: "adults" },
+    { key: "google_personal",  label: "Google personal",      meta: "Personal calendar imports",         defaultBand: "private" },
+    { key: "outlook_default",  label: "Outlook",              meta: "Microsoft calendar imports",        defaultBand: "adults" },
+    { key: "classroom",        label: "School and classroom",  meta: "Child school data",                 defaultBand: "family" },
+];
+
+const SETTINGS_KID_CAPABILITIES = [
+    { key: "can_create_events",                   label: "Create family events",         defaultValue: true },
+    { key: "can_create_reminders",                label: "Create reminders",             defaultValue: true },
+    { key: "can_add_shopping_requests",           label: "Request shopping items",       defaultValue: true },
+    { key: "can_mark_chores_complete",            label: "Mark chores complete",         defaultValue: true },
+    { key: "can_see_parent_personal_calendar",    label: "See parent personal calendar", defaultValue: false },
+    { key: "can_override_visibility",             label: "Override item visibility",     defaultValue: false },
+    { key: "can_redeem_rewards_without_approval", label: "Redeem rewards directly",      defaultValue: false },
+];
+
 const calState = {
     year: new Date().getFullYear(),
     month: new Date().getMonth(),
+    selectedDate: new Date().toISOString().slice(0, 10),
     events: [],
+    feeds: [],
+    manifest: null,
 };
 
 async function loadAdapterView(viewId) {
@@ -1141,6 +1323,7 @@ function _renderAdapterBody(viewId, adapterId, manifest, writeActions, listData)
     switch (adapterId) {
         case "calendar":         _renderCalendarView(viewId, manifest, writeActions, listData); break;
         case "tasks":            _renderTasksView(viewId, manifest, writeActions, listData); break;
+        case "shopping":         _renderShoppingView(viewId, manifest, writeActions, listData); break;
         case "reminders":        _renderRemindersView(viewId, manifest, writeActions, listData); break;
         case "chores":           _renderChoresView(viewId, manifest, writeActions, listData); break;
         case "family_settings":  _renderSettingsView(viewId, manifest, writeActions, listData); break;
@@ -1151,7 +1334,7 @@ function _renderAdapterBody(viewId, adapterId, manifest, writeActions, listData)
         btn.addEventListener("click", () => {
             const [aId, actionName] = btn.dataset.appAction.split(":");
             const action = ((adapterCache.manifest[aId] || {}).actions || []).find((a) => a.name === actionName);
-            if (action) showActionForm(aId, action);
+            if (action) showActionForm(aId, action, _actionDefaults(aId, actionName));
         });
     });
 }
@@ -1172,10 +1355,97 @@ function setupHeaderActionButtons() {
                 } catch {/* */}
             }
             const action = ((adapterCache.manifest[adapterId] || {}).actions || []).find((a) => a.name === actionName);
-            if (action) showActionForm(adapterId, action);
+            if (adapterId === "shopping" && actionName === "add_item" && !state.shoppingSelectedListId) {
+                showToast("Shopping", "Create or select a list before adding an item.");
+                return;
+            }
+            if (action) showActionForm(adapterId, action, _actionDefaults(adapterId, actionName));
             else showToast("Action unavailable", `${actionName} not found in ${adapterId}`);
         });
     });
+}
+
+function _actionDefaults(adapterId, actionName) {
+    if (adapterId === "calendar" && actionName === "create_event") {
+        return _defaultEventTimes(calState.selectedDate);
+    }
+    if (adapterId === "tasks" && actionName === "create_task") {
+        return {
+            assigned_to: _currentMemberActorId(),
+            list_id: state.tasksSelectedListId || undefined,
+            priority: "medium",
+        };
+    }
+    if (adapterId === "tasks" && actionName === "create_list") {
+        return { color: "#2563eb" };
+    }
+    if (adapterId === "shopping" && actionName === "add_item" && state.shoppingSelectedListId) {
+        return { list_id: state.shoppingSelectedListId };
+    }
+    if (adapterId === "reminders" && actionName === "create_reminder") {
+        return {
+            recipient: _currentMemberActorId(),
+            trigger: { kind: "time", fire_at: _isoMinutesFromNow(60) },
+            visibility: "family",
+        };
+    }
+    if (adapterId === "chores" && actionName === "create_template") {
+        return {
+            assigned_to: _currentMemberActorId(),
+            frequency: "weekly",
+            base_points: 5,
+            visibility: "family",
+        };
+    }
+    if (adapterId === "family_settings" && actionName === "set_feature_flag") {
+        return { enabled: true, scope: "space" };
+    }
+    if (adapterId === "family_settings" && actionName === "update_visibility_policy") {
+        const policy = adapterCache.listData.family_settings?.policy || {};
+        return {
+            rules: policy.rules || {},
+            sensitive_keywords: Array.isArray(policy.sensitive_keywords) ? policy.sensitive_keywords : [],
+            kid_capabilities: policy.kid_capabilities || {},
+        };
+    }
+    return {};
+}
+
+function _findAction(manifest, name) {
+    return (manifest.actions || []).find((action) => action.name === name) || null;
+}
+
+function _hasAction(manifest, name) {
+    return Boolean(_findAction(manifest, name));
+}
+
+function _openAdapterAction(adapterId, manifest, actionName, defaults = {}) {
+    const action = _findAction(manifest, actionName);
+    if (!action) {
+        showToast("Action unavailable", `${actionName} not found in ${adapterId}`);
+        return;
+    }
+    showActionForm(adapterId, action, defaults);
+}
+
+function _idOf(item, fallbackName = "id") {
+    return item?.id || item?.[fallbackName] || "";
+}
+
+function _isoMinutesFromNow(minutes) {
+    const d = new Date();
+    d.setMinutes(d.getMinutes() + minutes);
+    d.setSeconds(0, 0);
+    return d.toISOString();
+}
+
+function _defaultEventTimes(dateIso) {
+    const base = /^\d{4}-\d{2}-\d{2}$/.test(dateIso || "") ? dateIso : new Date().toISOString().slice(0, 10);
+    return {
+        start: new Date(`${base}T09:00:00`).toISOString(),
+        end: new Date(`${base}T10:00:00`).toISOString(),
+        visibility: "family",
+    };
 }
 
 // ----------------------------------------------------------------------------
@@ -1183,10 +1453,25 @@ function setupHeaderActionButtons() {
 // ----------------------------------------------------------------------------
 
 function _renderCalendarView(viewId, manifest, writeActions, listData) {
-    calState.events = _extractItems(listData);
+    calState.events = Array.isArray(listData?.events) ? listData.events : _extractItems(listData);
+    calState.feeds = Array.isArray(listData?.feeds) ? listData.feeds : [];
+    calState.manifest = manifest;
     const body = dom.viewBody[viewId];
 
+    const now = new Date();
+    const todayIso = now.toISOString().slice(0, 10);
+    const nextWeek = new Date(now);
+    nextWeek.setDate(nextWeek.getDate() + 7);
+    const upcoming = calState.events.filter((event) => event.start && new Date(event.start) >= now);
+    const todayCount = calState.events.filter((event) => (event.start || "").slice(0, 10) === todayIso).length;
+    const weekCount = upcoming.filter((event) => new Date(event.start) <= nextWeek).length;
+
     body.innerHTML = `
+        <div class="cal-stats">
+            <div class="cal-stat"><p class="cal-stat-label">Upcoming</p><p class="cal-stat-value">${upcoming.length}</p></div>
+            <div class="cal-stat"><p class="cal-stat-label">Today</p><p class="cal-stat-value cal-stat-value--blue">${todayCount}</p></div>
+            <div class="cal-stat"><p class="cal-stat-label">Next 7 Days</p><p class="cal-stat-value cal-stat-value--green">${weekCount}</p></div>
+        </div>
         <div class="cal-layout">
             <div class="cal-main">
                 <div class="cal-nav">
@@ -1204,13 +1489,17 @@ function _renderCalendarView(viewId, manifest, writeActions, listData) {
                 <div class="cal-grid" id="cal-grid"></div>
             </div>
             <aside class="cal-side">
+                <div id="cal-selected-day"></div>
                 <h3>Upcoming Events</h3>
                 <div id="cal-upcoming"></div>
+                ${calState.feeds.length ? `<div class="cal-feed-list"><h3>Feeds</h3><div id="cal-feeds"></div></div>` : ""}
             </aside>
         </div>`;
 
     _calRenderMonth();
+    _calRenderSelectedDay();
     _calRenderUpcoming();
+    _calRenderFeeds();
 
     body.querySelector("#cal-prev").addEventListener("click", () => {
         calState.month--;
@@ -1252,18 +1541,71 @@ function _calRenderMonth() {
     for (let d = 1; d <= daysInMonth; d++) {
         const ds = `${calState.year}-${String(calState.month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
         const isToday = today.getFullYear() === calState.year && today.getMonth() === calState.month && today.getDate() === d;
+        const isSelected = calState.selectedDate === ds;
         const evs = evMap[ds] || [];
         const bars = evs.slice(0, 3).map((ev) =>
             `<div class="cal-event-bar" style="--bar-color:${_memberColor(ev.created_by || "")}" title="${escapeHtml(ev.title || "")}"></div>`
         ).join("");
         const more = evs.length > 3 ? `<span class="cal-more-events">+${evs.length - 3} more</span>` : "";
         html += `
-            <button class="cal-cell${isToday ? " cal-cell--today" : ""}" data-date="${ds}">
+            <button class="cal-cell${isToday ? " cal-cell--today" : ""}${isSelected ? " cal-cell--selected" : ""}" data-date="${ds}">
                 <span class="cal-day-num">${d}</span>
                 <div class="cal-event-bars">${bars}${more}</div>
             </button>`;
     }
     grid.innerHTML = html;
+    grid.querySelectorAll(".cal-cell[data-date]").forEach((cell) => {
+        cell.addEventListener("click", () => {
+            calState.selectedDate = cell.dataset.date;
+            _calRenderMonth();
+            _calRenderSelectedDay();
+        });
+    });
+}
+
+function _calRenderSelectedDay() {
+    const panel = document.getElementById("cal-selected-day");
+    if (!panel) return;
+    const manifest = calState.manifest || { actions: [] };
+    const events = calState.events
+        .filter((event) => (event.start || "").slice(0, 10) === calState.selectedDate)
+        .sort((a, b) => String(a.start || "").localeCompare(String(b.start || "")));
+    panel.innerHTML = `
+        <div class="cal-selected-head">
+            <div>
+                <p class="cal-side-kicker">Selected Day</p>
+                <h3>${escapeHtml(_formatDateLabel(calState.selectedDate))}</h3>
+            </div>
+            ${_hasAction(manifest, "create_event") ? `<button class="view-small-btn view-small-btn--primary" id="cal-add-selected">Add</button>` : ""}
+        </div>
+        <div class="cal-day-events">
+            ${events.length === 0 ? `<p class="muted-empty">No events on this day.</p>` : events.map((event) => _renderCalendarEventRow(event, manifest)).join("")}
+        </div>`;
+    const add = panel.querySelector("#cal-add-selected");
+    if (add) {
+        add.addEventListener("click", () => _openAdapterAction("calendar", manifest, "create_event", _defaultEventTimes(calState.selectedDate)));
+    }
+    panel.querySelectorAll("[data-cal-action]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+            const eventId = btn.dataset.eventId;
+            if (!eventId) return;
+            await _submitAdapterAction("calendar", btn.dataset.calAction, { event_id: eventId });
+        });
+    });
+}
+
+function _renderCalendarEventRow(event, manifest) {
+    const eventId = _idOf(event, "event_id");
+    const canDelete = _hasAction(manifest, "delete_event") && eventId;
+    return `
+        <div class="cal-day-event-row">
+            <div class="cal-day-event-dot" style="background:${_memberColor(event.created_by || event.actor || "")}"></div>
+            <div class="cal-day-event-body">
+                <p class="cal-day-event-title">${escapeHtml(event.title || "Untitled")}</p>
+                <p class="cal-day-event-meta">${escapeHtml(_fmtEventTime(event.start, event.end, event.all_day))}${event.location ? ` · ${escapeHtml(event.location)}` : ""}</p>
+            </div>
+            ${canDelete ? `<button class="view-action-btn view-action-btn--danger" data-cal-action="delete_event" data-event-id="${escapeHtml(eventId)}">Remove</button>` : ""}
+        </div>`;
 }
 
 function _calRenderUpcoming() {
@@ -1279,12 +1621,17 @@ function _calRenderUpcoming() {
         list.innerHTML = `<p class="muted-empty">No upcoming events.</p>`;
         return;
     }
+    const manifest = calState.manifest || { actions: [] };
     list.innerHTML = upcoming.map((ev) => {
         const col = _memberColor(ev.created_by || "");
         const when = _fmtEventTime(ev.start, ev.end, ev.all_day);
+        const eventId = _idOf(ev, "event_id");
         return `
             <div class="cal-event-card" style="--ev-color:${col}">
-                <h4>${escapeHtml(ev.title || "Untitled")}</h4>
+                <div class="cal-event-card-head">
+                    <h4>${escapeHtml(ev.title || "Untitled")}</h4>
+                    ${_hasAction(manifest, "delete_event") && eventId ? `<button class="view-action-btn view-action-btn--danger" data-cal-action="delete_event" data-event-id="${escapeHtml(eventId)}">Remove</button>` : ""}
+                </div>
                 <div class="cal-event-meta">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                     ${escapeHtml(when)}
@@ -1296,6 +1643,29 @@ function _calRenderUpcoming() {
                     </div>` : ""}
             </div>`;
     }).join("");
+    list.querySelectorAll("[data-cal-action]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+            const eventId = btn.dataset.eventId;
+            if (!eventId) return;
+            await _submitAdapterAction("calendar", btn.dataset.calAction, { event_id: eventId });
+        });
+    });
+}
+
+function _calRenderFeeds() {
+    const feedList = document.getElementById("cal-feeds");
+    if (!feedList) return;
+    feedList.innerHTML = calState.feeds.map((feed) => `
+        <div class="cal-feed-row">
+            <span>${escapeHtml(feed.feed_source || feed.source || "feed")}</span>
+            <strong>${escapeHtml(feed.account || feed.source_label || "Connected")}</strong>
+        </div>`).join("");
+}
+
+function _formatDateLabel(dateIso) {
+    const d = new Date(`${dateIso}T00:00:00`);
+    if (isNaN(d)) return dateIso || "Selected day";
+    return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 }
 
 function _fmtEventTime(start, end, allDay) {
@@ -1312,31 +1682,62 @@ function _fmtEventTime(start, end, allDay) {
 // ----------------------------------------------------------------------------
 
 function _renderTasksView(viewId, manifest, writeActions, listData) {
-    const items = _extractItems(listData);
+    const items = Array.isArray(listData?.tasks) ? listData.tasks : _extractItems(listData);
+    const lists = Array.isArray(listData?.lists) ? listData.lists : [];
     const body = dom.viewBody[viewId];
 
-    const active = items.filter((t) => t.status !== "done" && t.status !== "cancelled");
-    const completed = items.filter((t) => t.status === "done");
+    if (state.tasksSelectedListId && !lists.some((list) => list.id === state.tasksSelectedListId)) {
+        state.tasksSelectedListId = null;
+    }
+    const selectedListId = state.tasksSelectedListId || "__all__";
+    const scopedItems = selectedListId === "__all__" ? items : items.filter((task) => (task.list_id || "") === selectedListId);
+
+    const active = scopedItems.filter((t) => t.status !== "done" && t.status !== "cancelled");
+    const completed = scopedItems.filter((t) => t.status === "done");
     const high = active.filter((t) => t.priority === "high").length;
+    const dueToday = active.filter((t) => t.due_at && _relativeDate(t.due_at) === "Today").length;
+    const actions = new Set((manifest.actions || []).map((action) => action.name));
+
+    const listCount = (listId) => listId === "__all__"
+        ? items.filter((task) => task.status !== "done" && task.status !== "cancelled").length
+        : items.filter((task) => (task.list_id || "") === listId && task.status !== "done" && task.status !== "cancelled").length;
+
+    const renderListButton = (list) => {
+        const listId = list.id || "";
+        const activeList = listId === selectedListId;
+        return `
+            <button class="task-list-tab${activeList ? " task-list-tab--active" : ""}" data-task-list-id="${escapeHtml(listId)}">
+                <span class="task-list-name">${escapeHtml(list.name || "Untitled list")}</span>
+                <span class="task-list-count">${listCount(listId)}</span>
+            </button>`;
+    };
 
     const renderRow = (t, done) => {
         const pri = t.priority || "normal";
         const due = t.due_at ? _relativeDate(t.due_at) : null;
         const assignee = t.assigned_to || "";
-        const aColor = _memberColor(assignee);
+        const taskId = _idOf(t, "task_id");
+        const canComplete = actions.has("complete_task") && taskId && !done;
+        const canReopen = actions.has("reopen_task") && taskId && done;
+        const canDelete = actions.has("delete_task") && taskId;
         return `
             <div class="task-row${done ? " task-row--done" : ""}">
-                <div class="task-checkbox${done ? " task-checkbox--checked" : ""}" data-id="${escapeHtml(t.id || "")}">
+                <button class="task-checkbox${done ? " task-checkbox--checked" : ""}" data-task-action="${done ? "reopen_task" : "complete_task"}" data-task-id="${escapeHtml(taskId)}" ${canComplete || canReopen ? "" : "disabled"} aria-label="${done ? "Reopen" : "Complete"} ${escapeHtml(t.title || "task")}">
                     ${done ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>` : ""}
-                </div>
+                </button>
                 <div class="task-body">
                     <p class="task-title">${escapeHtml(t.title || "Untitled")}</p>
                     <div class="task-meta">
                         ${assignee ? `<span class="task-meta-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>${escapeHtml(assignee)}</span>` : ""}
                         ${due ? `<span class="task-meta-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>${escapeHtml(due)}</span>` : ""}
+                        ${t.list_id ? `<span class="task-meta-item">${escapeHtml(_taskListName(lists, t.list_id))}</span>` : ""}
                     </div>
                 </div>
                 ${pri && pri !== "normal" ? `<span class="task-priority task-priority--${pri}">${pri}</span>` : ""}
+                <div class="task-actions">
+                    ${done && canReopen ? `<button class="view-action-btn" data-task-action="reopen_task" data-task-id="${escapeHtml(taskId)}">Reopen</button>` : ""}
+                    ${canDelete ? `<button class="view-action-btn view-action-btn--danger" data-task-action="delete_task" data-task-id="${escapeHtml(taskId)}">Remove</button>` : ""}
+                </div>
             </div>`;
     };
 
@@ -1345,20 +1746,189 @@ function _renderTasksView(viewId, manifest, writeActions, listData) {
             <div class="task-stat"><p class="task-stat-label">Active Tasks</p><p class="task-stat-value">${active.length}</p></div>
             <div class="task-stat"><p class="task-stat-label">Completed</p><p class="task-stat-value task-stat-value--green">${completed.length}</p></div>
             <div class="task-stat"><p class="task-stat-label">High Priority</p><p class="task-stat-value task-stat-value--red">${high}</p></div>
+            <div class="task-stat"><p class="task-stat-label">Due Today</p><p class="task-stat-value task-stat-value--blue">${dueToday}</p></div>
         </div>
 
-        <section class="task-section">
-            <h3>Active Tasks</h3>
-            ${active.length === 0
-                ? `<p class="muted-empty">All caught up!</p>`
-                : active.map((t) => renderRow(t, false)).join("")}
-        </section>
+        <div class="task-layout">
+            <aside class="task-lists">
+                <div class="task-lists-header">
+                    <h3>Lists</h3>
+                    ${actions.has("create_list") ? `<button class="view-small-btn" data-app-action="tasks:create_list">New</button>` : ""}
+                </div>
+                <div class="task-list-tabs">
+                    <button class="task-list-tab${selectedListId === "__all__" ? " task-list-tab--active" : ""}" data-task-list-id="__all__">
+                        <span class="task-list-name">All tasks</span>
+                        <span class="task-list-count">${listCount("__all__")}</span>
+                    </button>
+                    ${lists.map(renderListButton).join("")}
+                </div>
+            </aside>
+            <section class="task-panel">
+                <div class="task-panel-header">
+                    <div>
+                        <h3>${escapeHtml(selectedListId === "__all__" ? "Active Tasks" : _taskListName(lists, selectedListId))}</h3>
+                        <p>${active.length} open · ${completed.length} done</p>
+                    </div>
+                    ${actions.has("create_task") ? `<button class="view-small-btn view-small-btn--primary" data-app-action="tasks:create_task">Add task</button>` : ""}
+                </div>
+                <div class="task-section task-section--flat">
+                    ${active.length === 0
+                        ? `<p class="muted-empty">All caught up.</p>`
+                        : active.map((t) => renderRow(t, false)).join("")}
+                </div>
 
-        ${completed.length > 0 ? `
-        <section class="task-section">
-            <h3>Completed</h3>
-            ${completed.map((t) => renderRow(t, true)).join("")}
-        </section>` : ""}`;
+                ${completed.length > 0 ? `
+                <div class="task-section task-section--flat">
+                    <h3>Completed</h3>
+                    ${completed.map((t) => renderRow(t, true)).join("")}
+                </div>` : ""}
+            </section>
+        </div>`;
+
+    body.querySelectorAll("[data-task-list-id]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+            state.tasksSelectedListId = btn.dataset.taskListId === "__all__" ? null : btn.dataset.taskListId;
+            _renderAdapterBody(viewId, "tasks", manifest, writeActions, listData);
+        });
+    });
+    body.querySelectorAll("[data-task-action]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+            const taskId = btn.dataset.taskId;
+            const actionName = btn.dataset.taskAction;
+            if (!taskId || !actionName || btn.disabled) return;
+            await _submitAdapterAction("tasks", actionName, { task_id: taskId });
+        });
+    });
+}
+
+function _taskListName(lists, listId) {
+    return (lists || []).find((list) => list.id === listId)?.name || "No list";
+}
+
+// ----------------------------------------------------------------------------
+// Shopping view
+// ----------------------------------------------------------------------------
+
+function _renderShoppingView(viewId, manifest, writeActions, listData) {
+    const body = dom.viewBody[viewId];
+    const lists = Array.isArray(listData?.lists) ? listData.lists : [];
+    const items = Array.isArray(listData?.items) ? listData.items : [];
+    const actions = new Set((manifest.actions || []).map((action) => action.name));
+
+    if (lists.length > 0 && !lists.some((list) => list.id === state.shoppingSelectedListId)) {
+        state.shoppingSelectedListId = lists[0].id;
+    }
+    if (lists.length === 0) state.shoppingSelectedListId = null;
+
+    const selectedList = lists.find((list) => list.id === state.shoppingSelectedListId) || lists[0] || null;
+    if (selectedList) state.shoppingSelectedListId = selectedList.id;
+
+    const selectedItems = selectedList
+        ? items.filter((item) => item.list_id === selectedList.id)
+        : items;
+    const visibleItems = selectedItems.filter((item) => item.approval_status !== "rejected");
+    const needed = visibleItems.filter((item) => item.status !== "checked");
+    const checked = visibleItems.filter((item) => item.status === "checked");
+    const pending = visibleItems.filter((item) => item.approval_status === "pending_parent_approval");
+
+    const listCount = (listId) => items.filter((item) => item.list_id === listId && item.status !== "checked" && item.approval_status !== "rejected").length;
+    const hasAction = (name) => actions.has(name);
+
+    const renderListButton = (list) => {
+        const active = list.id === state.shoppingSelectedListId;
+        const count = listCount(list.id);
+        return `
+            <button class="shopping-list-tab${active ? " shopping-list-tab--active" : ""}" data-shopping-list-id="${escapeHtml(list.id || "")}">
+                <span class="shopping-list-tab-name">${escapeHtml(list.name || "Untitled list")}</span>
+                <span class="shopping-list-tab-meta">${escapeHtml(_humanizeLabel(list.category || "other"))}</span>
+                <span class="shopping-list-tab-count">${count}</span>
+            </button>`;
+    };
+
+    const renderItem = (item) => {
+        const checkedOff = item.status === "checked";
+        const pendingApproval = item.approval_status === "pending_parent_approval";
+        const quantity = [item.quantity, item.unit].filter(Boolean).join(" ");
+        const priority = item.priority || "medium";
+        const canCheck = hasAction("check_off_item") && !checkedOff && !pendingApproval;
+        const canApprove = hasAction("approve_item") && pendingApproval;
+        const canDelete = hasAction("delete_item");
+        return `
+            <div class="shopping-row${checkedOff ? " shopping-row--checked" : ""}${pendingApproval ? " shopping-row--pending" : ""}">
+                <button class="shopping-check${checkedOff ? " shopping-check--checked" : ""}" data-shopping-action="check_off_item" data-item-id="${escapeHtml(item.id || "")}" ${canCheck ? "" : "disabled"} aria-label="Check off ${escapeHtml(item.name || "item")}">
+                    ${checkedOff ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>` : ""}
+                </button>
+                <div class="shopping-item-body">
+                    <p class="shopping-item-title">${quantity ? `<span>${escapeHtml(quantity)}</span>` : ""}${escapeHtml(item.name || "Untitled item")}</p>
+                    <div class="shopping-item-meta">
+                        ${item.category ? `<span>${escapeHtml(_humanizeLabel(item.category))}</span>` : ""}
+                        ${item.requested_by ? `<span>Requested by ${escapeHtml(item.requested_by)}</span>` : ""}
+                        ${item.notes ? `<span>${escapeHtml(item.notes)}</span>` : ""}
+                    </div>
+                </div>
+                <div class="shopping-badges">
+                    ${pendingApproval ? `<span class="shopping-badge shopping-badge--pending">pending approval</span>` : ""}
+                    ${checkedOff ? `<span class="shopping-badge shopping-badge--checked">checked</span>` : ""}
+                    ${priority !== "medium" ? `<span class="shopping-badge shopping-badge--${escapeHtml(priority)}">${escapeHtml(priority)}</span>` : ""}
+                </div>
+                <div class="shopping-actions">
+                    ${canApprove ? `<button class="shopping-action-btn" data-shopping-action="approve_item" data-item-id="${escapeHtml(item.id || "")}">Approve</button>` : ""}
+                    ${canDelete ? `<button class="shopping-action-btn shopping-action-btn--danger" data-shopping-action="delete_item" data-item-id="${escapeHtml(item.id || "")}" aria-label="Remove ${escapeHtml(item.name || "item")}">Remove</button>` : ""}
+                </div>
+            </div>`;
+    };
+
+    body.innerHTML = `
+        <div class="shopping-stats">
+            <div class="shopping-stat"><p class="shopping-stat-label">Lists</p><p class="shopping-stat-value">${lists.length}</p></div>
+            <div class="shopping-stat"><p class="shopping-stat-label">Needed</p><p class="shopping-stat-value shopping-stat-value--blue">${needed.length}</p></div>
+            <div class="shopping-stat"><p class="shopping-stat-label">Pending</p><p class="shopping-stat-value shopping-stat-value--orange">${pending.length}</p></div>
+        </div>
+        <div class="shopping-layout">
+            <aside class="shopping-lists">
+                <div class="shopping-lists-header">
+                    <h3>Lists</h3>
+                    ${hasAction("create_list") ? `<button class="shopping-small-btn" data-app-action="shopping:create_list">New</button>` : ""}
+                </div>
+                <div class="shopping-list-tabs">
+                    ${lists.length === 0 ? `<p class="muted-empty">No shopping lists yet.</p>` : lists.map(renderListButton).join("")}
+                </div>
+            </aside>
+            <section class="shopping-panel">
+                <div class="shopping-panel-header">
+                    <div>
+                        <h3>${escapeHtml(selectedList?.name || "Shopping")}</h3>
+                        ${selectedList?.category ? `<p>${escapeHtml(_humanizeLabel(selectedList.category))}</p>` : ""}
+                    </div>
+                    ${selectedList && hasAction("add_item") ? `<button class="shopping-small-btn shopping-small-btn--primary" data-app-action="shopping:add_item">Add item</button>` : ""}
+                </div>
+                <div class="shopping-items">
+                    ${selectedList == null
+                        ? `<div class="view-empty">Create a shopping list to start tracking items.</div>`
+                        : visibleItems.length === 0
+                            ? `<div class="view-empty">No items in this list yet.</div>`
+                            : `
+                                ${needed.length ? `<div class="shopping-section-label">Needed</div>${needed.map(renderItem).join("")}` : ""}
+                                ${checked.length ? `<div class="shopping-section-label">Checked off</div>${checked.map(renderItem).join("")}` : ""}
+                            `}
+                </div>
+            </section>
+        </div>`;
+
+    body.querySelectorAll("[data-shopping-list-id]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+            state.shoppingSelectedListId = btn.dataset.shoppingListId;
+            _renderAdapterBody(viewId, "shopping", manifest, writeActions, listData);
+        });
+    });
+    body.querySelectorAll("[data-shopping-action]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+            const itemId = btn.dataset.itemId;
+            const actionName = btn.dataset.shoppingAction;
+            if (!itemId || !actionName || btn.disabled) return;
+            await _submitAdapterAction("shopping", actionName, { item_id: itemId });
+        });
+    });
 }
 
 // ----------------------------------------------------------------------------
@@ -1368,6 +1938,7 @@ function _renderTasksView(viewId, manifest, writeActions, listData) {
 function _renderRemindersView(viewId, manifest, writeActions, listData) {
     const items = _extractItems(listData);
     const body = dom.viewBody[viewId];
+    const actions = new Set((manifest.actions || []).map((action) => action.name));
 
     const order = { scheduled: 0, snoozed: 1, fired: 2, dismissed: 3 };
     const sorted = [...items].sort((a, b) => {
@@ -1376,23 +1947,33 @@ function _renderRemindersView(viewId, manifest, writeActions, listData) {
         return ((a.trigger?.fire_at || a.fire_at || "")).localeCompare(b.trigger?.fire_at || b.fire_at || "");
     });
 
-    if (sorted.length === 0) {
-        body.innerHTML = `<div class="view-empty">No reminders yet. Add one above.</div>`;
-        return;
-    }
+    const scheduled = sorted.filter((r) => r.status === "scheduled" || r.status === "snoozed");
+    const fired = sorted.filter((r) => r.status === "fired");
+    const dueToday = scheduled.filter((r) => {
+        const fireAt = r.trigger?.fire_at || r.fire_at || r.snoozed_until;
+        return fireAt && _relativeDate(fireAt) === "Today";
+    }).length;
 
     body.innerHTML = `
+        <div class="reminder-stats">
+            <div class="reminder-stat"><p class="reminder-stat-label">Scheduled</p><p class="reminder-stat-value">${scheduled.length}</p></div>
+            <div class="reminder-stat"><p class="reminder-stat-label">Due Today</p><p class="reminder-stat-value reminder-stat-value--blue">${dueToday}</p></div>
+            <div class="reminder-stat"><p class="reminder-stat-label">Needs Attention</p><p class="reminder-stat-value reminder-stat-value--orange">${fired.length}</p></div>
+        </div>
         <div class="reminder-list">
-            ${sorted.map((r) => {
+            ${sorted.length === 0 ? `<div class="view-empty">No reminders yet. Add one above.</div>` : sorted.map((r) => {
                 const fireAt = r.trigger?.fire_at || r.fire_at;
                 const kind = r.trigger?.kind || "time";
-                const kindIcon = ({ time: "🕐", location_enter: "📍", location_leave: "🚪", event_offset: "📅" }[kind]) || "🔔";
                 const timeStr = fireAt ? _fmtReminderTime(fireAt) : "";
                 const status = r.status || "scheduled";
                 const muted = status === "fired" || status === "dismissed";
+                const reminderId = _idOf(r, "reminder_id");
+                const canDismiss = actions.has("dismiss_reminder") && reminderId && (status === "fired" || status === "snoozed");
+                const canSnooze = actions.has("snooze_reminder") && reminderId && (status === "fired" || status === "snoozed");
+                const canDelete = actions.has("delete_reminder") && reminderId;
                 return `
                     <div class="reminder-row${muted ? " reminder-row--muted" : ""}">
-                        <div class="reminder-icon">${kindIcon}</div>
+                        <div class="reminder-icon">${_reminderKindIcon(kind)}</div>
                         <div class="reminder-body">
                             <p class="reminder-title">${escapeHtml(r.title || "Reminder")}</p>
                             <div class="reminder-meta">
@@ -1402,9 +1983,36 @@ function _renderRemindersView(viewId, manifest, writeActions, listData) {
                             </div>
                         </div>
                         <span class="reminder-status reminder-status--${status}">${escapeHtml(_humanizeLabel(status))}</span>
+                        <div class="reminder-actions">
+                            ${canSnooze ? `<button class="view-action-btn" data-reminder-action="snooze_reminder" data-reminder-id="${escapeHtml(reminderId)}">Snooze 10m</button>` : ""}
+                            ${canDismiss ? `<button class="view-action-btn" data-reminder-action="dismiss_reminder" data-reminder-id="${escapeHtml(reminderId)}">Dismiss</button>` : ""}
+                            ${canDelete ? `<button class="view-action-btn view-action-btn--danger" data-reminder-action="delete_reminder" data-reminder-id="${escapeHtml(reminderId)}">Remove</button>` : ""}
+                        </div>
                     </div>`;
             }).join("")}
         </div>`;
+
+    body.querySelectorAll("[data-reminder-action]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+            const reminderId = btn.dataset.reminderId;
+            const actionName = btn.dataset.reminderAction;
+            if (!reminderId || !actionName) return;
+            const params = actionName === "snooze_reminder"
+                ? { reminder_id: reminderId, snooze_until: _isoMinutesFromNow(10) }
+                : { reminder_id: reminderId };
+            await _submitAdapterAction("reminders", actionName, params);
+        });
+    });
+}
+
+function _reminderKindIcon(kind) {
+    if (kind === "location_enter" || kind === "location_leave") {
+        return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13S3 17 3 10a9 9 0 1 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>`;
+    }
+    if (kind === "event_offset") {
+        return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>`;
+    }
+    return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`;
 }
 
 function _fmtReminderTime(dt) {
@@ -1421,36 +2029,87 @@ function _fmtReminderTime(dt) {
 // ----------------------------------------------------------------------------
 
 function _renderChoresView(viewId, manifest, writeActions, listData) {
-    const items = _extractItems(listData);
+    const items = Array.isArray(listData?.chores) ? listData.chores : _extractItems(listData);
+    const summary = Array.isArray(listData?.summary) ? listData.summary : [];
     const body = dom.viewBody[viewId];
+    const actions = new Set((manifest.actions || []).map((action) => action.name));
 
-    if (items.length === 0) {
-        body.innerHTML = `<div class="view-empty">No chores set up yet.</div>`;
-        return;
-    }
+    const pending = items.filter((chore) => (chore.status || "pending") === "pending");
+    const done = items.filter((chore) => chore.status === "done");
+    const skipped = items.filter((chore) => chore.status === "skipped");
+    const points = done.reduce((total, chore) => total + Number(chore.points_awarded || 0), 0);
+
+    const renderChore = (chore) => {
+        const occurrenceId = _idOf(chore, "occurrence_id");
+        const status = chore.status || "pending";
+        const assignee = chore.assigned_to || "";
+        const due = chore.due_at ? _relativeDate(chore.due_at) : null;
+        const canComplete = status === "pending" && actions.has("complete_chore") && occurrenceId;
+        const canSkip = status === "pending" && actions.has("skip_chore") && occurrenceId;
+        const canReopen = status !== "pending" && actions.has("reopen_chore") && occurrenceId;
+        return `
+            <div class="chore-card chore-card--${escapeHtml(status)}">
+                <div class="chore-card-top">
+                    <span class="chore-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18"/><path d="M6 7v14h12V7"/><path d="M9 7V4h6v3"/></svg></span>
+                    <span class="chore-reward">${Number(chore.points_awarded || chore.base_points || 0)} pts</span>
+                </div>
+                <p class="chore-title">${escapeHtml(chore.title || "Chore")}</p>
+                ${chore.description ? `<p class="chore-desc">${escapeHtml(String(chore.description).slice(0, 90))}</p>` : ""}
+                <div class="chore-meta">
+                    ${status ? `<span class="chore-recur">${escapeHtml(_humanizeLabel(status))}</span>` : ""}
+                    ${due ? `<span class="chore-recur">${escapeHtml(due)}</span>` : ""}
+                    ${assignee ? `<span class="chore-assignee" style="background:${_memberColor(assignee)}" title="${escapeHtml(assignee)}">${escapeHtml(assignee.slice(0, 2).toUpperCase())}</span>` : ""}
+                </div>
+                <div class="chore-actions">
+                    ${canComplete ? `<button class="view-action-btn" data-chore-action="complete_chore" data-occurrence-id="${escapeHtml(occurrenceId)}">Done</button>` : ""}
+                    ${canSkip ? `<button class="view-action-btn" data-chore-action="skip_chore" data-occurrence-id="${escapeHtml(occurrenceId)}">Skip</button>` : ""}
+                    ${canReopen ? `<button class="view-action-btn" data-chore-action="reopen_chore" data-occurrence-id="${escapeHtml(occurrenceId)}">Reopen</button>` : ""}
+                </div>
+            </div>`;
+    };
+
+    const renderColumn = (title, rows, empty) => `
+        <section class="chore-column">
+            <div class="chore-column-head"><h3>${escapeHtml(title)}</h3><span>${rows.length}</span></div>
+            <div class="chore-column-list">${rows.length ? rows.map(renderChore).join("") : `<p class="muted-empty">${escapeHtml(empty)}</p>`}</div>
+        </section>`;
 
     body.innerHTML = `
-        <div class="chores-grid">
-            ${items.map((c) => {
-                const assignee = c.default_assignee || "";
-                const recur = _shortRecurrence(c.recurrence);
-                const hasReward = c.reward_amount && Number(c.reward_amount) > 0;
-                const verify = c.requires_verification;
-                return `
-                    <div class="chore-card">
-                        <div class="chore-card-top">
-                            <span class="chore-icon">🧹</span>
-                            ${hasReward ? `<span class="chore-reward">$${Number(c.reward_amount).toFixed(0)}</span>` : ""}
-                        </div>
-                        <p class="chore-title">${escapeHtml(c.title || "Chore")}</p>
-                        <div class="chore-meta">
-                            ${recur ? `<span class="chore-recur">${escapeHtml(recur)}</span>` : ""}
-                            ${verify ? `<span class="chore-verify-badge">verify</span>` : ""}
-                            ${assignee ? `<span class="chore-assignee" style="background:${_memberColor(assignee)}" title="${escapeHtml(assignee)}">${escapeHtml(assignee.slice(0, 2).toUpperCase())}</span>` : ""}
-                        </div>
-                    </div>`;
-            }).join("")}
+        <div class="chore-stats">
+            <div class="chore-stat"><p class="chore-stat-label">Pending</p><p class="chore-stat-value">${pending.length}</p></div>
+            <div class="chore-stat"><p class="chore-stat-label">Done</p><p class="chore-stat-value chore-stat-value--green">${done.length}</p></div>
+            <div class="chore-stat"><p class="chore-stat-label">Skipped</p><p class="chore-stat-value chore-stat-value--orange">${skipped.length}</p></div>
+            <div class="chore-stat"><p class="chore-stat-label">Points</p><p class="chore-stat-value chore-stat-value--blue">${points}</p></div>
+        </div>
+        <div class="chores-layout">
+            <div class="chores-board">
+                ${renderColumn("To Do", pending, "No pending chores.")}
+                ${renderColumn("Done", done, "Nothing completed yet.")}
+                ${renderColumn("Skipped", skipped, "No skipped chores.")}
+            </div>
+            <aside class="chore-summary">
+                <div class="chore-summary-head">
+                    <h3>Leaderboard</h3>
+                    ${actions.has("create_template") ? `<button class="view-small-btn" data-app-action="chores:create_template">New template</button>` : ""}
+                </div>
+                ${summary.length === 0
+                    ? `<p class="muted-empty">Chore points will appear here.</p>`
+                    : summary.sort((a, b) => Number(b.total_points || 0) - Number(a.total_points || 0)).map((row) => `
+                        <div class="chore-summary-row">
+                            <span>${escapeHtml(row.member_id || "Unassigned")}</span>
+                            <strong>${Number(row.total_points || 0)} pts</strong>
+                        </div>`).join("")}
+            </aside>
         </div>`;
+
+    body.querySelectorAll("[data-chore-action]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+            const occurrenceId = btn.dataset.occurrenceId;
+            const actionName = btn.dataset.choreAction;
+            if (!occurrenceId || !actionName) return;
+            await _submitAdapterAction("chores", actionName, { occurrence_id: occurrenceId });
+        });
+    });
 }
 
 function _shortRecurrence(rrule) {
@@ -1466,33 +2125,163 @@ function _shortRecurrence(rrule) {
 // ----------------------------------------------------------------------------
 
 function _renderSettingsView(viewId, manifest, writeActions, listData) {
-    const items = _extractItems(listData);
-    const flags = items.filter((i) => "flag_name" in i || "enabled" in i);
+    const flags = Array.isArray(listData?.flags) ? listData.flags : _extractItems(listData).filter((i) => "flag_name" in i || "enabled" in i);
+    const policy = listData?.policy || null;
     const body = dom.viewBody[viewId];
+    const rules = policy?.rules || {};
+    const keywords = Array.isArray(policy?.sensitive_keywords) ? policy.sensitive_keywords : [];
+    const kidCaps = policy?.kid_capabilities || {};
+    const canUpdatePolicy = _hasAction(manifest, "update_visibility_policy");
+    const enabledFlagCount = flags.filter((flag) => Boolean(flag.enabled)).length;
+    const customizedRules = SETTINGS_SOURCE_RULES.filter((source) => Object.prototype.hasOwnProperty.call(rules, source.key)).length;
+    const customizedKidCaps = SETTINGS_KID_CAPABILITIES.filter((cap) => Object.prototype.hasOwnProperty.call(kidCaps, cap.key)).length;
+
+    const bandOptions = (selected) => SETTINGS_VISIBILITY_BANDS.map((band) =>
+        `<option value="${escapeHtml(band.value)}" ${selected === band.value ? "selected" : ""}>${escapeHtml(band.label)}</option>`
+    ).join("");
+
+    const renderSourceRule = (source) => {
+        const customized = Object.prototype.hasOwnProperty.call(rules, source.key);
+        const band = rules[source.key] || source.defaultBand;
+        return `
+            <div class="settings-source-row">
+                <div class="settings-source-copy">
+                    <p class="settings-source-name">${escapeHtml(source.label)}</p>
+                    <p class="settings-source-meta">${escapeHtml(source.meta)}</p>
+                </div>
+                <div class="settings-source-controls">
+                    <span class="settings-pill ${customized ? "settings-pill--custom" : ""}">${customized ? "Custom" : "Default"}</span>
+                    <select class="settings-select" data-setting-rule="${escapeHtml(source.key)}" data-current-band="${escapeHtml(band)}" ${canUpdatePolicy ? "" : "disabled"}>
+                        ${bandOptions(band)}
+                    </select>
+                </div>
+            </div>`;
+    };
+
+    const renderKidCapability = (cap) => {
+        const customized = Object.prototype.hasOwnProperty.call(kidCaps, cap.key);
+        const enabled = customized ? Boolean(kidCaps[cap.key]) : cap.defaultValue;
+        return `
+            <div class="settings-permission-row">
+                <div class="settings-permission-copy">
+                    <p class="settings-permission-name">${escapeHtml(cap.label)}</p>
+                    <span class="settings-pill ${customized ? "settings-pill--custom" : ""}">${customized ? "Custom" : "Default"}</span>
+                </div>
+                <div class="toggle settings-capability-toggle${enabled ? " toggle--on" : ""}" data-kid-capability="${escapeHtml(cap.key)}" data-enabled="${enabled}" role="switch" aria-checked="${enabled}" tabindex="0" ${canUpdatePolicy ? "" : "aria-disabled=\"true\""}>
+                    <div class="toggle-thumb"></div>
+                </div>
+            </div>`;
+    };
+
+    const renderFlag = (flag) => {
+        const name = flag.flag_name || flag.name || flag.id || "flag";
+        const enabled = Boolean(flag.enabled);
+        const desc = flag.description || flag.scope || "";
+        return `
+            <div class="flag-row">
+                <div class="flag-info">
+                    <p class="flag-name">${escapeHtml(_humanizeLabel(name))}</p>
+                    ${desc ? `<p class="flag-desc">${escapeHtml(desc)}</p>` : ""}
+                </div>
+                <div class="toggle settings-flag-toggle${enabled ? " toggle--on" : ""}" data-flag="${escapeHtml(name)}" data-enabled="${enabled}" role="switch" aria-checked="${enabled}" tabindex="0">
+                    <div class="toggle-thumb"></div>
+                </div>
+            </div>`;
+    };
 
     body.innerHTML = `
-        <div class="settings-section">
-            <p class="settings-section-title">Feature Flags</p>
-            ${flags.length === 0
-                ? `<p class="muted-empty">No flags configured.</p>`
-                : flags.map((f) => {
-                    const name = f.flag_name || f.name || f.id || "flag";
-                    const enabled = Boolean(f.enabled);
-                    const desc = f.description || f.scope || "";
-                    return `
-                        <div class="flag-row">
-                            <div class="flag-info">
-                                <p class="flag-name">${escapeHtml(_humanizeLabel(name))}</p>
-                                ${desc ? `<p class="flag-desc">${escapeHtml(desc)}</p>` : ""}
-                            </div>
-                            <div class="toggle${enabled ? " toggle--on" : ""}" data-flag="${escapeHtml(name)}" data-enabled="${enabled}" role="switch" aria-checked="${enabled}" tabindex="0">
-                                <div class="toggle-thumb"></div>
-                            </div>
-                        </div>`;
-                }).join("")}
+        <div class="settings-overview">
+            <div class="settings-stat"><span>Privacy Rules</span><strong>${customizedRules}/${SETTINGS_SOURCE_RULES.length}</strong></div>
+            <div class="settings-stat"><span>Sensitive Terms</span><strong>${keywords.length}</strong></div>
+            <div class="settings-stat"><span>Kid Permissions</span><strong>${customizedKidCaps}/${SETTINGS_KID_CAPABILITIES.length}</strong></div>
+            <div class="settings-stat"><span>Features On</span><strong>${enabledFlagCount}</strong></div>
+        </div>
+        <div class="settings-grid">
+            <section class="settings-section settings-section--wide">
+                <div class="settings-section-head">
+                    <div>
+                        <p class="settings-section-title">Family Privacy</p>
+                        <h3>Default visibility by source</h3>
+                    </div>
+                    ${canUpdatePolicy ? `<button class="view-small-btn" data-app-action="family_settings:update_visibility_policy">Advanced</button>` : ""}
+                </div>
+                ${policy == null ? `<p class="muted-empty">No policy document visible.</p>` : `
+                    <div class="settings-source-list">
+                        ${SETTINGS_SOURCE_RULES.map(renderSourceRule).join("")}
+                    </div>`}
+            </section>
+
+            <section class="settings-section">
+                <div class="settings-section-head">
+                    <div>
+                        <p class="settings-section-title">Sensitive Information</p>
+                        <h3>Adults-only terms</h3>
+                    </div>
+                </div>
+                <div class="settings-keywords">
+                    ${keywords.length === 0
+                        ? `<p class="muted-empty">No sensitive terms configured.</p>`
+                        : `<div class="settings-keyword-list">${keywords.map((kw) => `
+                            <span class="settings-keyword-chip">${escapeHtml(kw)}${canUpdatePolicy ? `<button type="button" data-keyword-remove="${escapeHtml(kw)}" aria-label="Remove ${escapeHtml(kw)}">&times;</button>` : ""}</span>`).join("")}</div>`}
+                    ${canUpdatePolicy ? `
+                        <div class="settings-keyword-add">
+                            <input type="text" class="settings-keyword-input" data-keyword-input placeholder="doctor, salary, therapy" aria-label="Add sensitive terms">
+                            <button type="button" class="view-small-btn" data-keyword-add>Add</button>
+                        </div>` : ""}
+                </div>
+            </section>
+
+            <section class="settings-section">
+                <div class="settings-section-head">
+                    <div>
+                        <p class="settings-section-title">Kid Permissions</p>
+                        <h3>Child capability gates</h3>
+                    </div>
+                </div>
+                <div class="settings-permission-list">
+                    ${SETTINGS_KID_CAPABILITIES.map(renderKidCapability).join("")}
+                </div>
+            </section>
+
+            <section class="settings-section settings-section--advanced">
+                <div class="settings-section-head">
+                    <div>
+                        <p class="settings-section-title">Features</p>
+                        <h3>Family feature flags</h3>
+                    </div>
+                    ${_hasAction(manifest, "set_feature_flag") ? `<button class="view-small-btn" data-app-action="family_settings:set_feature_flag">New flag</button>` : ""}
+                </div>
+                ${flags.length === 0 ? `<p class="muted-empty">No feature flags configured.</p>` : flags.map(renderFlag).join("")}
+            </section>
         </div>`;
 
-    body.querySelectorAll(".toggle").forEach((tog) => {
+    body.querySelectorAll("[data-setting-rule]").forEach((select) => {
+        select.addEventListener("change", () => _setVisibilityRule(select));
+    });
+    body.querySelectorAll("[data-keyword-remove]").forEach((btn) => {
+        btn.addEventListener("click", () => _removeSensitiveKeyword(btn.dataset.keywordRemove, btn));
+    });
+    const keywordInput = body.querySelector("[data-keyword-input]");
+    const keywordAdd = body.querySelector("[data-keyword-add]");
+    if (keywordAdd && keywordInput) {
+        keywordAdd.addEventListener("click", () => _addSensitiveKeywords(keywordInput, keywordAdd));
+        keywordInput.addEventListener("keydown", (event) => {
+            if (event.key === "Enter") {
+                event.preventDefault();
+                _addSensitiveKeywords(keywordInput, keywordAdd);
+            }
+        });
+    }
+    body.querySelectorAll(".settings-capability-toggle").forEach((tog) => {
+        tog.addEventListener("click", () => _toggleKidCapability(tog));
+        tog.addEventListener("keydown", (e) => {
+            if (e.key === " " || e.key === "Enter") {
+                e.preventDefault();
+                _toggleKidCapability(tog);
+            }
+        });
+    });
+    body.querySelectorAll(".settings-flag-toggle").forEach((tog) => {
         tog.addEventListener("click", () => _toggleFlag(tog, manifest));
         tog.addEventListener("keydown", (e) => {
             if (e.key === " " || e.key === "Enter") {
@@ -1501,6 +2290,89 @@ function _renderSettingsView(viewId, manifest, writeActions, listData) {
             }
         });
     });
+}
+
+function _settingsCurrentPolicy() {
+    return adapterCache.listData.family_settings?.policy || {};
+}
+
+function _settingsCurrentKeywords() {
+    const policy = _settingsCurrentPolicy();
+    return Array.isArray(policy.sensitive_keywords) ? policy.sensitive_keywords.map(String) : [];
+}
+
+async function _setVisibilityRule(select) {
+    const key = select.dataset.settingRule;
+    const value = select.value;
+    const previous = select.dataset.currentBand;
+    if (!key || !value) return;
+    const saved = await _updateSettingsPolicy({ rules: { [key]: value } }, select, "Privacy rule updated.");
+    if (!saved) select.value = previous;
+}
+
+async function _addSensitiveKeywords(input, button) {
+    const additions = String(input.value || "")
+        .split(",")
+        .map((value) => value.trim().toLowerCase())
+        .filter(Boolean);
+    if (!additions.length) return;
+    const current = _settingsCurrentKeywords();
+    const seen = new Set(current.map((value) => value.toLowerCase()));
+    const next = [...current];
+    additions.forEach((value) => {
+        if (!seen.has(value)) {
+            seen.add(value);
+            next.push(value);
+        }
+    });
+    input.value = "";
+    await _updateSettingsPolicy({ sensitive_keywords: next }, button, "Sensitive terms updated.");
+}
+
+async function _removeSensitiveKeyword(keyword, button) {
+    if (!keyword) return;
+    const next = _settingsCurrentKeywords().filter((value) => value !== keyword);
+    await _updateSettingsPolicy({ sensitive_keywords: next }, button, "Sensitive terms updated.");
+}
+
+async function _toggleKidCapability(tog) {
+    if (tog.getAttribute("aria-disabled") === "true") return;
+    const key = tog.dataset.kidCapability;
+    const current = tog.dataset.enabled === "true";
+    if (!key) return;
+    await _updateSettingsPolicy({ kid_capabilities: { [key]: !current } }, tog, "Kid permissions updated.");
+}
+
+async function _updateSettingsPolicy(patch, pendingEl, message) {
+    const manifest = adapterCache.manifest.family_settings || {};
+    if (!_hasAction(manifest, "update_visibility_policy")) {
+        showToast("Settings", "Policy editing is unavailable.");
+        return false;
+    }
+
+    pendingEl?.classList?.add("settings-pending");
+    if (pendingEl && "disabled" in pendingEl) pendingEl.disabled = true;
+    try {
+        const resp = await fetch("/k1/tools/family_settings/update_visibility_policy", {
+            method: "POST",
+            headers: { ...buildAppsHeaders(), "Content-Type": "application/json" },
+            body: JSON.stringify(patch || {}),
+        });
+        const result = resp.ok ? await resp.json() : { success: false, error: `HTTP ${resp.status}` };
+        if (result.success === false) {
+            showToast("Action failed", result.error || result.error_code || "Unknown error", 7000);
+            return false;
+        }
+        showToast("Settings", message || "Settings saved.");
+        await loadAdapterView("settings");
+        return true;
+    } catch (e) {
+        showToast("Error", e.message, 7000);
+        return false;
+    } finally {
+        pendingEl?.classList?.remove("settings-pending");
+        if (pendingEl && "disabled" in pendingEl) pendingEl.disabled = false;
+    }
 }
 
 async function _toggleFlag(tog, manifest) {
@@ -1522,6 +2394,7 @@ async function _toggleFlag(tog, manifest) {
             tog.setAttribute("aria-checked", String(newVal));
             tog.classList.toggle("toggle--on", newVal);
             showToast("Settings", `${_humanizeLabel(flagName)} ${newVal ? "enabled" : "disabled"}.`);
+            await loadAdapterView("settings");
         } else {
             showToast("Error", `HTTP ${resp.status}`);
         }
@@ -1567,8 +2440,8 @@ function setupActionFormHandlers() {
     setupHeaderActionButtons();
 }
 
-function showActionForm(adapterId, actionSpec) {
-    _pendingAction = { adapterId, actionSpec };
+function showActionForm(adapterId, actionSpec, defaults = {}) {
+    _pendingAction = { adapterId, actionSpec, defaults };
 
     const modal = document.getElementById("action-form-modal");
     const title = document.getElementById("action-form-title");
@@ -1583,22 +2456,38 @@ function showActionForm(adapterId, actionSpec) {
     fields.innerHTML = Object.entries(properties).map(([name, schema]) => {
         const isReq = required.includes(name);
         const label = _humanizeLabel(name);
+        const defaultValue = defaults[name];
         const inputType = schema.type === "boolean" ? "checkbox"
             : (schema.type === "integer" || schema.type === "number" ? "number" : "text");
         const placeholder = schema.description || schema.format || name;
+        const encodedDefault = typeof defaultValue === "object" && defaultValue !== null
+            ? JSON.stringify(defaultValue, null, 2)
+            : (defaultValue ?? "");
+
+        if (defaultValue !== undefined && name.endsWith("_id")) {
+            return `<input id="af-${escapeHtml(name)}" name="${escapeHtml(name)}" type="hidden" class="action-field-input" data-field-type="${escapeHtml(schema.type || "string")}" value="${escapeHtml(encodedDefault)}">`;
+        }
 
         if (inputType === "checkbox") {
             return `
                 <div class="action-form-field action-form-field--check">
-                    <input id="af-${escapeHtml(name)}" name="${escapeHtml(name)}" type="checkbox" class="action-field-input action-field-checkbox">
+                    <input id="af-${escapeHtml(name)}" name="${escapeHtml(name)}" type="checkbox" class="action-field-input action-field-checkbox" ${defaultValue ? "checked" : ""}>
                     <label class="action-field-label" for="af-${escapeHtml(name)}">${escapeHtml(label)}</label>
+                </div>`;
+        }
+        if (schema.type === "object" || schema.type === "array") {
+            return `
+                <div class="action-form-field">
+                    <label class="action-field-label" for="af-${escapeHtml(name)}">${escapeHtml(label)}${isReq ? ' <span class="af-req">*</span>' : ""}</label>
+                    <textarea id="af-${escapeHtml(name)}" name="${escapeHtml(name)}" data-field-type="${escapeHtml(schema.type)}"
+                              placeholder="${escapeHtml(placeholder)}" class="action-field-input action-field-textarea" ${isReq ? "required" : ""}>${escapeHtml(encodedDefault)}</textarea>
                 </div>`;
         }
         return `
             <div class="action-form-field">
                 <label class="action-field-label" for="af-${escapeHtml(name)}">${escapeHtml(label)}${isReq ? ' <span class="af-req">*</span>' : ""}</label>
                 <input id="af-${escapeHtml(name)}" name="${escapeHtml(name)}" type="${inputType}"
-                       placeholder="${escapeHtml(placeholder)}" class="action-field-input" ${isReq ? "required" : ""}>
+                       data-field-type="${escapeHtml(schema.type || "string")}" placeholder="${escapeHtml(placeholder)}" class="action-field-input" value="${escapeHtml(encodedDefault)}" ${isReq ? "required" : ""}>
             </div>`;
     }).join("");
 
@@ -1609,17 +2498,49 @@ function showActionForm(adapterId, actionSpec) {
     modal.classList.remove("hidden");
 }
 
+async function _submitAdapterAction(adapterId, actionName, params) {
+    const manifest = adapterCache.manifest[adapterId] || {};
+    const actionSpec = (manifest.actions || []).find((action) => action.name === actionName);
+    const label = actionSpec?.label || _humanizeLabel(actionName);
+
+    try {
+        const resp = await fetch(`/k1/tools/${adapterId}/${actionName}`, {
+            method: "POST",
+            headers: { ...buildAppsHeaders(), "Content-Type": "application/json" },
+            body: JSON.stringify(params || {}),
+        });
+        const result = resp.ok ? await resp.json() : { success: false, error: `HTTP ${resp.status}` };
+        if (result.success !== false) {
+            showToast("Done", `${label} completed.`);
+            const viewId = Object.entries(ADAPTER_BACKEND_NAME).find(([, b]) => b === adapterId)?.[0];
+            if (viewId) await loadAdapterView(viewId);
+            if (state.currentView === "home") loadHomeDashboard();
+        } else {
+            showToast("Action failed", result.error || result.error_message || result.error_code || "Unknown error", 7000);
+        }
+    } catch (e) {
+        showToast("Error", e.message, 7000);
+    }
+}
+
 async function submitActionForm() {
     if (!_pendingAction) return;
     const { adapterId, actionSpec } = _pendingAction;
 
     const modal = document.getElementById("action-form-modal");
     const inputs = modal.querySelectorAll(".action-field-input");
+    const properties = actionSpec.params?.properties || {};
     const params = {};
-    inputs.forEach((input) => {
-        if (!input.name) return;
-        params[input.name] = input.type === "checkbox" ? input.checked : (input.value || undefined);
-    });
+    try {
+        inputs.forEach((input) => {
+            if (!input.name) return;
+            const value = _parseActionInput(input, properties[input.name] || {});
+            if (value !== undefined) params[input.name] = value;
+        });
+    } catch (e) {
+        showToast("Check the form", e.message, 7000);
+        return;
+    }
 
     const btn = document.getElementById("btn-action-submit");
     btn.textContent = "Submitting…";
@@ -1656,6 +2577,34 @@ function closeActionForm() {
     _pendingAction = null;
 }
 
+function _parseActionInput(input, schema) {
+    if (input.type === "checkbox") return Boolean(input.checked);
+    const raw = input.value;
+    if (raw === "") return undefined;
+    const type = schema.type || input.dataset.fieldType || "string";
+    if (type === "integer") {
+        const value = Number.parseInt(raw, 10);
+        if (Number.isNaN(value)) throw new Error(`${_humanizeLabel(input.name)} must be a number.`);
+        return value;
+    }
+    if (type === "number") {
+        const value = Number.parseFloat(raw);
+        if (Number.isNaN(value)) throw new Error(`${_humanizeLabel(input.name)} must be a number.`);
+        return value;
+    }
+    if (type === "object" || type === "array") {
+        try {
+            const parsed = JSON.parse(raw);
+            if (type === "array" && !Array.isArray(parsed)) throw new Error("array");
+            if (type === "object" && (parsed === null || Array.isArray(parsed) || typeof parsed !== "object")) throw new Error("object");
+            return parsed;
+        } catch {
+            throw new Error(`${_humanizeLabel(input.name)} must be valid JSON ${type}.`);
+        }
+    }
+    return raw;
+}
+
 // ============================================================================
 // Adapter helpers
 // ============================================================================
@@ -1690,6 +2639,88 @@ function _currentRole() {
 }
 
 async function _fetchAdapterData(adapterId, manifest) {
+    const readAction = (name) => (manifest.actions || []).find((a) => a.kind === "read" && a.name === name);
+
+    if (adapterId === "calendar") {
+        const eventAction = readAction("list_events");
+        const feedAction = readAction("list_feeds");
+        const [eventData, feedData] = await Promise.all([
+            eventAction ? _callListAction(adapterId, eventAction) : null,
+            feedAction ? _callListAction(adapterId, feedAction) : null,
+        ]);
+        return {
+            success: true,
+            events: Array.isArray(eventData?.events) ? eventData.events : [],
+            feeds: Array.isArray(feedData?.feeds) ? feedData.feeds : [],
+            event_result: eventData,
+            feed_result: feedData,
+        };
+    }
+
+    if (adapterId === "tasks") {
+        const taskAction = readAction("list_tasks");
+        const listAction = readAction("list_lists");
+        const [taskData, listData] = await Promise.all([
+            taskAction ? _callListAction(adapterId, taskAction) : null,
+            listAction ? _callListAction(adapterId, listAction) : null,
+        ]);
+        return {
+            success: true,
+            tasks: Array.isArray(taskData?.tasks) ? taskData.tasks : [],
+            lists: Array.isArray(listData?.lists) ? listData.lists : [],
+            task_result: taskData,
+            list_result: listData,
+        };
+    }
+
+    if (adapterId === "shopping") {
+        const listAction = readAction("list_lists");
+        const itemAction = readAction("list_items");
+        const [listData, itemData] = await Promise.all([
+            listAction ? _callListAction(adapterId, listAction) : null,
+            itemAction ? _callListAction(adapterId, itemAction) : null,
+        ]);
+        return {
+            success: true,
+            lists: Array.isArray(listData?.lists) ? listData.lists : [],
+            items: Array.isArray(itemData?.items) ? itemData.items : [],
+            list_result: listData,
+            item_result: itemData,
+        };
+    }
+
+    if (adapterId === "chores") {
+        const choreAction = readAction("list_chores");
+        const summaryAction = readAction("chore_summary");
+        const [choreData, summaryData] = await Promise.all([
+            choreAction ? _callListAction(adapterId, choreAction) : null,
+            summaryAction ? _callListAction(adapterId, summaryAction) : null,
+        ]);
+        return {
+            success: true,
+            chores: Array.isArray(choreData?.chores) ? choreData.chores : [],
+            summary: Array.isArray(summaryData?.summary) ? summaryData.summary : [],
+            chore_result: choreData,
+            summary_result: summaryData,
+        };
+    }
+
+    if (adapterId === "family_settings") {
+        const policyAction = readAction("get_visibility_policy");
+        const flagsAction = readAction("list_feature_flags");
+        const [policyData, flagsData] = await Promise.all([
+            policyAction ? _callListAction(adapterId, policyAction) : null,
+            flagsAction ? _callListAction(adapterId, flagsAction) : null,
+        ]);
+        return {
+            success: true,
+            policy: policyData?.policy || null,
+            flags: Array.isArray(flagsData?.flags) ? flagsData.flags : [],
+            policy_result: policyData,
+            flags_result: flagsData,
+        };
+    }
+
     const listAction = (manifest.actions || []).find((a) => a.kind === "read" && a.name.startsWith("list_"))
         || (manifest.actions || []).find((a) => a.kind === "read")
         || null;
@@ -1780,6 +2811,7 @@ function _scheduleSSRefresh() {
 function renderSessionState(data) {
     const sections = data.sections || {};
     const details = data.section_details || {};
+    const payloads = data.section_payloads || {};
     let hotBytes = 0, warmBytes = 0, hotCap = 0, warmCap = 0;
     for (const [n, info] of Object.entries(sections)) {
         const d = details[n] || {};
@@ -1820,22 +2852,118 @@ function renderSessionState(data) {
         ${_ssTierBar("HOT", hotPct, hotBytes / 1024, hotCap / 1024)}
         ${_ssTierBar("WARM", warmPct, warmBytes / 1024, warmCap / 1024)}`;
 
+    const sectionNames = Object.keys(sections);
+    if (!state.sessionStateSelectedSection || !sections[state.sessionStateSelectedSection]) {
+        state.sessionStateSelectedSection = sectionNames.find((name) => _ssPayloadHasData(payloads[name]?.data)) || sectionNames[0] || null;
+    }
+
     const hot = [], warm = [];
     for (const [name, info] of Object.entries(sections)) {
         const d = details[name] || {};
         const sz = d.current_size_bytes ?? info.size_bytes;
         const cap = d.budget_bytes ?? info.budget_bytes;
         const pct = cap > 0 ? (sz / cap) * 100 : 0;
+        const selected = state.sessionStateSelectedSection === name;
+        const payloadSummary = _ssPayloadSummary(payloads[name]?.data);
         const row = `
-            <div class="ss-section-row">
-                <span class="ss-section-name">${escapeHtml(name.replace(/_/g, " "))}</span>
+            <button class="ss-section-row${selected ? " ss-section-row--active" : ""}" data-ss-section="${escapeHtml(name)}" type="button">
+                <span class="ss-section-main">
+                    <span class="ss-section-name">${escapeHtml(name.replace(/_/g, " "))}</span>
+                    <span class="ss-section-subtitle">${escapeHtml(payloadSummary)}</span>
+                </span>
                 <span class="ss-section-detail">${(sz / 1024).toFixed(2)} / ${(cap / 1024).toFixed(0)} KB · ${pct.toFixed(0)}%</span>
-            </div>`;
+            </button>`;
         (info.tier === "hot" ? hot : warm).push(row);
     }
     dom.ssHotSections.innerHTML = hot.join("") || `<p class="muted-empty">Empty.</p>`;
     dom.ssWarmSections.innerHTML = warm.join("") || `<p class="muted-empty">Empty.</p>`;
+    document.querySelectorAll("[data-ss-section]").forEach((button) => {
+        button.addEventListener("click", () => {
+            state.sessionStateSelectedSection = button.dataset.ssSection;
+            renderSessionState(data);
+        });
+    });
+    renderSessionInspector(data, state.sessionStateSelectedSection);
     dom.ssColdInfo.innerHTML = `SQLite archive: <strong>${data.local_cold_count || 0}</strong> items (K1 edge storage)`;
+}
+
+function renderSessionInspector(data, sectionName) {
+    if (!dom.ssInspector) return;
+    const sections = data.sections || {};
+    const details = data.section_details || {};
+    const payload = (data.section_payloads || {})[sectionName] || {};
+    const info = sections[sectionName] || {};
+    const detail = details[sectionName] || {};
+    const sectionTitle = sectionName ? sectionName.replace(/_/g, " ") : "No section selected";
+    const size = detail.current_size_bytes ?? info.size_bytes ?? 0;
+    const budget = detail.budget_bytes ?? info.budget_bytes ?? 0;
+    const pct = budget > 0 ? (size / budget) * 100 : 0;
+    const dataValue = payload.data;
+    const stats = _ssInspectorStats(dataValue);
+
+    dom.ssInspector.innerHTML = `
+        <div class="ss-inspector-head">
+            <div>
+                <p class="ss-inspector-kicker">${escapeHtml(String(info.tier || "section").toUpperCase())} section</p>
+                <h3>${escapeHtml(_humanizeLabel(sectionTitle))}</h3>
+            </div>
+            <div class="ss-inspector-meta">
+                <span>${(size / 1024).toFixed(2)} KB</span>
+                <span>${pct.toFixed(0)}%</span>
+                <span>${escapeHtml(payload.serializer || "snapshot")}</span>
+            </div>
+        </div>
+        <div class="ss-inspector-chips">
+            ${stats.map((stat) => `<span>${escapeHtml(stat)}</span>`).join("")}
+        </div>
+        ${payload.error ? `<div class="view-error">${escapeHtml(payload.error)}</div>` : ""}
+        <pre class="ss-data-viewer">${escapeHtml(_ssStringifyData(dataValue))}</pre>`;
+}
+
+function _ssPayloadHasData(value) {
+    if (value == null) return false;
+    if (Array.isArray(value)) return value.length > 0;
+    if (typeof value === "object") return Object.keys(value).some((key) => _ssPayloadHasData(value[key]));
+    if (typeof value === "string") return value.length > 0;
+    return true;
+}
+
+function _ssPayloadSummary(value) {
+    if (value == null) return "No stored data";
+    if (Array.isArray(value)) return `${value.length} items`;
+    if (typeof value === "object") {
+        const keys = Object.keys(value);
+        const counts = keys
+            .map((key) => Array.isArray(value[key]) ? `${value[key].length} ${key}` : null)
+            .filter(Boolean)
+            .slice(0, 2);
+        return counts.length ? counts.join(" · ") : `${keys.length} fields`;
+    }
+    return String(value).slice(0, 60);
+}
+
+function _ssInspectorStats(value) {
+    if (value == null) return ["empty"];
+    if (Array.isArray(value)) return [`${value.length} items`];
+    if (typeof value === "object") {
+        const keys = Object.keys(value);
+        const chips = [`${keys.length} fields`];
+        keys.forEach((key) => {
+            if (Array.isArray(value[key])) chips.push(`${value[key].length} ${key}`);
+            else if (value[key] && typeof value[key] === "object") chips.push(`${Object.keys(value[key]).length} ${key}`);
+        });
+        return chips.slice(0, 6);
+    }
+    return [typeof value];
+}
+
+function _ssStringifyData(value) {
+    if (value == null) return "No stored data in this section yet.";
+    try {
+        return JSON.stringify(value, null, 2);
+    } catch {
+        return String(value);
+    }
 }
 
 function _ssTierBar(label, pct, usedKB, totalKB) {

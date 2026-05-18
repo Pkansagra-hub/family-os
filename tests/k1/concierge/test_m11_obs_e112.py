@@ -25,9 +25,11 @@ from k1.concierge.obs.actor_metrics import (
     MODE_EXPECTATIONS,
     TIER_BUDGET_LIMITS,
     BackOutcome,
+    BackProfileSelectionOutcome,
     FrontOutcome,
     classify_budget_utilization,
     record_back_metrics,
+    record_back_profile_selection,
     record_front_metrics,
 )
 from k1.concierge.obs.metrics import MetricsCollector
@@ -784,6 +786,49 @@ class TestRecordBackMetrics:
         assert util == [0.875]
 
 
+class TestRecordBackProfileSelection:
+    """Back profile-selection observability uses the real MetricsCollector."""
+
+    def test_records_profile_reason_confidence_and_evidence(self) -> None:
+        mc = MetricsCollector(session_id="s1")
+        outcome = BackProfileSelectionOutcome(
+            task_id="task-1",
+            trace_id="trace-1",
+            profile_ids=("calendar.v1",),
+            confidence=0.8,
+            evidence_sources=("domain:calendar",),
+            fallback_reason="domain_metadata",
+        )
+
+        record_back_profile_selection(mc, outcome)
+
+        assert mc.get_counter("back.profile.selection_count", {"reason": "domain_metadata"}) == 1.0
+        assert mc.get_histogram("back.profile.confidence", {"reason": "domain_metadata"}) == [0.8]
+        assert (
+            mc.get_counter(
+                "back.profile.profile_selected",
+                {"reason": "domain_metadata", "profile_id": "calendar.v1"},
+            )
+            == 1.0
+        )
+        assert mc.get_histogram(
+            "back.profile.evidence_source_count",
+            {"reason": "domain_metadata"},
+        ) == [1.0]
+
+    def test_disabled_collector_noop(self) -> None:
+        mc = MetricsCollector(session_id="s1", enabled=False)
+        record_back_profile_selection(
+            mc,
+            BackProfileSelectionOutcome(
+                profile_ids=("system_of_record.generic.v1",),
+                fallback_reason="discovery_required",
+            ),
+        )
+
+        assert mc.pending_count() == 0
+
+
 # =====================================================================
 # 11.2.3 -- classify_budget_utilization
 # =====================================================================
@@ -846,16 +891,20 @@ class TestE112PackageImport:
     def test_import_actor_metrics(self) -> None:
         from k1.concierge.obs import (
             BackOutcome,
+            BackProfileSelectionOutcome,
             FrontOutcome,
             classify_budget_utilization,
             record_back_metrics,
+            record_back_profile_selection,
             record_front_metrics,
         )
 
         assert FrontOutcome is not None
         assert BackOutcome is not None
+        assert BackProfileSelectionOutcome is not None
         assert record_front_metrics is not None
         assert record_back_metrics is not None
+        assert record_back_profile_selection is not None
         assert classify_budget_utilization is not None
 
 

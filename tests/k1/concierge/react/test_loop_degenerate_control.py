@@ -228,3 +228,179 @@ async def test_back_text_after_empty_discovery_nudges_needs_human() -> None:
     ]
     assert nudge_messages
     assert "result_type='needs_human'" in nudge_messages[-1]
+
+
+@pytest.mark.asyncio
+async def test_failed_capability_binding_does_not_count_as_authority_progress() -> None:
+    class Model:
+        def __init__(self) -> None:
+            self.requests = []
+
+        async def execute(self, request):  # type: ignore[no-untyped-def]
+            self.requests.append(request)
+            if len(self.requests) == 1:
+                return make_hub_tool_response(
+                    [
+                        {
+                            "id": "invoke-1",
+                            "name": "invoke_capability",
+                            "arguments": {
+                                "capability_name": "tool.read.shopping.list_lists",
+                                "params": {"category": "groceries"},
+                            },
+                        }
+                    ]
+                )
+            if len(self.requests) == 2:
+                return make_hub_text_response("I handled it.")
+            return make_hub_tool_response(
+                [
+                    {
+                        "id": "submit-1",
+                        "name": "submit_result",
+                        "arguments": {
+                            "result_type": "needs_human",
+                            "hil_type": "clarification",
+                            "question": "No valid registry capability was available.",
+                        },
+                    }
+                ]
+            )
+
+    class Dispatcher:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def dispatch(self, tool_call):  # type: ignore[no-untyped-def]
+            self.calls.append(tool_call.name)
+            if tool_call.name == "invoke_capability":
+                return ToolResult(
+                    tool_name="invoke_capability",
+                    status="error",
+                    error="capability_binding_invalid_candidate",
+                    data={
+                        "candidates": [{"name": "tool.read.shopping.list_lists"}],
+                        "recovery": {
+                            "rejected_name": "tool.read.shopping.bad_name",
+                        },
+                    },
+                )
+            return ToolResult(tool_name=tool_call.name, status="ok", data={"ok": True})
+
+    model = Model()
+    dispatcher = Dispatcher()
+
+    result = await react_loop(
+        actor="back",
+        system_prompt="system",
+        messages=[],
+        tools=[_tool("invoke_capability"), _submit_tool()],
+        max_iterations=4,
+        model=model,  # type: ignore[arg-type]
+        tool_dispatcher=dispatcher,  # type: ignore[arg-type]
+        on_text_response=lambda text: None,  # type: ignore[arg-type]
+        cancellation_check=_never_cancel,
+        trace_id="failed-binding-authority-test",
+        scenario="task_execution",
+    )
+
+    assert result.status == "suspended"
+    assert dispatcher.calls == ["invoke_capability", "submit_result"]
+    message_text = "\n".join(
+        message.content for request in model.requests for message in request.payload.messages
+    )
+    assert "failed during registry binding" in message_text
+    assert "You already invoked an authority capability" not in message_text
+
+
+@pytest.mark.asyncio
+async def test_back_discovery_context_spin_gets_authority_nudge() -> None:
+    class Model:
+        def __init__(self) -> None:
+            self.requests = []
+
+        async def execute(self, request):  # type: ignore[no-untyped-def]
+            self.requests.append(request)
+            if len(self.requests) == 1:
+                return make_hub_tool_response(
+                    [
+                        {
+                            "id": "discover-1",
+                            "name": "discover_capabilities",
+                            "arguments": {"intent": "add groceries", "domain": "shopping"},
+                        }
+                    ]
+                )
+            if len(self.requests) == 2:
+                return make_hub_tool_response(
+                    [
+                        {
+                            "id": "recall-1",
+                            "name": "recall_memory",
+                            "arguments": {"query": "shopping list ingredients"},
+                        }
+                    ]
+                )
+            return make_hub_tool_response(
+                [
+                    {
+                        "id": "submit-1",
+                        "name": "submit_result",
+                        "arguments": {
+                            "result_type": "needs_human",
+                            "hil_type": "clarification",
+                            "question": "Which list should I use?",
+                        },
+                    }
+                ]
+            )
+
+    class Dispatcher:
+        async def dispatch(self, tool_call):  # type: ignore[no-untyped-def]
+            if tool_call.name == "discover_capabilities":
+                return ToolResult(
+                    tool_name="discover_capabilities",
+                    status="ok",
+                    data={
+                        "count": 1,
+                        "capabilities": [
+                            {
+                                "name": "tool.execute.shopping.add_item",
+                                "schema": {
+                                    "capabilities": ["write", "adapter:shopping"],
+                                    "required_inputs": [
+                                        {"name": "list_id"},
+                                        {"name": "name"},
+                                    ],
+                                },
+                            }
+                        ],
+                    },
+                )
+            return ToolResult(tool_name=tool_call.name, status="ok", data={"ok": True})
+
+    model = Model()
+
+    result = await react_loop(
+        actor="back",
+        system_prompt="system",
+        messages=[],
+        tools=[_tool("discover_capabilities"), _tool("recall_memory"), _submit_tool()],
+        max_iterations=4,
+        model=model,  # type: ignore[arg-type]
+        tool_dispatcher=Dispatcher(),  # type: ignore[arg-type]
+        on_text_response=lambda text: None,  # type: ignore[arg-type]
+        cancellation_check=_never_cancel,
+        trace_id="back-spin-nudge-test",
+        scenario="task_execution",
+    )
+
+    assert result.status == "suspended"
+    assert any(event["event_type"] == "back_capability_spin_nudge" for event in result.loop_events)
+    third_request_text = "\n".join(
+        message.content for message in model.requests[2].payload.messages
+    )
+    assert (
+        "Do NOT call discover_capabilities, recall_memory, or summarize_context again"
+        in third_request_text
+    )

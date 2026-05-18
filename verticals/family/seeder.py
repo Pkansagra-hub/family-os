@@ -240,13 +240,25 @@ class SpaceDataSeeder:
             l2: dict = {}
             l3: dict = {}
             if member is not None:
+                selfmodel_role = member.role()
                 l1["display_name"] = member.name
-                l1["role"] = member.relation
+                l1["role"] = selfmodel_role
+                l1["consent_posture"] = {
+                    "family": [
+                        "display_name",
+                        "role",
+                        "role_in_family",
+                        "age_band",
+                        "preferences",
+                        "schedule_summary",
+                    ]
+                }
                 if member.age:
                     l1["age"] = member.age
                 if member.occupation:
                     l1["occupation"] = member.occupation
-                l2["role_in_family"] = member.relation
+                l2["role_in_family"] = selfmodel_role
+                l2["family_relation"] = member.relation
                 if member.age_band() != "unknown":
                     l2["age_band"] = member.age_band()
                 # L3: rich profile data that fills [preferences]/[hobbies]/[space] blocks

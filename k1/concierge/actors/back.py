@@ -57,7 +57,12 @@ from k1.concierge.bus.builders import (
 from k1.concierge.config import get_config
 from k1.concierge.llm.types import ModelMessage
 from k1.concierge.llm.validator import LLMOutputValidator
+from k1.concierge.obs.actor_metrics import (
+    BackProfileSelectionOutcome,
+    record_back_profile_selection,
+)
 from k1.concierge.prompt.back_profiles import (
+    BackProfileSelection,
     render_back_execution_profile_block,
     select_back_execution_profiles,
 )
@@ -70,6 +75,7 @@ from k1.concierge.react.history import build_chat_history_for_back
 from k1.concierge.react.loop import ReactResult, react_loop
 from k1.concierge.tools.dispatcher import ToolDispatcher, create_back_dispatcher
 from k1.concierge.tools.schemas_back import BACK_TIER_ALLOWLISTS, BACK_TOOL_SCHEMAS
+from k1.hil.types import NeedsHumanRequest
 from k1.model_hub.ports import IModelHubPort
 
 logger = logging.getLogger(__name__)
@@ -77,12 +83,12 @@ logger = logging.getLogger(__name__)
 _SAFETY_BANDS = frozenset({"GREEN", "AMBER", "RED", "CRISIS"})
 
 
-def _normalize_safety_band(value: Any, default: str = "AMBER") -> str:
+def _normalize_safety_band(value: Any, default: str = "GREEN") -> str:
     band = str(value or "").upper()
     if band in _SAFETY_BANDS:
         return band
-    fallback = str(default or "AMBER").upper()
-    return fallback if fallback in _SAFETY_BANDS else "AMBER"
+    fallback = str(default or "GREEN").upper()
+    return fallback if fallback in _SAFETY_BANDS else "GREEN"
 
 
 def _effective_task_safety_band(task: dict[str, Any], snapshot: dict[str, Any]) -> str:
@@ -109,6 +115,7 @@ def _bind_tool_context(
     session_id: str,
     task_id: str,
     safety_band: str | None = None,
+    execution_profiles: list[dict[str, Any]] | None = None,
 ) -> None:
     """Bind Back tool calls to the current envelope correlation scope."""
     ctx = getattr(tool_dispatcher, "ctx", None)
@@ -122,6 +129,10 @@ def _bind_tool_context(
             safety_band,
             default=get_config().actors.back.default_safety_band,
         )
+    if execution_profiles is not None:
+        ctx.active_execution_profiles = [
+            dict(profile) for profile in execution_profiles if isinstance(profile, dict)
+        ]
 
 
 # Compatibility export -- max ReAct iterations per tier
@@ -433,19 +444,61 @@ def _execution_records(tool_dispatcher: ToolDispatcher) -> list[dict[str, Any]]:
         return []
 
 
-def _execution_profile_block_for_task(task: dict[str, Any]) -> str:
+def _execution_profile_selection_for_task(task: dict[str, Any]) -> BackProfileSelection:
     reference_context = task.get("reference_context") if isinstance(task, dict) else None
-    selection = select_back_execution_profiles(
+    return select_back_execution_profiles(
         task,
         reference_context=reference_context if isinstance(reference_context, dict) else None,
     )
+
+
+def _persist_execution_profile_selection(
+    task: dict[str, Any],
+    selection: BackProfileSelection,
+) -> list[dict[str, Any]]:
+    profiles = selection.to_dict()["profiles"]
     if isinstance(task, dict) and not task.get("execution_profiles"):
-        task["execution_profiles"] = selection.to_dict()["profiles"]
+        task["execution_profiles"] = profiles
+    return [dict(profile) for profile in profiles if isinstance(profile, dict)]
+
+
+def _metrics_collector_for_dispatcher(tool_dispatcher: ToolDispatcher) -> Any | None:
+    ctx = getattr(tool_dispatcher, "ctx", None)
+    return getattr(ctx, "metrics_collector", None)
+
+
+def _record_execution_profile_selection(
+    *,
+    label: str,
+    task_id: str,
+    trace_id: str,
+    selection: BackProfileSelection,
+    tool_dispatcher: ToolDispatcher,
+) -> None:
+    outcome = BackProfileSelectionOutcome(
+        task_id=task_id,
+        trace_id=trace_id,
+        profile_ids=selection.profile_ids,
+        confidence=selection.confidence,
+        evidence_sources=selection.evidence_sources,
+        fallback_reason=selection.reason,
+    )
     logger.info(
-        "back_handler: execution profiles reason=%s profiles=%s",
+        "%s: execution profile selection task_id=%s trace=%s reason=%s profiles=%s confidence=%.3f evidence=%s",
+        label,
+        task_id,
+        trace_id[:8] if trace_id else "",
         selection.reason,
         list(selection.profile_ids),
+        selection.confidence,
+        list(selection.evidence_sources),
     )
+    collector = _metrics_collector_for_dispatcher(tool_dispatcher)
+    if collector is not None:
+        record_back_profile_selection(collector, outcome)
+
+
+def _execution_profile_block_for_selection(selection: BackProfileSelection) -> str:
     return render_back_execution_profile_block(selection)
 
 
@@ -496,6 +549,173 @@ def _get_back_control_queue(
         registrar(task_id, queue)
         return queue
     return None
+
+
+def _normalize_hil_options(raw: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw, list):
+        return []
+    options: list[dict[str, Any]] = []
+    for item in raw:
+        if isinstance(item, dict):
+            options.append(dict(item))
+        else:
+            value = str(item)
+            options.append({"label": value, "value": value})
+    return options
+
+
+def _normalize_hil_side_effects(raw: Any) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    side_effects: list[str] = []
+    for item in raw:
+        if isinstance(item, str):
+            side_effects.append(item)
+        else:
+            side_effects.append(json.dumps(item, separators=(",", ":"), default=str))
+    return side_effects
+
+
+def _resume_task_after_unified_hil(fsm_state: Any | None, task_id: str) -> None:
+    task_bridge = getattr(fsm_state, "task_bridge", None) if fsm_state is not None else None
+    resume_task = getattr(task_bridge, "resume_task", None)
+    if callable(resume_task):
+        resume_task(task_id)
+
+
+def _hil_response_resume_message(response: Any) -> ModelMessage:
+    payload = {
+        "hil_request_id": getattr(response, "hil_request_id", ""),
+        "decision": getattr(response, "decision", ""),
+        "resolution": getattr(response, "resolution", {}) or {},
+        "raw_user_text": getattr(response, "raw_user_text", None),
+    }
+    return ModelMessage(
+        role="user",
+        content=(
+            "HIL_RESPONSE\n"
+            "Use this human-provided answer to continue the task. Do not ask the "
+            "same question again unless the answer is insufficient.\n"
+            f"{json.dumps(payload, indent=2, default=str)}"
+        ),
+    )
+
+
+async def _resolve_needs_human_in_process(
+    *,
+    result: ReactResult,
+    hil_port: Any | None,
+    task_id: str,
+    trace_id: str,
+    safety_band: str,
+    messages: list[ModelMessage],
+    model: IModelHubPort,
+    system_prompt: str,
+    tools: list[Any],
+    max_iterations: int,
+    tool_dispatcher: ToolDispatcher,
+    cancellation_check: Any,
+    validator: LLMOutputValidator | None,
+    control_queue: asyncio.Queue[BackControlEvent] | None,
+    fsm_state: Any | None,
+) -> ReactResult:
+    needs_human = getattr(hil_port, "needs_human", None) if hil_port is not None else None
+    if not callable(needs_human):
+        if result.status == "suspended":
+            logger.warning(
+                "back_handler: unified HIL port missing for task_id=%s; "
+                "falling back to legacy task.suspended emission",
+                task_id,
+            )
+        return result
+
+    max_rounds = max(1, int(getattr(get_config().protocols, "max_suspensions_per_task", 2) or 2))
+    current = result
+    for round_index in range(max_rounds):
+        if current.status != "suspended":
+            return current
+        data = dict(current.data or {})
+        context = dict(data.get("context") or {}) if isinstance(data.get("context"), dict) else {}
+        context.update(
+            {
+                "round_index": round_index + 1,
+                "result_type": data.get("result_type", "needs_human"),
+            }
+        )
+        req = NeedsHumanRequest(
+            caller_key=f"back:{task_id}",
+            task_id=task_id,
+            trace_id=trace_id,
+            hil_type=str(data.get("hil_type") or "clarification"),
+            question=str(
+                data.get("question")
+                or data.get("prompt")
+                or data.get("message")
+                or "I need more information to continue."
+            ),
+            options=_normalize_hil_options(data.get("options") or data.get("choices")),
+            context=context,
+            side_effects=_normalize_hil_side_effects(data.get("side_effects")),
+            safety_band=safety_band,
+            react_history=_serialize_messages(messages),
+            timeout_ms=int(get_config().actors.back.hitl_timeout_s) * 1000,
+        )
+        logger.info(
+            "back_handler: requesting unified HIL task_id=%s hil_type=%s round=%d trace=%s",
+            task_id,
+            req.hil_type,
+            round_index + 1,
+            trace_id[:8] if trace_id else "",
+        )
+        try:
+            response = await needs_human(req)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("back_handler: unified HIL request failed task_id=%s", task_id)
+            return ReactResult(
+                status="cancelled",
+                data={
+                    "error_code": "HIL_REQUEST_FAILED",
+                    "error_message": str(exc),
+                    "partial_results": data,
+                },
+            )
+        if getattr(response, "timed_out", False):
+            logger.warning("back_handler: unified HIL timed out task_id=%s", task_id)
+            return ReactResult(
+                status="cancelled",
+                data={
+                    "error_code": "HIL_TIMEOUT",
+                    "partial_results": data,
+                },
+            )
+
+        _resume_task_after_unified_hil(fsm_state, task_id)
+        messages.append(_hil_response_resume_message(response))
+        current = await react_loop(
+            actor="back",
+            system_prompt=system_prompt,
+            messages=messages,
+            tools=tools,
+            max_iterations=max(2, max_iterations),
+            model=model,
+            tool_dispatcher=tool_dispatcher,
+            on_text_response=_noop_text,
+            cancellation_check=cancellation_check,
+            trace_id=trace_id,
+            scenario="task_execution_after_hil",
+            validator=validator,
+            control_queue=control_queue,
+        )
+
+    if current.status == "suspended":
+        return ReactResult(
+            status="budget_exhausted",
+            data={
+                "error_code": "HIL_ROUND_BUDGET_EXHAUSTED",
+                "partial_results": current.data or {},
+            },
+        )
+    return current
 
 
 # =========================================================================
@@ -668,6 +888,7 @@ async def back_handler(
     tool_dispatcher: ToolDispatcher,
     fsm_state: Any | None = None,
     cancel_token: CancellationToken | None = None,
+    hil_port: Any | None = None,
 ) -> ReactResult:
     """Back handler: ReAct agent for task execution.
 
@@ -758,6 +979,25 @@ async def back_handler(
     if budget_hint is not None:
         max_iterations = _budget_to_iterations(budget_hint)
 
+    profile_selection = _execution_profile_selection_for_task(task)
+    execution_profiles = _persist_execution_profile_selection(task, profile_selection)
+    _record_execution_profile_selection(
+        label="back_handler",
+        task_id=task_id,
+        trace_id=trace_id,
+        selection=profile_selection,
+        tool_dispatcher=tool_dispatcher,
+    )
+    execution_profile_block = _execution_profile_block_for_selection(profile_selection)
+    _bind_tool_context(
+        tool_dispatcher,
+        trace_id=trace_id,
+        session_id=envelope.session_id,
+        task_id=task_id,
+        safety_band=effective_safety_band,
+        execution_profiles=execution_profiles,
+    )
+
     system_prompt = build_back_prompt(
         task=task,
         beliefs=snapshot["beliefs_prompt"],
@@ -767,7 +1007,7 @@ async def back_handler(
         safety_band=effective_safety_band,
         persona_prefs=snapshot["persona_prefs"],
         max_tool_calls=max_iterations,
-        execution_profile_block=_execution_profile_block_for_task(task),
+        execution_profile_block=execution_profile_block,
     )
 
     # 3. Build messages: last N entries + task as "user" message
@@ -803,6 +1043,10 @@ async def back_handler(
         "back_handler: LLM INPUT tools=%s",
         [t.name for t in tools],
     )
+    logger.debug(
+        "back_handler: SYSTEM PROMPT\n%s",
+        system_prompt,
+    )
 
     # Build output validator with tier-filtered tools (Epic 4.1)
     validator = LLMOutputValidator(tools) if tools else None
@@ -832,16 +1076,26 @@ async def back_handler(
         control_queue=control_queue,
     )
 
-    # 6b. needs_human → task.suspended (no in-process bypass).
-    # When react_loop returns status="suspended" (Back called
-    # submit_result(needs_human, ...)), _emit_back_result below publishes
-    # TOPIC_TASK_SUSPENDED. The FSM transitions COMPANIONING →
-    # CLARIFYING_WORKER, Front runs in HITL_RELAY mode to translate the
-    # structured request to natural-language prose, the user replies via
-    # ordinary chat, and Front (HITL_RESOLVE) emits TOPIC_TASK_RESUME
-    # which back_resume_handler picks up to continue the ReAct loop.
-    # This preserves the Front-owns-user-channel invariant (see
-    # _scan_temp/04_actors.md and _scan_temp/11_diagram.md §8.3).
+    # 6b. Live needs_human is resolved through the unified HIL port. The
+    # residual task.suspended emission path remains only for no-port legacy
+    # fixtures and crash-recovery compatibility.
+    result = await _resolve_needs_human_in_process(
+        result=result,
+        hil_port=hil_port,
+        task_id=task_id,
+        trace_id=trace_id,
+        safety_band=effective_safety_band,
+        messages=messages,
+        model=model,
+        system_prompt=system_prompt,
+        tools=tools,
+        max_iterations=max_iterations,
+        tool_dispatcher=tool_dispatcher,
+        cancellation_check=cancellation_check,
+        validator=validator,
+        control_queue=control_queue,
+        fsm_state=fsm_state,
+    )
 
     # 7. Emit result to bus (Epic 7.3)
     # M3 E3.3.4: Pass react history + original task for suspended payloads
@@ -1069,6 +1323,24 @@ async def back_resume_handler(
     if budget_hint is not None:
         original_budget = _budget_to_iterations(budget_hint)
 
+    profile_selection = _execution_profile_selection_for_task(original_task)
+    execution_profiles = _persist_execution_profile_selection(original_task, profile_selection)
+    _record_execution_profile_selection(
+        label="back_resume_handler",
+        task_id=task_id,
+        trace_id=trace_id,
+        selection=profile_selection,
+        tool_dispatcher=tool_dispatcher,
+    )
+    _bind_tool_context(
+        tool_dispatcher,
+        trace_id=trace_id,
+        session_id=envelope.session_id,
+        task_id=task_id,
+        safety_band=effective_safety_band,
+        execution_profiles=execution_profiles,
+    )
+
     system_prompt = build_back_prompt(
         task=original_task,
         beliefs=snapshot["beliefs_prompt"],
@@ -1078,7 +1350,7 @@ async def back_resume_handler(
         safety_band=effective_safety_band,
         persona_prefs=snapshot["persona_prefs"],
         max_tool_calls=original_budget,
-        execution_profile_block=_execution_profile_block_for_task(original_task),
+        execution_profile_block=_execution_profile_block_for_selection(profile_selection),
     )
 
     # 4. Hydrate resolution into messages (copy to avoid mutation)
@@ -1296,6 +1568,7 @@ async def route_back_envelope(
     tool_dispatcher: ToolDispatcher,
     fsm_state: Any | None = None,
     cancel_token: CancellationToken | None = None,
+    hil_port: Any | None = None,
 ) -> ReactResult | None:
     """Central topic-based dispatcher for all back-bound envelopes.
 
@@ -1353,6 +1626,7 @@ async def route_back_envelope(
             tool_dispatcher=tool_dispatcher,
             fsm_state=fsm_state,
             cancel_token=cancel_token,
+            hil_port=hil_port,
         )
 
     if topic == TOPIC_TASK_RESUME:

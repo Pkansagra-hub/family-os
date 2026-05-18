@@ -213,6 +213,7 @@ class PromptContractParser:
             version=body.get("version", ""),
             domain=list(body.get("domain", [])),
             description=body.get("description", ""),
+            activity_profile=body.get("activity_profile", ""),
             # ---- Retrieval Matching ----
             intent_match=list(body.get("intent_match", [])),
             # ---- Template Variables ----

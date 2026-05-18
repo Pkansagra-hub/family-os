@@ -231,8 +231,8 @@ class GroundingCapsuleBuilder:
             )
         for edge in edges:
             kind = _safe_str(getattr(edge, "kind", ""))
-            src = _safe_str(getattr(edge, "src", ""))
-            dst = _safe_str(getattr(edge, "dst", ""))
+            src = _safe_str(getattr(edge, "from_member", "") or getattr(edge, "src", ""))
+            dst = _safe_str(getattr(edge, "to_member", "") or getattr(edge, "dst", ""))
             if not kind:
                 continue
             lines.append(f"- edge {src}--{kind}-->{dst}")

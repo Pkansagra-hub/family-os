@@ -84,7 +84,7 @@ class MWConfig:
     skip_sections: FrozenSet[str] = field(default_factory=lambda: _DEFAULT_SKIP_SECTIONS)
 
     # --- 7. Model Hub Routing ---
-    model_hint: str = "cheapest"
+    model_hint: str = "gemini-2.5-flash"
 
     # --- 7b. Session-Batch Extraction (Option B) ---
     # Replaces per-turn LLM call with buffered + threshold + idle flush.

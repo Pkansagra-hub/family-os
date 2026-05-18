@@ -353,3 +353,9 @@ class TestDateCalcContract:
     def test_contract_domain(self, validator: ContractValidator) -> None:
         contract = parse_contract(CONTRACTS_DIR / "date_calc.yaml", validator=validator)
         assert "UTILITY" in contract.domain
+
+    def test_contract_profile_metadata(self, validator: ContractValidator) -> None:
+        contract = parse_contract(CONTRACTS_DIR / "date_calc.yaml", validator=validator)
+        assert contract.activity_profile == "wasm.generic.v1"
+        assert contract.prompt_template == "wasm_generic_activity_v1"
+        assert contract.tool_instructions is not None

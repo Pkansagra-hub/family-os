@@ -838,6 +838,27 @@ class DynamicPromptBuilder:
         messages = list(history_messages) if history_messages else []
         all_schemas = all_tool_schemas or []
 
+        # M6.E1.I4 / M6.E3.I2: OPP-6 compressed_context and OPP-7
+        # identity_block are smuggled through ``scenario_data`` by
+        # ``front_handler``. The builder consumes them explicitly and
+        # strips them before scenario formatting so they cannot leak via
+        # the ``_format_scenario_data`` fallback (which prints unknown keys
+        # as raw ``key: value`` text). They are then re-injected at their
+        # canonical positions: compressed_context REPLACES the history_active
+        # SS read at Stage 8, identity_block is appended after Stage 9.5
+        # promoted blocks.
+        compressed_context_block = ""
+        identity_block_text = ""
+        if scenario_data:
+            compressed_context_block = str(scenario_data.get("compressed_context", "") or "")
+            identity_block_text = str(scenario_data.get("identity_block", "") or "")
+            if compressed_context_block or identity_block_text:
+                scenario_data = {
+                    k: v
+                    for k, v in scenario_data.items()
+                    if k not in ("compressed_context", "identity_block")
+                }
+
         logger.info(
             "DynamicPromptBuilder.build START  mode=%s affect=%s domain=%s tier=%s depth=%d",
             mode.value,
@@ -926,12 +947,27 @@ class DynamicPromptBuilder:
             if scenario_block:
                 prompt_parts.append(scenario_block)
 
-        # Stage 8: Read and render SS sections per mode config
+        # Stage 8: Read and render SS sections per mode config.
+        # M6.E1.I4: when an OPP-6 compressed_context is present we replace
+        # the raw history_active SS read with the compressed block at the
+        # same position. We do this by filtering history_active out of the
+        # configs list before delegating to ``_read_ss_sections`` (which
+        # owns the rendering of all other sections unchanged), then append
+        # the compressed block. This keeps the SessionState section
+        # untouched and the substitution surface explicit + observable.
         if ss is not None:
             ss_configs = SS_READ_CONFIGS.get(mode, [])
+            if compressed_context_block:
+                ss_configs = [c for c in ss_configs if c.section != "history_active"]
             ss_block = self._read_ss_sections(ss, ss_configs)
             if ss_block:
                 prompt_parts.append(ss_block)
+            if compressed_context_block:
+                prompt_parts.append(compressed_context_block)
+                logger.debug(
+                    "  Stage 8  history_active replaced by OPP-6 " "compressed_context (len=%d)",
+                    len(compressed_context_block),
+                )
 
         # Stage 9: Apply affect modifiers + pre-call budget check
         base_max_iter = self._get_max_iterations(mode, affect_band)
@@ -1006,6 +1042,20 @@ class DynamicPromptBuilder:
         # Insert in original order at insert_idx
         for i, block in enumerate(promoted):
             prompt_parts.insert(insert_idx + i, block)
+
+        # M6.E3.I2: OPP-7 dynamic identity block. Appended AFTER promoted
+        # blocks (so static IDENTITY + member + NOW + AFFECT + CONSCIENCE
+        # are already in place) and BEFORE late grounding/reference body.
+        # The block carries its own ``== DYNAMIC IDENTITY CONTEXT ==``
+        # header from ``IdentitySnapshot.to_prompt_block()``. It must NOT
+        # flow through scenario formatting; ``build`` already stripped it
+        # from ``scenario_data`` at the top of the method.
+        if identity_block_text:
+            prompt_parts.append(identity_block_text)
+            logger.debug(
+                "  Stage 9.5  OPP-7 identity_block appended (len=%d)",
+                len(identity_block_text),
+            )
 
         # Late grounding (reference-lookup blocks: prefs, hobbies, goals,
         # routines, context, freshness). Identity + space + conscience

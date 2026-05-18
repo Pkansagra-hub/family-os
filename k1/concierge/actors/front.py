@@ -865,6 +865,48 @@ def _task_field(task: Any, key: str, default: Any = None) -> Any:
     return getattr(task, key, default)
 
 
+# Terminal task statuses -- task_state.py L74-89 contract.
+_TASK_TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
+
+
+def _has_inflight_tasks(task_state_dict: dict[str, Any]) -> bool:
+    """True when at least one task is NOT in a terminal status.
+
+    M6.E3.I1 forwards this to OppPipeline.on_pre_prompt_build so that
+    DynamicIdentityContext can select the EXECUTOR role for the active
+    user when Back is busy.
+    """
+    for task in task_state_dict.get("tasks", []) or []:
+        status = str(_task_field(task, "status", "") or "").lower()
+        if status and status not in _TASK_TERMINAL_STATUSES:
+            return True
+    return False
+
+
+def _history_entries_to_opp_turns(history_active: Any) -> list[dict[str, Any]]:
+    """M6.E1.I3 thin wrapper -- delegates to the single owner module.
+
+    See :mod:`k1.concierge.compression.turn_shape` for the canonical
+    conversion. Kept here as a private alias so existing call sites in
+    this file (and any future tests that import the private name) keep
+    a stable surface.
+    """
+    from k1.concierge.compression.turn_shape import history_entries_to_opp_turns
+
+    return history_entries_to_opp_turns(history_active)
+
+
+def _derive_active_user(ss: Any) -> tuple[str, str]:
+    """Return (active_user_id, active_user_name) from persona; empty fallbacks."""
+    persona = _safe_get_section(ss, "persona")
+    if persona is None:
+        return ("", "")
+    prefs = getattr(persona, "_preferences", {}) or {}
+    active_member = str(prefs.get("active_member", "") or "")
+    # No separate id field exists in persona -- reuse the display name as id.
+    return (active_member, active_member)
+
+
 def _task_has_status(task: Any, status: str) -> bool:
     return str(_task_field(task, "status", "")).upper() == status.upper()
 
@@ -1157,20 +1199,28 @@ async def front_handler(
             )
 
     # 8. Assemble prompt via mode-driven builder
-    # OPP-6/OPP-7: Enrich prompt with episodic compression + dynamic identity
+    # OPP-6/OPP-7: Enrich prompt with episodic compression + dynamic identity.
+    # M6.E1.I3 + M6.E3.I1: use canonical compressor turn shape; forward
+    # has_inflight_tasks + active user fields so DynamicIdentityContext can
+    # choose EXECUTOR/SUPPORTER/etc. correctly. ``scenario_data`` only carries
+    # the two enriched strings as a transport channel -- DynamicPromptBuilder
+    # consumes them explicitly and strips them before scenario formatting so
+    # they never leak through the _format_scenario_data fallback.
     opp_enrichment = None
     if opp_pipeline is not None:
         try:
             history_active = _get_history_active(ss)
-            turns_for_opp = (
-                [{"role": e.get("role", ""), "text": e.get("text", "")} for e in history_active]
-                if history_active
-                else []
-            )
+            turns_for_opp = _history_entries_to_opp_turns(history_active)
+            task_state_dict = _get_task_state_dict(ss)
+            has_inflight = _has_inflight_tasks(task_state_dict)
+            active_user_id, active_user_name = _derive_active_user(ss)
             opp_enrichment = opp_pipeline.on_pre_prompt_build(
                 turns=turns_for_opp,
                 affect_band=affect_band,
                 active_domains=[domain] if domain else [],
+                active_user_id=active_user_id,
+                active_user_name=active_user_name,
+                has_inflight_tasks=has_inflight,
             )
             if opp_enrichment.compressed_context:
                 scenario_data["compressed_context"] = opp_enrichment.compressed_context
@@ -1181,7 +1231,11 @@ async def front_handler(
                 )
             if opp_enrichment.identity_block:
                 scenario_data["identity_block"] = opp_enrichment.identity_block
-                logger.info("front_handler: OPP-7 dynamic identity block injected")
+                logger.info(
+                    "front_handler: OPP-7 dynamic identity block injected "
+                    "(has_inflight_tasks=%s)",
+                    has_inflight,
+                )
         except Exception:
             logger.warning("front_handler: OPP prompt enrichment failed", exc_info=True)
 

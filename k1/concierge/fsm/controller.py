@@ -169,7 +169,7 @@ def _hil_requested_payload(
         "pending_hil_id": hil_request_id,
         "hil_type": kind,
         "parent_task_id": task_id,
-        "safety_band": contract.get("safety_band_min", "AMBER"),
+        "safety_band": contract.get("safety_band_min", "GREEN"),
         "hil_deadline_ms": int(_parse_payload(envelope).get("timeout_ms", 0) or 0),
         "resume_token": hil_request_id,
         "device_id": "",
@@ -245,7 +245,7 @@ def _task_dispatch_from_payload(payload: dict[str, Any]) -> TaskDispatch:
         "tier": tier,
         "budget_hint": payload.get("budget_hint"),
         "reference_context": payload.get("reference_context"),
-        "safety_band": payload.get("safety_band", "AMBER"),
+        "safety_band": payload.get("safety_band", "GREEN"),
         "depends_on": payload.get("depends_on"),
         "context_snapshot": payload.get("context_snapshot"),
     }
@@ -502,6 +502,16 @@ class ConciergeController:
         self._current_turn_user_text: str = ""  # Tracks user text for turn pairing
         self._current_turn_assistant_response: str = ""
         self._ledger: Any = None  # V3 M1 E1.2: Optional LedgerWriter for event sourcing
+        # M5 G5: when the kernel runs CrashRecoveryOrchestrator at session
+        # create, it calls ``mark_ledger_recovery_done()`` after a
+        # successful rebuild. That flag short-circuits the controller's
+        # own ``_recover_hitl_on_startup`` (which is otherwise wired off
+        # ``set_session_state``) so we don't double-recover HITL state.
+        self._ledger_recovery_done: bool = False
+        # M5 G5: opt-in flag for ledger-driven recovery during
+        # ``set_session_state``. The factory toggles it on when
+        # ``ConciergeConfig.enable_ledger_recovery`` is True.
+        self._ledger_recovery_enabled: bool = False
         self._hitl_responded_tasks: dict[str, str] = {}  # M5 E5.4.4: task_id -> device_id dedup
         self._pending_hil_subtasks: dict[str, HILSubTask] = (
             {}
@@ -677,6 +687,45 @@ class ConciergeController:
         control = ss.get_section("control")
         self._control_ext.bind_control_section(control)
 
+        # M5 G5: ledger-driven crash recovery runs HERE -- after the
+        # TaskBridge/control rebind so projections land in the real SS
+        # sections, and BEFORE ``_recover_hitl_on_startup`` so the
+        # ledger replay can claim authority and short-circuit the
+        # SS-driven HITL scan. Default-off keeps cold-start behavior
+        # unchanged for callers that haven't opted in via
+        # ``enable_ledger_recovery_on_attach``.
+        if (
+            self._ledger_recovery_enabled
+            and self._ledger is not None
+            and not self._ledger_recovery_done
+        ):
+            try:
+                from k1.concierge.ledger.recovery import CrashRecoveryOrchestrator
+
+                ledger_store = getattr(self._ledger, "store", None)
+                session_id = getattr(self._ledger, "session_id", None)
+                if ledger_store is not None and session_id:
+                    report = CrashRecoveryOrchestrator().recover(self, ledger_store, session_id)
+                    if report.recovered:
+                        self.mark_ledger_recovery_done()
+                        logger.info(
+                            "ConciergeController.set_session_state: ledger "
+                            "recovery completed -- %s",
+                            report.summary,
+                        )
+                    else:
+                        logger.info(
+                            "ConciergeController.set_session_state: ledger "
+                            "recovery skipped -- %s",
+                            report.error or "no events",
+                        )
+            except Exception:
+                logger.warning(
+                    "ConciergeController.set_session_state: ledger recovery "
+                    "raised -- continuing with SS-driven HITL scan",
+                    exc_info=True,
+                )
+
         # M6 E6.4.2: Recover pending HITL suspensions from previous session
         self._recover_hitl_on_startup()
 
@@ -707,6 +756,35 @@ class ConciergeController:
             "ConciergeController.set_ledger: attached for session=%s",
             getattr(ledger, "session_id", "unknown"),
         )
+
+    def mark_ledger_recovery_done(self) -> None:
+        """M5 G5: Signal that ledger-driven crash recovery has completed.
+
+        Called by ``KernelService`` after ``CrashRecoveryOrchestrator.recover``
+        returns ``recovered=True`` for this session. With the flag set,
+        ``_recover_hitl_on_startup`` (invoked from ``set_session_state``)
+        becomes a no-op so we don't double-restore HITL state.
+        """
+        self._ledger_recovery_done = True
+        logger.info(
+            "ConciergeController.mark_ledger_recovery_done: ledger replay "
+            "owns recovery; controller HITL scan will short-circuit"
+        )
+
+    def enable_ledger_recovery_on_attach(self) -> None:
+        """M5 G5: Opt this controller into ledger-driven crash recovery.
+
+        When enabled, ``set_session_state`` runs
+        ``CrashRecoveryOrchestrator.recover`` against the attached
+        ``LedgerWriter.store`` immediately after the SS rebind and
+        before ``_recover_hitl_on_startup``. The HITL scan then
+        short-circuits via ``mark_ledger_recovery_done``.
+
+        The factory toggles this flag based on
+        ``ConciergeConfig.enable_ledger_recovery``; default-off keeps
+        cold-start behavior identical for callers that haven't opted in.
+        """
+        self._ledger_recovery_enabled = True
 
     def set_back_pool(self, back_pool: Any) -> None:
         """Attach BackPool for capacity-aware arbiter decisions (M7 E7.5.6).
@@ -914,6 +992,33 @@ class ConciergeController:
         except Exception:
             logger.debug("_check_hil_state_coherence failed", exc_info=True)
         return anomalies
+
+    def _after_task_cleanup(self, task_id: str, *, context: str) -> None:
+        """Cleanup wrapper: drop suspension state then check HIL coherence.
+
+        Single boundary for every callsite that terminalizes a task and
+        therefore needs to drop suspension/HIL caches together. Coherence
+        checking is observability-only -- it must never raise (already
+        enforced by ``_check_hil_state_coherence``).
+
+        ``context`` is a short stable string used by the coherence logger
+        (e.g. ``"task_complete"``, ``"task_failed"``, ``"task_cancel"``,
+        ``"hitl_timeout"``, ``"recovery_auto_cancel"``,
+        ``"arbiter_cancel"``).
+        """
+        sm = getattr(self, "_suspension_manager", None)
+        if sm is not None:
+            try:
+                sm.cleanup_task(task_id)
+            except Exception:  # noqa: BLE001 -- cleanup must not crash callers
+                logger.debug(
+                    "SuspensionManager.cleanup_task failed task_id=%s context=%s",
+                    task_id,
+                    context,
+                    exc_info=True,
+                )
+        # Coherence checker swallows its own exceptions internally.
+        self._check_hil_state_coherence(task_id=task_id, context=context)
 
     def _collect_weave_signal(self, task_id: str = "") -> WeaveSignal:
         """Collect the pure weave signal snapshot for a candidate task."""
@@ -1723,7 +1828,7 @@ class ConciergeController:
                 except Exception:
                     logger.debug("_handle_arbiter_cancel: ledger write failed", exc_info=True)
             self._cancel_handler.request_cancel(task_id)
-            self._suspension_manager.cleanup_task(task_id)
+            self._after_task_cleanup(task_id, context="arbiter_cancel")
 
         # Transition to CANCELLING BEFORE publishing events
         self._transition(
@@ -2726,7 +2831,7 @@ class ConciergeController:
             self._control_ext.remove_active_task(task_id)
             self._remove_running_task(task_id)
             self._task_bridge.complete_task(task_id)
-            self._suspension_manager.cleanup_task(task_id)
+            self._after_task_cleanup(task_id, context="task_complete_same_turn")
             self._cleanup_terminal_hitl_state(task_id)
 
             # BUG-1 FIX: Release BackPool worker on same-turn completion.
@@ -2797,7 +2902,7 @@ class ConciergeController:
             },
         )
         self._task_bridge.complete_task(task_id)
-        self._suspension_manager.cleanup_task(task_id)
+        self._after_task_cleanup(task_id, context="task_complete")
         self._cleanup_terminal_hitl_state(task_id)
         self._task_dispatch_turns.pop(task_id, None)
 
@@ -2966,7 +3071,7 @@ class ConciergeController:
         self._control_ext.remove_active_task(task_id)
         self._remove_running_task(task_id)  # M5 E5.5.4
         # M3 E3.3.5: Clean up suspension context on terminal state
-        self._suspension_manager.cleanup_task(task_id)
+        self._after_task_cleanup(task_id, context="task_failed")
 
         # M4 E4.5.1: Ledger write BEFORE TaskBridge mutation
         self._write_history(
@@ -3043,7 +3148,7 @@ class ConciergeController:
         self._discard_task_result_ownership(task_id)
 
         # M3 E3.3.5: Clean up suspension context on cancel
-        self._suspension_manager.cleanup_task(task_id)
+        self._after_task_cleanup(task_id, context="task_cancel")
 
         # M2 E2.1.3: Use _transition() instead of forced state assignment.
         # TASK_CANCEL transitions are now in TRANSITION_TABLE for
@@ -3521,6 +3626,18 @@ class ConciergeController:
             - Expired: emit hitl.timed_out.v1 + auto-cancel
             - Recoverable: reconstruct HILSubTask + restart timeout watcher
         """
+        # M5 G5: if a ledger-driven crash recovery already rebuilt FSM
+        # state at session create, skip this scan. The ledger replay
+        # owns the full restore (TaskBridge, SuspensionManager, pending
+        # HIL, history, turn pending_results) and re-running this would
+        # either re-fire timeouts or duplicate HIL re-presentations.
+        if self._ledger_recovery_done:
+            logger.debug(
+                "ConciergeController._recover_hitl_on_startup: skipped "
+                "(ledger replay already restored FSM state)"
+            )
+            return
+
         suspended = self._task_bridge.get_suspended_tasks()
         if not suspended:
             return
@@ -3577,7 +3694,7 @@ class ConciergeController:
             except (KeyError, ValueError):
                 logger.warning("Recovery: could not cancel task %s", task_id)
             self._active_task_ids.discard(task_id)
-            self._suspension_manager.cleanup_task(task_id)
+            self._after_task_cleanup(task_id, context="recovery_auto_cancel")
             logger.info("Recovery: auto-cancelled expired task %s", task_id)
 
         # 6.4.3: Re-present recoverable suspensions
@@ -3659,9 +3776,8 @@ class ConciergeController:
         self._active_task_ids.discard(task_id)
         self._remove_running_task(task_id)
         self._control_ext.remove_active_task(task_id)
-        self._suspension_manager.cleanup_task(task_id)
+        self._after_task_cleanup(task_id, context="hitl_timeout")
         self._hitl_responded_tasks.pop(task_id, None)
-        self._check_hil_state_coherence(task_id=task_id, context="hitl_timeout")
 
     def _on_hil_request(self, envelope: Envelope) -> None:
         """Handle k1.hil.request.v1 (HIL Unification E4 unified entry point).
@@ -3787,7 +3903,23 @@ class ConciergeController:
         synthetic = False
         task_id = bound_task_id or f"hil:{hil_request_id}"
         task_state = self._ss.get_section("task_state") if self._ss else None
-        if task_state is not None and not bound_task_id:
+        if bound_task_id:
+            try:
+                suspended_entry = self._task_bridge.suspend_task(task_id)
+                if suspended_entry is None:
+                    logger.warning(
+                        "FSM._on_hil_request: bound task suspend returned None task=%s hil=%s",
+                        task_id,
+                        hil_request_id,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "FSM._on_hil_request: bound task suspend failed task=%s hil=%s err=%s",
+                    task_id,
+                    hil_request_id,
+                    exc,
+                )
+        elif task_state is not None:
             # Synthesise a SUSPENDED entry; Front reads pending_hil.envelope
             # off it and `determine_mode` resolves to HITL_RELAY via topic.
             try:

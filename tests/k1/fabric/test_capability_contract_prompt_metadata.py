@@ -1,9 +1,31 @@
 from __future__ import annotations
 
+from typing import Any, Dict, Optional
+
 from k1.fabric.contracts import parse_contract_body
+from k1.fabric.core.context_builder import ContextBuilder
+from k1.fabric.fabric import CapabilityFabric, FabricConfig
 from k1.fabric.manifest_translator import build_contract
-from k1.fabric.types import CapabilityContract
+from k1.fabric.types import CapabilityContract, CapabilityRequest
 from k1.tools.family.definition import ActionSpec, FieldSpec, LLMHints, ToolDefinition
+
+
+class _PromptSystem:
+    def __init__(self) -> None:
+        self.templates: Dict[str, str] = {}
+
+    def add(self, name: str, text: str) -> None:
+        self.templates[name] = text
+
+    def resolve(self, template_name: str) -> Optional[Dict[str, str]]:
+        text = self.templates.get(template_name)
+        return {"text": text} if text is not None else None
+
+    def compile(self, template: Dict[str, str], variables: Dict[str, Any]) -> str:
+        text = template["text"]
+        for key, value in variables.items():
+            text = text.replace(f"{{{key}}}", str(value))
+        return text
 
 
 def test_capability_contract_round_trips_prompt_profile_metadata() -> None:
@@ -98,3 +120,40 @@ def test_family_manifest_translator_propagates_prompt_profile_metadata() -> None
     assert contract.social_act == "create_record"
     assert contract.side_effects == [{"kind": "data_write", "target": "example.item"}]
     assert "coordination" in contract.domain
+
+
+def test_fabric_build_context_uses_contract_prompt_and_request_override() -> None:
+    prompt_system = _PromptSystem()
+    prompt_system.add("example_activity_v1", "Example prompt for {name}.")
+    builder = ContextBuilder(prompt_system=prompt_system)
+    fabric = CapabilityFabric(
+        resolver=object(),
+        context_builder=builder,
+        validation_pipeline=object(),
+        event_emitter=object(),
+        registry=object(),
+        provider_factory=object(),
+        config=FabricConfig(),
+    )
+    contract = CapabilityContract(
+        name="tool.execute.example.do_thing",
+        version="1.0.0",
+        domain=["TEST"],
+        description="Example",
+        provider_type="MCP",
+        provider_id="example",
+        prompt_template="example_activity_v1",
+        activity_profile="example.v1",
+    )
+    request = CapabilityRequest(
+        capability_name=contract.name,
+        params={"name": "params name"},
+        context_override={"prompt_variables": {"name": "override name"}},
+        caller="test",
+    )
+
+    context = fabric._build_context(request, contract)
+
+    assert context.prompt == "Example prompt for override name."
+    assert context.session_sections["context_override"]["activity_profile"] == "example.v1"
+    assert context.session_sections["context_override"]["prompt_template"] == "example_activity_v1"

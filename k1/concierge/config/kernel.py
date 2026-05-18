@@ -62,9 +62,20 @@ class KernelConfig:
     # a ToolContext without an IDispatchPort and want the legacy POC
     # stub responses should set this to True.
     allow_dispatch_passthrough: bool = False
+    # Activity profile / tool prompt injection support. The prompt system
+    # remains advisory: missing prompt inventory warns by default and only
+    # fails startup when strict mode is explicitly enabled.
+    enable_activity_profiles: bool = True
+    enable_activity_profiles_strict: bool = False
     auto_start_consumer: bool = True
     # M1 E1.4.1: Create and inject LedgerWriter into FSM at boot
     enable_ledger: bool = True
+    # M5 G5: when True, run CrashRecoveryOrchestrator at session create
+    # to rebuild FSM protocol state from the ledger BEFORE the
+    # controller's own ``_recover_hitl_on_startup`` runs. Default False
+    # to preserve current cold-start behavior; flip on for production
+    # warm-starts and the M5 ledger-replay integration test.
+    enable_ledger_recovery: bool = False
     # M2 E2.5.1: Create DeadLetterConsumer at boot
     enable_dead_letter_consumer: bool = True
     seed_memories: list[dict[str, Any]] = field(default_factory=list)

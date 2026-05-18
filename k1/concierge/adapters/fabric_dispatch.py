@@ -103,6 +103,24 @@ class FabricDispatchAdapter:
             )
         return await self._fabric.execute(request)
 
+    async def lookup_capability(self, capability_name: str, version: str | None = None) -> Any:
+        """Exact capability registry lookup for callers that already have a name."""
+        for target in (
+            self._fabric,
+            getattr(self._fabric, "registry_api", None),
+            getattr(self._fabric, "registry", None),
+        ):
+            lookup = getattr(target, "lookup", None)
+            if not callable(lookup):
+                continue
+            try:
+                return lookup(capability_name, version=version)
+            except TypeError:
+                if version is None:
+                    return lookup(capability_name)
+                raise
+        return None
+
     async def _dispatch_workflow(self, request: CapabilityRequest) -> CapabilityResult:
         """Route a ``workflow.<id>`` capability call to the WorkflowEngine.
 

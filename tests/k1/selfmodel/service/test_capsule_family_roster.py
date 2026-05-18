@@ -17,6 +17,7 @@ from k1.selfmodel.contracts.situation import (
     SituationFrame,
     Visibility,
 )
+from k1.selfmodel.contracts.space_graph import SpaceEdge
 from k1.selfmodel.service.capsule_builder import GroundingCapsuleBuilder
 
 T0 = 1_700_000_000_000
@@ -105,3 +106,24 @@ def test_family_block_handles_missing_family_members_key() -> None:
     )
     cap = _builder().build(frame)
     assert "(no related members in this frame)" in cap.family_block
+
+
+def test_family_block_renders_space_edge_endpoints() -> None:
+    frame = SituationFrame(
+        actor_id="alex",
+        situation_kind="caregiver_context_briefing",
+        composed_at_ms=T0,
+        device_id="dev-1",
+        projected_self={"display_name": "Alex"},
+        relations=RelationsSubset(
+            edges=(SpaceEdge(from_member="alex", to_member="riley", kind="parent_of"),)
+        ),
+        rules=ApplicableRules(rule_ids=(), constitution_version="v0"),
+        capabilities=Capabilities(),
+        visibility=Visibility(),
+        freshness={"self": "fresh", "family": "fresh", "constitution": "fresh"},
+    )
+
+    cap = _builder().build(frame)
+
+    assert "- edge alex--parent_of-->riley" in cap.family_block

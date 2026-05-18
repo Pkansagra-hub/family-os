@@ -75,11 +75,24 @@ class TestFabricRiskCatalog:
         assert cat.get_risk("assign_task") == RiskClass.MEDIUM
         assert cat.get_social_act("assign_task") == "assign_task"
 
+    def test_benign_contract_maps_to_low(self) -> None:
+        contract = SimpleNamespace(risk_class="benign", social_act=None)
+        registry = SimpleNamespace(
+            lookup=lambda name: contract if name == "tool.read.tasks.list_tasks" else None
+        )
+        cat = FabricRiskCatalog(registry)
+        assert cat.get_risk("tool.read.tasks.list_tasks") == RiskClass.LOW
+
     def test_falls_back_to_legacy_registry(self) -> None:
         registry = SimpleNamespace(lookup=lambda name: None)
         cat = FabricRiskCatalog(registry)
         # ``send_message`` is in the legacy registry as HIGH.
         assert cat.get_risk("send_message") == RiskClass.HIGH
+
+    def test_canonical_name_falls_back_to_legacy_registry(self) -> None:
+        registry = SimpleNamespace(lookup=lambda name: None)
+        cat = FabricRiskCatalog(registry)
+        assert cat.get_risk("tool.execute.tasks.create_task") == RiskClass.MEDIUM
 
     def test_unknown_capability_fails_open(self) -> None:
         """M12.E2.I1 — lookup-fallback lowered to LOW."""
@@ -129,6 +142,50 @@ class TestPolicyGateUsesRiskCatalog:
             risk_catalog=CaptureCat(),
         )
         await gate.evaluate(ToolCallResult(id="t1", name="recall_memory", arguments={}))
+        assert "recall_memory" in observed
+
+    @pytest.mark.anyio
+    async def test_selfmodel_handle_forwards_injected_risk_catalog(self) -> None:
+        from k1.concierge.llm.types import ToolCallResult
+        from k1.selfmodel.contracts.situation import (
+            ApplicableRules,
+            Capabilities,
+            SituationFrame,
+            Visibility,
+        )
+        from k1.selfmodel.kernel.handle import build_self_model_handle
+
+        observed: list[str] = []
+
+        class CaptureCat(StaticRiskCatalog):
+            def get_risk(self, name: str) -> RiskClass:
+                observed.append(name)
+                return super().get_risk(name)
+
+        frame = SituationFrame(
+            actor_id="a1",
+            situation_kind="caregiver_context_briefing",
+            rules=ApplicableRules(),
+            capabilities=Capabilities(),
+            conscience=ConscienceDigest(),
+            visibility=Visibility(),
+        )
+        bundle = SimpleNamespace(
+            composer=SimpleNamespace(compose=lambda *_args: frame),
+            evaluator=None,
+            capsule_builder=SimpleNamespace(),
+            citation_builder=SimpleNamespace(),
+        )
+
+        handle = build_self_model_handle(
+            bundle,  # type: ignore[arg-type]
+            session_id="s1",
+            actor_id="a1",
+            risk_catalog=CaptureCat(),
+        )
+
+        assert handle.gate is not None
+        await handle.gate.evaluate(ToolCallResult(id="t1", name="recall_memory", arguments={}))
         assert "recall_memory" in observed
 
 

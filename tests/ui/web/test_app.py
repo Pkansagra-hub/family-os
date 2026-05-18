@@ -95,6 +95,34 @@ def test_static_assets_served(client: TestClient) -> None:
     assert r.status_code == 200
 
 
+def test_family_app_static_contracts_are_manifest_aligned(client: TestClient) -> None:
+    """Regression guard for family-tool SPA wiring that is easy to break."""
+    html = client.get("/").text
+    js = client.get("/static/app.js").text
+
+    assert 'data-app-action="chores:create_template"' in html
+    assert 'data-app-action="chores:create_chore"' not in html
+    assert 'readAction("list_tasks")' in js
+    assert 'readAction("list_lists")' in js
+    assert 'readAction("get_visibility_policy")' in js
+    assert 'readAction("list_feature_flags")' in js
+    assert "SETTINGS_SOURCE_RULES" in js
+    assert "SETTINGS_KID_CAPABILITIES" in js
+    assert "data-setting-rule" in js
+    assert "data-kid-capability" in js
+    assert "data-keyword-add" in js
+    assert "Privacy, kid permissions, and family feature controls" in html
+    assert "_buildHomeActivityFeed" in js
+    assert "_renderHomeActivity" in js
+    assert "Family activity will appear as people update the apps." in js
+    assert "state.timelineEntries.slice(-6)" not in js
+    assert "section_payloads" in js
+    assert "data-ss-section" in js
+    assert "renderSessionInspector" in js
+    assert 'id="ss-inspector"' in html
+    assert "Inspect HOT / WARM / COLD memory sections and stored data" in html
+
+
 def test_configure_sets_test_mode() -> None:
     app_module.configure(test_mode=True)
     assert app_module._test_mode is True

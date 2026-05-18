@@ -104,6 +104,25 @@ tool_contract:
 
   provider_type: "MCP"
   provider_id: "build_agent_handler"
+  prompt_template: "mcp_generic_activity_v1"
+  activity_profile: "mcp.generic.v1"
+  tool_instructions: >
+    Build agents only from exact registered capability and prompt names supplied
+    by validated planner/orchestrator context. HIL and safety policy remain
+    authoritative; never create an agent from guessed tools or prompt ids.
+  prompt_variables_schema:
+    type: "object"
+    properties:
+      agent_name:
+        type: "string"
+      description:
+        type: "string"
+      tools_granted:
+        type: "array"
+        items:
+          type: "string"
+      prompt_template:
+        type: "string"
   safety_band_min: "AMBER"
   risk_class: "high"
   cost_per_call: 0.0

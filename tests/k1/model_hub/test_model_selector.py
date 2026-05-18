@@ -364,11 +364,43 @@ class TestPreference:
                 ),
             ],
         )
-        pref = ModelPreference(preferred_model="gpt-4o")
+        pref = ModelPreference(preferred_model="gpt-3.5")
         result = selector.select([provider], _hub_request(), preference=pref)
         assert result is not None
-        # Same cost, so preference dimension is the differentiator
-        assert result.model_id == "gpt-4o"
+        assert result.model_id == "gpt-3.5"
+
+    def test_request_constraint_preferred_model_match(self) -> None:
+        selector = ModelSelector()
+        provider = _eligible_provider(
+            "openai",
+            models=[
+                ModelSpec(
+                    id="gpt-4o",
+                    capabilities=[CapabilityType.CHAT],
+                    cost_per_1m_input=5.0,
+                    cost_per_1m_output=15.0,
+                ),
+                ModelSpec(
+                    id="gpt-3.5",
+                    capabilities=[CapabilityType.CHAT],
+                    cost_per_1m_input=5.0,
+                    cost_per_1m_output=15.0,
+                ),
+            ],
+        )
+        request = HubRequest(
+            capability=CapabilityType.CHAT,
+            payload=ChatPayload(messages=[Message(role="user", content="hello")]),
+            trace_id="test-trace-001",
+            constraints=RequestConstraints(
+                model_preference=ModelPreference(preferred_model="gpt-3.5")
+            ),
+        )
+
+        result = selector.select([provider], request)
+
+        assert result is not None
+        assert result.model_id == "gpt-3.5"
 
     def test_avoid_provider_excludes_from_top(self) -> None:
         selector = ModelSelector()

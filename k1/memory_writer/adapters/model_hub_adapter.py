@@ -29,6 +29,7 @@ from k1.model_hub.types import (
     ChatPayload,
     HubRequest,
     Message,
+    ModelPreference,
     Priority,
     RequestConstraints,
 )
@@ -94,12 +95,21 @@ class ModelHubAdapter:
 
         trace_id = self._trace_id or str(uuid.uuid4())
 
+        model_preference: Optional[ModelPreference] = None
+        provider_preference: Optional[str] = None
+        if model_hint and model_hint != "cheapest":
+            if _looks_like_model_id(model_hint):
+                model_preference = ModelPreference(preferred_model=model_hint)
+            else:
+                provider_preference = model_hint
+
         constraints = RequestConstraints(
             max_tokens=budget_tokens,
             timeout_ms=60000,  # BACKGROUND tier: 60s (MH-15)
             priority=Priority.BACKGROUND,
             temperature=0.7,
-            provider_preference=model_hint if model_hint != "cheapest" else None,
+            model_preference=model_preference,
+            provider_preference=provider_preference,
             consumer_id=self._consumer_id,
         )
 
@@ -130,3 +140,15 @@ class ModelHubAdapter:
             model=meta.model_id,
             latency_ms=elapsed_ms,
         )
+
+
+def _looks_like_model_id(value: str) -> bool:
+    normalized = value.strip().lower()
+    return (
+        "/" in normalized
+        or normalized.startswith("gemini-")
+        or normalized.startswith("gpt-")
+        or normalized.startswith("claude-")
+        or normalized.startswith("mistral-")
+        or normalized.startswith("llama-")
+    )

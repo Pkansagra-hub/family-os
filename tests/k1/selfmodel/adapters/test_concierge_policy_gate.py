@@ -16,7 +16,7 @@ Stubbed ``HumanInTheLoopService`` + capturing bus + scripted
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import pytest
@@ -26,10 +26,10 @@ from k1.hil.types import ApprovalRequest, ApprovalResponse
 from k1.selfmodel.adapters.concierge_policy_gate import (
     ConciergePolicyGate,
     _freshness_from_frame,
+    _resolve_effective_tools,
 )
 from k1.selfmodel.contracts.policy import (
     FreshnessState,
-    PolicyDecision,
     RiskClass,
 )
 from k1.selfmodel.contracts.risk_class_registry import (
@@ -119,6 +119,25 @@ def _call(name: str = "recall_memory") -> ToolCallResult:
     return ToolCallResult(id="c1", name=name, arguments={"k": "v"})
 
 
+def _batch_call(*capability_names: str) -> ToolCallResult:
+    return ToolCallResult(
+        id="batch-1",
+        name="batch_invoke_capabilities",
+        arguments={
+            "invocations": [{"capability_name": name, "params": {}} for name in capability_names]
+        },
+    )
+
+
+def test_batch_wrapper_resolves_all_inner_capabilities() -> None:
+    names, unwrapped = _resolve_effective_tools(
+        _batch_call("tool.read.tasks.list_tasks", "tool.read.reminders.list_reminders")
+    )
+
+    assert names == ("tool.read.tasks.list_tasks", "tool.read.reminders.list_reminders")
+    assert unwrapped is True
+
+
 # ---------------------------------------------------------------------
 # ALLOW
 # ---------------------------------------------------------------------
@@ -189,9 +208,7 @@ async def test_confirmation_rejected_returns_blocked() -> None:
 
 async def test_confirmation_timeout_denies() -> None:
     register_tool_risk("send_message", RiskClass.HIGH)
-    hil = _HILStub(
-        ApprovalResponse(hil_request_id="hil-3", decision="approve", timed_out=True)
-    )
+    hil = _HILStub(ApprovalResponse(hil_request_id="hil-3", decision="approve", timed_out=True))
     gate, _ = _gate(_frame(can_do=("send_message",)), hil=hil)
     out = await gate.evaluate(_call("send_message"))
     assert out is not None
@@ -205,6 +222,33 @@ async def test_confirmation_without_hil_blocks() -> None:
     out = await gate.evaluate(_call("send_message"))
     assert out is not None and out.status == "error"
     assert "REQUIRE_CONFIRMATION" in (out.error or "")
+
+
+async def test_batch_invoke_all_read_capabilities_passes_without_approval() -> None:
+    register_tool_risk("reminders.list_reminders", RiskClass.LOW)
+    task_read = "tool.read.tasks.list_tasks"
+    reminder_read = "tool.read.reminders.list_reminders"
+    hil = _HILStub(ApprovalResponse(hil_request_id="hil-unused", decision="approve"))
+    gate, _ = _gate(_frame(can_do=(task_read, reminder_read)), hil=hil)
+
+    out = await gate.evaluate(_batch_call(task_read, reminder_read))
+
+    assert out is None
+    assert hil.calls == []
+
+
+async def test_batch_invoke_write_uses_inner_capability_for_confirmation() -> None:
+    register_tool_risk("shopping.approve_item", RiskClass.HIGH)
+    capability = "tool.execute.shopping.approve_item"
+    hil = _HILStub(ApprovalResponse(hil_request_id="hil-approve", decision="approve"))
+    gate, _ = _gate(_frame(can_do=(capability,)), hil=hil)
+
+    out = await gate.evaluate(_batch_call(capability))
+
+    assert out is None
+    assert len(hil.calls) == 1
+    assert hil.calls[0].side_effects == [capability]
+    assert capability in hil.calls[0].summary
 
 
 # ---------------------------------------------------------------------
@@ -315,7 +359,9 @@ def test_freshness_worst_of_three() -> None:
     f1 = _frame(freshness={"self": "fresh", "family": "stale", "constitution": "fresh"})
     assert _freshness_from_frame(f1) == FreshnessState.STALE
 
-    f2 = _frame(freshness={"self": "stale", "family": "offline_local_only", "constitution": "fresh"})
+    f2 = _frame(
+        freshness={"self": "stale", "family": "offline_local_only", "constitution": "fresh"}
+    )
     assert _freshness_from_frame(f2) == FreshnessState.OFFLINE_LOCAL_ONLY
 
     f3 = _frame(freshness={"self": "fresh", "family": "fresh", "constitution": "conflict_pending"})

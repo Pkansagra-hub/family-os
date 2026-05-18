@@ -86,3 +86,62 @@ def test_hil_coherence_reports_mismatched_request_id() -> None:
     )
 
     assert anomalies == ["task_pending_hil_id_mismatch:h3!=other"]
+
+
+def test_after_task_cleanup_invokes_suspension_cleanup_and_coherence(monkeypatch) -> None:
+    """G1: _after_task_cleanup must call cleanup_task then coherence checker."""
+    fsm = _controller()
+
+    calls: list[tuple[str, dict]] = []
+
+    class _FakeSM:
+        def cleanup_task(self, task_id: str) -> None:
+            calls.append(("cleanup", {"task_id": task_id}))
+
+    fsm._suspension_manager = _FakeSM()  # type: ignore[assignment]
+
+    def _track_coherence(
+        *, task_id: str = "", hil_request_id: str = "", context: str = ""
+    ) -> list[str]:
+        calls.append(
+            (
+                "coherence",
+                {"task_id": task_id, "hil_request_id": hil_request_id, "context": context},
+            )
+        )
+        return []
+
+    monkeypatch.setattr(fsm, "_check_hil_state_coherence", _track_coherence)
+
+    fsm._after_task_cleanup("hil:h4", context="task_complete")
+
+    assert [c[0] for c in calls] == ["cleanup", "coherence"]
+    assert calls[0][1] == {"task_id": "hil:h4"}
+    assert calls[1][1]["context"] == "task_complete"
+    assert calls[1][1]["task_id"] == "hil:h4"
+
+
+def test_after_task_cleanup_swallows_suspension_failure(monkeypatch) -> None:
+    """G1: helper must run coherence check even if cleanup raises."""
+    fsm = _controller()
+
+    class _BoomSM:
+        def cleanup_task(self, task_id: str) -> None:  # noqa: ARG002
+            raise RuntimeError("boom")
+
+    fsm._suspension_manager = _BoomSM()  # type: ignore[assignment]
+
+    coherence_called: list[str] = []
+
+    def _track_coherence(
+        *, task_id: str = "", hil_request_id: str = "", context: str = ""
+    ) -> list[str]:  # noqa: ARG001
+        coherence_called.append(context)
+        return []
+
+    monkeypatch.setattr(fsm, "_check_hil_state_coherence", _track_coherence)
+
+    # Must not raise.
+    fsm._after_task_cleanup("hil:h5", context="task_failed")
+
+    assert coherence_called == ["task_failed"]

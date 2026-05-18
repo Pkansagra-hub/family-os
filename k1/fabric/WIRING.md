@@ -29,7 +29,7 @@ construction; no `import` of concrete classes happens inside Fabric logic.
 | `IEventPort` | `EventPortProdAdapter(IBus)` | `LocalEventAdapter(capture=True)` | Fire-and-forget. Must not raise. |
 | `IFabricK0Port` (Bridge) | `BridgeConnectionAdapter` | `TestBridgeAdapter` | Starts disconnected (LOCAL COLD). |
 | `IModelGatewayPort` | `ModelGatewayBridgeAdapter(IModelHubPort)` | `TestModelGatewayAdapter` | E-0.5.2 bridge adapter. |
-| `IPromptSystemPort` | `PromptSystemProdAdapter(prompts_dir)` | `TestPromptSystemAdapter` | Reads YAML. Supports template_file refs. |
+| `IPromptSystemPort` | `PromptSystemProdAdapter(prompts_dir)` | `TestPromptSystemAdapter` | Reads prompt YAML and external `template_file` markdown; inline `template` is compatibility-only. |
 | `IDeltaBusPort` | `DeltaBusProdAdapter(IBus)` | `TestDeltaBusAdapter` | Fire-and-forget. Non-blocking. |
 | `IHILPort` | (injected at construction) | none | HIL gate for `requires_human_confirmation`. |
 | `IConsciencePort` | (injected at construction) | none | Conscience gate for `social_act`. |
@@ -205,14 +205,63 @@ FabricFactory.create_with_ports(prompt_system=prompt_system_port)
     │
     └── PromptSystemProdAdapter(prompts_dir=...)
           Threading: RLock per instance
-          Supports {{template_file:<path>}} references in templates
+            Reads k1/contracts/prompts/*.yaml
+            template_file resolves repo-root first, then YAML-dir fallback
+            Inline template remains compatibility-only for tests/transitional fixtures
+            M8 inventory includes calendar/tasks/reminders plus generic MCP/WASM profiles
 
           At runtime (ContextBuilder.build(), step 4):
-          prompt_system.resolve(template_name) → PromptTemplate
-          prompt_system.compile(template, variables) → str
+                    prompt_template priority:
+                        request.prompt_template -> contract.prompt_template -> tool_instructions
+                    prompt variables:
+                        prompt_variables_schema defaults -> request.params -> context_override["prompt_variables"]
+                    prompt_system.resolve(template_name) → PromptTemplate
+                    prompt_system.compile(template, variables) → str
 
-          Missing template → context.prompt_resolved=False, continue gracefully
+            Missing template or missing template_file → skipped load / unresolved template;
+            ContextBuilder continues gracefully when resolve() returns None
 ```
+
+### Prompt/profile metadata registration
+
+M1 wires metadata into the contract plane only:
+
+```text
+YAML tool contract
+    -> ToolContractParser
+    -> CapabilityContract(prompt_template, activity_profile, tool_instructions, prompt_variables_schema)
+    -> CapabilityRegistry
+
+Family ToolDefinition / ActionSpec
+    -> manifest_translator.build_contract()
+    -> CapabilityContract(prompt_template, activity_profile, tool_instructions, domain tags, social_act, side_effects)
+    -> CapabilityRegistry
+```
+
+This metadata does not alter provider selection, tool grants, HIL, conscience gates, or business `params`. Runtime M3 wiring now flows through existing components:
+
+M8 representative metadata:
+
+- Family/native: all calendar actions, all task actions, and user-invokable reminder actions declare concrete profile/template metadata.
+- MCP: `find_prompts`, `discover_capabilities`, and `build_agent` declare `mcp.generic.v1` / `mcp_generic_activity_v1`.
+- WASM: `date_calc` and `unit_convert` declare `wasm.generic.v1` / `wasm_generic_activity_v1`.
+
+```text
+CapabilityRequest(prompt_template?, context_override?)
+    -> CapabilityFabric._build_context()
+    -> ContextBuilder.build(context_override=...)
+    -> ExecutionContext(prompt, session_sections["context_override"], params)
+    -> providers
+```
+
+Provider delivery is explicit and reserved:
+
+- `MCPProvider` adds `__metadata__` to MCP arguments only when prompt/profile metadata exists.
+- `WASMProvider` adds `__metadata__` to WASM params only when prompt/profile metadata exists.
+- `NativeToolProvider` keeps family service params business-only and writes metadata to `WriteContext.extras["fabric_prompt_metadata"]`.
+- `AgentFactory._spawn()` builds agent context with the selected contract prompt so `Agent.execute()` sees compiled prompt text.
+
+Reserved provider metadata keys: `__system_instructions__`, `__activity_profile__`, `__prompt_template__`.
 
 ---
 
@@ -237,6 +286,7 @@ FabricFactory.create_with_ports(state_reader=state_reader_port)
 ```
 
 Used by:
+
 - `ContextBuilder.build()` — reads required and optional context sections
 - `SemanticValidator.validate()` — reads `beliefs_active` section for hallucination detection
 - `AffectiveRouting.score()` — reads `affective_now` section

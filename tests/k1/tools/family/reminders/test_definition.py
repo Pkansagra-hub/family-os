@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from k1.fabric.manifest_translator import build_contract
 from k1.tools.family.reminders.definition import REMINDERS_DEFINITION
 
 _EXPECTED_ACTIONS = {
@@ -19,6 +20,8 @@ _EXPECTED_ACTIONS = {
 def test_definition_basics() -> None:
     assert REMINDERS_DEFINITION.adapter_id == "reminders"
     assert REMINDERS_DEFINITION.category == "coordination"
+    assert REMINDERS_DEFINITION.activity_profile == "reminders.v1"
+    assert set(REMINDERS_DEFINITION.domain_tags) >= {"alerting", "notification", "scheduler"}
 
 
 def test_all_eight_actions_present() -> None:
@@ -51,6 +54,9 @@ def test_fire_reminder_system_only() -> None:
     fire = REMINDERS_DEFINITION.find_action("fire_reminder")
     assert fire is not None
     assert fire.allowed_roles == ["system"]
+    assert fire.prompt_template is None
+    assert fire.tool_instructions is not None
+    assert "Scheduler-only" in fire.tool_instructions
 
 
 def test_sse_topics_format() -> None:
@@ -67,3 +73,21 @@ def test_llm_hints_present_on_write_actions() -> None:
     for action in REMINDERS_DEFINITION.actions:
         if action.kind in ("write", "delete"):
             assert action.llm is not None, f"{action.name} missing LLM hints"
+
+
+def test_user_invokable_reminder_actions_reference_activity_prompt_template() -> None:
+    for action in REMINDERS_DEFINITION.actions:
+        if action.name == "fire_reminder":
+            continue
+        assert action.prompt_template == "reminders_activity_v1", action.name
+
+
+def test_reminder_contracts_inherit_activity_profile_metadata() -> None:
+    action = REMINDERS_DEFINITION.find_action("create_reminder")
+    assert action is not None
+
+    contract = build_contract(REMINDERS_DEFINITION, action)
+
+    assert contract.activity_profile == "reminders.v1"
+    assert contract.prompt_template == "reminders_activity_v1"
+    assert "alerting" in contract.domain

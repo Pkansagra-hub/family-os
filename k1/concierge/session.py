@@ -340,6 +340,11 @@ class ConciergeRuntime:
 
             if front_env is not None:
                 did_work = True
+                # M6.E1.I2: route the per-session OppPipeline ONLY to Front.
+                # Back never sees OPP -- it builds its own prompt via
+                # build_back_prompt and must not receive identity/compression
+                # enrichment. getattr() default keeps tests that stub the FSM
+                # without ``_opp_pipeline`` working.
                 await front_handler(
                     envelope=front_env,
                     model=self._model,
@@ -349,6 +354,7 @@ class ConciergeRuntime:
                     all_tool_schemas=FRONT_TOOL_SCHEMAS,
                     fsm_state=self._fsm.state.name,
                     self_model=self._self_model,
+                    opp_pipeline=getattr(self._fsm, "_opp_pipeline", None),
                 )
                 await self._tick_experience()
 
@@ -374,6 +380,7 @@ class ConciergeRuntime:
                         bus=self._bus,
                         tool_dispatcher=self._back_dispatcher,
                         fsm_state=self._fsm,
+                        hil_port=self._hil_port,
                     )
                 except SuspensionResolutionNotFound as exc:
                     # M6 E6.2 (C08): back_resume_handler raises this when
@@ -439,6 +446,64 @@ class ConciergeRuntime:
             payload = fill.__dict__ if hasattr(fill, "__dict__") else {"text": str(fill)}
             self._bus.publish(build_proactive_fill(payload=payload))
 
+        # M6.E2.I2: write narrative outputs to the ``narrative_active`` SS
+        # section so the prompt builder's Stage 8 SS read can render the
+        # primary thread (``Thread: <title>`` line). Skip when the FSM is
+        # mid-HITL clarification (CLARIFYING_WORKER) -- the user is
+        # answering a Back HITL request, so we must NOT create or switch
+        # the primary thread mid-clarification. The 0.25 salience-delta
+        # gate prevents thrash when two threads have similar frequency.
+        try:
+            narrative = outputs.get("narrative")
+            fsm_state_name = self._fsm.state.name
+            if (
+                narrative is not None
+                and getattr(narrative, "active_threads", None)
+                and fsm_state_name != "CLARIFYING_WORKER"
+            ):
+                section = self._session_state.get_section("narrative_active")
+                if section is not None and hasattr(section, "primary_thread"):
+                    top = str(narrative.active_threads[0])
+                    salience = getattr(narrative, "thread_salience", {}) or {}
+                    suggestion = str(getattr(narrative, "weave_suggestion", "") or "")
+                    related_intents = list(narrative.active_threads[:5])
+                    turn_number = getattr(self._fsm, "turn_number", None)
+                    primary = section.primary_thread
+                    if primary is None:
+                        section.create_thread(
+                            title=top,
+                            goal=suggestion,
+                            turn_number=turn_number,
+                            related_intents=related_intents,
+                        )
+                    elif primary.title == top:
+                        if hasattr(section, "update_thread"):
+                            section.update_thread(
+                                primary.id,
+                                goal=suggestion or None,
+                                turn_number=turn_number,
+                            )
+                    else:
+                        # Different top thread -- switch only when the new
+                        # thread's salience exceeds the primary's by >= 0.25.
+                        new_s = float(salience.get(top, 0.0))
+                        old_s = float(salience.get(primary.title, 0.0))
+                        if new_s - old_s >= 0.25:
+                            section.create_thread(
+                                title=top,
+                                goal=suggestion,
+                                turn_number=turn_number,
+                                related_intents=related_intents,
+                            )
+                        elif hasattr(section, "update_thread"):
+                            section.update_thread(
+                                primary.id,
+                                goal=suggestion or None,
+                                turn_number=turn_number,
+                            )
+        except Exception:
+            logger.warning("session._tick_experience: narrative write failed", exc_info=True)
+
     def _build_experience_context(self) -> dict[str, Any]:
         """Build safe context snapshot for ExperienceLayer.tick()."""
         ss = self._session_state
@@ -495,6 +560,34 @@ class ConciergeRuntime:
             hist = ss.get_section("history_active")
             if hist is not None and hasattr(hist, "get_typed_entries"):
                 for entry in hist.get_typed_entries(10):
+                    # M6.E2.I1: project derived signals (intent/topic/thread)
+                    # from ``TypedHistoryEntry.metadata`` so the
+                    # NarrativeWeaver sees non-empty values. The underlying
+                    # dataclass only stores ``task_id`` + ``metadata`` --
+                    # all narrative-relevant fields live under metadata
+                    # (placed there by the arbiter and the back-channel
+                    # writers). Precedence: arbiter.decision -> metadata
+                    # ['intent'] -> entry_type fallback.
+                    metadata = getattr(entry, "metadata", None) or {}
+                    arbiter = metadata.get("arbiter") if isinstance(metadata, dict) else None
+                    arbiter_decision = ""
+                    if isinstance(arbiter, dict):
+                        arbiter_decision = str(arbiter.get("decision", "") or "")
+                    intent = (
+                        arbiter_decision
+                        or str((metadata.get("intent") if isinstance(metadata, dict) else "") or "")
+                        or entry.entry_type
+                    )
+                    topic = ""
+                    thread = ""
+                    if isinstance(metadata, dict):
+                        topic = str(
+                            metadata.get("topic")
+                            or metadata.get("domain")
+                            or metadata.get("current_thread")
+                            or ""
+                        )
+                        thread = str(metadata.get("thread") or "")
                     conversation_history.append(
                         {
                             "turn_number": entry.turn_number,
@@ -502,6 +595,11 @@ class ConciergeRuntime:
                             "text": entry.text,
                             "timestamp_ms": entry.timestamp_ms,
                             "source": entry.source,
+                            "task_id": getattr(entry, "task_id", None),
+                            "metadata": metadata if isinstance(metadata, dict) else {},
+                            "intent": intent,
+                            "topic": topic,
+                            "thread": thread,
                         }
                     )
         except Exception:

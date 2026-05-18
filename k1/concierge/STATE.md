@@ -158,6 +158,39 @@ This is an **intentional design decision**: re-reading SS mid-ReAct would violat
 deterministic replay guarantee of the event-sourced ledger. The only re-read point
 is `back_resume_handler()` — after a HITL suspension where SS may legitimately change.
 
+### 2.3 Back execution profile metadata
+
+Back execution profiles live on the task payload, not in SessionState. They are
+ephemeral operating hints rendered into the Back prompt before Step 1 orientation.
+
+- If `TaskDispatch.execution_profiles` is present, Back reuses it as the selected
+  profile set. This keeps HITL resume guidance stable.
+- If it is absent, `back_handler()` selects prompt-contract-backed profile metadata
+  from explicit profile fields or exact structured domain metadata, renders a
+  bounded `execution_profile_block`, and stores the selected profile list on the
+  in-memory task payload so a later `task.suspended` payload can carry it in
+  `original_task`.
+- `back_resume_handler()` rebuilds the prompt from `resume_context.original_task`
+  and therefore reuses existing `execution_profiles` when they were captured at
+  suspension time.
+
+Profiles are guidance only. They do not grant tools, infer capability names from
+free text, change the task safety band, write SessionState, bypass HIL, or alter
+Fabric capability validation.
+
+Profile selection is observable. Initial Back execution and HITL resume log the
+selected profile IDs, confidence, evidence sources, fallback reason, task ID,
+and trace ID. When `ToolContext.metrics_collector` is configured, the same
+selection emits `back.profile.*` metrics through the actor metrics surface. This
+telemetry explains why Back received calendar/task/reminder/generic guidance;
+it does not become an authorization source.
+
+For direct Back capability calls, session Fabric discovery uses the shared Fabric
+registry created by KernelService. Family tool contracts discovered in a session
+therefore carry the same `prompt_template` and `activity_profile` metadata that
+was registered at Tier 1. Back may pass that metadata through binding into
+`CapabilityRequest.context_override`, but it never becomes business params.
+
 ---
 
 ## 3. Ephemeral per-turn state (`FSMTurnState`)

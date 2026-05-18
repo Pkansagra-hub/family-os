@@ -209,6 +209,28 @@ class BackOutcome:
     task_id: str = ""
 
 
+@dataclass
+class BackProfileSelectionOutcome:
+    """Structured Back execution-profile selection telemetry."""
+
+    task_id: str = ""
+    trace_id: str = ""
+    profile_ids: tuple[str, ...] = ()
+    confidence: float = 0.0
+    evidence_sources: tuple[str, ...] = ()
+    fallback_reason: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "task_id": self.task_id,
+            "trace_id": self.trace_id,
+            "profile_ids": list(self.profile_ids),
+            "confidence": self.confidence,
+            "evidence_sources": list(self.evidence_sources),
+            "fallback_reason": self.fallback_reason,
+        }
+
+
 # Tier budget limits (P3.4b: canonical buckets + legacy aliases).
 TIER_BUDGET_LIMITS: dict[str, int] = {
     "simple": 400,
@@ -324,6 +346,41 @@ def record_back_metrics(
     )
 
     return alerts
+
+
+def record_back_profile_selection(
+    collector: MetricsCollector,
+    outcome: BackProfileSelectionOutcome,
+) -> None:
+    """Record Back execution-profile selection observability metrics."""
+    if not collector or not collector.enabled:
+        return
+
+    reason = outcome.fallback_reason or "unknown"
+    confidence = max(0.0, min(float(outcome.confidence), 1.0))
+    base_labels = {"reason": reason}
+
+    collector.increment("back.profile.selection_count", base_labels)
+    collector.observe(
+        "back.profile.confidence",
+        base_labels,
+        value=round(confidence, 3),
+    )
+    collector.observe(
+        "back.profile.evidence_source_count",
+        base_labels,
+        value=float(len(outcome.evidence_sources)),
+    )
+
+    profile_ids = outcome.profile_ids or ("none",)
+    for profile_id in profile_ids:
+        labels = {"reason": reason, "profile_id": str(profile_id)}
+        collector.increment("back.profile.profile_selected", labels)
+        collector.observe(
+            "back.profile.profile_confidence",
+            labels,
+            value=round(confidence, 3),
+        )
 
 
 def classify_budget_utilization(utilization: float) -> str:

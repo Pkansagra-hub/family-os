@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
@@ -42,6 +43,18 @@ def _make_session(**overrides) -> SessionInstance:
     )
     defaults.update(overrides)
     return SessionInstance(**defaults)
+
+
+class _FakePromptSystem:
+    def __init__(self, names: list[str]) -> None:
+        self._names = names
+
+    @property
+    def template_count(self) -> int:
+        return len(self._names)
+
+    def list_names(self) -> list[str]:
+        return list(self._names)
 
 
 # ── KernelService instantiation ─────────────────────────────
@@ -260,6 +273,42 @@ class TestKernelConfigTier1Fields:
     def test_otel_enabled_default(self) -> None:
         assert KernelConfig().otel_enabled is True
 
+    def test_activity_profiles_enabled_by_default(self) -> None:
+        cfg = KernelConfig()
+        assert cfg.enable_activity_profiles is True
+        assert cfg.enable_activity_profiles_strict is False
+
+
+class TestKernelActivityPromptVerification:
+    def test_logs_prompt_template_count(self, caplog: pytest.LogCaptureFixture) -> None:
+        svc = KernelService(config=KernelConfig())
+        prompt_system = _FakePromptSystem(["calendar_activity_v1", "tasks_activity_v1"])
+
+        with caplog.at_level(logging.INFO):
+            count = svc._verify_activity_prompt_system(prompt_system, scope="shared")
+
+        assert count == 2
+        assert "Activity profile prompt store ready" in caplog.text
+        assert "templates=2" in caplog.text
+
+    def test_empty_prompt_store_warns_without_strict_mode(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        svc = KernelService(config=KernelConfig(enable_activity_profiles_strict=False))
+
+        with caplog.at_level(logging.WARNING):
+            count = svc._verify_activity_prompt_system(_FakePromptSystem([]), scope="shared")
+
+        assert count == 0
+        assert "Activity profile prompt store is empty" in caplog.text
+        assert "Native family tools remain available" in caplog.text
+
+    def test_empty_prompt_store_fails_in_strict_mode(self) -> None:
+        svc = KernelService(config=KernelConfig(enable_activity_profiles_strict=True))
+
+        with pytest.raises(RuntimeError, match="Activity profile prompt store is empty"):
+            svc._verify_activity_prompt_system(_FakePromptSystem([]), scope="shared")
+
     def test_workflow_db_path_default(self) -> None:
         assert KernelConfig().workflow_db_path == "./data/workflows.db"
 
@@ -342,9 +391,7 @@ class TestModelHubAdapterWiring:
 
     def test_adapter_satisfies_mw_protocol(self) -> None:
         """ModelHubAdapter satisfies MW's IModelHubPort (has chat method)."""
-        from k1.memory_writer.ports.model_hub_port import (
-            IModelHubPort as MWModelHubPort,
-        )
+        from k1.memory_writer.ports.model_hub_port import IModelHubPort as MWModelHubPort
 
         svc = KernelService(config=KernelConfig())
         svc._model_hub = MagicMock()
@@ -406,9 +453,7 @@ class TestModelHubAdapterWiring:
     @pytest.mark.asyncio
     async def test_adapter_not_same_as_raw_hub(self) -> None:
         """K1 ModelHub must NOT be passed directly — it lacks chat()."""
-        from k1.memory_writer.ports.model_hub_port import (
-            IModelHubPort as MWModelHubPort,
-        )
+        from k1.memory_writer.ports.model_hub_port import IModelHubPort as MWModelHubPort
 
         mock_k1_hub = MagicMock()  # raw K1 hub — has execute(), no chat()
         assert not isinstance(mock_k1_hub, MWModelHubPort)
