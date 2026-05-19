@@ -16,7 +16,7 @@ In scope:
 5. Hard removal of every POC site listed under [Deprecation Inventory](#deprecation-inventory).
 6. Domain-agnostic terminology across kernel code.
 7. SessionState UI inspector updates for the four new sections.
-8. Memory schema migrations for temporal/spatial metadata fields.
+8. MemoryWriter contract alignment for temporal/spatial metadata fields.
 9. Three feature flags `k1.temporal.enabled`, `k1.spatial.enabled`, `k1.grounding.enabled`, default OFF until milestone success criteria pass, then default ON, removed in M6 cleanup epic.
 
 Out of scope (explicit):
@@ -83,7 +83,7 @@ This plan is constrained by the live K1 kernel, not only by the whiteboard.
 | M3 | k1.spatial Foundation | Phase 3 |
 | M4 | Fabric / Tool Contracts / Agent Leases | Phase 4 |
 | M5 | Place Registry + Geofences + K0 Persistence | Phase 5 |
-| M6 | K0 Memory + UI + Memory Schema + Final Cleanup | Phase 6 |
+| M6 | K0 Memory + UI + MemoryWriter Schema + Final Cleanup | Phase 6 |
 
 Each milestone has: goal, epics, issues, deprecation epic, success criteria, exit criteria.
 
@@ -339,10 +339,10 @@ Goal: ship the production-grade temporal kernel service end to end. Front, Back,
 
 #### Issue M1-E1-I1: `k1/temporal/types.py`
 
-Scope (CREATE):
+Scope (MODIFY):
 
-- `k1/temporal/types.py` exporting:
-  - `TemporalAnchor` (re-export of the kernel-port dataclass to keep one definition canonical; service code uses the kernel-port type).
+- `k1/temporal/types.py` completes the M0 stubs and exports:
+  - `TemporalAnchor` (canonical package dataclass; kernel ports import/re-export it and do not define it).
   - `TemporalWindow`, `ResolvedTemporalExpression`, `TemporalProjection`, `TemporalTurnSnapshot`.
   - Enums: `FreshnessState = Literal["live", "stale", "degraded", "unavailable"]`, `TimezoneSource = Literal["device", "spatial", "persona", "utc"]`, `TimeOfDay = Literal["early_morning", "morning", "midday", "afternoon", "evening", "night", "late_night"]`.
   - `TemporalProjection` with fields: `anchor: TemporalAnchor`, `windows: Mapping[str, TemporalWindow]`, `resolved_expressions: tuple[ResolvedTemporalExpression, ...]`, `consumer: str`, `freshness: FreshnessState`, `precision: str`.
@@ -774,19 +774,19 @@ Goal: production grounding envelope path. After M1.5, temporal travels through `
 
 ## M1.5 Epics
 
-### Epic M1.5-E1: `k1.grounding` types and DeviceContextSnapshot rehome
+### Epic M1.5-E1: Complete `k1.grounding` runtime types
 
-#### Issue M1.5-E1-I1: `k1/grounding/types.py`
-
-Scope (CREATE):
-
-- `DeviceContextSnapshot` (canonical home; M0-E2-I4 file becomes a re-export).
-- `GroundingEnvelope`, `GroundingProjection`, `GroundingFreshness`, `GroundingSource`, `ConsumerScope`, `AgentGroundingLease` per whiteboard.
-- Type aliases: `Consumer = Literal["front", "back", "planner", "fabric", "agent", "tool", "memory"]`.
+#### Issue M1.5-E1-I1: Complete `k1/grounding/types.py`
 
 Scope (MODIFY):
 
-- `k1/kernel/ports/device_context_port.py` — replace local dataclass with `from k1.grounding.types import DeviceContextSnapshot` re-export.
+- `k1/grounding/types.py` — fill out the M0 stubs for `GroundingEnvelope`, `GroundingProjection`, `GroundingFreshness`, `GroundingSource`, `ConsumerScope`, and `AgentGroundingLease` per whiteboard.
+- Keep `DeviceContextSnapshot` in this file as the single canonical definition created in M0.
+- Type aliases: `Consumer = Literal["front", "back", "planner", "fabric", "agent", "tool", "memory"]`.
+
+Scope (VERIFY):
+
+- `k1/kernel/ports/device_context_port.py` still imports/re-exports `DeviceContextSnapshot` from `k1.grounding.types` and contains no local dataclass.
 
 Acceptance: only one definition of `DeviceContextSnapshot` in codebase.
 
@@ -1022,7 +1022,7 @@ Goal: production-grade spatial kernel service. Replace `_build_family_context` l
 
 #### Issue M3-E1-I1: `k1/spatial/types.py`
 
-Scope (CREATE): `DeviceSurface`, `LocationFix`, `PlaceRef`, `Geofence`, `SpatialContext`, `SpatialProjection`, `PresenceRef`, redaction types per whiteboard. Reuses `DeviceContextSnapshot` from `k1.grounding.types`.
+Scope (MODIFY): complete the M0 `k1/spatial/types.py` stubs for `DeviceSurface`, `LocationFix`, `PlaceRef`, `Geofence`, `SpatialContext`, `SpatialProjection`, `PresenceRef`, `SpatialTurnSnapshot`, and redaction types per whiteboard. Reuses `DeviceContextSnapshot` from `k1.grounding.types` and does not define a duplicate device snapshot.
 
 Dependencies: M1.5-E1-I1, M0-E3-I2.
 
