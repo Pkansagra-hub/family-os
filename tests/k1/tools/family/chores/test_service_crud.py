@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from tests.k1.tools.family.chores.conftest import make_ctx
 
 # ---------------------------------------------------------------------------
@@ -13,7 +11,7 @@ from tests.k1.tools.family.chores.conftest import make_ctx
 
 async def test_create_template_and_emit(svc):
     service, pub, _ = svc
-    ctx = make_ctx(user_id="u1", role="parent", band="AMBER")
+    ctx = make_ctx(user_id="u1", role="parent", band="GREEN")
     res = await service.dispatch(
         "create_template",
         {"title": "Vacuum living room", "frequency": "weekly", "base_points": 5},
@@ -21,13 +19,45 @@ async def test_create_template_and_emit(svc):
     )
     assert res["success"] is True
     assert res["template_id"]
+    assert res["occurrence_id"]
     assert res["version"] == 1
     assert any(t.startswith("family.chores.create_template") for t, _ in pub.published)
+
+    listed = await service.dispatch("list_chores", {}, ctx)
+    assert listed["count"] == 1
+    assert listed["chores"][0]["template_id"] == res["template_id"]
+    assert listed["chores"][0]["id"] == res["occurrence_id"]
+    assert listed["chores"][0]["title"] == "Vacuum living room"
+    assert listed["chores"][0]["status"] == "pending"
+
+
+async def test_create_template_accepts_natural_frequency(svc):
+    service, _, _ = svc
+    ctx = make_ctx(user_id="u1", role="parent", band="GREEN")
+    res = await service.dispatch(
+        "create_template",
+        {"title": "Water plants", "frequency": "every 3 days", "assigned_to": "riley"},
+        ctx,
+    )
+    assert res["success"] is True
+    template = service._select_template(res["template_id"], ctx.space_id)
+    assert template is not None
+    assert template.frequency == "custom"
+    assert template.metadata["recurrence"] == {
+        "raw": "every 3 days",
+        "interval_count": 3,
+        "interval_unit": "day",
+    }
+
+    listed = await service.dispatch("list_chores", {"assigned_to": "riley"}, ctx)
+    assert listed["count"] == 1
+    assert listed["chores"][0]["id"] == res["occurrence_id"]
+    assert listed["chores"][0]["assigned_to"] == "riley"
 
 
 async def test_update_template(svc):
     service, _, _ = svc
-    ctx = make_ctx(user_id="u1", role="parent", band="AMBER")
+    ctx = make_ctx(user_id="u1", role="parent", band="GREEN")
     create_res = await service.dispatch(
         "create_template",
         {"title": "Dishes", "frequency": "daily", "base_points": 3},
@@ -45,7 +75,7 @@ async def test_update_template(svc):
 
 async def test_update_template_deactivate(svc):
     service, _, _ = svc
-    ctx = make_ctx(user_id="u1", role="parent", band="AMBER")
+    ctx = make_ctx(user_id="u1", role="parent", band="GREEN")
     create_res = await service.dispatch(
         "create_template",
         {"title": "Mow lawn", "frequency": "weekly"},
@@ -62,7 +92,7 @@ async def test_update_template_deactivate(svc):
 
 async def test_delete_template(svc):
     service, _, _ = svc
-    ctx = make_ctx(user_id="u1", role="parent", band="AMBER")
+    ctx = make_ctx(user_id="u1", role="parent", band="GREEN")
     create_res = await service.dispatch(
         "create_template",
         {"title": "Clean bathroom", "frequency": "weekly"},
@@ -80,7 +110,7 @@ async def test_delete_template(svc):
 
 async def test_assign_chore_creates_occurrence(svc):
     service, pub, _ = svc
-    ctx = make_ctx(user_id="u1", role="parent", band="AMBER")
+    ctx = make_ctx(user_id="u1", role="parent", band="GREEN")
     tmpl_res = await service.dispatch(
         "create_template",
         {"title": "Vacuum", "frequency": "weekly", "base_points": 5},
@@ -104,10 +134,10 @@ async def test_assign_chore_creates_occurrence(svc):
 
 async def test_complete_chore(svc):
     service, _, _ = svc
-    ctx = make_ctx(user_id="u1", role="parent", band="AMBER")
+    ctx = make_ctx(user_id="u1", role="parent", band="GREEN")
     occ_id = await _create_assigned_occurrence(service, ctx, "riley")
 
-    riley_ctx = make_ctx(user_id="riley", role="child", band="AMBER")
+    riley_ctx = make_ctx(user_id="riley", role="child", band="GREEN")
     done = await service.dispatch("complete_chore", {"occurrence_id": occ_id}, riley_ctx)
     assert done["success"] is True
     assert done["completed_at"]
@@ -116,9 +146,9 @@ async def test_complete_chore(svc):
 
 async def test_complete_chore_idempotent(svc):
     service, _, _ = svc
-    ctx = make_ctx(user_id="u1", role="parent", band="AMBER")
+    ctx = make_ctx(user_id="u1", role="parent", band="GREEN")
     occ_id = await _create_assigned_occurrence(service, ctx, "riley")
-    riley_ctx = make_ctx(user_id="riley", role="child", band="AMBER")
+    riley_ctx = make_ctx(user_id="riley", role="child", band="GREEN")
 
     d1 = await service.dispatch("complete_chore", {"occurrence_id": occ_id}, riley_ctx)
     d2 = await service.dispatch("complete_chore", {"occurrence_id": occ_id}, riley_ctx)
@@ -127,10 +157,10 @@ async def test_complete_chore_idempotent(svc):
 
 async def test_skip_chore(svc):
     service, _, _ = svc
-    ctx = make_ctx(user_id="u1", role="parent", band="AMBER")
+    ctx = make_ctx(user_id="u1", role="parent", band="GREEN")
     occ_id = await _create_assigned_occurrence(service, ctx, "riley")
 
-    riley_ctx = make_ctx(user_id="riley", role="child", band="AMBER")
+    riley_ctx = make_ctx(user_id="riley", role="child", band="GREEN")
     skip = await service.dispatch(
         "skip_chore",
         {"occurrence_id": occ_id, "skip_reason": "school trip"},
@@ -141,10 +171,10 @@ async def test_skip_chore(svc):
 
 async def test_reopen_chore(svc):
     service, _, _ = svc
-    parent_ctx = make_ctx(user_id="u1", role="parent", band="AMBER")
+    parent_ctx = make_ctx(user_id="u1", role="parent", band="GREEN")
     occ_id = await _create_assigned_occurrence(service, parent_ctx, "riley")
 
-    riley_ctx = make_ctx(user_id="riley", role="child", band="AMBER")
+    riley_ctx = make_ctx(user_id="riley", role="child", band="GREEN")
     await service.dispatch("complete_chore", {"occurrence_id": occ_id}, riley_ctx)
 
     reopen = await service.dispatch(
@@ -157,7 +187,7 @@ async def test_reopen_chore(svc):
 
 async def test_list_chores_assigned_to_filter(svc):
     service, _, _ = svc
-    ctx = make_ctx(user_id="u1", role="parent", band="AMBER")
+    ctx = make_ctx(user_id="u1", role="parent", band="GREEN")
     await _create_assigned_occurrence(service, ctx, "riley")
     await _create_assigned_occurrence(service, ctx, "alex")
 
@@ -168,11 +198,11 @@ async def test_list_chores_assigned_to_filter(svc):
 
 async def test_list_chores_status_filter(svc):
     service, _, _ = svc
-    ctx = make_ctx(user_id="u1", role="parent", band="AMBER")
+    ctx = make_ctx(user_id="u1", role="parent", band="GREEN")
     occ_id = await _create_assigned_occurrence(service, ctx, "riley")
     await _create_assigned_occurrence(service, ctx, "alex")
 
-    riley_ctx = make_ctx(user_id="riley", role="child", band="AMBER")
+    riley_ctx = make_ctx(user_id="riley", role="child", band="GREEN")
     await service.dispatch("complete_chore", {"occurrence_id": occ_id}, riley_ctx)
 
     done_list = await service.dispatch("list_chores", {"status": "done"}, make_ctx())
@@ -184,9 +214,9 @@ async def test_list_chores_status_filter(svc):
 
 async def test_chore_summary_points_tally(svc):
     service, _, _ = svc
-    ctx = make_ctx(user_id="u1", role="parent", band="AMBER")
+    ctx = make_ctx(user_id="u1", role="parent", band="GREEN")
     occ_id = await _create_assigned_occurrence(service, ctx, "riley", base_points=5)
-    riley_ctx = make_ctx(user_id="riley", role="child", band="AMBER")
+    riley_ctx = make_ctx(user_id="riley", role="child", band="GREEN")
     await service.dispatch("complete_chore", {"occurrence_id": occ_id}, riley_ctx)
 
     summary = await service.dispatch("chore_summary", {}, make_ctx())
@@ -199,7 +229,7 @@ async def test_chore_summary_points_tally(svc):
 
 async def test_points_override_by_parent(svc):
     service, _, _ = svc
-    ctx = make_ctx(user_id="u1", role="parent", band="AMBER")
+    ctx = make_ctx(user_id="u1", role="parent", band="GREEN")
     occ_id = await _create_assigned_occurrence(service, ctx, "riley", base_points=5)
 
     done = await service.dispatch(
@@ -212,7 +242,7 @@ async def test_points_override_by_parent(svc):
 
 async def test_due_before_filter(svc):
     service, _, _ = svc
-    ctx = make_ctx(user_id="u1", role="parent", band="AMBER")
+    ctx = make_ctx(user_id="u1", role="parent", band="GREEN")
     tmpl_res = await service.dispatch(
         "create_template",
         {"title": "Vacuum", "frequency": "weekly", "base_points": 5},

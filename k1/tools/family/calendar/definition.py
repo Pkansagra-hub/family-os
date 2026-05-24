@@ -184,7 +184,7 @@ CALENDAR_DEFINITION = ToolDefinition(
                     "user mentions a fixed-time event with start and end on a date",
                 ],
                 avoid_when=[
-                    "user wants a recurring family chore -> use chores.create_chore",
+                    "user wants a recurring family chore -> use chores.create_template",
                     "user wants a one-off to-do without fixed time -> use tasks.create_task",
                     "user wants a time/location alert -> use reminders.create_reminder",
                 ],

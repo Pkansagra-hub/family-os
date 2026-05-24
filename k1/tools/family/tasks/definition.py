@@ -173,7 +173,7 @@ TASKS_DEFINITION = ToolDefinition(
                     "user wants to track something that needs to happen once (not recurring)",
                 ],
                 avoid_when=[
-                    "task recurs weekly/daily → use chores.create_chore",
+                    "task recurs weekly/daily → use chores.create_template",
                     "an alert must fire at a specific time → use reminders.create_reminder",
                     "user wants to block time with start+end → use calendar.create_event",
                     "user wants to track something to buy → use shopping.add_item",

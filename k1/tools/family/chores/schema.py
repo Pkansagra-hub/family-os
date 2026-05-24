@@ -36,7 +36,7 @@ from k1.tools.family.base import BaseEntity
 # Type aliases
 # ---------------------------------------------------------------------------
 
-ChoreFrequency = Literal["daily", "weekly", "monthly", "once"]
+ChoreFrequency = Literal["daily", "weekly", "monthly", "once", "custom"]
 ChoreStatus = Literal["pending", "done", "skipped"]
 
 
@@ -57,8 +57,8 @@ class ChoreTemplate(BaseEntity):
     assigned_to:
         Default assignee ``member_id``; individual occurrences may override.
     frequency:
-        Recurrence cadence.  ``once`` creates a single occurrence and
-        marks the template complete after it is done.
+        Recurrence cadence. ``custom`` stores a caller-provided phrase or
+        interval in metadata for schedules outside the built-in cadences.
     base_points:
         Base gamification reward for completing this chore.  Zero means
         no points awarded.
@@ -75,7 +75,7 @@ class ChoreTemplate(BaseEntity):
     )
     frequency: ChoreFrequency = Field(
         default="weekly",
-        description="Recurrence cadence: daily | weekly | monthly | once.",
+        description="Recurrence cadence: daily | weekly | monthly | once | custom.",
     )
     base_points: int = Field(
         default=0,
