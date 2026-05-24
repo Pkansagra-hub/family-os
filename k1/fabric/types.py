@@ -1343,12 +1343,14 @@ class ScoredCapability:
 
     contract: Optional[CapabilityContract] = None
     score: float = 0.0
+    diagnostics: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return {
             "contract": self.contract.to_dict() if self.contract else None,
             "score": self.score,
+            "diagnostics": dict(self.diagnostics),
         }
 
     @classmethod
@@ -1359,6 +1361,7 @@ class ScoredCapability:
         return cls(
             contract=contract,
             score=data.get("score", 0.0),
+            diagnostics=dict(data.get("diagnostics") or {}),
         )
 
 
@@ -1396,6 +1399,7 @@ class RetrievalResult:
     query_intent: str = ""
     index_size: int = 0
     embedding_model: str = "ultrabert-v4.0.0"
+    diagnostics: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -1406,6 +1410,7 @@ class RetrievalResult:
             "query_intent": self.query_intent,
             "index_size": self.index_size,
             "embedding_model": self.embedding_model,
+            "diagnostics": dict(self.diagnostics),
         }
 
     @classmethod
@@ -1418,6 +1423,7 @@ class RetrievalResult:
             query_intent=data.get("query_intent", ""),
             index_size=data.get("index_size", 0),
             embedding_model=data.get("embedding_model", "ultrabert-v4.0.0"),
+            diagnostics=dict(data.get("diagnostics") or {}),
         )
 
 

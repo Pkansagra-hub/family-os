@@ -13,7 +13,7 @@ def test_registry_loads_profiles_from_prompt_contracts() -> None:
     assert profile is not None
     assert profile.prompt_template == "calendar_activity_v1"
     assert profile.domains[0] == "calendar"
-    assert any("fixed-time coordination" in item for item in profile.guidance)
+    assert any("tool.read.calendar.list_events" in item for item in profile.guidance)
 
 
 def test_selects_calendar_profile_from_structured_domain_metadata() -> None:
@@ -67,7 +67,25 @@ def test_bundled_calendar_and_reminder_selects_multiple_profiles() -> None:
     assert "reminders.v1" in selection.profile_ids
 
 
-def test_unbacked_chores_domain_requires_discovery_profile() -> None:
+def test_bundled_tasks_and_calendar_selects_both_profiles() -> None:
+    selection = select_back_execution_profiles(
+        {
+            "task_id": "task-1",
+            "intents": [
+                {"action": "list Riley tasks", "domain": "tasks"},
+                {"action": "list calendar events", "domain": "calendar"},
+            ],
+        }
+    )
+
+    assert selection.reason == "domain_metadata"
+    assert "tasks.v1" in selection.profile_ids
+    assert "calendar.v1" in selection.profile_ids
+    assert "shopping.v1" not in selection.profile_ids
+    assert "reminders.v1" not in selection.profile_ids
+
+
+def test_chores_domain_selects_contract_backed_profile() -> None:
     selection = select_back_execution_profiles(
         {
             "task_id": "task-1",
@@ -81,11 +99,11 @@ def test_unbacked_chores_domain_requires_discovery_profile() -> None:
         }
     )
 
-    assert selection.reason == "discovery_required"
-    assert selection.profile_ids == ("system_of_record.generic.v1",)
+    assert selection.reason == "domain_metadata"
+    assert selection.profile_ids == ("chores.v1",)
 
 
-def test_unbacked_shopping_domain_requires_discovery_profile() -> None:
+def test_shopping_domain_selects_contract_backed_profile() -> None:
     selection = select_back_execution_profiles(
         {
             "task_id": "task-1",
@@ -99,8 +117,8 @@ def test_unbacked_shopping_domain_requires_discovery_profile() -> None:
         }
     )
 
-    assert selection.reason == "discovery_required"
-    assert selection.profile_ids == ("system_of_record.generic.v1",)
+    assert selection.reason == "domain_metadata"
+    assert selection.profile_ids == ("shopping.v1",)
 
 
 def test_free_text_action_cues_do_not_select_profile() -> None:
@@ -190,3 +208,31 @@ def test_weak_generic_record_action_falls_back_to_generic_profile() -> None:
     )
 
     assert selection.profile_ids == ("system_of_record.generic.v1",)
+
+
+def test_profile_loads_compatible_tools_from_prompt_contract() -> None:
+    """compatible_tools field in prompt_contract YAML is loaded onto profile."""
+    profile = get_back_execution_profile("chores.v1")
+
+    assert profile is not None
+    assert profile.compatible_tools, "chores.v1 should expose compatible_tools"
+    assert "tool.read.chores.list_chores" in profile.compatible_tools
+    assert all(item.startswith("tool.") for item in profile.compatible_tools)
+
+
+def test_rendered_profile_block_includes_soft_capability_hint() -> None:
+    """compatible_tools surface as a 'preferred capabilities' soft hint, not allowlist."""
+    selection = select_back_execution_profiles(
+        {
+            "task_id": "task-1",
+            "intents": [{"action": "complete chore", "domain": "chores"}],
+        }
+    )
+    block = render_back_execution_profile_block(selection, max_chars=2000)
+
+    assert "preferred capabilities" in block.lower()
+    assert "soft hint" in block.lower()
+    # Must surface at least one chore capability
+    assert "tool." in block and "chores" in block
+    # Must NOT enforce — language should preserve exploration
+    assert "Reach beyond them only when the task clearly requires it" in block

@@ -71,6 +71,18 @@ class TestReExportIdentity:
 
         assert Facade is Deep
 
+    def test_writer_port_identity(self) -> None:
+        from k1.sessionstate.ports.writer import IWriterPort as Deep
+        from k1.sessionstate.public_types import IWriterPort as Facade
+
+        assert Facade is Deep
+
+    def test_control_section_identity(self) -> None:
+        from k1.sessionstate.public_types import ControlSection as Facade
+        from k1.sessionstate.sections.control import ControlSection as Deep
+
+        assert Facade is Deep
+
     def test_intent_classification_identity(self) -> None:
         from k1.sessionstate.public_types import IntentClassification as Facade
         from k1.sessionstate.sections.control import IntentClassification as Deep
@@ -119,15 +131,9 @@ class TestReExportIdentity:
 
         assert Facade is Deep
 
-    def test_compute_temporal_anchor_identity(self) -> None:
-        from k1.sessionstate.public_types import compute_temporal_anchor as Facade
-        from k1.sessionstate.sections.temporal_context import compute_temporal_anchor as Deep
-
-        assert Facade is Deep
-
-    def test_temporal_anchor_identity(self) -> None:
-        from k1.sessionstate.public_types import TemporalAnchor as Facade
-        from k1.sessionstate.sections.temporal_context import TemporalAnchor as Deep
+    def test_temporal_section_identity(self) -> None:
+        from k1.sessionstate.public_types import TemporalSection as Facade
+        from k1.sessionstate.sections.temporal import TemporalSection as Deep
 
         assert Facade is Deep
 

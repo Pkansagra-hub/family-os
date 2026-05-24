@@ -210,6 +210,15 @@ kernel:
   # Envelope dedup cache size (cleared when exceeded)
   dedup_cache_size: 4096
 
+  # BackPool runtime worker defaults
+  backpool_size: 3
+  backpool_max_concurrent_per_session: 2
+  backpool_lease_ttl_s: 300.0
+  backpool_reclaim_check_interval_s: 30.0
+  backpool_enable_dependency_ordering: true
+  backpool_max_renewals: 3
+  backpool_lease_grace_period_s: 5.0
+
 
 # ── llm/ ────────────────────────────────────────────────────────────────
 

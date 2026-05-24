@@ -85,7 +85,10 @@ async def start_kernel(config: KernelConfig | None = None) -> KernelRuntime:
 
     svc = KernelService(cfg)
     await svc.startup()
-    session = await svc.create_session(session_id)
+    session = await svc.create_session(
+        session_id,
+        device_id=getattr(cfg, "active_device_id", "") or None,
+    )
 
     # Map SessionInstance → KernelRuntime for backward compat
     concierge = session.concierge  # ConciergeRuntime

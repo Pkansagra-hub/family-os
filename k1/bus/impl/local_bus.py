@@ -1140,6 +1140,11 @@ class LocalBus:
         """
         return self._captured
 
+    @property
+    def published(self) -> list[Envelope]:
+        """Backward-compatible alias for captured test envelopes."""
+        return self._captured
+
     def drain(self) -> list[Envelope]:
         """
         Return and clear all captured envelopes.

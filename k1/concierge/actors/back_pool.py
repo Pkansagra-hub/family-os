@@ -376,8 +376,11 @@ class BackPool:
             )
             return None
 
-        # E7.3.4: Track released task_ids for late-envelope discard
-        self._released_task_ids.add(task_id)
+        # E7.3.4: Track terminal releases for late-envelope discard.
+        # Suspensions free the worker slot but must allow a future resume
+        # envelope to reacquire a worker.
+        if reason != "suspended":
+            self._released_task_ids.add(task_id)
 
         # Update lease status (E7.2.2)
         if slot.lease is not None:
@@ -385,6 +388,8 @@ class BackPool:
                 slot.lease.cancel()
             elif reason == "lease_expired":
                 slot.lease.expire()
+            elif reason == "suspended":
+                slot.lease.suspend()
             else:
                 slot.lease.release()
 

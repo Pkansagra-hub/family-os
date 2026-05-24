@@ -249,6 +249,7 @@ class TestDecideResponseFinalTruthTable:
         assert d.action == ResponseFinalAction.STAY
         assert d.target_state is None
         assert d.release_front_lock is True
+        assert d.drain_front_lock is True
 
     def test_branch_12_clarifying_worker_no_active(self):
         """CLARIFYING_WORKER + no active -> LISTENING."""
@@ -428,6 +429,23 @@ class TestControllerResponseFinal:
         assert ctrl._state == ConciergeState.CLARIFYING_WORKER
         turn_completed = [e for e in bus.captured if e.topic == TOPIC_TURN_COMPLETED]
         assert len(turn_completed) == 0
+
+    def test_clarifying_worker_response_final_drains_queued_user_answer(self):
+        """Queued user answers are processed after HITL_RELAY finalizes."""
+        ctrl, _bus = _make_controller()
+        ctrl._state = ConciergeState.CLARIFYING_WORKER
+        ctrl._turn_number = 1
+        ctrl._active_task_ids.add("t1")
+        ctrl._front_lock.busy = True
+        ctrl._front_lock._enqueue(_user_input_env("Use today.", envelope_id=201))
+
+        delivered: list[Envelope] = []
+        ctrl._deliver_to_front = delivered.append  # type: ignore[method-assign]
+
+        ctrl._on_response_final(_final_response_env(envelope_id=101))
+
+        assert ctrl._state == ConciergeState.CLARIFYING_WORKER
+        assert delivered and delivered[0].topic == TOPIC_USER_INPUT
 
     def test_clarifying_worker_no_active_tasks_transitions_to_listening(self):
         """CLARIFYING_WORKER + no active tasks -> LISTENING + turn.completed."""

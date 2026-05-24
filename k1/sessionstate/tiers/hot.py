@@ -16,9 +16,9 @@ SPECIFICATION
 
 PURPOSE:
     Manage HOT CORE sections (always in memory).
-    Coordinate 52KB budget across 10 sections.
+    Coordinate 56KB budget across 11 sections.
 
-TOTAL BUDGET: 52KB (53248 bytes)
+TOTAL BUDGET: 56KB (57344 bytes)
 
 SECTIONS (with individual budgets):
     - control:          8KB (NEVER demote)
@@ -31,6 +31,7 @@ SECTIONS (with individual budgets):
     - meta:             2KB (NEVER demote)
     - task_state:       4KB (NEVER demote)
     - task_artifacts:   4KB (demotes to artifacts_warm)
+    - temporal:         4KB (NEVER demote)
 
 DEMOTION PAIRS:
     beliefs_active -> beliefs_history (WARM)
@@ -69,6 +70,7 @@ from ..sections import (
     MetaSection,
     NarrativeActiveSection,
     ScoreboardSection,
+    TemporalSection,
 )
 from ..sections.task_artifacts import TaskArtifactsSection
 from ..sections.task_state import TaskStateSection
@@ -84,7 +86,7 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 # Budget in bytes
-HOT_BUDGET_BYTES: int = 53248  # config: sessionstate.tiers.hot_budget_bytes
+HOT_BUDGET_BYTES: int = 57344  # config: sessionstate.tiers.hot_budget_bytes
 
 # Section budgets (from sizetracker.py)
 SECTION_BUDGETS: Dict[str, int] = {
@@ -98,6 +100,7 @@ SECTION_BUDGETS: Dict[str, int] = {
     "meta": 2 * 1024,
     "task_state": 4 * 1024,
     "task_artifacts": 4 * 1024,
+    "temporal": 4 * 1024,
 }
 
 # Sections that are ordered for demotion (lower index = demote first)
@@ -109,7 +112,7 @@ DEMOTE_ORDER: List[str] = [
 ]
 
 # Sections that can never be demoted
-NEVER_DEMOTE: frozenset[str] = frozenset(["control", "meta", "task_state"])
+NEVER_DEMOTE: frozenset[str] = frozenset(["control", "meta", "task_state", "temporal"])
 
 # Demotion target pairs: HOT section -> WARM section
 DEMOTE_TARGETS: Dict[str, str] = {
@@ -130,6 +133,7 @@ HOT_SECTION_NAMES: List[str] = [
     "meta",
     "task_state",
     "task_artifacts",
+    "temporal",
 ]
 
 
@@ -277,6 +281,7 @@ SectionType = Union[
     MetaSection,
     TaskStateSection,
     TaskArtifactsSection,
+    TemporalSection,
 ]
 
 
@@ -284,13 +289,13 @@ class HotTier:
     """
     HOT CORE tier manager.
 
-    Manages 10 HOT sections with a combined 52KB budget.
+    Manages 11 HOT sections with a combined 56KB budget.
     Coordinates demotion to WARM tier when under pressure.
 
-    Budget: 52KB (53248 bytes)
-    Sections: 10 (control, beliefs_active, scoreboard, history_active,
+    Budget: 56KB (57344 bytes)
+    Sections: 11 (control, beliefs_active, scoreboard, history_active,
                   clarifications, affective_now, narrative_active, meta,
-                  task_state, task_artifacts)
+                  task_state, task_artifacts, temporal)
 
     Thread Safety:
         - Read operations are safe for concurrent access
@@ -331,7 +336,7 @@ class HotTier:
         config: Optional[SessionStateConfig] = None,
     ) -> None:
         """
-        Initialize HotTier with all 10 sections.
+        Initialize HotTier with all hot sections.
 
         Args:
             session_id: Session UUID (for section initialization)
@@ -343,7 +348,7 @@ class HotTier:
         self._migration_engine = migration_engine
         self._created_at_ms = int(time.time() * 1000)
 
-        # Initialize all 10 sections
+        # Initialize all hot sections
         self._sections: Dict[str, SectionType] = {
             "control": ControlSection(session_id=session_id),
             "beliefs_active": BeliefsActiveSection(session_id=session_id),
@@ -355,6 +360,7 @@ class HotTier:
             "meta": MetaSection(session_id=session_id),
             "task_state": TaskStateSection(),
             "task_artifacts": TaskArtifactsSection(),
+            "temporal": TemporalSection(session_id=session_id),
         }
 
         logger.info(

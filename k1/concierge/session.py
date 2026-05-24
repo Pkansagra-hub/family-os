@@ -13,6 +13,7 @@ ConciergeSession:  Per-request scope wrapper around ConciergeRuntime.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import uuid
 from dataclasses import dataclass, field
@@ -66,6 +67,9 @@ class ConciergeRuntime:
         ledger: Any | None = None,
         ledger_store: Any | None = None,
         dead_letter_consumer: Any | None = None,
+        back_pool: Any | None = None,
+        back_topic_router: Any | None = None,
+        ready_queue: Any | None = None,
     ) -> None:
         self._bus = bus
         self._router = router
@@ -92,12 +96,18 @@ class ConciergeRuntime:
         self._ledger = ledger
         self._ledger_store = ledger_store
         self._dead_letter_consumer = dead_letter_consumer
+        self._back_pool = back_pool
+        self._back_topic_router = back_topic_router
+        self._ready_queue = ready_queue
         self._consumer_task: asyncio.Task[None] | None = None
+        self._back_tasks: dict[str, asyncio.Task[None]] = {}
+        self._lease_watcher_task: asyncio.Task | None = None
         self._started = False
         # M5.E4: per-session SelfModelHandle (set by KernelService after
         # P3.5 install). When None, front_handler runs with no grounding
         # capsule (pre-M4 baseline).
         self._self_model: Any = None
+        self._temporal: Any = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -108,6 +118,8 @@ class ConciergeRuntime:
         if self._started:
             return
         self._consumer_task = asyncio.create_task(self._mailbox_consumer())
+        if self._back_pool is not None and hasattr(self._back_pool, "start_lease_watcher"):
+            self._lease_watcher_task = await self._back_pool.start_lease_watcher(self._bus)
         self._started = True
         logger.info("ConciergeRuntime.start: consumer task created")
 
@@ -123,6 +135,17 @@ class ConciergeRuntime:
                 await self._consumer_task
             except asyncio.CancelledError:
                 pass
+
+        for task in list(self._back_tasks.values()):
+            if not task.done():
+                task.cancel()
+        if self._back_tasks:
+            await asyncio.gather(*self._back_tasks.values(), return_exceptions=True)
+        self._back_tasks.clear()
+
+        if self._back_pool is not None and hasattr(self._back_pool, "stop_lease_watcher"):
+            await self._back_pool.stop_lease_watcher()
+        self._lease_watcher_task = None
 
         # 2. Flush ledger
         if self._ledger is not None:
@@ -260,6 +283,22 @@ class ConciergeRuntime:
         return self._dead_letter_consumer
 
     @property
+    def back_pool(self) -> Any | None:
+        return self._back_pool
+
+    @property
+    def back_topic_router(self) -> Any | None:
+        return self._back_topic_router
+
+    @property
+    def ready_queue(self) -> Any | None:
+        return self._ready_queue
+
+    @property
+    def active_back_tasks(self) -> dict[str, asyncio.Task[None]]:
+        return dict(self._back_tasks)
+
+    @property
     def front_ctx(self) -> Any | None:
         return self._front_ctx
 
@@ -272,6 +311,11 @@ class ConciergeRuntime:
         """Per-session SelfModelHandle, or None when disabled."""
         return self._self_model
 
+    @property
+    def temporal(self) -> Any | None:
+        """Per-session TemporalHandle, or None when disabled."""
+        return self._temporal
+
     def set_self_model(self, handle: Any) -> None:
         """Attach a SelfModelHandle for stage 9.5 grounding capsules.
 
@@ -281,6 +325,12 @@ class ConciergeRuntime:
         if self._started:
             raise RuntimeError("set_self_model() must be called before start()")
         self._self_model = handle
+
+    def set_temporal(self, handle: Any) -> None:
+        """Attach a TemporalHandle for turn refresh and prompt projection."""
+        if self._started:
+            raise RuntimeError("set_temporal() must be called before start()")
+        self._temporal = handle
 
     @property
     def front_subscriptions(self) -> list[Any]:
@@ -312,7 +362,6 @@ class ConciergeRuntime:
 
     async def _mailbox_consumer(self) -> None:
         """Poll front/back mailboxes and invoke actor handlers."""
-        from k1.concierge.actors.back import route_back_envelope
         from k1.concierge.actors.front import front_handler
         from k1.concierge.config import get_config
         from k1.concierge.tools.schemas_front import FRONT_TOOL_SCHEMAS
@@ -354,49 +403,280 @@ class ConciergeRuntime:
                     all_tool_schemas=FRONT_TOOL_SCHEMAS,
                     fsm_state=self._fsm.state.name,
                     self_model=self._self_model,
+                    temporal=self._temporal,
                     opp_pipeline=getattr(self._fsm, "_opp_pipeline", None),
                 )
                 await self._tick_experience()
 
             # --- Back mailbox ---
-            back_env = self._back_mailbox.receive(timeout_ms=0)
-            if back_env is not None:
+            self._cleanup_back_tasks()
+            drained_overflow = self._drain_back_overflow_to_ready_queue()
+            if drained_overflow:
+                did_work = True
+
+            while True:
+                back_env = self._back_mailbox.receive(timeout_ms=0)
+                if back_env is None:
+                    break
                 env_id = int(getattr(back_env, "envelope_id", 0) or 0)
                 if env_id and env_id in seen_back_ids:
-                    back_env = None
-                else:
-                    if env_id:
-                        seen_back_ids.add(env_id)
-                        if len(seen_back_ids) > dedup_limit:
-                            seen_back_ids.clear()
-
-            if back_env is not None:
+                    continue
+                if env_id:
+                    seen_back_ids.add(env_id)
+                    if len(seen_back_ids) > dedup_limit:
+                        seen_back_ids.clear()
                 did_work = True
-                try:
-                    await route_back_envelope(
-                        envelope=back_env,
-                        model=self._model,
-                        ss=self._session_state,
-                        bus=self._bus,
-                        tool_dispatcher=self._back_dispatcher,
-                        fsm_state=self._fsm,
-                        hil_port=self._hil_port,
-                    )
-                except SuspensionResolutionNotFound as exc:
-                    # M6 E6.2 (C08): back_resume_handler raises this when
-                    # no resume_context is available for the task. The
-                    # handler has already published `task_failed` on the
-                    # bus before raising, so observers see the failure.
-                    # Absorb here to keep the session loop alive.
-                    logger.warning(
-                        "session: back resume failed -- " "SuspensionResolutionNotFound task_id=%s",
-                        exc.task_id,
-                    )
+                await self._enqueue_or_run_back_envelope(back_env)
+
+            scheduled = await self._schedule_ready_back_envelopes()
+            if scheduled:
+                did_work = True
 
             if did_work:
                 await asyncio.sleep(0)
             else:
                 await asyncio.sleep(poll_interval)
+
+    def _parse_back_payload(self, envelope: Envelope) -> dict[str, Any]:
+        payload_bytes = getattr(envelope, "payload", None)
+        if not payload_bytes:
+            return {}
+        try:
+            if isinstance(payload_bytes, (bytes, bytearray)):
+                return json.loads(payload_bytes.decode("utf-8"))
+            if isinstance(payload_bytes, str):
+                return json.loads(payload_bytes)
+        except Exception:
+            logger.debug("session: failed to parse back envelope payload", exc_info=True)
+        return {}
+
+    def _back_task_id(self, envelope: Envelope) -> str:
+        payload = self._parse_back_payload(envelope)
+        task_id = str(payload.get("task_id") or "")
+        if task_id:
+            return task_id
+        envelope_id = getattr(envelope, "envelope_id", None)
+        return f"envelope-{envelope_id or uuid.uuid4().hex}"
+
+    def _back_depends_on(self, envelope: Envelope) -> str | None:
+        payload = self._parse_back_payload(envelope)
+        depends_on = payload.get("depends_on")
+        if not depends_on:
+            depends_on = payload.get("dependsOn")
+        if isinstance(depends_on, list):
+            depends_on = depends_on[0] if depends_on else None
+        if depends_on is None:
+            return None
+        depends_on_s = str(depends_on).strip()
+        return depends_on_s or None
+
+    def _back_session_id(self, envelope: Envelope) -> str | None:
+        payload = self._parse_back_payload(envelope)
+        session_id = payload.get("session_id") or payload.get("sessionId")
+        if session_id:
+            return str(session_id)
+        return None
+
+    def _back_cancel_token(self, task_id: str) -> Any | None:
+        getter = getattr(self._fsm, "get_cancel_token", None)
+        if callable(getter):
+            token = getter(task_id)
+            if token is not None:
+                return token
+
+        cancel_handler = getattr(self._fsm, "cancel_handler", None)
+        handler_getter = getattr(cancel_handler, "get_token", None)
+        if callable(handler_getter):
+            return handler_getter(task_id)
+        return None
+
+    def _cleanup_back_tasks(self) -> None:
+        for task_id, task in list(self._back_tasks.items()):
+            if task.done():
+                self._back_tasks.pop(task_id, None)
+
+    def _drain_back_overflow_to_ready_queue(self) -> bool:
+        if self._back_pool is None or self._ready_queue is None:
+            return False
+        drained = False
+        while True:
+            envelope = self._back_pool.dequeue_overflow()
+            if envelope is None:
+                break
+            drained = True
+            self._ready_queue.enqueue(envelope)
+        return drained
+
+    async def _enqueue_or_run_back_envelope(self, envelope: Envelope) -> None:
+        router = self._back_topic_router
+        topic = getattr(envelope, "topic", "") or ""
+        task_id = self._back_task_id(envelope)
+
+        if router is not None:
+            handler = router.route(envelope)
+            if handler is None:
+                return
+            if router.is_cancel_topic(topic):
+                cancel_token = router.get_cancel_token_for_task(task_id)
+                handler(envelope=envelope, fsm_state=self._fsm, cancel_token=cancel_token)
+                return
+
+        if self._ready_queue is None or self._back_pool is None:
+            await self._schedule_back_envelope(envelope)
+            return
+
+        depends_on = None
+        if getattr(self._back_pool.config, "enable_dependency_ordering", True):
+            depends_on = self._back_depends_on(envelope)
+        status, failed_task_ids = self._ready_queue.enqueue(envelope, depends_on=depends_on)
+        if failed_task_ids:
+            self._publish_dependency_failures(failed_task_ids, reason=status)
+
+    async def _schedule_ready_back_envelopes(self) -> int:
+        if self._ready_queue is None:
+            return 0
+        scheduled = 0
+        for envelope in self._ready_queue.dequeue_ready():
+            if await self._schedule_back_envelope(envelope):
+                scheduled += 1
+        return scheduled
+
+    async def _schedule_back_envelope(self, envelope: Envelope) -> bool:
+        task_id = self._back_task_id(envelope)
+
+        if self._back_pool is None:
+            task = asyncio.create_task(self._run_back_envelope(envelope))
+            self._back_tasks[task_id] = task
+            return True
+
+        try:
+            slot = self._back_pool.acquire_worker(
+                task_id,
+                session_id=self._back_session_id(envelope),
+                cancellation_token=self._back_cancel_token(task_id),
+            )
+        except Exception as exc:
+            from k1.concierge.actors.back_pool import BackPoolExhausted
+
+            if isinstance(exc, BackPoolExhausted):
+                self._back_pool.enqueue_overflow(envelope)
+                return False
+            raise
+
+        if self._ready_queue is not None:
+            self._ready_queue.register_task(task_id)
+
+        task = asyncio.create_task(self._run_back_envelope_with_slot(envelope, slot))
+        slot.bind_task(task)
+        self._back_tasks[task_id] = task
+        return True
+
+    async def _run_back_envelope_with_slot(self, envelope: Envelope, slot: Any) -> None:
+        task_id = slot.task_id
+        reason = "completed"
+        queue_status: str | None = "completed"
+        try:
+            result = await self._run_back_envelope(
+                envelope,
+                cancel_token=getattr(getattr(slot, "lease", None), "cancellation_token", None),
+                propagate_errors=True,
+            )
+            status = str(getattr(result, "status", "complete") or "complete")
+            if status == "suspended":
+                reason = "suspended"
+                queue_status = None
+            elif status == "cancelled":
+                reason = "cancelled"
+                queue_status = "cancelled"
+            elif status == "complete":
+                reason = "completed"
+                queue_status = "completed"
+            else:
+                reason = "error"
+                queue_status = "failed"
+        except SuspensionResolutionNotFound:
+            reason = "error"
+            queue_status = "failed"
+        except asyncio.CancelledError:
+            reason = "cancelled"
+            queue_status = "cancelled"
+            raise
+        except Exception:
+            reason = "error"
+            queue_status = "failed"
+        finally:
+            if self._back_pool is not None:
+                self._back_pool.release_worker(task_id, reason=reason)
+            self._back_tasks.pop(task_id, None)
+            if queue_status is not None and self._ready_queue is not None:
+                _, failed_task_ids = self._ready_queue.notify_completed(
+                    task_id, status=queue_status
+                )
+                if failed_task_ids:
+                    self._publish_dependency_failures(failed_task_ids, reason="dependency_failed")
+
+    def _publish_dependency_failures(self, task_ids: list[str], *, reason: str) -> None:
+        from k1.concierge.bus.builders import build_task_failed
+
+        for task_id in task_ids:
+            self._bus.publish(
+                build_task_failed(
+                    payload={
+                        "task_id": task_id,
+                        "reason": reason,
+                        "error": "dependency_failed",
+                    }
+                )
+            )
+            if self._ready_queue is not None:
+                self._ready_queue.notify_completed(task_id, status="failed")
+
+    async def _run_back_envelope(
+        self,
+        envelope: Envelope,
+        *,
+        cancel_token: Any | None = None,
+        propagate_errors: bool = False,
+    ) -> Any | None:
+        """Run one Back actor envelope without blocking Front mailbox polling."""
+        from k1.concierge.actors.back import route_back_envelope
+
+        try:
+            return await route_back_envelope(
+                envelope=envelope,
+                model=self._model,
+                ss=self._session_state,
+                bus=self._bus,
+                tool_dispatcher=self._back_dispatcher,
+                fsm_state=self._fsm,
+                cancel_token=cancel_token,
+                hil_port=self._hil_port,
+                temporal=self._temporal,
+            )
+        except SuspensionResolutionNotFound as exc:
+            # M6 E6.2 (C08): back_resume_handler raises this when
+            # no resume_context is available for the task. The
+            # handler has already published `task_failed` on the
+            # bus before raising, so observers see the failure.
+            # Absorb here to keep the session loop alive.
+            logger.warning(
+                "session: back resume failed -- SuspensionResolutionNotFound task_id=%s",
+                exc.task_id,
+            )
+            if propagate_errors:
+                raise
+            return None
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "session: back envelope handling failed topic=%s envelope_id=%s",
+                getattr(envelope, "topic", ""),
+                getattr(envelope, "envelope_id", "?"),
+            )
+            if propagate_errors:
+                raise
+            return None
 
     # ------------------------------------------------------------------
     # Experience layer tick (extracted from bootstrap._tick_experience)

@@ -93,9 +93,14 @@ def _failure_result(**kwargs) -> CapabilityResult:
     )
 
 
-def _retrieval_result(names: list[str] | None = None) -> RetrievalResult:
+def _retrieval_result(
+    names: list[str] | None = None,
+    *,
+    diagnostics: dict | None = None,
+) -> RetrievalResult:
     caps = []
-    for i, name in enumerate(names or ["tool.execute.send_message"]):
+    source_names = names if names is not None else ["tool.execute.send_message"]
+    for i, name in enumerate(source_names):
         caps.append(
             ScoredCapability(
                 contract=CapabilityContract(
@@ -104,7 +109,12 @@ def _retrieval_result(names: list[str] | None = None) -> RetrievalResult:
                 score=1.0 - i * 0.1,
             )
         )
-    return RetrievalResult(capabilities=caps, total_matched=len(caps), query_intent="test")
+    return RetrievalResult(
+        capabilities=caps,
+        total_matched=len(caps),
+        query_intent="test",
+        diagnostics=diagnostics or {},
+    )
 
 
 # =====================================================================
@@ -159,7 +169,15 @@ class TestDiscoverWithFabricPort:
         assert cap["name"] == "tool.execute.send_message"
 
     @pytest.mark.asyncio
-    async def test_capability_dict_has_score(self) -> None:
+    async def test_capability_dict_is_slim(self) -> None:
+        """Workflow v2: discover returns ONLY name/brief/domain/side-effect/safety.
+
+        Verbose fields (description, score, schema, required_inputs,
+        optional_inputs, prompt_template, activity_profile,
+        tool_instructions, limitations, provider_type, type, domains,
+        diagnostics, side_effects) live on the cached contract and are
+        accessible via get_capability_schemas.
+        """
         mock_port = AsyncMock(spec=FabricDispatchAdapter)
         mock_port.discover_capabilities.return_value = _retrieval_result(
             ["tool.execute.send_message"]
@@ -167,11 +185,37 @@ class TestDiscoverWithFabricPort:
         ctx = _make_ctx(dispatch=mock_port)
         result = await execute_discover_capabilities({"intent": "send message"}, ctx)
         cap = result.data["capabilities"][0]
-        assert "score" in cap
-        assert isinstance(cap["score"], float)
+        # Slim fields present
+        assert cap["name"] == "tool.execute.send_message"
+        assert "brief" in cap
+        assert "domain" in cap
+        assert "has_side_effects" in cap
+        assert "safety_band_min" in cap
+        # Verbose fields MUST be stripped
+        for verbose_key in (
+            "description",
+            "score",
+            "schema",
+            "required_inputs",
+            "optional_inputs",
+            "prompt_template",
+            "activity_profile",
+            "tool_instructions",
+            "limitations",
+            "provider_type",
+            "type",
+            "domains",
+            "diagnostics",
+            "side_effects",
+        ):
+            assert verbose_key not in cap, (
+                f"workflow v2: discover payload must not contain {verbose_key!r}; "
+                "fetch via get_capability_schemas instead"
+            )
 
     @pytest.mark.asyncio
-    async def test_capability_dict_has_input_schema_and_caches_contract(self) -> None:
+    async def test_discover_caches_full_contract_for_schema_lookup(self) -> None:
+        """Workflow v2: full contract is cached so get_capability_schemas can read it."""
         contract = CapabilityContract(
             name="tool.execute.tasks.create_task",
             description="Create a task",
@@ -186,19 +230,15 @@ class TestDiscoverWithFabricPort:
         )
         ctx = _make_ctx(dispatch=mock_port)
 
-        result = await execute_discover_capabilities({"intent": "create task"}, ctx)
+        await execute_discover_capabilities({"intent": "create task"}, ctx)
 
-        cap = result.data["capabilities"][0]
-        assert cap["schema"]["required_inputs"] == [
-            {"name": "title", "type": "string", "description": "Task title"}
-        ]
-        assert cap["schema"]["optional_inputs"] == [
-            {"name": "assigned_to", "type": "string", "description": "Member id"}
-        ]
+        # Contract is cached at the standard key so get_capability_schemas
+        # can resolve it without a re-discover round-trip.
         assert ctx.capability_cache[("capability_contract", contract.name)] is contract
 
     @pytest.mark.asyncio
-    async def test_capability_dict_has_contract_metadata_for_planning(self) -> None:
+    async def test_discover_keeps_contract_metadata_in_cache(self) -> None:
+        """Workflow v2: discover payload is slim, but the cached contract is whole."""
         contract = CapabilityContract(
             name="tool.read.records.list_records",
             description="List records",
@@ -224,20 +264,23 @@ class TestDiscoverWithFabricPort:
         result = await execute_discover_capabilities({"intent": "list records"}, ctx)
 
         cap = result.data["capabilities"][0]
-        assert cap["domains"] == ["system", "records"]
-        assert cap["prompt_template"] == "records_activity_v1"
-        assert cap["activity_profile"] == "records.v1"
-        assert cap["tool_instructions"] == "Read records before writing summaries."
-        assert cap["limitations"] == ["do not use for writes"]
-        assert cap["schema"]["capabilities"] == ["read", "adapter:records"]
-        assert cap["schema"]["output"]["properties"]["records"]["type"] == "array"
+        # Slim payload uses the first domain element.
+        assert cap["domain"] == "system"
+        # Cached contract still carries the planning metadata.
+        cached = ctx.capability_cache[("capability_contract", contract.name)]
+        assert cached.prompt_template == "records_activity_v1"
+        assert cached.activity_profile == "records.v1"
+        assert cached.tool_instructions == "Read records before writing summaries."
+        assert list(cached.limitations) == ["do not use for writes"]
+        assert list(cached.capabilities) == ["read", "adapter:records"]
+        assert cached.output["properties"]["records"]["type"] == "array"
 
     @pytest.mark.asyncio
     async def test_domain_passed_as_list(self) -> None:
         mock_port = AsyncMock(spec=FabricDispatchAdapter)
         mock_port.discover_capabilities.return_value = _retrieval_result()
         ctx = _make_ctx(dispatch=mock_port)
-        await execute_discover_capabilities({"intent": "send", "domain": "messaging"}, ctx)
+        await execute_discover_capabilities({"intent": "send", "domain": ["messaging"]}, ctx)
         call_kwargs = mock_port.discover_capabilities.call_args_list[0]
         assert call_kwargs.kwargs.get("domain") == ["messaging"] or call_kwargs[1].get(
             "domain"
@@ -247,7 +290,7 @@ class TestDiscoverWithFabricPort:
     async def test_domain_is_soft_hint_and_global_results_are_merged(self) -> None:
         mock_port = AsyncMock(spec=FabricDispatchAdapter)
         mock_port.discover_capabilities.side_effect = [
-            _retrieval_result(["tool.read.records.list_records"]),
+            _retrieval_result([]),
             _retrieval_result(["tool.execute.records.delete_record"]),
         ]
         ctx = _make_ctx(dispatch=mock_port)
@@ -258,9 +301,23 @@ class TestDiscoverWithFabricPort:
 
         assert mock_port.discover_capabilities.await_count == 2
         names = [cap["name"] for cap in result.data["capabilities"]]
-        assert names == ["tool.read.records.list_records", "tool.execute.records.delete_record"]
+        assert names == ["tool.execute.records.delete_record"]
         assert mock_port.discover_capabilities.call_args_list[0].kwargs["domain"] == ["operations"]
         assert mock_port.discover_capabilities.call_args_list[1].kwargs["domain"] is None
+
+    @pytest.mark.asyncio
+    async def test_discover_capabilities_passes_retrieval_diagnostics_through(self) -> None:
+        mock_port = AsyncMock(spec=FabricDispatchAdapter)
+        mock_port.discover_capabilities.return_value = _retrieval_result(
+            ["tool.read.records.list_records"],
+            diagnostics={"candidate_count": 3, "rejection_counts": {"offline": 1}},
+        )
+        ctx = _make_ctx(dispatch=mock_port)
+
+        result = await execute_discover_capabilities({"intent": "list records"}, ctx)
+
+        assert result.data["diagnostics"]["queries"][0]["candidate_count"] == 3
+        assert result.data["diagnostics"]["queries"][0]["rejection_counts"] == {"offline": 1}
 
     @pytest.mark.asyncio
     async def test_empty_intent_returns_error(self) -> None:
@@ -375,6 +432,46 @@ class TestInvokeWithFabricPort:
         call_args = mock_port.dispatch_direct.call_args[0][0]
         assert call_args.params["title"] == "start washer and dryer for Jordan"
         assert call_args.params["assigned_to"] == "jordan"
+
+    @pytest.mark.asyncio
+    async def test_normalizes_family_member_reference_params(self) -> None:
+        mock_port = AsyncMock(spec=IDispatchPort)
+        mock_port.dispatch_direct.return_value = _success_result()
+        ctx = _make_ctx(dispatch=mock_port, actor="back")
+        await execute_invoke_capability(
+            {
+                "capability_name": "tool.execute.reminders.create_reminder",
+                "params": {
+                    "title": "Take vitamins",
+                    "recipient": "Nana Liz",
+                    "trigger": {"kind": "time", "fire_at": "2026-05-19T20:00:00Z"},
+                    "visible_to": ["Alex", "Nana Liz"],
+                },
+            },
+            ctx,
+        )
+        call_args = mock_port.dispatch_direct.call_args[0][0]
+        assert call_args.params["recipient"] == "nana_liz"
+        assert call_args.params["visible_to"] == ["alex", "nana_liz"]
+
+    @pytest.mark.asyncio
+    async def test_normalizes_member_id_named_params_when_contract_uses_legacy_name(self) -> None:
+        mock_port = AsyncMock(spec=IDispatchPort)
+        mock_port.dispatch_direct.return_value = _success_result()
+        ctx = _make_ctx(dispatch=mock_port, actor="back")
+        await execute_invoke_capability(
+            {
+                "capability_name": "tool.execute.calendar.connect_feed",
+                "params": {
+                    "feed_source": "google",
+                    "account": "nana@example.com",
+                    "member_id": "Nana Liz",
+                },
+            },
+            ctx,
+        )
+        call_args = mock_port.dispatch_direct.call_args[0][0]
+        assert call_args.params["member_id"] == "nana_liz"
 
     @pytest.mark.asyncio
     async def test_missing_required_capability_param_returns_recovery_contract(self) -> None:

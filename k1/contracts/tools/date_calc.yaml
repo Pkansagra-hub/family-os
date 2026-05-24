@@ -21,6 +21,9 @@ tool_contract:
     - "no_calendar_lookup"
     - "iso_date_inputs_only"
 
+  required_context:
+    - "temporal"
+
   required_inputs:
     - name: "operation"
       type: "STRING"

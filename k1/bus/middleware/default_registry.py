@@ -68,6 +68,7 @@ _DEFAULT_PREFIXES: tuple[str, ...] = (
     "k1.selfmodel.",
     "k1.session.",
     "k1.task.",
+    "k1.temporal.",
     "k1.test.",  # synthetic test topics (silences warnings in unit tests)
     "k1.tool.",
     "k1.ui.",

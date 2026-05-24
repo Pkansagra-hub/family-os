@@ -5,7 +5,7 @@ SessionState Package - K1 Session Memory Management
 IMPLEMENTATION PLAN: docs/plans/sessionstate-implementation-plan.md
 
 SessionState provides:
-- 100KB session memory (52KB HOT + 48KB WARM)
+- 104KB tier budgets (56KB HOT + 48KB WARM), 108KB total limit
 - 40-turn conversation retention
 - Edge-first offline support (LOCAL COLD)
 - Single-writer pattern (Concierge)
@@ -42,10 +42,10 @@ Architecture:
     │                   SessionStateManager                    │
     │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────────────┐│
     │  │ HotTier │ │WarmTier │ │LocalCold│ │ MutationGuard   ││
-    │  │  52KB   │ │  48KB   │ │ SQLite  │ │ SizeTracker     ││
+    │  │  56KB   │ │  48KB   │ │ SQLite  │ │ SizeTracker     ││
     │  └─────────┘ └─────────┘ └─────────┘ │ EvictionEngine  ││
     │       ↓           ↓           ↓      │ MigrationEngine ││
-    │    8 sections  4 sections  Archive   └─────────────────┘│
+    │   11 sections  5 sections  Archive   └─────────────────┘│
     └─────────────────────────────────────────────────────────┘
 
     Ports (Dependency Injection):
@@ -92,7 +92,12 @@ from .events import (
 from .eviction import EvictionEngine, EvictionResult
 
 # Core manager and factory
-from .factory import PortProtocolError, SessionStateFactory, create_for_testing, create_standalone
+from .factory import (
+    PortProtocolError,
+    SessionStateFactory,
+    create_for_testing,
+    create_standalone,
+)
 from .guard import Approval, MutationGuard, RejectionReason
 
 # Local cold archive

@@ -92,8 +92,6 @@ _FRONT_SIMPLE: set[str] = {
     "recall_memory",
     "summarize_context",
     "dispatch_task",
-    "discover_capabilities",
-    "invoke_capability",
 }
 
 FRONT_TIER_ALLOWLISTS: dict[str, set[str]] = {

@@ -33,14 +33,16 @@ from k1.concierge.llm.types import (
 )
 from k1.concierge.llm.types import tool_result_to_message as _tool_result_to_msg
 from k1.concierge.llm.validator import LLMOutputValidator, ValidationResult
+from k1.concierge.react.back_execution_plan import BackExecutionPlan
 from k1.concierge.react.capability_routing import (
     context_read_gap_requires_dispatch,
+    front_dispatch_should_stay_conversational,
     has_dispatch_tool,
     latest_user_text,
     synthesize_dispatch_task,
 )
 from k1.concierge.react.control import BackControlEvent, ReactLoopEvent
-from k1.concierge.task.parallel_safety import classify_tool_batch
+from k1.concierge.task.parallel_safety import classify_tool_calls
 from k1.concierge.tools.dispatcher import ToolDispatcher, hash_tool_arguments
 from k1.concierge.tools.recovery_contract import ask_human_recovery_from_tool_data
 from k1.concierge.tools.result_protocol import ToolResult
@@ -49,23 +51,176 @@ from k1.model_hub.types import (
     CapabilityType,
     ChatPayload,
     ChatResult,
+)
+from k1.model_hub.types import FinishReason as K1FinishReason
+from k1.model_hub.types import (
     HubChunk,
     HubRequest,
     HubResponse,
+)
+from k1.model_hub.types import Message as K1Message
+from k1.model_hub.types import (
     ReasonResult,
     RequestConstraints,
     ResponseMetadata,
     StructuredResult,
     TokenUsage,
     ToolCallPayload,
+)
+from k1.model_hub.types import ToolCallResult as K1ToolCallResult
+from k1.model_hub.types import (
     ToolCallResultSet,
 )
-from k1.model_hub.types import FinishReason as K1FinishReason
-from k1.model_hub.types import Message as K1Message
-from k1.model_hub.types import ToolCallResult as K1ToolCallResult
 from k1.model_hub.types import ToolDefinition as K1ToolDefinition
 
 logger = logging.getLogger(__name__)
+
+
+# =========================================================================
+# Kernel-grade prompt+IO tracer
+# =========================================================================
+# When K1_PROMPT_TRACE=1, every react_loop invocation dumps the FULL
+# system_prompt, message history, tool schemas, and every iteration's
+# LLM input/output to disk under data/prompt_dumps/<actor>_trace/.
+# Designed to be LLM-agnostic and domain-agnostic: it records what the
+# kernel sent and what the provider returned, nothing else.
+# =========================================================================
+
+import os as _os  # noqa: E402
+from pathlib import Path as _Path  # noqa: E402
+
+_TRACE_ROOT = _Path(__file__).resolve().parents[3] / "data" / "prompt_dumps"
+
+
+def _trace_enabled() -> bool:
+    return (_os.environ.get("K1_PROMPT_TRACE") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _trace_dir(actor: str, trace_id: str, started_ms: int) -> _Path:
+    safe = (trace_id or "notrace").replace("/", "_").replace("\\", "_")
+    d = _TRACE_ROOT / f"{actor}_trace_{safe}_{started_ms}"
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+    except Exception:  # pragma: no cover - diagnostics must not break flow
+        pass
+    return d
+
+
+def _tool_schema_to_dict(tool: ToolSchema) -> dict[str, Any]:
+    return {
+        "name": getattr(tool, "name", ""),
+        "description": getattr(tool, "description", ""),
+        "parameters": getattr(tool, "parameters", None),
+    }
+
+
+def _message_to_dict(m: ModelMessage) -> dict[str, Any]:
+    out: dict[str, Any] = {"role": m.role, "content": m.content}
+    if m.tool_calls:
+        out["tool_calls"] = [
+            {"id": tc.id, "name": tc.name, "arguments": tc.arguments} for tc in m.tool_calls
+        ]
+    if getattr(m, "tool_call_id", None):
+        out["tool_call_id"] = m.tool_call_id
+    if getattr(m, "name", None):
+        out["name"] = m.name
+    return out
+
+
+def _write_loop_open_trace(
+    *,
+    actor: str,
+    trace_id: str,
+    scenario: str,
+    started_ms: int,
+    system_prompt: str,
+    messages: list[ModelMessage],
+    tools: list[ToolSchema],
+    max_iterations: int,
+) -> None:
+    if not _trace_enabled():
+        return
+    try:
+        d = _trace_dir(actor, trace_id, started_ms)
+        payload = {
+            "actor": actor,
+            "trace_id": trace_id,
+            "scenario": scenario,
+            "started_ms": started_ms,
+            "max_iterations": max_iterations,
+            "system_prompt": system_prompt,
+            "messages": [_message_to_dict(m) for m in messages],
+            "tools": [_tool_schema_to_dict(t) for t in tools],
+        }
+        (d / "00_open.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        (_TRACE_ROOT / f"{actor}_trace_latest.json").write_text(
+            json.dumps(
+                {"trace_dir": str(d), "open": payload}, ensure_ascii=False, indent=2
+            ),
+            encoding="utf-8",
+        )
+        logger.info(
+            "react_loop trace: opened actor=%s dir=%s tools=%d messages=%d",
+            actor,
+            d,
+            len(tools),
+            len(messages),
+        )
+    except Exception:  # pragma: no cover - diagnostics
+        logger.debug("react_loop trace: open write failed", exc_info=True)
+
+
+def _write_iter_trace(
+    *,
+    actor: str,
+    trace_id: str,
+    started_ms: int,
+    iteration: int,
+    request_messages: list[ModelMessage],
+    response: ConciergeModelResponse,
+    used_streaming: bool,
+    duration_ms: int,
+) -> None:
+    if not _trace_enabled():
+        return
+    try:
+        d = _trace_dir(actor, trace_id, started_ms)
+        payload = {
+            "iteration": iteration,
+            "actor": actor,
+            "trace_id": trace_id,
+            "used_streaming": used_streaming,
+            "duration_ms": duration_ms,
+            "request_messages_tail": [
+                _message_to_dict(m) for m in request_messages[-12:]
+            ],
+            "request_message_count": len(request_messages),
+            "response": {
+                "text": response.text or "",
+                "thought_text": getattr(response, "thought_text", "") or "",
+                "tool_calls": [
+                    {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
+                    for tc in (response.tool_calls or [])
+                ],
+                "finish_reason": str(getattr(response.finish_reason, "value", response.finish_reason)),
+                "tokens_in": getattr(response, "tokens_in", 0) or 0,
+                "tokens_out": getattr(response, "tokens_out", 0) or 0,
+                "tokens_thoughts": getattr(response, "tokens_thoughts", 0) or 0,
+                "model_id": getattr(response, "model_id", "") or "",
+            },
+        }
+        (d / f"iter_{iteration:02d}.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except Exception:  # pragma: no cover - diagnostics
+        logger.debug("react_loop trace: iter write failed", exc_info=True)
 
 
 # =========================================================================
@@ -323,6 +478,117 @@ def _result_to_dict(result: ToolResult) -> dict[str, Any]:
     return result.data
 
 
+# Discovery payloads can be enormous: each capability contract carries
+# its full JSON schema, optional/required input specs, prompt template,
+# tool instructions, limitations, and diagnostics.  Injecting four or
+# more full discovery results into a single LLM context window blows
+# past provider input-budget limits (observed: Vertex/Gemini returning
+# finish=ERROR on the next iteration after a 4-intent fan-out).
+#
+# The full per-capability contracts are already cached server-side in
+# ctx.capability_cache by name, so invocation does not need the model
+# to echo them back -- it only needs to pick a capability_name and
+# provide schema-valid params.  We therefore project discovery results
+# to a slim shape for the model's context.  This is a pure
+# representation change; no domain/language/LLM heuristics involved.
+_SLIM_CAPABILITY_KEEP_KEYS = (
+    "name",
+    "type",
+    "description",
+    "score",
+    "domain",
+    "domains",
+    "has_side_effects",
+    "requires_human_confirmation",
+    "safety_band_min",
+    "provider_type",
+)
+
+
+def _slim_capability_for_context(capability: dict[str, Any]) -> dict[str, Any]:
+    """Project one capability dict to a context-safe slim shape.
+
+    Drops large fields (full schema, optional_inputs, prompt_template,
+    tool_instructions, activity_profile, limitations, diagnostics) that
+    the model does not need to choose between candidates.  Preserves
+    the executable identity (`name`) plus enough metadata for
+    selection (description, score, side-effect flags, required-input
+    names).
+    """
+    slim: dict[str, Any] = {}
+    for key in _SLIM_CAPABILITY_KEEP_KEYS:
+        if key in capability:
+            slim[key] = capability[key]
+    required = capability.get("required_inputs")
+    if isinstance(required, dict):
+        slim["required_input_names"] = sorted(required.keys())
+    elif isinstance(required, list):
+        names: list[str] = []
+        for spec in required:
+            if isinstance(spec, dict):
+                name = spec.get("name") or spec.get("key")
+                if name:
+                    names.append(str(name))
+            elif isinstance(spec, str):
+                names.append(spec)
+        if names:
+            slim["required_input_names"] = names
+    optional = capability.get("optional_inputs")
+    if isinstance(optional, dict):
+        slim["optional_input_names"] = sorted(optional.keys())
+    elif isinstance(optional, list):
+        names = []
+        for spec in optional:
+            if isinstance(spec, dict):
+                name = spec.get("name") or spec.get("key")
+                if name:
+                    names.append(str(name))
+            elif isinstance(spec, str):
+                names.append(spec)
+        if names:
+            slim["optional_input_names"] = names
+    return slim
+
+
+def _slim_discovery_data_for_context(data: Any) -> Any:
+    """Slim a discover_capabilities result payload for model context.
+
+    Operates on the result dict shape `{capabilities: [...], count: N,
+    diagnostics?: {...}}`.  Non-matching payloads are returned
+    unchanged so this is safe to apply unconditionally to errors.
+    """
+    if not isinstance(data, dict):
+        return data
+    capabilities = data.get("capabilities")
+    if not isinstance(capabilities, list):
+        return data
+    slimmed = [
+        _slim_capability_for_context(cap) for cap in capabilities if isinstance(cap, dict)
+    ]
+    projected = dict(data)
+    projected["capabilities"] = slimmed
+    # Drop verbose per-query diagnostics from context; they remain in
+    # the server-side ToolResult for logging/observability.
+    projected.pop("diagnostics", None)
+    return projected
+
+
+def _message_payload_for_tool(
+    tool_call: ToolCallResult, result: ToolResult
+) -> dict[str, Any]:
+    """Build the dict payload that becomes the tool-result model message.
+
+    Identical to `_result_to_dict` except that discover_capabilities
+    payloads are projected to a slim shape before being injected into
+    the model's context window.  All other tools pass through
+    unchanged.
+    """
+    payload = _result_to_dict(result)
+    if getattr(tool_call, "name", "") == "discover_capabilities":
+        return _slim_discovery_data_for_context(payload)
+    return payload
+
+
 _BACK_AUTHORITY_TOOL_NAMES = {
     "invoke_capability",
     "batch_invoke_capabilities",
@@ -437,6 +703,15 @@ def _discovered_capabilities(payloads: list[dict[str, Any]]) -> list[dict[str, A
                 seen.add(name)
             capabilities.append(capability)
     return capabilities
+
+
+def _discovered_capability_metadata(payloads: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    metadata: dict[str, dict[str, Any]] = {}
+    for capability in _discovered_capabilities(payloads):
+        name = str(capability.get("name") or "")
+        if name:
+            metadata[name] = dict(capability)
+    return metadata
 
 
 def _capability_schema(capability: dict[str, Any]) -> dict[str, Any]:
@@ -866,6 +1141,8 @@ async def react_loop(
     control_queue: asyncio.Queue[BackControlEvent] | None = None,
     completed_tool_call_ids: set[str] | None = None,
     completed_tool_arg_keys: set[str] | None = None,
+    execution_plan: BackExecutionPlan | None = None,
+    system_prompt_continuation: str | None = None,
 ) -> ReactResult:
     """Shared ReAct loop for both Front and Back actors.
 
@@ -900,6 +1177,18 @@ async def react_loop(
     """
     dispatched_tasks: list[dict] = []
     last_text_with_tools: str | None = None  # Track text from mixed (text+tools) responses
+    # Kernel-grade prompt+IO tracer (enabled via K1_PROMPT_TRACE=1)
+    _trace_started_ms = int(time.time() * 1000)
+    _write_loop_open_trace(
+        actor=actor,
+        trace_id=trace_id,
+        scenario=scenario,
+        started_ms=_trace_started_ms,
+        system_prompt=system_prompt,
+        messages=messages,
+        tools=tools,
+        max_iterations=max_iterations,
+    )
     # M3 E3.7.4: Parallel safety observability counters
     _parallel_count = 0
     _sequential_count = 0
@@ -915,6 +1204,7 @@ async def react_loop(
     )
     _back_discovery_payloads = _seed_back_discovery_payloads(messages) if actor == "back" else []
     _back_tool_names_seen = _seed_back_tool_names(messages) if actor == "back" else set()
+    _back_execution_plan = execution_plan if actor == "back" else None
     _loop_events: list[dict[str, Any]] = []
     _completed_tool_call_ids = set(completed_tool_call_ids or set())
     _completed_tool_arg_keys = set(completed_tool_arg_keys or set())
@@ -922,6 +1212,15 @@ async def react_loop(
     _repeated_tool_counts: dict[str, int] = {}
     _tool_name_counts: dict[str, int] = {}  # name-only spin guard (Front)
     _back_capability_spin_nudge_sent = False
+    # Back-side write-capability dedup: once a `tool.execute.*` capability
+    # has been invoked successfully in this Back run, any subsequent
+    # invoke_capability call to the same capability is short-circuited
+    # to "already_completed" -- regardless of micro-variations in params.
+    # This prevents the LLM from accidentally writing the same row twice
+    # (observed in logs.txt 2026-05-20: calendar.create_event invoked
+    # twice consecutively with same params_keys but different key order,
+    # bypassing arg-hash dedup).
+    _back_write_capabilities_invoked: set[str] = set()
     _empty_response_count = 0
     _invalid_schema_count = 0
     effective_max_iterations = max_iterations
@@ -1153,6 +1452,43 @@ async def react_loop(
                     "call_id": getattr(tc, "id", "") or "",
                 },
             )
+        # Back-side write-capability dedup (see _back_write_capabilities_invoked).
+        if actor == "back" and getattr(tc, "name", "") == "invoke_capability":
+            _args = getattr(tc, "arguments", {}) or {}
+            _cap_name = str(_args.get("capability_name", "") or "")
+            if (
+                _cap_name
+                and _cap_name.startswith("tool.execute.")
+                and _cap_name in _back_write_capabilities_invoked
+            ):
+                _record_loop_event(
+                    "write_capability_already_invoked",
+                    -1,
+                    {
+                        "capability_name": _cap_name,
+                        "call_id": getattr(tc, "id", "") or "",
+                    },
+                )
+                logger.warning(
+                    "react_loop: Back attempted to re-invoke write capability %s -- "
+                    "short-circuiting to prevent duplicate side effect. Trace=%s",
+                    _cap_name,
+                    trace_id[:8] if trace_id else "",
+                )
+                return tc, ToolResult(
+                    tool_name="invoke_capability",
+                    status="ok",
+                    data={
+                        "already_completed": True,
+                        "capability_name": _cap_name,
+                        "call_id": getattr(tc, "id", "") or "",
+                        "note": (
+                            f"Write capability '{_cap_name}' was already invoked "
+                            "successfully in this task. Skipping duplicate. "
+                            "Call submit_result(result_type='complete') now."
+                        ),
+                    },
+                )
         _effective_timeout = (
             _hil_tool_timeout_s
             if getattr(tc, "name", "") in ("invoke_capability", "batch_invoke_capabilities")
@@ -1186,6 +1522,20 @@ async def react_loop(
                     )
                 except Exception:
                     logger.exception("react_loop: failed to record tool timeout")
+        except Exception as exc:  # noqa: BLE001
+            tool_name = getattr(tc, "name", "unknown")
+            logger.exception(
+                "react_loop: tool raised exception tool=%s actor=%s trace=%s",
+                tool_name,
+                actor,
+                trace_id[:8] if trace_id else "",
+            )
+            result = ToolResult(
+                tool_name=tool_name,
+                status="error",
+                data={"retryable": True},
+                error=f"tool_exception: {exc}",
+            )
         return tc, result
 
     logger.info(
@@ -1276,20 +1626,95 @@ async def react_loop(
         )
         _tc = "none" if force_text else _resolve_tool_choice(iteration, actor, tools)
         _k1_msgs = _to_k1_messages(messages)
+
+        # ---- FIX E: TOKEN PRE-FLIGHT GUARD ----
+        # Gemini's tool-call decoder fails (MALFORMED_FUNCTION_CALL) under
+        # token pressure; safety-net here aggressively slims discovery
+        # payloads still parked in tool-result messages BEFORE the request
+        # goes out. Threshold uses a 4 chars/token heuristic which is good
+        # enough for a guardrail; the actual provider count is authoritative.
+        _PREFLIGHT_TOKEN_BUDGET = 16000
+        try:
+            _sp_for_estimate = (
+                system_prompt_continuation
+                if (iteration >= 1 and system_prompt_continuation)
+                else system_prompt
+            )
+            _approx = len(_sp_for_estimate or "") + sum(
+                len(getattr(m, "content", "") or "") for m in _k1_msgs
+            )
+            if effective_tools:
+                # ToolDefinitions add roughly their JSON-serialized weight.
+                _approx += sum(
+                    len(getattr(t, "name", "") or "")
+                    + len(getattr(t, "description", "") or "")
+                    + len(json.dumps(getattr(t, "parameters", {}) or {}, default=str))
+                    for t in effective_tools
+                )
+            _approx_tokens = _approx // 4
+            if _approx_tokens > _PREFLIGHT_TOKEN_BUDGET:
+                _slimmed_any = False
+                for _m in messages:
+                    if getattr(_m, "role", None) != "tool":
+                        continue
+                    _content = getattr(_m, "content", None)
+                    if not isinstance(_content, str) or not _content:
+                        continue
+                    try:
+                        _parsed = json.loads(_content)
+                    except (TypeError, ValueError):
+                        continue
+                    _slim = _slim_discovery_data_for_context(_parsed)
+                    if _slim is not _parsed:
+                        _m.content = json.dumps(_slim, default=str)
+                        _slimmed_any = True
+                logger.warning(
+                    "react_loop: preflight token estimate %d > budget %d on "
+                    "iter=%d actor=%s -- %s prior tool-result messages",
+                    _approx_tokens,
+                    _PREFLIGHT_TOKEN_BUDGET,
+                    iteration,
+                    actor,
+                    "slimmed" if _slimmed_any else "no slimming opportunity in",
+                )
+                _record_loop_event(
+                    "preflight_token_warning",
+                    iteration,
+                    {
+                        "approx_tokens": _approx_tokens,
+                        "budget": _PREFLIGHT_TOKEN_BUDGET,
+                        "slimmed": _slimmed_any,
+                    },
+                )
+                if _slimmed_any:
+                    _k1_msgs = _to_k1_messages(messages)
+        except Exception:  # noqa: BLE001 -- pre-flight must never crash the loop
+            logger.debug("react_loop: preflight token guard failed", exc_info=True)
+
         # Ensure at least one message for payload validation
         if not _k1_msgs and system_prompt:
             _k1_msgs = [K1Message(role="system", content=system_prompt)]
+        # Fix B: iteration-aware system prompt. After the first iteration,
+        # the model already has the personality/anti-pattern guidance from
+        # iter 0 in its context. A slimmer continuation variant frees
+        # tokens for tool-result data and reduces MALFORMED_FUNCTION_CALL
+        # pressure on Gemini.
+        _effective_system_prompt = (
+            system_prompt_continuation
+            if (iteration >= 1 and system_prompt_continuation)
+            else system_prompt
+        )
         if _cap == CapabilityType.TOOL_CALL and effective_tools:
             _payload = ToolCallPayload(
                 messages=_k1_msgs,
                 tools=_to_k1_tools(effective_tools),
                 tool_choice=_tc,
-                system_prompt=system_prompt,
+                system_prompt=_effective_system_prompt,
             )
         else:
             _payload = ChatPayload(
                 messages=_k1_msgs,
-                system_prompt=system_prompt,
+                system_prompt=_effective_system_prompt,
             )
         request = HubRequest(
             capability=_cap,
@@ -1346,14 +1771,42 @@ async def react_loop(
             use_streaming,
             (response.text or "")[:60],
         )
+        _write_iter_trace(
+            actor=actor,
+            trace_id=trace_id,
+            started_ms=_trace_started_ms,
+            iteration=iteration,
+            request_messages=messages,
+            response=response,
+            used_streaming=use_streaming,
+            duration_ms=int((time.monotonic() - _iter_start) * 1000),
+        )
 
         # ---- LLM ERROR: bail immediately instead of wasting iterations ----
         if response.finish_reason == FinishReason.ERROR:
+            # Kernel-grade observability: surface every diagnostic the
+            # provider gave us so we can decide structurally instead of
+            # guessing.  google_plugin already emits a detailed log when
+            # the candidate is degenerate; this is the loop-side echo so
+            # operators see the failure in context (iter, actor, tokens,
+            # last tool calls).  No PII -- only counts and reason codes.
+            _last_tool_names: list[str] = []
+            for _msg in reversed(messages[-8:]):
+                if _msg.tool_calls:
+                    _last_tool_names = [tc.name for tc in _msg.tool_calls]
+                    break
             logger.error(
                 "react_loop: LLM returned ERROR on iter=%d actor=%s -- aborting loop "
-                "(check model name, API key, or quota)",
+                "(check google_plugin log above for raw finish_reason / "
+                "safety_ratings / prompt_feedback). tokens_in=%d tokens_out=%d "
+                "messages_in_context=%d last_tool_calls=%s trace=%s",
                 iteration,
                 actor,
+                getattr(response, "tokens_in", 0) or 0,
+                getattr(response, "tokens_out", 0) or 0,
+                len(messages),
+                _last_tool_names,
+                trace_id,
             )
             if actor != "front":
                 return _make_result(
@@ -1429,6 +1882,13 @@ async def react_loop(
                     continue
 
         # ---- MALFORMED TOOL CALL: model tried a tool call but JSON was invalid ----
+        # Workflow v2 / Fix F: Gemini emits MALFORMED_FUNCTION_CALL when the
+        # tool-call decoder fails -- usually because the model crammed too
+        # many fields/strings into one call and the schema-constrained
+        # decoder ran out of token budget mid-JSON. Recover by slimming
+        # accumulated tool-result context AND nudging the model to take the
+        # smallest legal next step (workflow v2: discover -> get_schemas ->
+        # invoke OR submit_result).
         if response.finish_reason == FinishReason.MALFORMED_TOOL_CALL:
             _record_loop_event("schema_repair", iteration, {"reason": "malformed_tool_call"})
             logger.warning(
@@ -1437,20 +1897,49 @@ async def react_loop(
                 iteration,
             )
             if iteration < effective_max_iterations - 1:
-                messages.append(
-                    ModelMessage(
-                        role="user",
-                        content=(
-                            "Your function call had invalid JSON and was rejected. "
-                            "Call submit_result now. Keep the results array simple: "
-                            "use plain strings instead of nested objects. "
-                            "Summarize each web result as a single string like "
-                            "'Title - URL - Snippet'."
-                        ),
+                # Aggressively slim prior discovery payloads still in
+                # context so the retry has headroom for the corrected
+                # tool call.  Only touches tool-result messages.
+                for _m in messages:
+                    if getattr(_m, "role", None) != "tool":
+                        continue
+                    _content = getattr(_m, "content", None)
+                    if not isinstance(_content, str) or not _content:
+                        continue
+                    try:
+                        _parsed = json.loads(_content)
+                    except (TypeError, ValueError):
+                        continue
+                    _slim = _slim_discovery_data_for_context(_parsed)
+                    if _slim is not _parsed:
+                        _m.content = json.dumps(_slim, default=str)
+
+                if actor == "back":
+                    _nudge = (
+                        "Your function call was rejected as malformed (likely "
+                        "too large for the schema decoder). Recover with the "
+                        "smallest legal step:\n"
+                        "  - If you already have the capability schema you "
+                        "need, call invoke_capability with ONLY the required "
+                        "params (no extra fields, no nested objects beyond "
+                        "the schema, plain strings where possible).\n"
+                        "  - If you do NOT have the schema yet, call "
+                        "get_capability_schemas with at most 2 names.\n"
+                        "  - If you already have enough information to "
+                        "answer, call submit_result now with a concise "
+                        "summary (plain strings, no nested results)."
                     )
-                )
+                else:
+                    _nudge = (
+                        "Your function call had invalid JSON and was "
+                        "rejected. Call submit_result now. Keep the results "
+                        "array simple: use plain strings instead of nested "
+                        "objects. Summarize each item as a single string."
+                    )
+                messages.append(ModelMessage(role="user", content=_nudge))
                 logger.info(
-                    "react_loop: %s malformed_tool_call on iter=%d/%d, nudging to simplify",
+                    "react_loop: %s malformed_tool_call on iter=%d/%d, "
+                    "slimmed prior tool results and nudged to simplify",
                     actor,
                     iteration,
                     max_iterations,
@@ -1622,11 +2111,48 @@ async def react_loop(
                 trace_id[:8] if trace_id else "",
             )
 
+        submit_retry_required = False
         for tc in response.tool_calls:
 
             # Back termination (L2): submit_result
             if tc.name == "submit_result":
-                result = await tool_dispatcher.dispatch(tc)
+                submit_args = dict(tc.arguments or {})
+                if (
+                    actor == "back"
+                    and _back_execution_plan is not None
+                    and submit_args.get("result_type") == "complete"
+                    and not _back_execution_plan.can_submit_complete()
+                ):
+                    rejection = _back_execution_plan.submit_rejection_payload()
+                    result = ToolResult(
+                        tool_name="submit_result",
+                        status="error",
+                        error="submit_result(complete) rejected: uncovered Back intents",
+                        data=rejection,
+                    )
+                    _record_loop_event(
+                        "back_execution_plan_incomplete",
+                        iteration,
+                        rejection,
+                    )
+                    logger.warning(
+                        "react_loop: submit_result complete rejected by Back execution plan "
+                        "pending=%d trace=%s",
+                        len(rejection.get("pending_intents", [])),
+                        trace_id[:8] if trace_id else "",
+                    )
+                    messages.append(_tool_result_to_msg(tc, _message_payload_for_tool(tc, result)))
+                    submit_retry_required = True
+                    break
+                dispatch_tc = tc
+                if actor == "back" and _back_execution_plan is not None:
+                    submit_args = _back_execution_plan.merge_submit_args(submit_args)
+                    dispatch_tc = ToolCallResult(
+                        id=getattr(tc, "id", "") or "",
+                        name=getattr(tc, "name", "submit_result"),
+                        arguments=submit_args,
+                    )
+                result = await tool_dispatcher.dispatch(dispatch_tc)
                 if result.status == "error":
                     # Schema validation or execution failed -- feed
                     # error back to LLM so it can retry with valid args.
@@ -1645,13 +2171,17 @@ async def react_loop(
                             tool_call_id=getattr(tc, "id", None),
                         )
                     )
+                    submit_retry_required = True
                     break  # Let LLM retry on next iteration
-                status = (
-                    "complete" if tc.arguments.get("result_type") == "complete" else "suspended"
-                )
+                status = "complete" if submit_args.get("result_type") == "complete" else "suspended"
                 _iter_dur = int((time.monotonic() - _iter_start) * 1000)
                 _iteration_durations.append(_iter_dur)
-                return _make_result(status, data=tc.arguments)
+                return _make_result(status, data=submit_args)
+
+        if submit_retry_required:
+            _iter_dur = int((time.monotonic() - _iter_start) * 1000)
+            _iteration_durations.append(_iter_dur)
+            continue
 
         # ---- CLASSIFIED TOOL EXECUTION (M3 E3.4.2/3.4.3/3.4.5) ----
         # Split non-terminal tool calls into parallel-safe and sequential
@@ -1659,8 +2189,56 @@ async def react_loop(
         # all tools to run sequentially for debugging.
         non_terminal = [tc for tc in response.tool_calls if tc.name != "submit_result"]
 
+        original_non_terminal = list(non_terminal)
+        preflight_results: list[tuple[Any, ToolResult]] = []
+        executable_non_terminal: list[Any] = []
+        for tc in original_non_terminal:
+            if actor == "front" and getattr(tc, "name", "") == "dispatch_task":
+                task_entry = dict(getattr(tc, "arguments", {}) or {})
+                if front_dispatch_should_stay_conversational(_front_turn_text, task_entry):
+                    preflight_results.append(
+                        (
+                            tc,
+                            ToolResult(
+                                tool_name="dispatch_task",
+                                status="error",
+                                error=(
+                                    "dispatch_task rejected: advisory conversation belongs to "
+                                    "Front"
+                                ),
+                                data={
+                                    "conversational_dispatch_rejected": True,
+                                    "hint": (
+                                        "Answer directly. Use dispatch_task only for explicit "
+                                        "external source-of-record reads/writes or side effects."
+                                    ),
+                                },
+                            ),
+                        )
+                    )
+                    logger.info(
+                        "react_loop: rejected conversational front dispatch before execution "
+                        "action=%s trace=%s",
+                        task_entry.get("intents", task_entry),
+                        trace_id[:8] if trace_id else "",
+                    )
+                    continue
+            executable_non_terminal.append(tc)
+
+        non_terminal = executable_non_terminal
         parallel_enabled = get_config().react.parallel_tools_enabled
-        parallel_names, sequential_names = classify_tool_batch([tc.name for tc in non_terminal])
+        capability_metadata = (
+            _discovered_capability_metadata(_back_discovery_payloads) if actor == "back" else {}
+        )
+        parallel_indexes, sequential_indexes = classify_tool_calls(
+            [
+                (str(getattr(tc, "name", "") or ""), dict(getattr(tc, "arguments", {}) or {}))
+                for tc in non_terminal
+            ],
+            capability_metadata=capability_metadata,
+        )
+        parallel_names = [non_terminal[index].name for index in parallel_indexes]
+        sequential_names = [non_terminal[index].name for index in sequential_indexes]
 
         logger.info(
             "react_loop: tool_batch_classified  parallel=%s sequential=%s "
@@ -1676,18 +2254,18 @@ async def react_loop(
         for tc in non_terminal:
             _tc_by_name.setdefault(tc.name, []).append(tc)
 
-        paired_results: list[tuple[Any, ToolResult]] = []
+        paired_results: list[tuple[Any, ToolResult]] = list(preflight_results)
 
         if parallel_enabled and parallel_names:
             # Gather parallel-safe tools from the original order
-            parallel_tcs = [tc for tc in non_terminal if tc.name in set(parallel_names)]
+            parallel_tcs = [non_terminal[index] for index in parallel_indexes]
             parallel_results = await asyncio.gather(*[_run_tool(tc) for tc in parallel_tcs])
             paired_results.extend(parallel_results)
             _parallel_count += len(parallel_tcs)
 
         # Sequential tools (always sequential, or ALL tools when toggle off)
         if parallel_enabled:
-            sequential_tcs = [tc for tc in non_terminal if tc.name in set(sequential_names)]
+            sequential_tcs = [non_terminal[index] for index in sequential_indexes]
         else:
             sequential_tcs = non_terminal
 
@@ -1701,7 +2279,7 @@ async def react_loop(
         # Re-sort results to match the LLM's original tool call order.
         # parallel+sequential execution may interleave; the LLM expects
         # observations in the same order it issued calls.
-        _tc_order = {id(tc): idx for idx, tc in enumerate(non_terminal)}
+        _tc_order = {id(tc): idx for idx, tc in enumerate(original_non_terminal)}
         paired_results.sort(key=lambda pair: _tc_order.get(id(pair[0]), 999))
 
         for idx, (tc, result) in enumerate(paired_results):
@@ -1730,6 +2308,12 @@ async def react_loop(
                 if call_id:
                     _completed_tool_call_ids.add(call_id)
                 _completed_tool_arg_keys.add(tool_key)
+                # Back-side write-capability tracking (see _back_write_capabilities_invoked).
+                if actor == "back" and getattr(tc, "name", "") == "invoke_capability":
+                    _args_ok = getattr(tc, "arguments", {}) or {}
+                    _cap_ok = str(_args_ok.get("capability_name", "") or "")
+                    if _cap_ok and _cap_ok.startswith("tool.execute."):
+                        _back_write_capabilities_invoked.add(_cap_ok)
             elif _is_retryable_error(result):
                 _retryable_error_counts[tool_key] = _retryable_error_counts.get(tool_key, 0) + 1
                 _record_loop_event(
@@ -1750,7 +2334,7 @@ async def react_loop(
                     )
                     paired_results[idx] = (tc, result)
 
-        for tc, result in paired_results:
+        for idx, (tc, result) in enumerate(paired_results):
             if actor == "back":
                 tool_name = str(getattr(tc, "name", "") or "")
                 if tool_name:
@@ -1762,23 +2346,37 @@ async def react_loop(
                     if (isinstance(count, int) and count > 0) or bool(capabilities):
                         _back_capability_candidates_seen = True
                         _back_discovery_payloads.append(data)
+                    if _back_execution_plan is not None:
+                        _back_execution_plan.record_discovery(
+                            dict(getattr(tc, "arguments", {}) or {}),
+                            data,
+                        )
                 elif tool_name in _BACK_AUTHORITY_TOOL_NAMES and result.is_ok():
                     _back_authority_tool_attempted = True
+                if tool_name in _BACK_AUTHORITY_TOOL_NAMES and _back_execution_plan is not None:
+                    _back_execution_plan.record_authority_result(
+                        tool_name=tool_name,
+                        args=dict(getattr(tc, "arguments", {}) or {}),
+                        data=result.data if isinstance(result.data, dict) else {},
+                        error=str(result.error or ""),
+                        tool_ok=result.is_ok(),
+                    )
 
             # Collect dispatch_task calls (L3)
             if tc.name == "dispatch_task":
                 task_entry = dict(tc.arguments)
                 # Merge system-generated task_id from ToolResult so the
                 # downstream dispatch envelope carries the canonical ID.
-                if result.is_ok() and result.data:
-                    task_id = result.data.get("task_id")
-                    if task_id:
-                        task_entry["task_id"] = task_id
-                    # Also merge the full _dispatch payload if present
-                    dispatch_payload = result.data.get("_dispatch")
-                    if isinstance(dispatch_payload, dict):
-                        task_entry.update(dispatch_payload)
-                dispatched_tasks.append(task_entry)
+                if result.is_ok():
+                    if result.data:
+                        task_id = result.data.get("task_id")
+                        if task_id:
+                            task_entry["task_id"] = task_id
+                        # Also merge the full _dispatch payload if present
+                        dispatch_payload = result.data.get("_dispatch")
+                        if isinstance(dispatch_payload, dict):
+                            task_entry.update(dispatch_payload)
+                    dispatched_tasks.append(task_entry)
 
             # Log artifact creation (invoke_capability with artifact_type)
             if (
@@ -1788,8 +2386,11 @@ async def react_loop(
             ):
                 logger.info("Artifact created: type=%s", result.data.get("artifact_type"))
 
-            # Append tool result as observation (ReAct pattern)
-            messages.append(_tool_result_to_msg(tc, _result_to_dict(result)))
+            # Append tool result as observation (ReAct pattern).
+            # discover_capabilities payloads are projected to a slim
+            # shape via _message_payload_for_tool to keep the model
+            # context window inside provider input-budget limits.
+            messages.append(_tool_result_to_msg(tc, _message_payload_for_tool(tc, result)))
             if (
                 actor == "back"
                 and result.is_error()
@@ -1849,18 +2450,47 @@ async def react_loop(
                 + _tool_name_counts.get("summarize_context", 0)
             )
             if _back_spin_count >= 2 and iteration < effective_max_iterations - 1:
+                # Structured, language-agnostic plan-state envelope.
+                # The model reads a JSON object describing the current
+                # coverage plan, discovered candidate names per intent,
+                # and the structural next action.  No English
+                # imperatives, no heuristic verb lists -- this works
+                # for any locale and any LLM that can read JSON.
+                _spin_envelope: dict[str, Any] = {
+                    "_type": "kernel.back_execution_plan_state",
+                    "reason": "discovery_complete_authority_pending",
+                    "required_next_action": "batch_invoke_capabilities",
+                    "allowed_tools": sorted(_BACK_AUTHORITY_TOOL_NAMES | {"submit_result"}),
+                    "forbidden_tools": [
+                        "discover_capabilities",
+                        "recall_memory",
+                        "summarize_context",
+                    ],
+                    "on_missing_input": {
+                        "tool": "submit_result",
+                        "result_type": "needs_human",
+                    },
+                }
+                if _back_execution_plan is not None:
+                    _plan_state = _back_execution_plan.to_dict()
+                    _spin_envelope["execution_plan"] = _plan_state
+                    _spin_envelope["pending_intents"] = [
+                        {
+                            "intent_index": item.intent_index,
+                            "action": item.action,
+                            "domain": item.domain,
+                            "discovered_capability_names": [
+                                str(cap.get("name", ""))
+                                for cap in item.discovered_capabilities
+                                if isinstance(cap, dict) and cap.get("name")
+                            ],
+                        }
+                        for item in _back_execution_plan.uncovered_items()
+                    ]
                 messages.append(
                     ModelMessage(
                         role="user",
-                        content=(
-                            "You have already discovered viable capability candidates and "
-                            "checked enough context. Do NOT call discover_capabilities, "
-                            "recall_memory, or summarize_context again for this same task. "
-                            "Use invoke_capability or batch_invoke_capabilities with an exact "
-                            "registry-owned capability name and schema-valid params. If a "
-                            "required input is missing, call submit_result with "
-                            "result_type='needs_human' and ask only for that missing detail."
-                        ),
+                        content=json.dumps(_spin_envelope, ensure_ascii=False),
                     )
                 )
                 _back_capability_spin_nudge_sent = True
@@ -1948,8 +2578,10 @@ async def react_loop(
                 },
             )
 
-        if actor == "front" and any(
-            tc.name == "dispatch_task" and result.is_ok() for tc, result in paired_results
+        if (
+            actor == "front"
+            and dispatched_tasks
+            and any(tc.name == "dispatch_task" and result.is_ok() for tc, result in paired_results)
         ):
             logger.info(
                 "react_loop: front dispatched task(s) on iter=%d -- ending turn for ack",

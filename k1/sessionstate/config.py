@@ -15,7 +15,7 @@ Issue: P4.3
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, FrozenSet, List
+from typing import Dict, List
 
 # ---------------------------------------------------------------------------
 # Sub-configs (mirror the POC ``sessionstate.*`` subtree)
@@ -24,8 +24,8 @@ from typing import Dict, FrozenSet, List
 
 @dataclass(frozen=True)
 class TiersConfig:
-    total_size_limit_bytes: int = 106_496
-    hot_budget_bytes: int = 53_248
+    total_size_limit_bytes: int = 110_592
+    hot_budget_bytes: int = 57_344
     warm_budget_bytes: int = 49_152
     normal_threshold_pct: float = 0.8
     elevated_threshold_pct: float = 0.9
@@ -43,6 +43,7 @@ class TiersConfig:
             "meta": 2048,
             "task_state": 4096,
             "task_artifacts": 4096,
+            "temporal": 4096,
         }
     )
 

@@ -201,9 +201,9 @@ SessionState implements a **three-tier memory hierarchy** with strict budget enf
 - SLA target: P95 < 50ms restore
 - Always available (edge-first design — no K0 required)
 
-#### Utility: `temporal_context.py`
+#### Temporal Grounding
 
-**Not a section** — computes `TemporalAnchor` from conversation history. Used by sections but not stored in any tier.
+Authoritative temporal grounding lives in `k1.temporal` and persists through the HOT `temporal` section. Control no longer mirrors temporal anchor state.
 
 ### 2.3 Kernel Services
 
@@ -479,7 +479,6 @@ Concierge bypasses the `IStatePort` boundary with direct SS imports:
 | `from k1.sessionstate.sections.task_artifacts import …` | `k1/concierge/fsm/task_bridge.py` |
 | `from k1.sessionstate.sections.task_state import TaskStateEntry, …` | `k1/concierge/fsm/task_bridge.py` |
 | `from k1.sessionstate.sections.control import IntentClassification, PrivacyBand` | `k1/concierge/fsm/controller.py` |
-| `from k1.sessionstate.sections.temporal_context import compute_temporal_anchor` | `k1/concierge/fsm/controller.py` |
 | `from k1.sessionstate.factory import SessionStateFactory` | `k1/concierge/kernel/bootstrap.py` |
 
 **Risk**: If SS section schemas change, these imports break Concierge directly.

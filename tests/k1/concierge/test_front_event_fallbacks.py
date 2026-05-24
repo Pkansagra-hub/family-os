@@ -11,7 +11,11 @@ import pytest
 
 from k1.bus.envelope.envelope import Envelope
 from k1.concierge.actors.front import front_handler
-from k1.concierge.bus.topics import TOPIC_FINAL_RESPONSE, TOPIC_TASK_RESUME
+from k1.concierge.bus.topics import (
+    TOPIC_FINAL_RESPONSE,
+    TOPIC_TASK_CANCEL,
+    TOPIC_TASK_RESUME,
+)
 from k1.concierge.prompt.mode import PromptMode
 from k1.concierge.react.loop import ReactResult
 
@@ -177,7 +181,7 @@ async def test_weave_degenerate_sanitizes_internal_back_failure() -> None:
 
 
 @pytest.mark.asyncio
-async def test_hitl_resolve_replaces_model_completion_with_ack() -> None:
+async def test_hitl_resolve_preserves_model_completion() -> None:
     bus = _RecordingBus()
     env = _env("k1.session.user.input.v1", {"text": "approve"})
 
@@ -206,5 +210,40 @@ async def test_hitl_resolve_replaces_model_completion_with_ack() -> None:
             fsm_state="CLARIFYING_WORKER",
         )
 
-    assert _final_text(bus) == "Got it. I'll keep going."
+    assert _final_text(bus) == "Done! Riley has a new task to clean her bedroom."
     assert [event.topic for event in bus.published].count(TOPIC_TASK_RESUME) == 1
+
+
+@pytest.mark.asyncio
+async def test_hitl_resolve_user_rejecting_dispatch_cancels_suspended_task() -> None:
+    bus = _RecordingBus()
+    env = _env("k1.session.user.input.v1", {"text": "just answer directly without dispatch"})
+
+    with (
+        patch("k1.concierge.actors.front.determine_mode", return_value=PromptMode.HITL_RESOLVE),
+        patch("k1.concierge.actors.front.compute_affect_band", return_value="calm"),
+        patch("k1.concierge.actors.front.get_config", return_value=_mock_front_config()),
+        patch("k1.concierge.actors.front._write_runtime_prompt_dump"),
+        patch("k1.concierge.actors.front.DynamicPromptBuilder") as mock_builder,
+        patch("k1.concierge.actors.front.react_loop", new_callable=AsyncMock) as react_loop,
+    ):
+        mock_builder.return_value.build.return_value = _prompt_context()
+        react_loop.return_value = ReactResult(
+            status="complete",
+            text="Here are a couple of direct ideas.",
+            dispatched_tasks=[],
+        )
+
+        await front_handler(
+            envelope=env,
+            model=AsyncMock(),
+            ss=_SuspendedSessionState(),
+            bus=bus,  # type: ignore[arg-type]
+            tool_dispatcher=MagicMock(),
+            all_tool_schemas=[],
+            fsm_state="CLARIFYING_WORKER",
+        )
+
+    assert _final_text(bus) == "Here are a couple of direct ideas."
+    assert [event.topic for event in bus.published].count(TOPIC_TASK_CANCEL) == 1
+    assert [event.topic for event in bus.published].count(TOPIC_TASK_RESUME) == 0

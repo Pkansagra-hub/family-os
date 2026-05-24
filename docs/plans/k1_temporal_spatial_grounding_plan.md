@@ -85,6 +85,58 @@ This plan is constrained by the live K1 kernel, not only by the whiteboard.
 | M5 | Place Registry + Geofences + K0 Persistence | Phase 5 |
 | M6 | K0 Memory + UI + MemoryWriter Schema + Final Cleanup | Phase 6 |
 
+## Agent Handoff Snapshot (2026-05-19)
+
+Read this section first. It records the current branch state after the M0/M1 implementation pass and the live web boot investigation, so future agents do not need to rediscover the same route from logs and scattered code.
+
+### Completed M0 State
+
+- Kernel ports exist and are re-exported: `ITemporalPort`, `ISpatialPort`, `IGroundingPort`, `IDeviceContextPort`.
+- Pure payload packages exist: `k1.temporal`, `k1.spatial`, `k1.grounding`; `DeviceContextSnapshot` is defined once in `k1.grounding.types` and re-exported by the kernel device-context port.
+- Temporal/spatial/grounding feature flags exist on `KernelConfig`; current branch state has `enable_temporal=True`, `enable_grounding=False`, and `enable_spatial=False` by default. This is drift from the original M0 text that said all three default OFF; keep the tests and plan aligned before closing M0/M1.
+- Architecture diagrams for temporal/spatial/grounding exist under `architecture_diagrams/k1/temporal_spatial_grounding/`.
+
+### Completed M1 State
+
+- `k1.temporal` has production types, events, serialization, ports, adapters, service builders/resolvers, projection builder/renderer, factory, kernel bundle, and per-session `TemporalHandle`.
+- SessionState has canonical HOT section `temporal`; old POC `temporal_context` is deleted.
+- KernelService wires S2.7 `TemporalServiceBundle` and P3.6 `TemporalHandle`, installs the handle before Concierge starts, and refreshes the temporal section on session creation and each Front turn.
+- Concierge runtime, factory, session loop, FSM, Front, Back, prompt builder, planner expansion, and Fabric contract surfaces consume the canonical temporal path instead of the old control anchor mirror.
+- M1-E10 is complete: `k1/contracts/tools/date_calc.yaml` now declares `required_context: ["temporal"]`.
+- M1-E11 is complete for hard-removal scope D-01..D-13 and D-16: `TemporalAnchor` / `compute_temporal_anchor` POC exports are removed from `public_types`, Control no longer stores or exposes `_temporal_anchor`, and production `k1/` grep has no old POC temporal-control call sites.
+- Empty-session crash is fixed: Front normalizes an empty `Envelope.session_id` to the bound `TemporalHandle.session_id`, correlates emitted envelopes with that session, and `TemporalHandle._session()` treats `None` or `""` as the bound session while still rejecting non-empty mismatches.
+- Temporal bus warnings are fixed: session/kernel topic registries include the `k1.temporal.` family, and temporal event envelopes carry `session_id`.
+
+### Live Boot Log Analysis
+
+Latest live boot in `logs.txt` proves the temporal module is active but previously fell back to UTC:
+
+- Kernel startup reached `temporal: bundle ready` and Concierge attached `TemporalHandle` to the FSM.
+- Front prompt dumps included a `== NOW ==` block and Gemini answered from that prompt, so prompt injection works.
+- The prompt block showed `UTC (weekday, live)` and the user-facing answer was UTC time.
+- FSM logged `device=none` because web user input carried `device` but FSM reads canonical `device_id`.
+- Browser/Web/UI did not send timezone or locale, and KernelService built temporal with no live `device_context_port`, so the resolver had no device timezone and correctly fell through device -> spatial -> persona -> UTC.
+
+Current fix landed in this pass:
+
+- Browser messages now include `device_context` with IANA timezone from `Intl.DateTimeFormat().resolvedOptions().timeZone`, locale, observed UTC timestamp, offset minutes, surface, and installation id.
+- `UiCoordinator.send_message()` records that payload as a canonical `DeviceContextSnapshot` before publishing user input.
+- KernelService owns an `InMemoryDeviceContextPort` and passes it to temporal via `DeviceContextAdapter`.
+- User input payload now includes both legacy `device` and canonical `device_id`, so FSM logs and temporal refresh see the current device.
+- Front passes the current turn `device_id` into `TemporalHandle.refresh_turn()`, so member/device switching can update the temporal anchor without rebuilding the session handle.
+
+Expected next live boot signs:
+
+- `FSM._on_user_input ... device=alex_phone` or the active member's default device, not `device=none`.
+- Prompt `== NOW ==` block should show the browser/device timezone source, for example `America/Chicago (..., live)` for Dallas/Chicago local time.
+- If browser timezone is unavailable, fallback remains deterministic: device -> spatial -> persona -> UTC.
+
+### Validation Snapshot
+
+- Focused regression run passed: `tests/k1/kernel/adapters/test_device_context.py`, `tests/k1/temporal/kernel/test_handle.py`, `tests/k1/concierge/test_front_temporal_session_id.py`, `tests/ui/web/test_app.py`, `tests/ui/web/test_device_context.py` -> 17 passed.
+- `git diff --check` is clean.
+- Broader targeted web/config pass had two branch-existing expectation failures unrelated to the device-context fix: `test_config_temporal_spatial_grounding_flags.py::test_kernel_config_grounding_flags_default_off` still expects `enable_temporal=False`, and `test_coordinator.py::test_web_bus_subscriptions_created` still expects 4 subscriptions while the coordinator currently creates 6.
+
 Each milestone has: goal, epics, issues, deprecation epic, success criteria, exit criteria.
 
 ## Deprecation Inventory

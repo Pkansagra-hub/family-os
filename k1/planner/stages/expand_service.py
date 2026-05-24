@@ -276,6 +276,40 @@ def _is_step_id(value: Any) -> bool:
     return value[1:].isdigit()
 
 
+def _format_temporal_constraint_block(temporal: Mapping[str, Any]) -> str:
+    """Format typed temporal constraints for EXPAND without ad-hoc now strings."""
+    fields = {
+        "anchor_id": temporal.get("anchor_id"),
+        "now_utc": temporal.get("now_utc"),
+        "timezone": temporal.get("timezone"),
+    }
+    lines = ["Temporal:"]
+    for key, value in fields.items():
+        if value:
+            lines.append(f"  {key}: {value}")
+    for key in ("today", "tomorrow"):
+        value = temporal.get(key)
+        if isinstance(value, Mapping):
+            start = value.get("start_local") or value.get("start_utc") or value.get("start")
+            end = value.get("end_local") or value.get("end_utc") or value.get("end")
+            if start or end:
+                lines.append(f"  {key}: {start or '?'} -> {end or '?'}")
+        elif value:
+            lines.append(f"  {key}: {value}")
+    resolved = temporal.get("resolved_expressions")
+    if isinstance(resolved, list) and resolved:
+        lines.append("  resolved_expressions:")
+        for item in resolved:
+            if isinstance(item, Mapping):
+                raw = item.get("raw_text", "")
+                label = item.get("normalized_label", item.get("resolution_kind", ""))
+                if raw or label:
+                    lines.append(f"    - {raw}: {label}")
+            elif item:
+                lines.append(f"    - {item}")
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+
 # ---------------------------------------------------------------------------
 # Output schema -- the JSON Schema the LLM must conform to (Section 7.4.1).
 # ---------------------------------------------------------------------------
@@ -504,7 +538,7 @@ EXPAND_TOOL_DEFINITIONS: Tuple[Dict[str, Any], ...] = (
                         "description": (
                             "Which sections to read. Available: "
                             "'beliefs_active', 'persona', 'temporal', "
-                            "'control', 'history_recent'."
+                            "'history_recent'."
                         ),
                     },
                 },
@@ -795,11 +829,11 @@ class ExpandService:
                 constraint_lines.append(f"Safety restriction: {safety_band}")
             temporal = request.constraints.get("temporal", {})
             if isinstance(temporal, dict):
-                now = temporal.get("now")
-                if now:
-                    constraint_lines.append(f"Current time: {now}")
+                temporal_block = _format_temporal_constraint_block(temporal)
+                if temporal_block:
+                    constraint_lines.append(temporal_block)
             if constraint_lines:
-                parts.append("\n[Constraints: " + ", ".join(constraint_lines) + "]")
+                parts.append("\nCONSTRAINTS:\n" + "\n".join(constraint_lines))
 
         # Arbiter feedback (revise loop).
         if arbiter_feedback:

@@ -28,6 +28,57 @@ TERMINAL_AUTHORITY_TOOLS = frozenset(
     {"dispatch_task", "invoke_capability", "batch_invoke_capabilities"}
 )
 
+_CONVERSATIONAL_WORK_MARKERS = (
+    "idea",
+    "ideas",
+    "suggest",
+    "suggestion",
+    "brainstorm",
+    "creative",
+    "recipe",
+    "recipes",
+    "what should",
+    "help me think",
+    "confused",
+    "good food",
+    "lunch",
+    "dinner",
+    "meal",
+    "cook",
+    "kitchen",
+)
+_EXTERNAL_WORK_MARKERS = (
+    "add to",
+    "shopping list",
+    "calendar",
+    "reminder",
+    "create task",
+    "assign",
+    "schedule",
+    "book",
+    "reserve",
+    "send",
+    "email",
+    "message",
+    "order",
+    "buy",
+    "purchase",
+    "approve",
+    "reject",
+    "delete",
+    "update",
+    "check off",
+)
+_VAGUE_ADVISORY_ACTION_STARTS = (
+    "prepare ",
+    "plan ",
+    "help ",
+    "brainstorm",
+    "give ideas",
+    "suggest",
+    "generate ideas",
+)
+
 CapabilityBindingStatus = Literal[
     "bound",
     "needs_discovery",
@@ -378,3 +429,45 @@ def synthesize_dispatch_task(user_text: str, reason: str) -> dict[str, Any]:
         "safety_band": "GREEN",
         "_policy_route": reason,
     }
+
+
+def front_dispatch_should_stay_conversational(
+    user_text: str,
+    task_entry: Mapping[str, Any],
+) -> bool:
+    """Return True when Front tried to dispatch advisory conversation.
+
+    The kernel-level distinction is not family-specific: external work that
+    mutates/reads a source of record belongs to Back, while brainstorming,
+    advice, recipes, explanations, and lightweight planning belong to Front.
+    This catches vague dispatches like ``prepare lunch`` without blocking
+    explicit side-effect requests such as adding ingredients to a shopping list.
+    """
+
+    intents = task_entry.get("intents") if isinstance(task_entry, Mapping) else None
+    actions: list[str] = []
+    if isinstance(intents, Iterable) and not isinstance(intents, (str, bytes, Mapping)):
+        for item in intents:
+            if isinstance(item, Mapping):
+                action = item.get("action")
+                if isinstance(action, str) and action.strip():
+                    actions.append(action.strip())
+    if not actions:
+        action = task_entry.get("action") if isinstance(task_entry, Mapping) else None
+        if isinstance(action, str) and action.strip():
+            actions.append(action.strip())
+
+    combined = " ".join([user_text, *actions]).lower()
+    if any(marker in combined for marker in _EXTERNAL_WORK_MARKERS):
+        return False
+    if any(marker in combined for marker in _CONVERSATIONAL_WORK_MARKERS):
+        return True
+
+    # A tiny vague imperative is usually a conversational plan/request for
+    # advice, not executable work. Explicit external-work markers above win.
+    for action in actions:
+        normalized = " ".join(action.lower().split())
+        if any(normalized.startswith(prefix) for prefix in _VAGUE_ADVISORY_ACTION_STARTS):
+            if len(normalized.split()) <= 5:
+                return True
+    return False

@@ -77,6 +77,9 @@ class SessionInstance:
     # ``KernelService``.
     self_model: Any = None  # SelfModelHandle | None
 
+    # ── M1.E7: per-session temporal handle ──────────────────
+    temporal: Any = None  # TemporalHandle | None
+
     # ── lifecycle helpers ───────────────────────────────────
 
     @property

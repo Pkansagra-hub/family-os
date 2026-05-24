@@ -33,11 +33,21 @@ import os
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from ui.web.renderer import WebSocketRenderer
 
 logger = logging.getLogger(__name__)
+
+
+def _env_flag(name: str, *, default: bool = False) -> bool:
+    """Parse an operator feature flag from the process environment."""
+
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 # ---------------------------------------------------------------------------
@@ -456,6 +466,7 @@ class UiCoordinator:
             session_mode="standalone",
             session_id=f"web-{uuid.uuid4().hex[:8]}",
             active_member_id=active_member_id,
+            active_device_id=self._current_device,
             enable_experience=True,
             enable_delta=True,
             enable_hitl=True,
@@ -481,6 +492,9 @@ class UiCoordinator:
             # Concierge planner can dispatch calendar/tasks/reminders/chores/
             # family_settings natively (no K0 round-trip needed).
             enable_family_tools=True,
+            enable_temporal=_env_flag("K1_ENABLE_TEMPORAL"),
+            enable_grounding=_env_flag("K1_ENABLE_GROUNDING"),
+            enable_spatial=_env_flag("K1_ENABLE_SPATIAL"),
             family_tool_service_paths=(
                 "k1.tools.family.calendar.service:CalendarToolService",
                 "k1.tools.family.tasks.service:TasksToolService",
@@ -709,12 +723,12 @@ class UiCoordinator:
     def _wire_web_timeline_hooks(self) -> None:
         """Subscribe FSM/affect/tool topics; forward to the WebSocketRenderer."""
         from k1.bus import Envelope
-        from k1.concierge.bus.topics import TOPIC_TOOL_STATE_CHANGED  # E15.10
         from k1.concierge.bus.topics import (
             TOPIC_AFFECT_UPDATE,
             TOPIC_STATE_UPDATED,
             TOPIC_TOOL_COMPLETED,
             TOPIC_TOOL_STARTED,
+            TOPIC_TOOL_STATE_CHANGED,  # E15.10
         )
         from k1.hil.topics import TOPIC_HIL_REQUEST as _TOPIC_HIL_REQUEST
 
@@ -872,6 +886,7 @@ class UiCoordinator:
         member: str,
         device: str,
         turn: int,
+        device_context: Dict[str, Any] | None = None,
         timeout_s: float = 180.0,
     ) -> None:
         """Publish a user input envelope and await the response.
@@ -885,6 +900,7 @@ class UiCoordinator:
         output = self.get_output_channel()
         output.set_member(member)
         output.start_turn(turn)
+        await self._record_device_context(device=device, device_context=device_context)
 
         # Reset dispatchers (per-turn tool budget bookkeeping)
         try:
@@ -899,12 +915,72 @@ class UiCoordinator:
             "text": text,
             "member": member,
             "device": device,
+            "device_id": device,
             "turn": turn,
         }
         envelope = build_user_input(payload=payload)
         self.get_bus().publish(envelope)
 
         await output.wait_for_response(timeout=timeout_s)
+
+    async def _record_device_context(
+        self,
+        *,
+        device: str,
+        device_context: Dict[str, Any] | None,
+    ) -> None:
+        if not self._runtime or not device:
+            return
+        service = getattr(self._runtime, "_service", None)
+        port = getattr(service, "device_context_port", None)
+        if port is None:
+            return
+        context = dict(device_context or {})
+        session_id = str(getattr(self._runtime, "_session_id", "") or "")
+        if not session_id:
+            return
+        timezone_name = context.get("timezone")
+        locale = context.get("locale")
+        installation_id = str(context.get("installation_id") or device)
+        observed_at = str(context.get("observed_at_utc") or datetime.now(timezone.utc).isoformat())
+        metadata = {
+            key: value
+            for key, value in context.items()
+            if key
+            not in {
+                "timezone",
+                "locale",
+                "observed_at_utc",
+                "surface",
+                "installation_id",
+                "clock_skew_ms",
+            }
+        }
+        from k1.grounding.types import DeviceContextSnapshot
+
+        await port.update_snapshot(
+            DeviceContextSnapshot(
+                session_id=session_id,
+                device_id=str(device),
+                installation_id=installation_id,
+                observed_at_utc=observed_at,
+                surface=str(context.get("surface") or "web"),
+                timezone=str(timezone_name).strip() if timezone_name else None,
+                locale=str(locale).strip() if locale else None,
+                clock_skew_ms=context.get("clock_skew_ms"),
+                metadata=metadata,
+            )
+        )
+        try:
+            meta = (
+                self.session_state.get_section("meta") if self.session_state is not None else None
+            )
+            if meta is not None and hasattr(meta, "set_active_device"):
+                meta.set_active_device(str(device))
+        except Exception:
+            logger.debug(
+                "Device context recorded but meta active-device update failed", exc_info=True
+            )
 
     def get_status_report(self) -> Dict[str, Any]:
         """Status snapshot for `/api/status` and `/status` command."""

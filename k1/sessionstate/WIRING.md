@@ -300,7 +300,7 @@ Generated FlatBuffer bindings are in `k1/sessionstate/generated/flatbuffers/`.
 | `SessionStateReaderAdapter` | `k1.kernel.service` | `k1.fabric.adapters.sessionstate_reader` |
 | `SessionStateProdAdapter` | `k1.kernel.service` | `k1.model_hub.adapters.session_state_prod` |
 | `SessionStateReadAdapter` (as PlannerStateAdapter) | `k1.kernel.service` | `k1.planner.adapters.session_state_adapter` |
-| `public_types.*` (MutationRequest, BatchRequest, IntentClassification, PrivacyBand, TaskStateEntry, TaskArtifactEntry, TemporalAnchor, MetaSection, etc.) | `k1.concierge` | `k1.sessionstate.public_types` |
+| `public_types.*` (MutationRequest, BatchRequest, IntentClassification, PrivacyBand, TaskStateEntry, TaskArtifactEntry, TemporalSection, MetaSection, etc.) | `k1.concierge` | `k1.sessionstate.public_types` |
 | `ISessionStateReader`, `SessionSnapshot` | Fabric components | `k1.fabric.ports.state_reader` |
 
 SessionState does NOT import from: `k1.concierge`, `k1.planner`, `k1.orchestrator`,

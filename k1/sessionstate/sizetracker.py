@@ -60,7 +60,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, FrozenSet, List, Optional, Tuple
 
-from .config import SessionStateConfig, TiersConfig
+from .config import TiersConfig
 
 if TYPE_CHECKING:
     pass
@@ -119,7 +119,7 @@ class SectionBudget:
 # Source: k1/sessionstate/README.md Sections 5-6
 
 SECTION_BUDGETS: Dict[str, SectionBudget] = {
-    # HOT CORE sections (52KB total, matches config hot_budget_bytes)
+    # HOT CORE sections (56KB total, matches config hot_budget_bytes)
     "control": SectionBudget(
         name="control",
         tier=Tier.HOT,
@@ -189,6 +189,13 @@ SECTION_BUDGETS: Dict[str, SectionBudget] = {
         max_bytes=4 * 1024,
         eviction_priority=3,  # Demotes to artifacts_warm
         can_migrate=True,
+    ),
+    "temporal": SectionBudget(
+        name="temporal",
+        tier=Tier.HOT,
+        max_bytes=4 * 1024,
+        eviction_priority=None,  # NEVER EVICT during an active session
+        can_migrate=False,
     ),
     # WARM TIER sections (48KB total)
     "beliefs_history": SectionBudget(

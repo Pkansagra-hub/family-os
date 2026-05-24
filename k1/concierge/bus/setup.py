@@ -80,6 +80,7 @@ def build_middleware_chain(cfg) -> MiddlewareChain | None:
         # Dynamic topics: k1.agent.*.delta.*, k1.session.*
         registry.register_prefix("k1.agent.")
         registry.register_prefix("k1.session.")
+        registry.register_prefix("k1.temporal.")
         middlewares.append(TopicValidationMiddleware(registry))
 
     if cfg.tracing_enabled:

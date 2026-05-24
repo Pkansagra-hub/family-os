@@ -76,7 +76,7 @@ class SSReadConfig:
 
 SS_READ_CONFIGS: dict[PromptMode, list[SSReadConfig]] = {
     PromptMode.STANDARD: [
-        SSReadConfig("temporal_context", "full"),
+        SSReadConfig("temporal", "full"),
         SSReadConfig("beliefs_active", "full"),
         SSReadConfig("scoreboard", "full"),
         SSReadConfig("affective_now", "full"),
@@ -89,7 +89,7 @@ SS_READ_CONFIGS: dict[PromptMode, list[SSReadConfig]] = {
         SSReadConfig("task_artifacts", "full"),
     ],
     PromptMode.CLARIFY_ASK: [
-        SSReadConfig("temporal_context", "slim"),
+        SSReadConfig("temporal", "slim"),
         SSReadConfig("beliefs_active", "slim"),
         SSReadConfig("scoreboard", "slim"),
         SSReadConfig("affective_now", "full"),
@@ -99,7 +99,7 @@ SS_READ_CONFIGS: dict[PromptMode, list[SSReadConfig]] = {
         SSReadConfig("persona", "full"),
     ],
     PromptMode.CLARIFY_RESOLVE: [
-        SSReadConfig("temporal_context", "slim"),
+        SSReadConfig("temporal", "slim"),
         SSReadConfig("beliefs_active", "full"),
         SSReadConfig("scoreboard", "full"),
         SSReadConfig("affective_now", "full"),
@@ -110,14 +110,14 @@ SS_READ_CONFIGS: dict[PromptMode, list[SSReadConfig]] = {
         SSReadConfig("task_state", "slim"),
     ],
     PromptMode.HITL_RELAY: [
-        SSReadConfig("temporal_context", "slim"),
+        SSReadConfig("temporal", "slim"),
         SSReadConfig("affective_now", "full"),
         SSReadConfig("control", "slim"),
         SSReadConfig("persona", "full"),
         SSReadConfig("task_state", "full"),
     ],
     PromptMode.HITL_RESOLVE: [
-        SSReadConfig("temporal_context", "slim"),
+        SSReadConfig("temporal", "slim"),
         SSReadConfig("beliefs_active", "slim"),
         SSReadConfig("scoreboard", "slim"),
         SSReadConfig("affective_now", "full"),
@@ -127,7 +127,7 @@ SS_READ_CONFIGS: dict[PromptMode, list[SSReadConfig]] = {
         SSReadConfig("task_state", "full"),
     ],
     PromptMode.PRESENT: [
-        SSReadConfig("temporal_context", "full"),
+        SSReadConfig("temporal", "full"),
         SSReadConfig("affective_now", "full"),
         SSReadConfig("narrative_active", "slim"),
         SSReadConfig("control", "slim"),
@@ -138,7 +138,7 @@ SS_READ_CONFIGS: dict[PromptMode, list[SSReadConfig]] = {
         SSReadConfig("beliefs_active", "slim"),
     ],
     PromptMode.WEAVE: [
-        SSReadConfig("temporal_context", "full"),
+        SSReadConfig("temporal", "full"),
         SSReadConfig("affective_now", "full"),
         SSReadConfig("narrative_active", "full"),
         SSReadConfig("control", "slim"),
@@ -149,7 +149,7 @@ SS_READ_CONFIGS: dict[PromptMode, list[SSReadConfig]] = {
         SSReadConfig("beliefs_active", "slim"),
     ],
     PromptMode.CANCEL: [
-        SSReadConfig("temporal_context", "slim"),
+        SSReadConfig("temporal", "slim"),
         SSReadConfig("beliefs_active", "slim"),
         SSReadConfig("affective_now", "full"),
         SSReadConfig("narrative_active", "slim"),
@@ -159,7 +159,7 @@ SS_READ_CONFIGS: dict[PromptMode, list[SSReadConfig]] = {
         SSReadConfig("task_state", "full"),
     ],
     PromptMode.INTERRUPT: [
-        SSReadConfig("temporal_context", "full"),
+        SSReadConfig("temporal", "full"),
         SSReadConfig("beliefs_active", "full"),
         SSReadConfig("scoreboard", "full"),
         SSReadConfig("affective_now", "full"),
@@ -172,7 +172,7 @@ SS_READ_CONFIGS: dict[PromptMode, list[SSReadConfig]] = {
         SSReadConfig("task_artifacts", "full"),
     ],
     PromptMode.ERROR: [
-        SSReadConfig("temporal_context", "slim"),
+        SSReadConfig("temporal", "slim"),
         SSReadConfig("affective_now", "full"),
         SSReadConfig("narrative_active", "slim"),
         SSReadConfig("control", "slim"),
@@ -575,79 +575,55 @@ def _render_persona_slim(section: Any, cfg: SSReadConfig) -> str:
 
 
 # =========================================================================
-# Temporal context renderers (reads from Control sub-field)
-# Architecture ref: skeleton.mmd -> TIME_RESOLUTION -> TEMPORAL_ANCHOR
-# Port path: Multimodal section sub-field (Section 5)
+# Temporal renderers (reads canonical temporal section via typed projection)
 # =========================================================================
 
 
-def _render_temporal_context_full(section: Any, cfg: SSReadConfig) -> str:
-    """Full: multi-line temporal anchor from Control sub-field."""
-    anchor = None
-    if hasattr(section, "get_temporal_anchor"):
-        anchor = section.get_temporal_anchor()
-    if anchor is None:
-        # Lazy fallback: compute from Persona timezone if Phase 1 not run
-        from k1.sessionstate.public_types import compute_temporal_anchor
-
-        tz = "UTC"
-        if hasattr(section, "get_all_preferences"):
-            tz = section.get_all_preferences().get("timezone", "UTC")
-        anchor = compute_temporal_anchor(tz).to_dict()
-    if not anchor:
-        return ""
-    # Parse ISO to produce a clear human-readable time
-    iso = anchor.get("local_time_iso", "")
-    human_time = iso
+def _temporal_projection_from_section(section: Any, consumer: str = "front") -> Any | None:
+    """Build a typed TemporalProjection from the canonical SS temporal section."""
     try:
-        from datetime import datetime as _dt
-
-        parsed = _dt.fromisoformat(iso)
-        human_time = parsed.strftime("%I:%M %p on %A, %B %d, %Y")
+        payload = section.to_dict() if hasattr(section, "to_dict") else section.get_data()
     except Exception:
-        pass
-    lines = [
-        f"CURRENT TIME: {human_time}",
-        f"Day: {anchor.get('day_of_week', '')}",
-        f"Time of day: {anchor.get('time_of_day', '')}",
-        f"Weekend: {anchor.get('is_weekend', False)}",
-        f"Timezone: {anchor.get('timezone', 'UTC')}",
-        "Location: Denton, Texas",
-    ]
-    return "\n".join(lines)
-
-
-def _render_temporal_context_slim(section: Any, cfg: SSReadConfig) -> str:
-    """Slim: one-liner temporal summary."""
-    anchor = None
-    if hasattr(section, "get_temporal_anchor"):
-        anchor = section.get_temporal_anchor()
-    if anchor is None:
-        from k1.sessionstate.public_types import compute_temporal_anchor
-
-        anchor = compute_temporal_anchor("UTC").to_dict()
-    if not anchor:
-        return ""
-    iso = anchor.get("local_time_iso", "")
-    human_time = iso
+        return None
+    if not isinstance(payload, dict) or not payload.get("anchor"):
+        return None
     try:
-        from datetime import datetime as _dt
+        from k1.temporal.config import TemporalConfig
+        from k1.temporal.service.projection_builder import build_projection
 
-        parsed = _dt.fromisoformat(iso)
-        human_time = parsed.strftime("%I:%M %p %Z")
+        anchor = payload.get("anchor") or {}
+        now_utc = str(anchor.get("now_utc") or anchor.get("captured_at_utc") or "")
+        if not now_utc:
+            return None
+        return build_projection(
+            payload,
+            consumer=consumer,
+            now_utc=now_utc,
+            config=TemporalConfig(stale_after_ms=int(payload.get("stale_after_ms", 120_000))),
+        )
     except Exception:
-        pass
-    return f"CURRENT TIME: {human_time} -- {anchor.get('day_of_week', '')} {anchor.get('time_of_day', '')}"
+        logger.debug("temporal projection build failed", exc_info=True)
+        return None
 
 
-# =========================================================================
-# Section source map: virtual prompt sections backed by real SS sections
-# Production: temporal_context -> multimodal (Section 5 sub-field)
-# POC: temporal_context -> control (sub-field per skeleton.mmd NOTE line 834)
-# =========================================================================
-SECTION_SOURCE_MAP: dict[str, str] = {
-    "temporal_context": "control",
-}
+def _render_temporal_full(section: Any, cfg: SSReadConfig) -> str:
+    """Full temporal block rendered from TemporalProjection."""
+    projection = _temporal_projection_from_section(section, consumer="front")
+    if projection is None:
+        return ""
+    from k1.temporal.service.projection_renderer import render_execution_block
+
+    return render_execution_block(projection)
+
+
+def _render_temporal_slim(section: Any, cfg: SSReadConfig) -> str:
+    """Slim temporal block rendered from TemporalProjection."""
+    projection = _temporal_projection_from_section(section, consumer="front")
+    if projection is None:
+        return ""
+    from k1.temporal.service.projection_renderer import render_now_block
+
+    return render_now_block(projection)
 
 
 # Dispatch table: section_name -> (full_renderer, slim_renderer)
@@ -662,7 +638,7 @@ SECTION_RENDERERS: dict[str, tuple] = {
     "affective_now": (_render_affective_now_full, _render_affective_now_slim),
     "control": (_render_control_full, _render_control_slim),
     "persona": (_render_persona_full, _render_persona_slim),
-    "temporal_context": (_render_temporal_context_full, _render_temporal_context_slim),
+    "temporal": (_render_temporal_full, _render_temporal_slim),
 }
 
 
@@ -808,6 +784,7 @@ class DynamicPromptBuilder:
         tier: str = "LOW",
         ss: Any = None,
         grounding_capsule: Any = None,
+        temporal_projection: Any = None,
     ) -> BuiltContext:
         """Assemble complete context for one Front LLM invocation.
 
@@ -988,7 +965,7 @@ class DynamicPromptBuilder:
         # and 10 directly reference them. We now promote three blocks to
         # sit RIGHT AFTER IDENTITY so they precede every rule that depends
         # on them:
-        #   1. == NOW ==              one-line clock from temporal_context
+        #   1. == NOW ==              one-line clock from TemporalProjection
         #   2. == AFFECT STATE ==     band + tone-rule + length-rule (consolidated)
         #   3. == CONSCIENCE ==       forbidden / must_ask acts (from capsule)
         #
@@ -999,7 +976,7 @@ class DynamicPromptBuilder:
         # M6 framing note: the LLM previously confused the conscience
         # (behavioural) with ``tools=[]`` (capability menu). The new
         # preamble keeps that disambiguation while being much shorter.
-        live_now_block = self._build_now_block(ss)
+        live_now_block = self._build_now_block(ss, temporal_projection=temporal_projection)
         affect_state_block = self._build_affect_state_block(affect_band, modifiers, ss)
         conscience_block_text = ""
         capsule_text = ""
@@ -1151,37 +1128,33 @@ class DynamicPromptBuilder:
     # -----------------------------------------------------------------
 
     @staticmethod
-    def _build_now_block(ss: Any) -> str:
-        """One-line ``== NOW ==`` header derived from temporal_context.
+    def _build_now_block(ss: Any, temporal_projection: Any = None) -> str:
+        """One-line ``== NOW ==`` header derived from TemporalProjection.
 
         Returns ``""`` if ss is None or temporal anchor unavailable.
         """
+        if temporal_projection is not None:
+            try:
+                from k1.temporal.service.projection_renderer import render_now_block
+
+                return render_now_block(temporal_projection)
+            except Exception:
+                logger.debug("_build_now_block: projection render failed", exc_info=True)
         if ss is None:
             return ""
-        section = _safe_get_ss_section(ss, "control")
-        if section is None or not hasattr(section, "get_temporal_anchor"):
+        section = _safe_get_ss_section(ss, "temporal")
+        if section is None:
+            return ""
+        projection = _temporal_projection_from_section(section, consumer="front")
+        if projection is None:
             return ""
         try:
-            anchor = section.get_temporal_anchor() or {}
-        except Exception:
-            return ""
-        if not anchor:
-            return ""
-        iso = anchor.get("local_time_iso", "")
-        day = anchor.get("day_of_week", "")
-        tod = anchor.get("time_of_day", "")
-        tz = anchor.get("timezone", "UTC")
-        is_weekend = anchor.get("is_weekend", False)
-        time_str = iso
-        try:
-            from datetime import datetime as _dt
+            from k1.temporal.service.projection_renderer import render_now_block
 
-            time_str = _dt.fromisoformat(iso).strftime("%I:%M %p")
+            return render_now_block(projection)
         except Exception:
-            pass
-        pieces = [p for p in [time_str, day, tod, tz] if p]
-        kind = "weekend" if is_weekend else "weekday"
-        return f"== NOW ==\n{' | '.join(pieces)} ({kind})"
+            logger.debug("_build_now_block: temporal section render failed", exc_info=True)
+            return ""
 
     @staticmethod
     def _build_affect_state_block(
@@ -1438,9 +1411,7 @@ class DynamicPromptBuilder:
         for cfg in configs:
             if cfg.read_mode == "skip":
                 continue
-            # Get section from SS manager (resolve virtual names via source map)
-            source_name = SECTION_SOURCE_MAP.get(cfg.section, cfg.section)
-            section = _safe_get_ss_section(ss, source_name)
+            section = _safe_get_ss_section(ss, cfg.section)
             if section is None:
                 continue
             renderers = SECTION_RENDERERS.get(cfg.section)

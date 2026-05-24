@@ -71,9 +71,6 @@ TOOL_ALLOWLIST: dict[PromptMode, list[str]] = {
         "recall_memory",
         "summarize_context",
         "dispatch_task",
-        # P1.1: Front handles LOW-tier single-step lookups directly via Fabric
-        "discover_capabilities",
-        "invoke_capability",
         # refine_affect and promote_belief added conditionally at build time
     ],
     PromptMode.CLARIFY_ASK: [
@@ -117,9 +114,6 @@ TOOL_ALLOWLIST: dict[PromptMode, list[str]] = {
         "recall_memory",
         "summarize_context",
         "dispatch_task",
-        # P1.1: even during interrupts, allow direct lookups for new topics
-        "discover_capabilities",
-        "invoke_capability",
     ],
     PromptMode.ERROR: [
         "update_narrative",

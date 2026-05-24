@@ -1,5 +1,7 @@
 # Changelog
 
+<!-- markdownlint-disable MD024 -->
+
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
@@ -46,6 +48,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - See `docs/development/runbooks/remediation-service.md` for new SSE-based pattern (reference implementation coming in Milestone B)
 
 ### Added
+
+- **K1 Temporal / Spatial / Grounding M0 scaffold**
+  - Added the long-lived implementation plan at `docs/plans/k1_temporal_spatial_grounding_plan.md`
+  - Added inert kernel package and port scaffolding for `k1.temporal`, `k1.spatial`, and `k1.grounding`
+  - Added migration feature flags `K1_ENABLE_TEMPORAL`, `K1_ENABLE_SPATIAL`, and `K1_ENABLE_GROUNDING`
+
+- **K1 Temporal M1 E1-E4 service core**
+  - Added canonical temporal event contracts, serialization helpers, and internal temporal ports
+  - Added clock, timezone, routine, event, metrics, state, and policy adapters for the temporal module
+  - Added deterministic anchor, window, freshness, projection, and expression-resolution service modules
 
 - **K0 Automation Enhancement Plan**
   - Comprehensive 6-8 week roadmap for automation infrastructure improvements

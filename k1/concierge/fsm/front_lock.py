@@ -31,6 +31,7 @@ from typing import Awaitable, Callable
 from k1.bus.envelope import Envelope
 from k1.concierge.bus.topics import (
     TOPIC_FINDINGS_READY,
+    TOPIC_HIL_REQUEST,
     TOPIC_PROACTIVE_FILL,
     TOPIC_TASK_COMPLETE,
     TOPIC_TASK_FAILED,
@@ -55,6 +56,7 @@ PRIORITY_INFO = 5
 # M2 E2.1.6: Use topic constants instead of hardcoded strings.
 TOPIC_PRIORITY: dict[str, int] = {
     TOPIC_USER_INPUT: PRIORITY_URGENT,
+    TOPIC_HIL_REQUEST: PRIORITY_INTERACTIVE,
     TOPIC_TASK_SUSPENDED: PRIORITY_INTERACTIVE,
     TOPIC_TASK_COMPLETE: PRIORITY_RESULT,
     TOPIC_TASK_FAILED: PRIORITY_ERROR,

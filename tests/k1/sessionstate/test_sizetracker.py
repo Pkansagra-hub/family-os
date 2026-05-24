@@ -99,9 +99,9 @@ class TestInitialization:
         assert tracker.get_pressure("warm") == PressureLevel.NORMAL
 
     def test_all_sections_defined(self) -> None:
-        """All 12 sections should be defined in constants."""
-        assert len(ALL_SECTIONS) == 15
-        assert len(HOT_SECTIONS) == 10
+        """All sections should be defined in constants."""
+        assert len(ALL_SECTIONS) == 16
+        assert len(HOT_SECTIONS) == 11
         assert len(WARM_SECTIONS) == 5
 
     def test_section_budgets_defined(self) -> None:
@@ -338,14 +338,14 @@ class TestAvailableBytesCalculations:
         """Tier available bytes calculation."""
         tracker.update("control", 10 * 1024)
         tracker.update("beliefs_active", 8 * 1024)
-        # HOT used: 18KB, limit: 48KB, available: 30KB
-        assert tracker.get_tier_available_bytes("hot") == 34 * 1024
+        # HOT used: 18KB, limit: 56KB, available: 38KB
+        assert tracker.get_tier_available_bytes("hot") == 38 * 1024
 
     def test_total_available_bytes(self, tracker: SizeTracker) -> None:
         """Total available bytes calculation."""
         tracker.update("control", 10 * 1024)
-        # Used: 10KB, limit: 96KB, available: 86KB
-        assert tracker.get_total_available_bytes() == 94 * 1024
+        # Used: 10KB, limit: 108KB, available: 98KB
+        assert tracker.get_total_available_bytes() == 98 * 1024
 
 
 # =============================================================================
@@ -589,22 +589,22 @@ class TestThreadSafety:
 class TestConstants:
     """Verify constant definitions match README specifications."""
 
-    def test_total_limit_is_96kb(self) -> None:
-        """Total limit should be 96KB."""
-        assert TOTAL_SIZE_LIMIT_BYTES == 104 * 1024
+    def test_total_limit_is_108kb(self) -> None:
+        """Total limit should be 108KB."""
+        assert TOTAL_SIZE_LIMIT_BYTES == 108 * 1024
 
-    def test_hot_limit_is_48kb(self) -> None:
-        """HOT tier limit should be 48KB."""
-        assert HOT_SIZE_LIMIT_BYTES == 52 * 1024
+    def test_hot_limit_is_56kb(self) -> None:
+        """HOT tier limit should be 56KB."""
+        assert HOT_SIZE_LIMIT_BYTES == 56 * 1024
 
     def test_warm_limit_is_48kb(self) -> None:
         """WARM tier limit should be 48KB."""
         assert WARM_SIZE_LIMIT_BYTES == 48 * 1024
 
-    def test_hot_sections_sum_to_48kb(self) -> None:
-        """HOT section budgets should sum to 48KB."""
+    def test_hot_sections_sum_to_56kb(self) -> None:
+        """HOT section budgets should sum to 56KB."""
         hot_total = sum(SECTION_BUDGETS[s].max_bytes for s in HOT_SECTIONS)
-        assert hot_total == 52 * 1024
+        assert hot_total == 56 * 1024
 
     def test_warm_sections_sum_to_56kb(self) -> None:
         """WARM section budgets should sum to 48KB."""
@@ -612,10 +612,12 @@ class TestConstants:
         assert warm_total == 56 * 1024
 
     def test_never_evict_sections(self) -> None:
-        """Control and meta should be NEVER EVICT."""
+        """Critical HOT sections should be NEVER EVICT."""
         assert "control" in NEVER_EVICT_SECTIONS
         assert "meta" in NEVER_EVICT_SECTIONS
-        assert len(NEVER_EVICT_SECTIONS) == 3
+        assert "task_state" in NEVER_EVICT_SECTIONS
+        assert "temporal" in NEVER_EVICT_SECTIONS
+        assert len(NEVER_EVICT_SECTIONS) == 4
 
     def test_pressure_thresholds(self) -> None:
         """Pressure thresholds should match specification."""
@@ -832,11 +834,12 @@ class TestUtilizationCalculations:
 
     def test_snapshot_utilization_at_50_percent(self, tracker: SizeTracker) -> None:
         """Utilization should be ~50% when half full."""
-        # Fill HOT to ~50% of 52KB = 26KB
+        # Fill HOT to 50% of 56KB = 28KB
         tracker.update("control", 8 * 1024)  # 8KB
         tracker.update("beliefs_active", 8 * 1024)  # 8KB
         tracker.update("history_active", 8 * 1024)  # 8KB
-        tracker.update("meta", 2 * 1024)  # 2KB = 26KB = 50% of 52KB
+        tracker.update("meta", 2 * 1024)  # 2KB
+        tracker.update("scoreboard", 2 * 1024)  # 2KB = 28KB = 50% of 56KB
 
         snapshot = tracker.get_snapshot()
         assert 0.49 < snapshot.hot_utilization_pct < 0.51

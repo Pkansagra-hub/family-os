@@ -84,7 +84,7 @@ _FINISH_MAP: Dict[str, FinishReason] = {
     "BLOCKLIST": FinishReason.SAFETY,
     "PROHIBITED_CONTENT": FinishReason.SAFETY,
     "SPII": FinishReason.SAFETY,
-    "MALFORMED_FUNCTION_CALL": FinishReason.ERROR,
+    "MALFORMED_FUNCTION_CALL": FinishReason.MALFORMED_TOOL_CALL,
 }
 
 
@@ -263,12 +263,49 @@ class GooglePlugin:
                         prompt_tokens = int(getattr(um, "prompt_token_count", 0) or 0)
                         completion_tokens = int(getattr(um, "candidates_token_count", 0) or 0)
                     if streamed_text_chars == 0 and streamed_tool_calls == 0:
+                        # Kernel-grade diagnostics: pull safety/block info
+                        # off the chunk so an empty terminal stream is not
+                        # opaque downstream.
+                        safety_ratings = None
+                        try:
+                            sr = getattr(candidate, "safety_ratings", None)
+                            if sr:
+                                safety_ratings = [
+                                    {
+                                        "category": str(getattr(r, "category", "")),
+                                        "probability": str(getattr(r, "probability", "")),
+                                        "blocked": bool(getattr(r, "blocked", False)),
+                                    }
+                                    for r in sr
+                                ]
+                        except Exception:  # pragma: no cover - diagnostics
+                            safety_ratings = None
+                        pf_block_reason = None
+                        pf_block_message = None
+                        try:
+                            prompt_feedback = getattr(chunk, "prompt_feedback", None)
+                            if prompt_feedback is not None:
+                                pf_block_reason = str(
+                                    getattr(prompt_feedback, "block_reason", "") or ""
+                                )
+                                pf_block_message = str(
+                                    getattr(prompt_feedback, "block_reason_message", "") or ""
+                                )
+                        except Exception:  # pragma: no cover - diagnostics
+                            pf_block_reason = None
                         logger.warning(
                             "GooglePlugin.stream_execute: empty terminal chunk "
-                            "finish_reason=%s prompt_tokens=%d completion_tokens=%d trace=%s",
+                            "finish_reason=%s mapped=%s prompt_tokens=%d "
+                            "completion_tokens=%d safety_ratings=%s "
+                            "prompt_feedback.block_reason=%s "
+                            "prompt_feedback.message=%s trace=%s",
                             candidate.finish_reason,
+                            finish_reason.value,
                             prompt_tokens,
                             completion_tokens,
+                            safety_ratings,
+                            pf_block_reason,
+                            pf_block_message,
                             request.trace_id[:8] if request.trace_id else "",
                         )
                     yield ProviderChunk(
@@ -548,12 +585,92 @@ class GooglePlugin:
 
         # Finish reason
         finish_reason = FinishReason.STOP
+        raw_finish: Any = None
         if tool_calls:
             finish_reason = FinishReason.TOOL_CALLS
         elif response.candidates:
-            fr = getattr(response.candidates[0], "finish_reason", None)
-            if fr is not None:
-                finish_reason = _map_finish_reason(fr)
+            raw_finish = getattr(response.candidates[0], "finish_reason", None)
+            if raw_finish is not None:
+                finish_reason = _map_finish_reason(raw_finish)
+
+        # Kernel-grade observability: when the model returns ERROR or
+        # SAFETY, or returns no candidates at all, surface the raw
+        # Gemini/Vertex diagnostics so we can decide structurally
+        # instead of guessing.  No PII is logged -- only category
+        # codes and counts.
+        if (
+            finish_reason in (
+                FinishReason.ERROR,
+                FinishReason.SAFETY,
+                FinishReason.MALFORMED_TOOL_CALL,
+            )
+            or not response.candidates
+            or (response.candidates and not (
+                response.candidates[0].content
+                and response.candidates[0].content.parts
+            ))
+        ):
+            try:
+                cand = response.candidates[0] if response.candidates else None
+                safety_ratings = None
+                if cand is not None:
+                    sr = getattr(cand, "safety_ratings", None)
+                    if sr:
+                        safety_ratings = [
+                            {
+                                "category": str(getattr(r, "category", "")),
+                                "probability": str(getattr(r, "probability", "")),
+                                "blocked": bool(getattr(r, "blocked", False)),
+                            }
+                            for r in sr
+                        ]
+                prompt_feedback = getattr(response, "prompt_feedback", None)
+                pf_block_reason = None
+                pf_block_message = None
+                pf_safety = None
+                if prompt_feedback is not None:
+                    pf_block_reason = str(getattr(prompt_feedback, "block_reason", "") or "")
+                    pf_block_message = str(
+                        getattr(prompt_feedback, "block_reason_message", "") or ""
+                    )
+                    pf_sr = getattr(prompt_feedback, "safety_ratings", None)
+                    if pf_sr:
+                        pf_safety = [
+                            {
+                                "category": str(getattr(r, "category", "")),
+                                "probability": str(getattr(r, "probability", "")),
+                                "blocked": bool(getattr(r, "blocked", False)),
+                            }
+                            for r in pf_sr
+                        ]
+                logger.error(
+                    "google_plugin: degenerate response model=%s finish_raw=%s "
+                    "mapped=%s candidates=%d has_parts=%s tool_calls=%d "
+                    "tokens_in=%d tokens_out=%d safety_ratings=%s "
+                    "prompt_feedback.block_reason=%s prompt_feedback.message=%s "
+                    "prompt_feedback.safety_ratings=%s",
+                    model_id or request.model_id,
+                    raw_finish,
+                    finish_reason.value,
+                    len(response.candidates) if response.candidates else 0,
+                    bool(
+                        response.candidates
+                        and response.candidates[0].content
+                        and response.candidates[0].content.parts
+                    ),
+                    len(tool_calls),
+                    tokens_in,
+                    tokens_out,
+                    safety_ratings,
+                    pf_block_reason,
+                    pf_block_message,
+                    pf_safety,
+                )
+            except Exception as diag_exc:  # pragma: no cover - diagnostics must not break flow
+                logger.warning(
+                    "google_plugin: degenerate response diagnostics failed: %s",
+                    diag_exc,
+                )
 
         raw = {"thought_text": thought_text} if thought_text else {}
 

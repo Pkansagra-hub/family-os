@@ -486,6 +486,9 @@ async def _handle_user_message(coord: UiCoordinator, ws: WebSocket, msg: dict) -
 
     member = msg.get("member", _current_member)
     device = msg.get("device", _current_device)
+    device_context = msg.get("device_context")
+    if not isinstance(device_context, dict):
+        device_context = None
 
     _turn_counter += 1
     turn = _turn_counter
@@ -497,6 +500,7 @@ async def _handle_user_message(coord: UiCoordinator, ws: WebSocket, msg: dict) -
             text=text,
             member=member,
             device=device,
+            device_context=device_context,
             turn=turn,
             timeout_s=180.0,
         )

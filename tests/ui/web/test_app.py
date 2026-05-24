@@ -114,6 +114,9 @@ def test_family_app_static_contracts_are_manifest_aligned(client: TestClient) ->
     assert "Privacy, kid permissions, and family feature controls" in html
     assert "_buildHomeActivityFeed" in js
     assert "_renderHomeActivity" in js
+    assert "getDeviceContext" in js
+    assert "Intl.DateTimeFormat().resolvedOptions().timeZone" in js
+    assert "device_context: getDeviceContext()" in js
     assert "Family activity will appear as people update the apps." in js
     assert "state.timelineEntries.slice(-6)" not in js
     assert "section_payloads" in js

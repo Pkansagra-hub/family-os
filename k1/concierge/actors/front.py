@@ -229,11 +229,35 @@ def _strip_leaked_reasoning(text: str) -> str:
     return text
 
 
-def _build_dispatch_ack(dispatches: list[dict[str, Any]]) -> str:
-    """Return a deterministic in-progress acknowledgement for dispatched work."""
-    if len(dispatches) > 1:
-        return "I'm working on those now."
-    return "I'm working on that now."
+# NOTE: A deterministic English fallback ack used to live here
+# ("_build_dispatch_ack").  It was removed because the K1 kernel is
+# domain-, language-, locale-, and LLM-agnostic: it MUST NOT synthesize
+# natural-language strings.  When the LLM returns no text after a
+# dispatch, the structured `k1.orchestration.task.dispatch.v1` event on
+# the bus is the kernel-grade acknowledgement.  Presentation surfaces
+# (UI / voice / non-English locales / bank, gov, health verticals)
+# render their own affordance from that structured signal.
+
+
+def _hitl_answer_rejects_background_task(text: str) -> bool:
+    normalized = " ".join(str(text or "").lower().split())
+    if not normalized:
+        return False
+    return any(
+        marker in normalized
+        for marker in (
+            "without dispatch",
+            "don't dispatch",
+            "do not dispatch",
+            "dont dispatch",
+            "just answer",
+            "answer directly",
+            "give me things without dispatch",
+            "no background task",
+            "stop the task",
+            "cancel that",
+        )
+    )
 
 
 # Patterns matching raw system/HIL blocks that LLMs sometimes pass through
@@ -302,6 +326,11 @@ def _strip_leaked_back_frame(text: str) -> str:
 
 
 _INTERNAL_FAILURE_MARKERS: tuple[str, ...] = (
+    "react_loop_degenerate",
+    "capability_name",
+    "member_id",
+    "tool.read",
+    "tool.execute",
     "tool invocation",
     "tool budget",
     "discover or invoke",
@@ -327,10 +356,32 @@ def _user_safe_failure_text(action: str = "") -> str:
     return f"I couldn't finish {target}. Want me to try again?"
 
 
-def _sanitize_result_summary(text: str) -> str:
-    if not text or not _looks_internal_failure_text(text):
+def _sanitize_result_summary(text: str, action: str = "") -> str:
+    """Strip lines containing internal failure markers while preserving
+    substantive content.
+
+    Previous behavior nuked the entire text and substituted a generic
+    "I couldn't finish that task" message whenever ANY internal marker
+    appeared.  That caused successful Back results to be presented to
+    Front as failures whenever the result summary happened to mention a
+    tool/capability/worker name (see logs.txt 2026-05-20 -- successful
+    `tool.execute.calendar.create_event` was reported to the user as a
+    snag).
+
+    New behavior:
+      * Drop only the offending lines.
+      * Return the remaining substantive text.
+      * Only when nothing substantive remains do we fall back to the
+        safe "couldn't finish" message (with optional action context).
+    """
+    if not text:
         return text
-    return _user_safe_failure_text()
+    lines = text.splitlines()
+    clean_lines = [ln for ln in lines if not _looks_internal_failure_text(ln)]
+    cleaned = "\n".join(clean_lines).strip()
+    if cleaned:
+        return cleaned
+    return _user_safe_failure_text(action)
 
 
 # =========================================================================
@@ -431,7 +482,23 @@ def _extract_scenario_data(
     if mode == PromptMode.WEAVE:
         frame = WeavePresentationFrame.from_payload_and_pending(payload, None, ss)
         data = frame.to_scenario_dict()
-        data["results_summary"] = _sanitize_result_summary(str(data.get("results_summary") or ""))
+        # Extract the first task's action so the sanitizer can include
+        # it in any fallback "couldn't finish <action>" message.
+        _first_action = ""
+        _payload_results = payload.get("results") or []
+        if _payload_results and isinstance(_payload_results[0], dict):
+            _first_item = _payload_results[0]
+            _first_inner = (
+                _first_item.get("result", _first_item)
+                if isinstance(_first_item.get("result"), dict)
+                else _first_item
+            )
+            if isinstance(_first_inner, dict):
+                _first_action = str(_first_inner.get("action", "") or "")
+        data["results_summary"] = _sanitize_result_summary(
+            str(data.get("results_summary") or ""),
+            action=_first_action,
+        )
         return data
 
     if mode == PromptMode.HITL_RELAY:
@@ -1047,6 +1114,7 @@ async def front_handler(
     fsm_state: str | None = None,
     opp_pipeline: Any | None = None,
     self_model: Any = None,
+    temporal: Any | None = None,
 ) -> ReactResult:
     """Front handler with mode-driven prompt assembly.
 
@@ -1072,7 +1140,14 @@ async def front_handler(
     trace_id = (
         envelope.cognitive_trace_id or envelope.request_id or f"front-{uuid.uuid4().hex[:12]}"
     )
-    _bind_tool_context(tool_dispatcher, trace_id=trace_id, session_id=envelope.session_id)
+    effective_session_id = envelope.session_id or getattr(temporal, "session_id", "") or ""
+    effective_session_id = str(effective_session_id) if effective_session_id else ""
+    correlation_source = (
+        replace(envelope, session_id=effective_session_id)
+        if effective_session_id and effective_session_id != envelope.session_id
+        else envelope
+    )
+    _bind_tool_context(tool_dispatcher, trace_id=trace_id, session_id=effective_session_id)
 
     # 0. Guard: skip observability-only topics that should never trigger
     #    an LLM call. These are informational events (turn lifecycle,
@@ -1161,6 +1236,7 @@ async def front_handler(
             payload={"text": "", "is_ack": True},
             parent_id=envelope.envelope_id,
         )
+        _ack_env = _correlate_envelope(_ack_env, correlation_source, trace_id)
         bus.publish(_ack_env)
         return ReactResult(status="skipped", text="", dispatched_tasks=[])
 
@@ -1197,6 +1273,26 @@ async def front_handler(
                 "front_handler: appended current user turn to messages: %s",
                 current_user_text[:60],
             )
+
+    temporal_projection: Any = None
+    if temporal is not None:
+        try:
+            temporal_session_id = effective_session_id or None
+            temporal_payload = _parse_payload(envelope)
+            temporal_device_id = str(
+                temporal_payload.get("device") or temporal_payload.get("device_id") or ""
+            )
+            await temporal.refresh_turn(
+                temporal_session_id,
+                turn_id=str(envelope.envelope_id),
+                trace_id=trace_id,
+                candidates=(),
+                device_id=temporal_device_id or None,
+                installation_id=temporal_device_id or None,
+            )
+            temporal_projection = await temporal.build_projection(temporal_session_id, "front")
+        except Exception:
+            logger.warning("front_handler: temporal refresh/projection failed", exc_info=True)
 
     # 8. Assemble prompt via mode-driven builder
     # OPP-6/OPP-7: Enrich prompt with episodic compression + dynamic identity.
@@ -1275,6 +1371,7 @@ async def front_handler(
         tier=tier,
         ss=ss,
         grounding_capsule=grounding_capsule,
+        temporal_projection=temporal_projection,
     )
     event_turn_text = _build_event_turn_text(mode, scenario_data)
     if event_turn_text:
@@ -1349,7 +1446,7 @@ async def front_handler(
             payload={"text": text, "trace_id": trace_id},
             parent_id=parent_id,
         )
-        env = _correlate_envelope(env, envelope, trace_id)
+        env = _correlate_envelope(env, correlation_source, trace_id)
         bus.publish(env)
         logger.info(
             "front_handler._on_text_response: FINAL published (envelope_id=%d)", env.envelope_id
@@ -1380,7 +1477,7 @@ async def front_handler(
                 },
                 parent_id=parent_id,
             )
-            env = _correlate_envelope(env, envelope, trace_id)
+            env = _correlate_envelope(env, correlation_source, trace_id)
             bus.publish(env)
             _stream_chunk_idx += 1
         elif chunk.chunk_type == "text_delta" and chunk.text:
@@ -1394,7 +1491,7 @@ async def front_handler(
                 },
                 parent_id=parent_id,
             )
-            env = _correlate_envelope(env, envelope, trace_id)
+            env = _correlate_envelope(env, correlation_source, trace_id)
             bus.publish(env)
             _stream_chunk_idx += 1
 
@@ -1432,6 +1529,14 @@ async def front_handler(
             result.text[:120],
         )
 
+    # NOTE: a heuristic "phantom dispatch" detector that matched English
+    # phrases ("I'll add", "I'm scheduling", ...) used to live here.
+    # Removed: the kernel does not parse natural language to second-guess
+    # the LLM.  Whether the LLM's text honoured DISPATCH_RULES is a
+    # prompt/model contract concern, not a kernel concern.  The only
+    # structural signal the kernel exposes is `dispatched=0 tool_calls=0`,
+    # already in the LLM OUTPUT log line above.
+
     # 10. Post-loop: emit bus events in correct FSM order.
     #
     #     The react_loop no longer fires on_text_response directly.
@@ -1463,6 +1568,7 @@ async def front_handler(
             reason="User requested cancellation",
             parent_id=parent_id,
             trace_id=trace_id,
+            source_envelope=correlation_source,
         )
 
     # 10b. Emit normal dispatches BEFORE response.final
@@ -1490,15 +1596,26 @@ async def front_handler(
             },
             parent_id=parent_id,
         )
-        env = _correlate_envelope(env, envelope, trace_id)
+        env = _correlate_envelope(env, correlation_source, trace_id)
         bus.publish(env)
 
     # 10c. Emit response.final AFTER all dispatches (correct FSM ordering)
     #      For STANDARD/PRESENT modes, emit stream chunks first (Epic 4.2).
     _final_text = result.text or ""
     if mode == PromptMode.STANDARD and normal_dispatches:
-        _final_text = _build_dispatch_ack(normal_dispatches)
-        logger.info("front_handler: replaced post-dispatch text with deterministic ack")
+        if _final_text.strip():
+            logger.info("front_handler: preserving model text after dispatch")
+        else:
+            # KERNEL CONTRACT: do NOT synthesize an English fallback.
+            # The structured task.dispatch.v1 event already carries the
+            # acknowledgement signal; presentation layers render from it
+            # in their own language/locale.  Empty text here means
+            # "LLM had nothing to say beyond the dispatch" -- a valid,
+            # domain-agnostic outcome.
+            logger.info(
+                "front_handler: empty post-dispatch text; relying on "
+                "structured task.dispatch.v1 event for ack signal"
+            )
     # WEAVE degenerate guard: if the LLM produced the generic fallback
     # ("Let me think about that for a moment.") during a WEAVE/proactive
     # delivery, replace it with a deterministic summary built from the
@@ -1540,8 +1657,7 @@ async def front_handler(
             _final_text = _question if _question else ""
             logger.info("front_handler: HITL_RELAY degenerate replaced with deterministic prompt")
     if mode == PromptMode.HITL_RESOLVE and _final_text:
-        _final_text = "Got it. I'll keep going."
-        logger.info("front_handler: HITL_RESOLVE final text replaced with deterministic ack")
+        logger.info("front_handler: preserving HITL_RESOLVE model text")
     if _final_text:
         clean_text = _strip_leaked_reasoning(_final_text)
         clean_text = _strip_leaked_system_blocks(clean_text)
@@ -1553,7 +1669,7 @@ async def front_handler(
                     text=clean_text,
                     trace_id=trace_id,
                     parent_id=parent_id,
-                    source_envelope=envelope,
+                    source_envelope=correlation_source,
                 )
             await _on_text_response(clean_text)
         else:
@@ -1572,6 +1688,26 @@ async def front_handler(
                 {},
             )
         suspended_task_id = _task_field(suspended_task, "task_id", "")
+        raw_hil_answer = str(scenario_data.get("user_answer") or "")
+        if _hitl_answer_rejects_background_task(raw_hil_answer):
+            if suspended_task_id:
+                emit_task_cancel(
+                    bus=bus,
+                    task_id=suspended_task_id,
+                    reason="User asked to stop background dispatch and answer directly",
+                    parent_id=parent_id,
+                    trace_id=trace_id,
+                    source_envelope=correlation_source,
+                )
+            logger.info("front_handler: HITL_RESOLVE rejected background task; skipped resume")
+            logger.info(
+                "front_handler complete: status=%s dispatched=%d cancel=%d trace=%s",
+                result.status,
+                len(normal_dispatches),
+                len(cancel_dispatches),
+                trace_id[:8] if trace_id else "",
+            )
+            return result
         # E1.M2.1 / E4: when the suspension was created by the unified
         # HumanInTheLoopService, ``pending_hil.envelope`` carries the
         # original HILEnvelope.  In that case we publish ONLY the
@@ -1602,7 +1738,9 @@ async def front_handler(
                         else scenario_data.get("user_answer")
                     ),
                 )
-                bus.publish(build_hil_response(resp_payload, parent_id=parent_id))
+                resp_env = build_hil_response(resp_payload, parent_id=parent_id)
+                resp_env = _correlate_envelope(resp_env, correlation_source, trace_id)
+                bus.publish(resp_env)
                 logger.info(
                     "front_emit_hil_response hil_request_id=%s kind=%s",
                     resp_payload.get("hil_request_id"),
@@ -1617,7 +1755,7 @@ async def front_handler(
                         resolution_frame=resolution_frame.to_dict() if resolution_frame else None,
                         parent_id=parent_id,
                         trace_id=trace_id,
-                        source_envelope=envelope,
+                        source_envelope=correlation_source,
                     )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
@@ -1642,7 +1780,7 @@ async def front_handler(
                 resolution_frame=resolution_frame.to_dict() if resolution_frame else None,
                 parent_id=parent_id,
                 trace_id=trace_id,
-                source_envelope=envelope,
+                source_envelope=correlation_source,
             )
 
     logger.info(
@@ -1703,6 +1841,7 @@ def emit_task_cancel(
     reason: str,
     parent_id: int = 0,
     trace_id: str = "",
+    source_envelope: Envelope | None = None,
 ) -> Envelope:
     """Emit k1.orchestration.task.cancel.v1 on bus -- Epic 6.3.4.
 
@@ -1720,6 +1859,8 @@ def emit_task_cancel(
         payload={"task_id": task_id, "reason": reason, "trace_id": trace_id},
         parent_id=parent_id,
     )
+    if source_envelope is not None:
+        env = _correlate_envelope(env, source_envelope, trace_id)
     bus.publish(env)
     logger.info("emit_task_cancel: task_id=%s reason=%s", task_id, reason)
     return env

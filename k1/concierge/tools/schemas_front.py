@@ -18,14 +18,6 @@ from __future__ import annotations
 
 from k1.concierge.llm.types import ToolSchema
 
-# P1.1 -- Front gains direct Fabric access for LOW-tier single-step lookups.
-# Both schemas live in schemas_fabric to avoid a cycle with schemas_back
-# (which imports RECALL_MEMORY_SCHEMA from this module).
-from k1.concierge.tools.schemas_fabric import (
-    DISCOVER_CAPABILITIES_SCHEMA,
-    INVOKE_CAPABILITY_SCHEMA,
-)
-
 # ===================================================================
 # COGNITIVE (6)
 # ===================================================================
@@ -38,7 +30,9 @@ UPDATE_BELIEFS_SCHEMA = ToolSchema(
         "subject-predicate-object triple with confidence. Examples: "
         "('user', 'prefers', 'Italian food', 0.9), "
         "('trip', 'has_dates', 'June 15-17', 1.0), "
-        "('budget', 'is', 'under $600/night', 0.8)."
+        "('budget', 'is', 'under $600/night', 0.8). Do not store live source-of-record "
+        "data such as today's calendar, current reminders, temporary tool results, or "
+        "one-turn observations here."
     ),
     parameters={
         "type": "object",
@@ -85,7 +79,8 @@ UPDATE_SCOREBOARD_SCHEMA = ToolSchema(
         "Call when the user changes topic, uses pronouns that need resolution, "
         "asks a new question, or when you make a DEFERRED PROMISE to do something "
         "later (e.g. 'I'll have X ready when Y happens'). "
-        "Phase 1 (UltraBERT) sets initial intents and entities; this tool REFINES them."
+        "Phase 1 (UltraBERT) sets initial intents and entities; this tool REFINES them. "
+        "Use it for meaningful session state changes, not as a transcript log."
     ),
     parameters={
         "type": "object",
@@ -169,7 +164,9 @@ UPDATE_CLARIFICATIONS_SCHEMA = ToolSchema(
         "Record semantic gaps detected in user intent. Call when user's request "
         "is ambiguous, underspecified, or contradicts existing beliefs. "
         "Each gap has a field (what's missing), a question (what to ask), "
-        "and severity (how blocking it is)."
+        "and severity (how blocking it is). Clarifications must ask for information "
+        "the user can know; never ask for internal capability, tool, schema, registry, "
+        "or adapter names."
     ),
     parameters={
         "type": "object",
@@ -220,7 +217,8 @@ UPDATE_NARRATIVE_SCHEMA = ToolSchema(
     description=(
         "Track conversation thread switches and resumptions. Call when user "
         "changes topic (switch), returns to a previous topic (resume), "
-        "or finishes a topic (close). Maintains narrative_active section."
+        "or finishes a topic (close). Maintains narrative_active section. Use only "
+        "when it preserves context that would help future turns; do not mirror every reply."
     ),
     parameters={
         "type": "object",
@@ -262,7 +260,8 @@ REFINE_AFFECT_SCHEMA = ToolSchema(
         "Override Phase 1 (UltraBERT) emotion classification with LLM's "
         "assessment. Call when you detect emotional signals that the "
         "deterministic classifier missed: sarcasm, irony, mixed emotions, "
-        "subtle frustration, excitement masked as calm, etc."
+        "subtle frustration, excitement masked as calm, etc. Use careful confidence "
+        "and avoid guessing private emotional states from weak evidence."
     ),
     parameters={
         "type": "object",
@@ -315,7 +314,8 @@ PROMOTE_BELIEF_SCHEMA = ToolSchema(
     description=(
         "Promote a low-confidence or WARM-tier belief to HOT/high-confidence. "
         "Call when conversation confirms a previously uncertain belief. "
-        "MEDIUM and HIGH tier only."
+        "Use an actual belief_id from memory or the session; do not invent ids or "
+        "promote live tool outputs as durable beliefs. MEDIUM and HIGH tier only."
     ),
     parameters={
         "type": "object",
@@ -361,7 +361,9 @@ RECALL_MEMORY_SCHEMA = ToolSchema(
         "preferences, past events, background rules, contacts, allergies, "
         "habits, and background facts. Do NOT use as the source of truth for live "
         "records owned by capabilities, connectors, databases, workflows, or external "
-        "services; route those through dispatch_task or safe read capabilities. "
+        "services; route those through dispatch_task. "
+        "If memory lacks a live record, that does not mean the record does not exist; "
+        "use dispatch_task for authoritative reads. "
         "Examples: prior preference, remembered routine, historical incident, "
         "or stored background fact. "
         "Front uses for conversational context. Back uses for task-specific data."
@@ -418,7 +420,8 @@ SUMMARIZE_CONTEXT_SCHEMA = ToolSchema(
     description=(
         "Compress Session State sections to fit within token budget. "
         "Call when the system prompt is too large. Returns compressed version "
-        "of specified sections. This is a token management tool, not a user-facing tool."
+        "of specified sections. This is a token management tool, not a user-facing tool, "
+        "and it is not a substitute for recall_memory or source-of-record capability reads."
     ),
     parameters={
         "type": "object",
@@ -464,12 +467,16 @@ DISPATCH_TASK_SCHEMA = ToolSchema(
         "wants something DONE (search, book, create, schedule, send, draft, etc.). "
         "Also use for live system-of-record reads or writes that must be handled "
         "through capabilities rather than memory/context. "
-        "Do NOT call for pure conversation, emotional support, or clarification. "
+        "Do NOT call for pure conversation, brainstorming, advice, recipes, ideas, "
+        "emotional support, or clarification; answer those directly in Front. "
         "The FSM intercepts this tool call and emits k1.orchestration.task.dispatch.v1 "
         "on the bus. The tool itself returns immediately with {queued: true}. "
         "For multi-intent messages (including sequential ones), call dispatch_task "
         "ONCE with all intents in the intents array ordered logically. "
-        "Only use depends_on with a task-ID from a previous dispatch_task result."
+        "Only use depends_on with a task-ID from a previous dispatch_task result. "
+        "For calendar/reminder/task reads, preserve the user's natural-language request "
+        "and include any known time window, person, household, or adapter-domain hints "
+        "in reference_context; Back will discover and invoke the exact capability names."
     ),
     parameters={
         "type": "object",
@@ -575,7 +582,9 @@ UPDATE_SESSION_BUNDLE_SCHEMA = ToolSchema(
         "atomically in one turn. Reduces token cost by batching 2-5 writes into "
         "one tool call/result round-trip. Each mutation specifies a section, "
         "operation, and data payload. Duplicate calls with the same "
-        "idempotency_key are safely ignored."
+        "idempotency_key are safely ignored. Keep operations scoped to cognitive "
+        "session memory; source-of-record family data belongs behind capabilities "
+        "and dispatched tasks."
     ),
     parameters={
         "type": "object",
@@ -672,19 +681,16 @@ FRONT_TOOL_SCHEMAS: list[ToolSchema] = [
     SUMMARIZE_CONTEXT_SCHEMA,
     # Control
     DISPATCH_TASK_SCHEMA,
-    # Fabric (P1.1) -- Front direct capability access for LOW-tier lookups
-    DISCOVER_CAPABILITIES_SCHEMA,
-    INVOKE_CAPABILITY_SCHEMA,
 ]
 
 
 # ===================================================================
-# M13.E1 -- Front-allowed read-only / safe capability whitelist
+# Legacy defense-in-depth: Front direct Fabric invoke whitelist
 # ===================================================================
 #
-# Front is the user-facing voice and MUST NOT execute side-effecting,
-# safety-sensitive, or AMBER+/RED storyline acts directly. The Back
-# actor is the only path for those (via dispatch_task -> ReAct loop).
+# Front no longer exposes discover_capabilities or invoke_capability in its
+# prompt/tool surface. This whitelist is retained only as a defense-in-depth
+# guard for stale prompts, replayed tool calls, or direct implementation tests.
 #
 # This whitelist is the authoritative source for both:
 #   * the policy gate (k1.selfmodel.adapters.concierge_policy_gate),
@@ -735,6 +741,4 @@ __all__ = [
     "RECALL_MEMORY_SCHEMA",
     "SUMMARIZE_CONTEXT_SCHEMA",
     "DISPATCH_TASK_SCHEMA",
-    "DISCOVER_CAPABILITIES_SCHEMA",
-    "INVOKE_CAPABILITY_SCHEMA",
 ]

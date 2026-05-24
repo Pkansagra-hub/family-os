@@ -88,6 +88,12 @@ class FinishReason(str, Enum):
     LENGTH = "length"
     ERROR = "error"
     SAFETY = "safety"
+    # Workflow v2 / Fix F: Gemini emits MALFORMED_FUNCTION_CALL when its
+    # tool-call schema decoder fails (often token-budget pressure shears the
+    # JSON mid-stream). Distinct value lets the ReAct loop run a targeted
+    # retry (slim context + restrict tools) instead of aborting like a hard
+    # error.
+    MALFORMED_TOOL_CALL = "malformed_tool_call"
 
 
 class HealthStatus(str, Enum):

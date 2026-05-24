@@ -130,6 +130,14 @@ class IDispatchPort(Protocol):
         """Execute a single capability via Fabric (LOW tier path)."""
         ...
 
+    async def execute_batch(
+        self,
+        requests: list[CapabilityRequest],
+        strategy: str = "PARALLEL",
+    ) -> list[CapabilityResult]:
+        """Execute capability requests as a batch when the port supports it."""
+        ...
+
     async def dispatch_envelope(self, envelope: TaskEnvelope) -> AggregatedResult:
         """Execute a task envelope via Orchestrator (MED/HIGH tier path)."""
         ...

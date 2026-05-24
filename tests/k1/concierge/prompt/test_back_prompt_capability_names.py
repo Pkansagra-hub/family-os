@@ -80,3 +80,19 @@ def test_back_prompt_marks_native_knowledge_as_general_provenance() -> None:
     assert "source=model_general_knowledge" in prompt
     assert "guidance_scope=general" in prompt
     assert "Do not present model knowledge as verified instructions" in prompt
+
+
+def test_back_prompt_never_asks_for_family_member_ids() -> None:
+    prompt = build_back_prompt(
+        task={
+            "task_id": "task-1",
+            "tier": "LOW",
+            "intents": [{"action": "create task", "params": {"assignee": "Riley"}}],
+        },
+        safety_band="GREEN",
+        max_tool_calls=6,
+    )
+
+    assert "FAMILY MEMBER REFERENCES" in prompt
+    assert "Do NOT ask the user for a member ID" in prompt
+    assert "Riley -> ``riley``" in prompt

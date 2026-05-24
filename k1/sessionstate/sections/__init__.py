@@ -5,7 +5,7 @@ SessionState Sections Package - HOT CORE + WARM TIER Sections
 This package contains individual section implementations.
 Each section is a bounded buffer with specific budget and behavior.
 
-HOT CORE Sections (52KB total, always in memory):
+HOT CORE Sections (56KB total, always in memory):
 - control.py        - 8KB, NEVER EVICT, mode/turn/focus
 - beliefs_active.py - 8KB, active beliefs
 - scoreboard.py     - 6KB, task progress
@@ -16,10 +16,11 @@ HOT CORE Sections (52KB total, always in memory):
 - meta.py           - 2KB, schema version
 - task_state.py     - 4KB, NEVER EVICT, active tasks
 - task_artifacts.py - 4KB, task output artifacts
+- temporal.py       - 4KB, NEVER EVICT, temporal projections
 
 WARM TIER Sections (48KB total, evictable):
 - beliefs_history.py - 12KB, demoted beliefs
-- history_recent.py  - 16KB, demoted history
+- history_recent.py  - 20KB, demoted history
 - persona.py         - 8KB, stable traits
 - telemetry.py       - 4KB, metrics
 - artifacts_warm.py  - 8KB, demoted artifacts
@@ -44,6 +45,7 @@ from .scoreboard import ScoreboardSection
 from .task_artifacts import ArtifactType, TaskArtifactEntry, TaskArtifactsSection
 from .task_state import TaskStateEntry, TaskStateSection, TaskStatus
 from .telemetry import TelemetrySection
+from .temporal import TemporalSection
 
 __all__ = [
     # HOT CORE
@@ -61,6 +63,7 @@ __all__ = [
     "TaskArtifactsSection",
     "TaskArtifactEntry",
     "ArtifactType",
+    "TemporalSection",
     # WARM TIER
     "BeliefsHistorySection",
     "HistoryRecentSection",

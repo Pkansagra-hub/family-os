@@ -8,6 +8,7 @@ from k1.tools.family.definition import (
     ActionSpec,
     FieldSpec,
     LLMHints,
+    Role,
     SSESpec,
     ToolDefinition,
 )
@@ -16,9 +17,9 @@ _HERE = os.path.dirname(__file__)
 with open(os.path.join(_HERE, "tables.sql"), encoding="utf-8") as _f:
     _SHOPPING_DDL: str = _f.read()
 
-_ALL_ROLES = ["guest", "child", "elder", "guardian", "parent", "system"]
-_REQUEST_ROLES = ["child", "elder", "guardian", "parent", "system"]
-_APPROVER_ROLES = ["guardian", "parent", "system"]
+_ALL_ROLES: list[Role] = ["guest", "child", "elder", "guardian", "parent", "system"]
+_REQUEST_ROLES: list[Role] = ["child", "elder", "guardian", "parent", "system"]
+_APPROVER_ROLES: list[Role] = ["guardian", "parent", "system"]
 
 _CATEGORY_DESCRIPTION = (
     "Shopping category: groceries | clothes | household | school | pharmacy | "
@@ -40,7 +41,7 @@ _VISIBLE_TO_FIELD = FieldSpec(
     name="visible_to",
     type="array",
     required=False,
-    description="Allow-list of member_ids when visibility='named'.",
+    description="Allow-list of family member references when visibility='named'.",
 )
 _LIST_ID_FIELD = FieldSpec(
     name="list_id",
@@ -94,7 +95,7 @@ SHOPPING_DEFINITION = ToolDefinition(
             name="requested_by",
             type="string",
             required=False,
-            description="Filter by requesting member_id.",
+            description="Filter by requesting family member reference, e.g. Riley or riley.",
         ),
     ],
     can_reference=["task_item", "calendar_event", "reminder"],
@@ -107,7 +108,7 @@ SHOPPING_DEFINITION = ToolDefinition(
             summary="Create a parent-managed shopping list bucket.",
             label="New list",
             primary=True,
-            min_band="AMBER",
+            min_band="GREEN",
             prompt_template="shopping_activity_v1",
             allowed_roles=_APPROVER_ROLES,
             idempotent=True,
@@ -143,7 +144,7 @@ SHOPPING_DEFINITION = ToolDefinition(
             kind="delete",
             summary="Soft-delete a shopping list bucket.",
             label="Delete list",
-            min_band="AMBER",
+            min_band="GREEN",
             prompt_template="shopping_activity_v1",
             allowed_roles=_APPROVER_ROLES,
             params=[_LIST_ID_FIELD],
@@ -191,7 +192,7 @@ SHOPPING_DEFINITION = ToolDefinition(
             summary="Add an item to a shopping list; child requests require parent approval.",
             label="Add item",
             primary=True,
-            min_band="AMBER",
+            min_band="GREEN",
             prompt_template="shopping_activity_v1",
             allowed_roles=_REQUEST_ROLES,
             idempotent=True,
@@ -210,7 +211,10 @@ SHOPPING_DEFINITION = ToolDefinition(
                     name="requested_by",
                     type="string",
                     required=False,
-                    description="member_id requesting the item; child callers are forced to themselves.",
+                    description=(
+                        "Family member reference requesting the item, e.g. Riley or riley; "
+                        "child callers are forced to themselves."
+                    ),
                 ),
                 FieldSpec(name="notes", type="string", required=False),
                 FieldSpec(
@@ -249,7 +253,7 @@ SHOPPING_DEFINITION = ToolDefinition(
             kind="write",
             summary="Patch an existing shopping item.",
             label="Edit item",
-            min_band="AMBER",
+            min_band="GREEN",
             prompt_template="shopping_activity_v1",
             allowed_roles=_APPROVER_ROLES,
             params=[
@@ -280,7 +284,7 @@ SHOPPING_DEFINITION = ToolDefinition(
             kind="write",
             summary="Approve a pending child shopping request.",
             label="Approve item",
-            min_band="AMBER",
+            min_band="GREEN",
             prompt_template="shopping_activity_v1",
             allowed_roles=_APPROVER_ROLES,
             params=[
@@ -306,7 +310,7 @@ SHOPPING_DEFINITION = ToolDefinition(
             kind="write",
             summary="Reject a pending child shopping request.",
             label="Reject item",
-            min_band="AMBER",
+            min_band="GREEN",
             prompt_template="shopping_activity_v1",
             allowed_roles=_APPROVER_ROLES,
             params=[
@@ -332,7 +336,7 @@ SHOPPING_DEFINITION = ToolDefinition(
             kind="write",
             summary="Mark an approved shopping item as bought or done.",
             label="Check off",
-            min_band="AMBER",
+            min_band="GREEN",
             prompt_template="shopping_activity_v1",
             allowed_roles=_APPROVER_ROLES,
             params=[
@@ -356,7 +360,7 @@ SHOPPING_DEFINITION = ToolDefinition(
             kind="delete",
             summary="Soft-delete a shopping item.",
             label="Delete item",
-            min_band="AMBER",
+            min_band="GREEN",
             prompt_template="shopping_activity_v1",
             allowed_roles=_APPROVER_ROLES,
             params=[_ITEM_ID_FIELD],

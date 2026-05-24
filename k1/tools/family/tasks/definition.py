@@ -11,7 +11,7 @@ Exposes :data:`TASKS_DEFINITION`, the single source of truth consumed by:
 * :class:`TasksToolService` -- consumes ``DEFINITION.tables_sql`` to bring
   up its SQLite projection tables at construction time.
 
-10 actions, 3 read-only (GREEN band) and 7 writes/deletes (AMBER band).
+10 actions, all GREEN band.
 The cross-member reassignment guard (caller ≠ assignee → parent gate) is a
 runtime check inside the handler, not a declarative ``min_role``, matching
 the pattern established by ``respond_to_invite`` in the Calendar adapter.
@@ -52,7 +52,7 @@ _VISIBLE_TO_FIELD = FieldSpec(
     name="visible_to",
     type="array",
     required=False,
-    description="Allow-list of ``member_id`` strings when ``visibility='named'``.",
+    description="Allow-list of family member references when ``visibility='named'``.",
 )
 _TASK_ID_FIELD = FieldSpec(
     name="task_id", type="string", required=True, description="``TaskItem.id``."
@@ -88,7 +88,7 @@ TASKS_DEFINITION = ToolDefinition(
             name="assigned_to",
             type="string",
             required=False,
-            description="Filter by assignee ``member_id``.",
+            description="Filter by assignee family member reference, e.g. Riley or riley.",
         ),
         FieldSpec(
             name="status",
@@ -131,7 +131,10 @@ TASKS_DEFINITION = ToolDefinition(
                     name="assigned_to",
                     type="string",
                     required=False,
-                    description="``member_id`` of assignee; omit for unassigned.",
+                    description=(
+                        "Assignee family member reference, e.g. Riley or riley; "
+                        "omit for unassigned. Do not ask the user for member IDs."
+                    ),
                 ),
                 FieldSpec(
                     name="due_at",
@@ -302,7 +305,10 @@ TASKS_DEFINITION = ToolDefinition(
                     name="new_assignee",
                     type="string",
                     required=True,
-                    description="``member_id`` of the new assignee.",
+                    description=(
+                        "New assignee family member reference, e.g. Riley or riley. "
+                        "Do not ask the user for member IDs."
+                    ),
                 ),
             ],
             result=[
@@ -317,8 +323,8 @@ TASKS_DEFINITION = ToolDefinition(
                 ],
                 avoid_when=["new_assignee is the same as the current assignee"],
                 examples=[
-                    "Give pickup duty to dad -> get_task(task_id) first, then reassign_task(task_id, new_assignee=dad_id)",
-                    "Move Riley's homework check to mom -> reassign_task(task_id, new_assignee=mom_id)",
+                    "Give pickup duty to dad -> get_task(task_id) first, then reassign_task(task_id, new_assignee=dad)",
+                    "Move Riley's homework check to mom -> reassign_task(task_id, new_assignee=mom)",
                 ],
             ),
             sse=SSESpec(emits=["family.tasks.reassign_task.write.v1"]),
@@ -364,7 +370,7 @@ TASKS_DEFINITION = ToolDefinition(
                     name="assigned_to",
                     type="string",
                     required=False,
-                    description="Filter to a specific assignee ``member_id``.",
+                    description="Filter to a specific assignee family member reference, e.g. Riley or riley.",
                 ),
                 FieldSpec(
                     name="status",
@@ -403,8 +409,8 @@ TASKS_DEFINITION = ToolDefinition(
                     "user asks what tasks are due soon",
                 ],
                 examples=[
-                    "What tasks does Riley have today? -> list_tasks(assigned_to=riley_id, due_before=end_of_day)",
-                    "Check for duplicate before creating -> list_tasks(assigned_to=member_id, status='open')",
+                    "What tasks does Riley have today? -> list_tasks(assigned_to=riley, due_before=end_of_day)",
+                    "Check for duplicate before creating -> list_tasks(assigned_to=riley, status='open')",
                     "Show high priority open tasks -> list_tasks(status='open', priority='high')",
                 ],
             ),

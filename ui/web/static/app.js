@@ -459,6 +459,23 @@ function send(data) {
     }
 }
 
+function getDeviceContext() {
+    let timezone = null;
+    try {
+        timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+    } catch (e) {
+        timezone = null;
+    }
+    return {
+        timezone,
+        locale: navigator.language || null,
+        observed_at_utc: new Date().toISOString(),
+        timezone_offset_minutes: new Date().getTimezoneOffset(),
+        surface: "web",
+        installation_id: state.device,
+    };
+}
+
 // ============================================================================
 // Message router
 // ============================================================================
@@ -1148,6 +1165,7 @@ function sendMessage() {
         text,
         member: state.member,
         device: state.device,
+        device_context: getDeviceContext(),
     });
 
     dom.input.value = "";

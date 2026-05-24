@@ -887,6 +887,22 @@ def _build_kernel(raw: dict[str, Any]) -> KernelConfig:
         cfg.poll_interval_s = float(raw["poll_interval_s"])
     if "dedup_cache_size" in raw:
         cfg.dedup_cache_size = int(raw["dedup_cache_size"])
+    for attr in (
+        "backpool_size",
+        "backpool_max_concurrent_per_session",
+        "backpool_max_renewals",
+    ):
+        if attr in raw:
+            setattr(cfg, attr, int(raw[attr]))
+    for attr in (
+        "backpool_lease_ttl_s",
+        "backpool_reclaim_check_interval_s",
+        "backpool_lease_grace_period_s",
+    ):
+        if attr in raw:
+            setattr(cfg, attr, float(raw[attr]))
+    if "backpool_enable_dependency_ordering" in raw:
+        cfg.backpool_enable_dependency_ordering = bool(raw["backpool_enable_dependency_ordering"])
     return cfg
 
 

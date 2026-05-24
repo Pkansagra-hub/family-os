@@ -68,6 +68,9 @@ def _random_vec(seed: int = 0) -> np.ndarray:
 def _make_contract(
     name: str = "tool.read.test",
     domain: list[str] | None = None,
+    description: str | None = None,
+    capabilities: list[str] | None = None,
+    activity_profile: str | None = None,
     safety_band_min: str = "GREEN",
     availability: str = "ONLINE",
     provider_type: str = "MCP",
@@ -81,10 +84,11 @@ def _make_contract(
         name=name,
         version="1.0.0",
         domain=domain or ["TEST"],
-        description=f"Test contract {name}",
-        capabilities=[name],
+        description=description or f"Test contract {name}",
+        capabilities=capabilities or [name],
         provider_type=provider_type,
         provider_id=f"pid-{name}",
+        activity_profile=activity_profile,
         safety_band_min=safety_band_min,
         availability=availability,
         required_inputs=inputs,
@@ -106,19 +110,34 @@ class StubEmbeddingPort:
         return v / (np.linalg.norm(v) + 1e-9)
 
 
+class ConstantEmbeddingPort:
+    """Embedding port that makes semantic similarity equal for every contract."""
+
+    def __init__(self, dimension: int = DIM):
+        self._vector = np.ones(dimension, dtype=np.float32)
+        self._vector = self._vector / np.linalg.norm(self._vector)
+
+    def embed(self, text: str) -> np.ndarray:  # noqa: ARG002
+        return self._vector
+
+
 class StubRegistryPort:
     """Real in-memory registry port listing contracts."""
 
     def __init__(self, contracts: list[CapabilityContract] | None = None):
         self._contracts = list(contracts or [])
+        self.list_all_calls = 0
+        self.list_by_domain_calls: list[str] = []
 
     def add(self, c: CapabilityContract) -> None:
         self._contracts.append(c)
 
     def list_all(self) -> list[CapabilityContract]:
+        self.list_all_calls += 1
         return list(self._contracts)
 
     def list_by_domain(self, domain: str) -> list[CapabilityContract]:
+        self.list_by_domain_calls.append(domain)
         return [c for c in self._contracts if domain in (getattr(c, "domain", None) or [])]
 
 
@@ -507,9 +526,10 @@ class TestRetrievalEngine:
         self,
         contracts: list[CapabilityContract] | None = None,
         default_top_k: int = 10,
+        embedding_port=None,
     ) -> RetrievalEngine:
         """Wire real components into a RetrievalEngine."""
-        embed_port = StubEmbeddingPort(dimension=DIM)
+        embed_port = embedding_port or StubEmbeddingPort(dimension=DIM)
         index = EmbeddingIndex(EmbeddingIndexConfig(dimension=DIM))
         reg_port = StubRegistryPort(contracts or [])
 
@@ -583,6 +603,17 @@ class TestRetrievalEngine:
         names = [sc.contract.name for sc in result.capabilities if sc.contract]
         assert "tool.read.weather" not in names
 
+    def test_discover_capabilities_excludes_prompt_type_contracts(self):
+        contracts = [
+            _make_contract(name="prompt.template.greet", provider_type="prompt_default"),
+            _make_contract(name="tool.read.weather", provider_type="MCP"),
+        ]
+        engine = self._build_engine(contracts)
+        result = engine.discover_capabilities(intent="greeting")
+        names = [sc.contract.name for sc in result.capabilities if sc.contract]
+        assert "prompt.template.greet" not in names
+        assert "tool.read.weather" in names
+
     def test_result_metadata(self):
         contracts = [_make_contract(name="tool.read.x")]
         engine = self._build_engine(contracts)
@@ -617,3 +648,153 @@ class TestRetrievalEngine:
         )
         # Should survive hard filter since param 'query' is available
         assert result.total_matched >= 1
+
+    def test_contract_evidence_ranks_tasks_and_calendar_queries(self):
+        contracts = [
+            _make_contract(
+                name="tool.read.family_tasks.list_tasks",
+                domain=["tasks", "family"],
+                description="List family tasks from the tasks adapter",
+                capabilities=["read", "list", "adapter:tasks"],
+                activity_profile="tasks.v1",
+            ),
+            _make_contract(
+                name="tool.read.calendar.list_events",
+                domain=["calendar", "family"],
+                description="List calendar events from the calendar adapter",
+                capabilities=["read", "list", "adapter:calendar"],
+                activity_profile="calendar.v1",
+            ),
+            _make_contract(
+                name="tool.read.date.current_date",
+                domain=["date"],
+                description="Read current date",
+                capabilities=["read", "adapter:date"],
+            ),
+            _make_contract(
+                name="tool.read.units.convert_units",
+                domain=["units"],
+                description="Convert units",
+                capabilities=["read", "adapter:units"],
+            ),
+        ]
+        engine = self._build_engine(contracts, embedding_port=ConstantEmbeddingPort())
+
+        tasks_result = engine.discover_capabilities(intent="list tasks", top_k=4)
+        calendar_result = engine.discover_capabilities(intent="list calendar events", top_k=4)
+
+        assert tasks_result.capabilities[0].contract.name == "tool.read.family_tasks.list_tasks"
+        assert calendar_result.capabilities[0].contract.name == "tool.read.calendar.list_events"
+        assert tasks_result.capabilities[0].diagnostics["contract_evidence_score"] > 0
+
+    def test_domain_hint_is_soft_when_exact_domain_misses_capability(self):
+        contracts = [
+            _make_contract(
+                name="tool.read.family_tasks.list_tasks",
+                domain=["tasks", "family"],
+                description="List family tasks",
+                capabilities=["read", "list", "adapter:tasks"],
+            ),
+            _make_contract(
+                name="tool.read.calendar.list_events",
+                domain=["calendar", "family"],
+                description="List calendar events",
+                capabilities=["read", "list", "adapter:calendar"],
+            ),
+        ]
+        engine = self._build_engine(contracts, embedding_port=ConstantEmbeddingPort())
+
+        result = engine.discover_capabilities(
+            intent="list tasks",
+            domain=["household"],
+            top_k=2,
+        )
+
+        names = [sc.contract.name for sc in result.capabilities]
+        assert "tool.read.family_tasks.list_tasks" in names
+        assert result.capabilities[0].contract.name == "tool.read.family_tasks.list_tasks"
+        assert result.capabilities[0].diagnostics["domain_hint_exact"] is False
+        assert result.diagnostics["domain_fallback_used"] is True
+
+    def test_exact_domain_hint_uses_domain_index_without_global_scan(self):
+        contracts = [
+            _make_contract(
+                name="tool.read.family_tasks.list_tasks",
+                domain=["tasks"],
+                description="List family tasks",
+                capabilities=["read", "list", "adapter:tasks"],
+            ),
+            _make_contract(
+                name="tool.read.calendar.list_events",
+                domain=["calendar"],
+                description="List calendar events",
+                capabilities=["read", "list", "adapter:calendar"],
+            ),
+        ]
+        embed_port = ConstantEmbeddingPort()
+        index = EmbeddingIndex(EmbeddingIndexConfig(dimension=DIM))
+        for contract in contracts:
+            index.add_vector(contract.name, embed_port.embed(contract.name))
+        registry = StubRegistryPort(contracts)
+        engine = RetrievalEngine(
+            embedding_index=index,
+            hard_filter=HardFilter(),
+            soft_ranker=SoftRanker(),
+            top_k_selector=TopKSelector(),
+            embedding_port=embed_port,
+            registry_port=registry,
+        )
+
+        result = engine.discover_capabilities(
+            intent="list tasks",
+            domain=["tasks"],
+            top_k=2,
+        )
+
+        assert registry.list_by_domain_calls == ["tasks"]
+        assert registry.list_all_calls == 0
+        assert [cap.contract.name for cap in result.capabilities] == [
+            "tool.read.family_tasks.list_tasks"
+        ]
+        assert result.diagnostics["domain_fallback_used"] is False
+
+    def test_mixed_exact_and_broad_domain_hints_preserve_exact_evidence(self):
+        contracts = [
+            _make_contract(
+                name="tool.read.family_tasks.list_tasks",
+                domain=["tasks"],
+                description="List family tasks",
+                capabilities=["read", "list", "adapter:tasks"],
+            ),
+            _make_contract(
+                name="tool.read.calendar.list_events",
+                domain=["calendar"],
+                description="List calendar events",
+                capabilities=["read", "list", "adapter:calendar"],
+            ),
+        ]
+        embed_port = ConstantEmbeddingPort()
+        index = EmbeddingIndex(EmbeddingIndexConfig(dimension=DIM))
+        for contract in contracts:
+            index.add_vector(contract.name, embed_port.embed(contract.name))
+        registry = StubRegistryPort(contracts)
+        engine = RetrievalEngine(
+            embedding_index=index,
+            hard_filter=HardFilter(),
+            soft_ranker=SoftRanker(),
+            top_k_selector=TopKSelector(),
+            embedding_port=embed_port,
+            registry_port=registry,
+        )
+
+        result = engine.discover_capabilities(
+            intent="list tasks",
+            domain=["tasks", "household"],
+            top_k=2,
+        )
+
+        assert registry.list_by_domain_calls == ["tasks"]
+        assert registry.list_all_calls == 1
+        assert result.capabilities[0].contract.name == "tool.read.family_tasks.list_tasks"
+        assert result.capabilities[0].diagnostics["domain_hint_exact"] is True
+        assert result.diagnostics["domain_fallback_used"] is True

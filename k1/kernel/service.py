@@ -61,6 +61,7 @@ from k1.hil.ledger import HILLedgerAdapter
 from k1.hil.safety import SafetyBandPolicy
 from k1.hil.service import HumanInTheLoopService
 from k1.kernel.adapters.bridge_adapter import OfflineBridgeAdapter, SinkBridgeAdapter
+from k1.kernel.adapters.device_context import InMemoryDeviceContextPort
 
 # Issue 2.2.6: Planner adapters + factory
 from k1.kernel.adapters.model_hub_llm_bus import ModelHubRequestBus
@@ -85,7 +86,9 @@ from k1.memory_writer.health.circuit_breaker import CircuitBreaker as MWCircuitB
 from k1.model_hub.adapters.config_adapter import ConfigAdapter
 from k1.model_hub.adapters.credential_store_adapter import CredentialStoreAdapter
 from k1.model_hub.adapters.event_bus_adapter import EventBusAdapter as MHEventBusAdapter
-from k1.model_hub.adapters.health_report_adapter import HealthReportAdapter as MHHealthReportAdapter
+from k1.model_hub.adapters.health_report_adapter import (
+    HealthReportAdapter as MHHealthReportAdapter,
+)
 from k1.model_hub.adapters.prometheus_adapter import PrometheusAdapter
 from k1.model_hub.adapters.session_state_prod import SessionStateProdAdapter
 from k1.model_hub.factory import ModelHubFactory
@@ -107,13 +110,19 @@ from k1.orchestrator.config import OrchestratorConfig
 from k1.orchestrator.factory import OrchestratorFactory
 from k1.orchestrator.workflows.persistence import SQLiteWorkflowAdapter
 from k1.planner.adapters.bridge_adapter import BridgeAdapter as PlannerBridgeAdapter
-from k1.planner.adapters.delta_bus_adapter import DeltaBusAdapter as PlannerDeltaBusAdapter
-from k1.planner.adapters.event_bus_adapter import EventBusAdapter as PlannerEventBusAdapter
+from k1.planner.adapters.delta_bus_adapter import (
+    DeltaBusAdapter as PlannerDeltaBusAdapter,
+)
+from k1.planner.adapters.event_bus_adapter import (
+    EventBusAdapter as PlannerEventBusAdapter,
+)
 from k1.planner.adapters.fabric_registry_adapter import FabricRegistryAdapter
 from k1.planner.adapters.fabric_retrieval_adapter import FabricRetrievalAdapter
 from k1.planner.adapters.llm_gateway_adapter import LLMGatewayAdapter
 from k1.planner.adapters.mailbox_adapter import MailboxAdapter as PlannerMailboxAdapter
-from k1.planner.adapters.session_state_adapter import SessionStateReadAdapter as PlannerStateAdapter
+from k1.planner.adapters.session_state_adapter import (
+    SessionStateReadAdapter as PlannerStateAdapter,
+)
 from k1.planner.factory import PlannerFactory
 
 # M5.E3.I2 + I3: k1.selfmodel kernel wiring (S2.6 + P3.5).
@@ -129,8 +138,14 @@ from k1.sessionstate.adapters.direct_writer import DirectWriterAdapter
 from k1.sessionstate.adapters.local_events import LocalEventAdapter
 from k1.sessionstate.adapters.sqlite_storage import SQLiteStorageAdapter
 from k1.sessionstate.adapters.standalone_lifecycle import StandaloneLifecycle
-from k1.sessionstate.async_bridge import AsyncSSMBridge
 from k1.sessionstate.factory import SessionStateFactory
+from k1.temporal.adapters import DeviceContextAdapter
+from k1.temporal.kernel import (
+    TemporalHandle,
+    TemporalServiceBundle,
+    build_temporal_bundle,
+    build_temporal_handle,
+)
 
 # Issue 2.4.3: Default timeout for component teardown (seconds).
 _TEARDOWN_TIMEOUT: float = 10.0
@@ -222,6 +237,12 @@ class KernelService:
         # store / signature validator.
         self._self_model_bundle: SelfModelServiceBundle | None = None
 
+        # M1.E7: Shared k1.temporal bundle. Per-session TemporalHandle
+        # instances write to each session's canonical SessionState
+        # ``temporal`` section.
+        self._temporal_bundle: TemporalServiceBundle | None = None
+        self._device_context_port: Any | None = None
+
         # M15: Family-tools bundle (k1.tools.family). Built at S8 of
         # _startup_tier1 when KernelConfig.enable_family_tools is True.
         # Owns the K1FamilyStore SQLite connection, ToolRegistry,
@@ -246,6 +267,11 @@ class KernelService:
     # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------
+
+    @property
+    def device_context_port(self) -> Any | None:
+        """Kernel-owned installed-device observation port."""
+        return self._device_context_port
 
     @property
     def is_running(self) -> bool:
@@ -309,6 +335,11 @@ class KernelService:
         """
         return self._self_model_bundle
 
+    @property
+    def temporal_bundle(self) -> TemporalServiceBundle | None:
+        """Shared Temporal bundle, or ``None`` if disabled."""
+        return self._temporal_bundle
+
     # ------------------------------------------------------------------
     # Diagnostics API (observability-only; no production code reads these)
     # ------------------------------------------------------------------
@@ -352,6 +383,9 @@ class KernelService:
                 if self._self_model_bundle is not None
                 else None
             ),
+            "temporal_bundle": (
+                type(self._temporal_bundle).__name__ if self._temporal_bundle is not None else None
+            ),
         }
 
         sessions: dict[str, dict[str, str | None]] = {}
@@ -366,6 +400,7 @@ class KernelService:
                 "memory_writer": (
                     type(sess.memory_writer).__name__ if sess.memory_writer is not None else None
                 ),
+                "temporal": type(sess.temporal).__name__ if sess.temporal is not None else None,
             }
 
         # Determine bridge mode from the runtime bridge object type name.
@@ -442,6 +477,15 @@ class KernelService:
     def _log_lifecycle(self, phase: str, component: str) -> None:
         """Append a lifecycle event to the internal log (diagnostics only)."""
         self._lifecycle_log.append({"phase": phase, "component": component, "ts": time.monotonic()})
+
+    def _log_grounding_feature_flags(self) -> None:
+        """Log migration feature flags before Tier 1 startup wiring begins."""
+        logger.info(
+            "K1 grounding feature flags: temporal=%s spatial=%s grounding=%s",
+            self._config.enable_temporal,
+            self._config.enable_spatial,
+            self._config.enable_grounding,
+        )
 
     def _close_orchestrator_storage(self) -> None:
         """Close S5 workflow storage owned by the kernel construction root."""
@@ -577,6 +621,16 @@ class KernelService:
             except Exception as exc:
                 errors.append(exc)
                 logger.warning("shutdown: HIL service shutdown failed: %s", exc)
+
+        # ── Reverse S2.7: Shutdown temporal bundle (M1.E7) ────
+        if self._temporal_bundle is not None:
+            try:
+                self._temporal_bundle.shutdown()
+                self._log_lifecycle("S2.7_shutdown_complete", "TemporalServiceBundle")
+            except Exception as exc:
+                errors.append(exc)
+                logger.warning("shutdown: temporal bundle shutdown failed: %s", exc)
+            self._temporal_bundle = None
 
         # ── Reverse S2.6: Shutdown selfmodel bundle (M5.E3.I2) ──
         # Closes the SQLite projection store handle when the bundle
@@ -760,6 +814,18 @@ class KernelService:
             components["planner_task"] = False
             details["planner_task"] = "Planner task not started"
 
+        if self._config.enable_temporal:
+            components["temporal"] = self._temporal_bundle is not None
+            if self._temporal_bundle is None:
+                details["temporal"] = "Temporal bundle not initialised"
+            else:
+                temporal_health = self._temporal_bundle.health()
+                components["temporal"] = bool(getattr(temporal_health, "ready", False))
+                if not components["temporal"]:
+                    details["temporal"] = "Temporal bundle not ready"
+        else:
+            components["temporal"] = True
+
         # Sessions
         components["sessions"] = True  # sessions existing is OK
         session_count = len(self._sessions)
@@ -890,6 +956,18 @@ class KernelService:
             errors.append(exc)
             logger.warning("destroy_session(%s): Concierge stop failed: %s", session_id, exc)
         self._log_lifecycle("P4_teardown_complete", f"session:{session_id}")
+
+        temporal_handle = getattr(session, "temporal", None)
+        if temporal_handle is not None:
+            try:
+                temporal_handle.uninstall_from_session()
+            except Exception as exc:
+                errors.append(exc)
+                logger.warning(
+                    "destroy_session(%s): temporal uninstall failed: %s",
+                    session_id,
+                    exc,
+                )
 
         # Reverse P1.5: Shutdown per-session HIL service (cancels pending
         # futures and unsubscribes from session_bus). Run AFTER Concierge
@@ -1355,6 +1433,8 @@ class KernelService:
         Boot order enforced by data dependency:
         S1 → S2 → S3 → S4 → S5 → S6 → S6b → S7
         """
+        self._log_grounding_feature_flags()
+
         # ── S1: Bus + AsyncBusBridge + MailboxRouter ──────────
         # W2: Optionally wire a SQLite WAL outbox for durable topics.
         bus_outbox = None
@@ -1533,6 +1613,38 @@ class KernelService:
             self._log_lifecycle("S2.6_skipped", "SelfModelServiceBundle")
         if self._self_model_bundle is not None:
             self._log_lifecycle("S2.6_complete", "SelfModelServiceBundle")
+
+        # ── S2.7: k1.temporal bundle (M1.E7) ─────────────────
+        # Constructed after SelfModel and before Bridge/Fabric so every
+        # session can build a P3.6 TemporalHandle before Concierge starts.
+        self._device_context_port = InMemoryDeviceContextPort()
+        if self._config.enable_temporal:
+            try:
+                self._temporal_bundle = build_temporal_bundle(
+                    bus=self._bus,
+                    device_context_port=DeviceContextAdapter(self._device_context_port),
+                )
+                logger.info("temporal: bundle ready")
+            except Exception:
+                if self._self_model_bundle is not None:
+                    try:
+                        self._self_model_bundle.shutdown()
+                    except Exception:
+                        pass
+                if self._hil_service is not None:
+                    try:
+                        await self._hil_service.shutdown()
+                    except Exception:
+                        pass
+                self._bus.close()
+                self._router.close()
+                raise
+        else:
+            self._temporal_bundle = None
+            logger.debug("temporal: enable_temporal=False; skipping S2.7")
+            self._log_lifecycle("S2.7_skipped", "TemporalServiceBundle")
+        if self._temporal_bundle is not None:
+            self._log_lifecycle("S2.7_complete", "TemporalServiceBundle")
 
         # ── S4: Bridge (kernel-level IBridgePort) ─────────
         # S4 before S3 because Fabric needs a bridge adapter.
@@ -1984,6 +2096,13 @@ class KernelService:
             except Exception:
                 pass
 
+        # M1.E7: temporal bundle constructed at S2.7.
+        if self._temporal_bundle is not None:
+            try:
+                self._temporal_bundle.shutdown()
+            except Exception:
+                pass
+
         # M5.E3.I2: selfmodel bundle constructed at S2.6.
         if self._self_model_bundle is not None:
             try:
@@ -2050,6 +2169,8 @@ class KernelService:
         self._planner = None
         self._hil_service = None  # E7.M1.1
         self._self_model_bundle = None  # M5.E3.I2
+        self._temporal_bundle = None  # M1.E7
+        self._device_context_port = None
 
     def _on_planner_task_done(self, task: asyncio.Task[Any]) -> None:
         """Issue 2.4.3 #9: Watchdog callback for planner background task.
@@ -2196,7 +2317,6 @@ class KernelService:
             ss_writer.bind_manager(ssm, ssm.mutation_guard)
             ss_lifecycle.bind_manager(ssm)
             ssm.start()
-            async_ssm = AsyncSSMBridge(ssm)
             self._log_lifecycle("P2_complete", f"session:{session_id}")
         except Exception:
             session_bus.close()
@@ -2313,6 +2433,35 @@ class KernelService:
                 )
                 session_self_model = None
 
+        # ── P3.6: k1.temporal handle (M1.E7) ─────────────────
+        session_temporal: TemporalHandle | None = None
+        if self._temporal_bundle is not None:
+            try:
+                principal_id, device_meta = self._derive_session_actor(ssm, session_id, device_id)
+                session_temporal = build_temporal_handle(
+                    self._temporal_bundle,
+                    session_id=session_id,
+                    principal_id=principal_id,
+                    device_id=device_meta or device_id,
+                    installation_id=device_meta or device_id,
+                    state_manager=ssm,
+                )
+                session_temporal.install_into_session()
+                await session_temporal.refresh_turn(
+                    session_id,
+                    turn_id=None,
+                    trace_id=None,
+                    candidates=(),
+                )
+                self._log_lifecycle("P3.6_complete", f"session:{session_id}")
+            except Exception:
+                logger.warning(
+                    "temporal P3.6 build/refresh failed for session=%s; continuing without handle",
+                    session_id,
+                    exc_info=True,
+                )
+                session_temporal = None
+
         # ── P4: Concierge (per-session) ──────────────────────
         session_concierge = None
         try:
@@ -2351,6 +2500,7 @@ class KernelService:
                 ),
                 # P4B.6: pass IWriterPort explicitly (was reach-through in factory step 7)
                 writer=ss_writer,
+                temporal=session_temporal,
             )
             session_concierge = ConciergeFactory.create_with_ports(
                 bus=session_bus,
@@ -2360,6 +2510,7 @@ class KernelService:
                 ports=port_bundle,
                 config=concierge_config,
                 hil_port=session_hil_service,  # P1.5: session-bus-bound HIL
+                temporal_port=session_temporal,
             )
             self._log_lifecycle("P4_complete", f"session:{session_id}")
         except Exception:
@@ -2452,6 +2603,18 @@ class KernelService:
                         exc_info=True,
                     )
 
+        if session_temporal is not None:
+            setter = getattr(session_concierge, "set_temporal", None)
+            if callable(setter):
+                try:
+                    setter(session_temporal)
+                except Exception:
+                    logger.warning(
+                        "temporal: set_temporal failed for session=%s",
+                        session_id,
+                        exc_info=True,
+                    )
+
         # ── P6: Assemble SessionInstance + Start Lifecycle ────
         try:
             await session_concierge.start()
@@ -2498,6 +2661,7 @@ class KernelService:
             ledger_store=session_concierge.ledger_store,
             concierge_task=session_concierge.consumer_task,
             self_model=session_self_model,
+            temporal=session_temporal,
         )
         self._sessions[session_id] = session
         self._log_lifecycle("P6_complete", f"session:{session_id}")

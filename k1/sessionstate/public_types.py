@@ -20,11 +20,11 @@ References:
   - SessionState ARCHITECTURE.md §4.3
 
 Exports grouped by source module:
-  1. Writer port types (MutationRequest, BatchRequest, etc.)
+  1. Writer port types (IWriterPort, MutationRequest, BatchRequest, etc.)
   2. Control section types (IntentClassification, PrivacyBand)
   3. Task section types (TaskStatus, TaskStateEntry, TaskStateSection)
   4. Task artifact types (ArtifactType, TaskArtifactEntry, TaskArtifactsSection)
-  5. Temporal context (compute_temporal_anchor, TemporalAnchor)
+  5. Temporal section (anchor payloads live under k1.temporal)
   6. Meta section (MetaSection)
   7. Factory (SessionStateFactory)
 """
@@ -39,12 +39,21 @@ from k1.sessionstate.factory import SessionStateFactory
 # ---------------------------------------------------------------------------
 # 1. Writer port types
 # ---------------------------------------------------------------------------
-from k1.sessionstate.ports.writer import BatchRequest, MutationRequest, RejectionCategory
+from k1.sessionstate.ports.writer import (
+    BatchRequest,
+    IWriterPort,
+    MutationRequest,
+    RejectionCategory,
+)
 
 # ---------------------------------------------------------------------------
 # 2. Control section types
 # ---------------------------------------------------------------------------
-from k1.sessionstate.sections.control import IntentClassification, PrivacyBand
+from k1.sessionstate.sections.control import (
+    ControlSection,
+    IntentClassification,
+    PrivacyBand,
+)
 
 # ---------------------------------------------------------------------------
 # 6. Meta section
@@ -63,19 +72,25 @@ from k1.sessionstate.sections.task_artifacts import (
 # ---------------------------------------------------------------------------
 # 3. Task state section types
 # ---------------------------------------------------------------------------
-from k1.sessionstate.sections.task_state import TaskStateEntry, TaskStateSection, TaskStatus
+from k1.sessionstate.sections.task_state import (
+    TaskStateEntry,
+    TaskStateSection,
+    TaskStatus,
+)
 
 # ---------------------------------------------------------------------------
-# 5. Temporal context
+# 5. Temporal section
 # ---------------------------------------------------------------------------
-from k1.sessionstate.sections.temporal_context import TemporalAnchor, compute_temporal_anchor
+from k1.sessionstate.sections.temporal import TemporalSection
 
 __all__ = [
     # Writer port types
     "BatchRequest",
+    "IWriterPort",
     "MutationRequest",
     "RejectionCategory",
     # Control section types
+    "ControlSection",
     "IntentClassification",
     "PrivacyBand",
     # Task state types
@@ -86,9 +101,8 @@ __all__ = [
     "ArtifactType",
     "TaskArtifactEntry",
     "TaskArtifactsSection",
-    # Temporal context
-    "TemporalAnchor",
-    "compute_temporal_anchor",
+    # Temporal section
+    "TemporalSection",
     # Meta section
     "MetaSection",
     # Factory

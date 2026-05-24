@@ -35,7 +35,12 @@ from k1.fabric.core.discovery_tools import (
     FindPromptsHandler,
     RetrievalLike,
 )
-from k1.fabric.types import CapabilityContract, CapabilityRequest, RetrievalResult, ScoredCapability
+from k1.fabric.types import (
+    CapabilityContract,
+    CapabilityRequest,
+    RetrievalResult,
+    ScoredCapability,
+)
 
 # ---------------------------------------------------------------------------
 # Test Adapter -- TestRetrievalEngine
@@ -133,11 +138,13 @@ def _make_scored(
     name: str = "tool.read.test_capability",
     score: float = 0.85,
     domain: Optional[List[str]] = None,
+    diagnostics: Optional[Dict[str, Any]] = None,
 ) -> ScoredCapability:
     """Create ScoredCapability with a test contract."""
     return ScoredCapability(
         contract=_make_contract(name=name, domain=domain),
         score=score,
+        diagnostics=diagnostics or {},
     )
 
 
@@ -146,6 +153,7 @@ def _make_retrieval_result(
     total_matched: int = 0,
     query_latency_ms: int = 5,
     query_intent: str = "test intent",
+    diagnostics: Optional[Dict[str, Any]] = None,
 ) -> RetrievalResult:
     """Create RetrievalResult with configurable data."""
     caps = capabilities or []
@@ -154,6 +162,7 @@ def _make_retrieval_result(
         total_matched=total_matched or len(caps),
         query_latency_ms=query_latency_ms,
         query_intent=query_intent,
+        diagnostics=diagnostics or {},
     )
 
 
@@ -295,6 +304,41 @@ class TestDiscoverCapabilitiesHandlerHappyPath:
         assert cap_data["score"] == 0.92
         assert cap_data["contract"]["name"] == "tool.read.medication_lookup"
         assert cap_data["contract"]["version"] == "2.1.0"
+
+    def test_discover_result_contains_retrieval_diagnostics(self) -> None:
+        """Result data includes candidate and query-level diagnostics."""
+        scored = [
+            _make_scored(
+                "tool.read.tasks.list_tasks",
+                0.94,
+                ["tasks"],
+                diagnostics={"contract_evidence_score": 0.75, "domain_hint_exact": True},
+            )
+        ]
+        engine = TestRetrievalEngine(
+            discover_result=_make_retrieval_result(
+                scored,
+                total_matched=1,
+                diagnostics={
+                    "candidate_count": 4,
+                    "survivor_count": 1,
+                    "rejection_counts": {"offline": 1},
+                    "domain_fallback_used": False,
+                },
+            ),
+        )
+        handler = DiscoverCapabilitiesHandler(engine)
+
+        result = handler.execute(
+            _make_request(params={"intent": "list tasks", "domain": ["tasks"]})
+        )
+
+        assert result.success is True
+        assert result.data["diagnostics"]["candidate_count"] == 4
+        assert result.data["diagnostics"]["rejection_counts"] == {"offline": 1}
+        cap_data = result.data["capabilities"][0]
+        assert cap_data["diagnostics"]["contract_evidence_score"] == 0.75
+        assert cap_data["diagnostics"]["domain_hint_exact"] is True
 
     def test_discover_timing_propagation(self) -> None:
         """duration_ms and retrieval_time_ms are populated."""

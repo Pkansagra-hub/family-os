@@ -34,6 +34,21 @@ from k1.fabric.retrieval.embedding_index import IEmbeddingPort
 
 logger = logging.getLogger(__name__)
 
+_BROAD_DOMAIN_HINTS = frozenset({"family", "household", "coordination"})
+
+
+def _is_prompt_contract(contract: Any) -> bool:
+    """Return True for prompt/profile contracts that are not directly executable."""
+    name = str(getattr(contract, "name", "") or "").lower()
+    provider_type = str(getattr(contract, "provider_type", "") or "").lower()
+    contract_type = contract.__class__.__name__.lower()
+    return (
+        name.startswith("prompt.")
+        or provider_type.startswith("prompt")
+        or contract_type == "promptcontract"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Protocols -- declared locally to avoid circular imports
 # (IEmbeddingPort is the canonical declaration in embedding_index.py;
@@ -253,15 +268,30 @@ class RetrievalEngine:
         effective_k = max(1, min(effective_k, self._config.max_top_k))
 
         # -- Step 0: Gather contracts -----------------------------------
-        # When domain hints are provided, use the O(1) domain index
-        # instead of scanning all N contracts.  This reduces the
-        # candidate set to only contracts tagged with the requested
-        # domains, providing O(k) instead of O(N) performance.
+        # Domain hints are ranking hints. For exact domains, start from the
+        # O(1) domain index; if the hint is broad or misses completely, fall
+        # back to the full registry so a broad label like household cannot
+        # hide concrete task/calendar contracts.
+        domain_exact_names: set[str] = set()
+        domain_fallback_used = False
         if query_domains:
-            seen_names: set = set()
+            seen_names: set[str] = set()
             all_contracts = []
+            broad_domain_query = any(str(d).lower() in _BROAD_DOMAIN_HINTS for d in query_domains)
             for d in query_domains:
+                if str(d).lower() in _BROAD_DOMAIN_HINTS:
+                    continue
                 for c in self._registry_port.list_by_domain(d):
+                    name = getattr(c, "name", "")
+                    if name and name not in seen_names:
+                        seen_names.add(name)
+                        domain_exact_names.add(name)
+                        all_contracts.append(c)
+            if broad_domain_query or not all_contracts:
+                domain_fallback_used = True
+                all_contracts = []
+                seen_names.clear()
+                for c in self._registry_port.list_all():
                     name = getattr(c, "name", "")
                     if name and name not in seen_names:
                         seen_names.add(name)
@@ -270,12 +300,9 @@ class RetrievalEngine:
             all_contracts = list(self._registry_port.list_all())
 
         if filter_prompt_type:
-            all_contracts = [
-                c
-                for c in all_contracts
-                if (getattr(c, "provider_type", "") or "").lower().startswith("prompt")
-                or (getattr(c, "name", "") or "").lower().startswith("prompt.")
-            ]
+            all_contracts = [c for c in all_contracts if _is_prompt_contract(c)]
+        else:
+            all_contracts = [c for c in all_contracts if not _is_prompt_contract(c)]
 
         logger.debug(
             "_run_pipeline: step0 all_contracts=%d query_domains=%s safety_band=%s",
@@ -293,6 +320,13 @@ class RetrievalEngine:
                 query_intent=query_text,
                 index_size=self._index.size,
                 embedding_model=self._config.embedding_model,
+                diagnostics={
+                    "query_domains": sorted(query_domains),
+                    "candidate_count": 0,
+                    "survivor_count": 0,
+                    "rejection_counts": {},
+                    "domain_fallback_used": domain_fallback_used,
+                },
             )
             return self._finalize_metrics(result, start, query_type)
 
@@ -326,12 +360,23 @@ class RetrievalEngine:
                 )
             )
 
-        survivors = self._hard_filter.filter_passed(
+        filter_results = self._hard_filter.filter(
             filter_candidates,
             user_band=safety_band,
             available_param_names=param_names,
             session_keys=session_keys,
         )
+        passed_names = {result.contract_name for result in filter_results if result.passed}
+        survivors = [
+            candidate for candidate in filter_candidates if candidate.contract_name in passed_names
+        ]
+        rejection_counts: dict[str, int] = {}
+        for result in filter_results:
+            if result.passed or not result.rejection_reason:
+                continue
+            rejection_counts[result.rejection_reason] = (
+                rejection_counts.get(result.rejection_reason, 0) + 1
+            )
 
         total_matched = len(survivors)
 
@@ -350,6 +395,13 @@ class RetrievalEngine:
                 query_intent=query_text,
                 index_size=self._index.size,
                 embedding_model=self._config.embedding_model,
+                diagnostics={
+                    "query_domains": sorted(query_domains),
+                    "candidate_count": len(filter_candidates),
+                    "survivor_count": 0,
+                    "rejection_counts": rejection_counts,
+                    "domain_fallback_used": domain_fallback_used,
+                },
             )
             return self._finalize_metrics(result, start, query_type)
 
@@ -382,18 +434,35 @@ class RetrievalEngine:
             ranker_candidates,
             query_vector,
             query_domains,
+            query_text=query_text,
         )
 
         # -- Step 4: Top-K select ---------------------------------------
         selected = self._top_k_selector.select(ranked, k=effective_k)
+        ranked_by_name = {item.contract_name: item for item in ranked}
 
         # Convert to ScoredCapability for the final result
         capabilities = []
         for sel in selected:
+            diagnostic_source = ranked_by_name.get(sel.contract_name)
             capabilities.append(
                 ScoredCapability(
                     contract=sel.contract,
                     score=sel.score,
+                    diagnostics={
+                        "semantic_similarity": getattr(
+                            diagnostic_source,
+                            "semantic_similarity",
+                            0.0,
+                        ),
+                        "domain_match": getattr(diagnostic_source, "domain_match", 0.0),
+                        "contract_evidence_score": getattr(
+                            diagnostic_source,
+                            "contract_evidence_score",
+                            0.0,
+                        ),
+                        "domain_hint_exact": sel.contract_name in domain_exact_names,
+                    },
                 )
             )
 
@@ -406,6 +475,13 @@ class RetrievalEngine:
             query_intent=query_text,
             index_size=self._index.size,
             embedding_model=self._config.embedding_model,
+            diagnostics={
+                "query_domains": sorted(query_domains),
+                "candidate_count": len(filter_candidates),
+                "survivor_count": total_matched,
+                "rejection_counts": rejection_counts,
+                "domain_fallback_used": domain_fallback_used,
+            },
         )
         return self._finalize_metrics(result, start, query_type)
 

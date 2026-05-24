@@ -45,7 +45,7 @@ from k1.concierge.ports import (
     IStatePort,
 )
 from k1.concierge.session import ConciergeRuntime, ConciergeSession
-from k1.sessionstate.ports.writer import IWriterPort
+from k1.sessionstate.public_types import IWriterPort
 
 if TYPE_CHECKING:
     from k1.kernel.ports.hil_port import IHILPort
@@ -66,6 +66,7 @@ _ALL_PORT_KEYS = frozenset(
         "dispatch",
         "delta",
         "memory",
+        "temporal",
     }
 )
 
@@ -87,6 +88,7 @@ class PortBundle:
     # OPTIONAL -- default to null/test adapters for two-tier boot
     dispatch: IDispatchPort | None = None
     memory: IMemoryPort | None = None
+    temporal: Any | None = None
     # P4B.6: writer is passed explicitly (was reach-through into ssm._writer_port)
     writer: IWriterPort | None = None
 
@@ -322,6 +324,7 @@ class ConciergeFactory:
         ports: PortBundle,
         config: ConciergeConfig | None = None,
         hil_port: "IHILPort | None" = None,
+        temporal_port: Any | None = None,
         ledger_store: Any | None = None,
     ) -> ConciergeRuntime:
         """Create a fully-wired ConciergeRuntime from explicit ports.
@@ -351,6 +354,7 @@ class ConciergeFactory:
             ports=ports,
             config=config,
             hil_port=hil_port,
+            temporal_port=temporal_port,
             ledger_store=ledger_store,
         )
 
@@ -545,8 +549,11 @@ class ConciergeFactory:
     @staticmethod
     def _seed_minimal_state(state: Any) -> None:
         """Seed InMemoryStateAdapter with stub sections for FSM binding."""
-        from k1.sessionstate.public_types import TaskArtifactsSection, TaskStateSection
-        from k1.sessionstate.sections.control import ControlSection
+        from k1.sessionstate.public_types import (
+            ControlSection,
+            TaskArtifactsSection,
+            TaskStateSection,
+        )
 
         state.seed("task_state", TaskStateSection())
         state.seed("task_artifacts", TaskArtifactsSection())
@@ -567,6 +574,7 @@ class ConciergeFactory:
         ports: PortBundle,
         config: ConciergeConfig,
         hil_port: "IHILPort | None" = None,
+        temporal_port: Any | None = None,
         ledger_store: Any | None = None,
     ) -> ConciergeRuntime:
         """16-step wiring sequence -- returns un-started ConciergeRuntime."""
@@ -713,6 +721,7 @@ class ConciergeFactory:
         # ``hil_port`` so KernelService.SessionInstance and
         # KernelRuntime can reach it without crawling into the FSM.
         hitl = hil_port
+        temporal = temporal_port if temporal_port is not None else ports.temporal
         if hil_port is not None:
             fsm.set_hil_port(hil_port)
             logger.info(
@@ -723,6 +732,13 @@ class ConciergeFactory:
             logger.warning(
                 "ConciergeFactory: enable_hitl=True but no hil_port provided; "
                 "HITL gates will no-op until kernel wires HumanInTheLoopService",
+            )
+
+        if temporal is not None and hasattr(fsm, "set_temporal"):
+            fsm.set_temporal(temporal)
+            logger.info(
+                "ConciergeFactory: attached Temporal port %s to FSM",
+                type(temporal).__name__,
             )
 
         # Step 12: Weave + Activity tracker
@@ -783,8 +799,54 @@ class ConciergeFactory:
 
             front_subs = subscribe_front_events(bus, _route_front)
 
-        # Step 16: Build and return ConciergeRuntime
-        return ConciergeRuntime(
+        # Step 16: BackPool runtime wiring (M8.E5)
+        from k1.concierge.actors.back_pool import BackPool, BackPoolConfig, WorkerSlot
+        from k1.concierge.actors.back_router import BackTopicRouter
+        from k1.concierge.actors.ready_queue import ReadyQueue
+        from k1.concierge.bus.builders import (
+            build_backpool_worker_acquired,
+            build_backpool_worker_released,
+            build_task_leased,
+        )
+
+        def _slot_payload(slot: WorkerSlot, **extra: Any) -> dict[str, Any]:
+            payload = {
+                "task_id": slot.task_id,
+                "worker_id": slot.worker_id,
+                "session_id": slot.session_id,
+            }
+            if slot.lease is not None:
+                payload["lease"] = slot.lease.to_payload()
+            payload.update(extra)
+            return payload
+
+        def _on_worker_acquired(slot: WorkerSlot) -> None:
+            bus.publish(build_backpool_worker_acquired(_slot_payload(slot)))
+            if slot.lease is not None:
+                bus.publish(build_task_leased(slot.lease.to_payload()))
+
+        def _on_worker_released(slot: WorkerSlot, reason: str) -> None:
+            bus.publish(build_backpool_worker_released(_slot_payload(slot, reason=reason)))
+
+        back_pool = BackPool(
+            BackPoolConfig(
+                pool_size=config.backpool_size,
+                max_concurrent_per_session=config.backpool_max_concurrent_per_session,
+                lease_ttl_s=config.backpool_lease_ttl_s,
+                reclaim_check_interval_s=config.backpool_reclaim_check_interval_s,
+                enable_dependency_ordering=config.backpool_enable_dependency_ordering,
+                max_renewals=config.backpool_max_renewals,
+                lease_grace_period_s=config.backpool_lease_grace_period_s,
+            ),
+            on_worker_acquired=_on_worker_acquired,
+            on_worker_released=_on_worker_released,
+        )
+        back_topic_router = BackTopicRouter(back_pool)
+        ready_queue = ReadyQueue()
+        fsm.set_back_pool(back_pool)
+
+        # Step 17: Build and return ConciergeRuntime
+        runtime = ConciergeRuntime(
             bus=bus,
             router=router,
             front_mailbox=front_mailbox,
@@ -808,7 +870,13 @@ class ConciergeFactory:
             ledger=ledger,
             ledger_store=ledger_store,
             dead_letter_consumer=dead_letter,
+            back_pool=back_pool,
+            back_topic_router=back_topic_router,
+            ready_queue=ready_queue,
         )
+        if temporal is not None:
+            runtime.set_temporal(temporal)
+        return runtime
 
 
 # ---------------------------------------------------------------------------

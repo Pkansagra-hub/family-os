@@ -10,11 +10,11 @@ Exposes :data:`FAMILY_SETTINGS_DEFINITION`, the single source of truth consumed 
 ---------
 Policy:
   1. ``get_visibility_policy``    read   GREEN  (parent+ only)
-  2. ``update_visibility_policy`` write  AMBER  (parent+ only)
+    2. ``update_visibility_policy`` write  GREEN  (parent+ only)
 
 Flags:
   3. ``list_feature_flags``       read   GREEN  (parent+ only)
-  4. ``set_feature_flag``         write  AMBER  (parent+ only)
+    4. ``set_feature_flag``         write  GREEN  (parent+ only)
 
 All actions are restricted to ``parent`` and ``system`` roles.  Children,
 elders, and guests have no face into this adapter.
@@ -88,7 +88,7 @@ FAMILY_SETTINGS_DEFINITION = ToolDefinition(
             name="update_visibility_policy",
             kind="write",
             summary="Replace the space visibility policy and reload all adapters immediately.",
-            min_band="AMBER",
+            min_band="GREEN",
             allowed_roles=_PARENT_PLUS,
             sse=SSESpec(
                 emits=["family.family_settings.update_visibility_policy.write.v1"],
@@ -156,7 +156,7 @@ FAMILY_SETTINGS_DEFINITION = ToolDefinition(
             name="set_feature_flag",
             kind="write",
             summary="Enable or disable a named feature flag for this space.",
-            min_band="AMBER",
+            min_band="GREEN",
             allowed_roles=_PARENT_PLUS,
             sse=SSESpec(
                 emits=["family.family_settings.set_feature_flag.write.v1"],
@@ -191,7 +191,10 @@ FAMILY_SETTINGS_DEFINITION = ToolDefinition(
                     name="target_member_id",
                     type="string",
                     required=False,
-                    description="Set when scope is ``member``.",
+                    description=(
+                        "Family member reference when scope is ``member``, e.g. Riley or riley. "
+                        "Do not ask the user for member IDs."
+                    ),
                 ),
             ],
             llm=LLMHints(

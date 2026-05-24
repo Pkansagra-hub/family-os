@@ -43,6 +43,13 @@ class ConciergeConfig:
     seed_memories: list[dict[str, Any]] = field(default_factory=list)
     delta_batch_window_ms: int = 100
     dead_letter_enabled: bool = False
+    backpool_size: int = 3
+    backpool_max_concurrent_per_session: int = 2
+    backpool_lease_ttl_s: float = 300.0
+    backpool_reclaim_check_interval_s: float = 30.0
+    backpool_enable_dependency_ordering: bool = True
+    backpool_max_renewals: int = 3
+    backpool_lease_grace_period_s: float = 5.0
 
     def __post_init__(self) -> None:
         if self.delta_batch_window_ms <= 0:
@@ -68,6 +75,25 @@ class ConciergeConfig:
             enable_dead_letter_consumer=getattr(kc, "enable_dead_letter_consumer", True),
             session_id=getattr(kc, "session_id", None),
             seed_memories=getattr(kc, "seed_memories", []),
+            backpool_size=getattr(kc, "backpool_size", 3),
+            backpool_max_concurrent_per_session=getattr(
+                kc,
+                "backpool_max_concurrent_per_session",
+                2,
+            ),
+            backpool_lease_ttl_s=getattr(kc, "backpool_lease_ttl_s", 300.0),
+            backpool_reclaim_check_interval_s=getattr(
+                kc,
+                "backpool_reclaim_check_interval_s",
+                30.0,
+            ),
+            backpool_enable_dependency_ordering=getattr(
+                kc,
+                "backpool_enable_dependency_ordering",
+                True,
+            ),
+            backpool_max_renewals=getattr(kc, "backpool_max_renewals", 3),
+            backpool_lease_grace_period_s=getattr(kc, "backpool_lease_grace_period_s", 5.0),
         )
 
     # Alias for plan naming convention

@@ -287,7 +287,6 @@ WEAVING:
 - `k1.concierge.protocols.weave_batcher`: `WEAVE_BATCH_WINDOW_MS`
 - `k1.concierge.protocols.weave_policy`: `UserActivityTracker`, `WeaveDecision`, `WeaveDecisionResult`, `WeaveFallbackHandler`, `WeavePolicy`, `WeaveSignal`, `sort_results_for_delivery`
 - `k1.sessionstate.sections.control`: `IntentClassification`, `PrivacyBand`
-- `k1.sessionstate.sections.temporal_context`: `compute_temporal_anchor`
 - `k1.concierge.task.complexity`: `ComplexityTier`
 - `k1.concierge.task.dispatch`: `TaskDispatch`
 - `k1.concierge.task.intent`: `TaskIntent`
@@ -947,7 +946,6 @@ Guard actions by category (summary):
 | **k1.concierge.protocols.weave_batcher** | controller | `WEAVE_BATCH_WINDOW_MS` |
 | **k1.concierge.protocols.weave_policy** | controller | `WeavePolicy`, `WeaveSignal`, `WeaveDecision`, `UserActivityTracker`, etc. |
 | **k1.sessionstate.sections.control** | controller | `IntentClassification`, `PrivacyBand` |
-| **k1.sessionstate.sections.temporal_context** | controller | `compute_temporal_anchor` |
 | **k1.sessionstate.sections.task_state** | task_bridge | `TaskStateEntry`, `TaskStateSection`, `TaskStatus` |
 | **k1.sessionstate.sections.task_artifacts** | task_bridge | `ArtifactType`, `TaskArtifactEntry`, `TaskArtifactsSection` |
 | **k1.concierge.task.complexity** | controller | `ComplexityTier` |

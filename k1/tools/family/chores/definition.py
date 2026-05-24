@@ -13,15 +13,15 @@ Exposes :data:`CHORES_DEFINITION`, the single source of truth consumed by:
 9 actions
 ---------
 Templates (3):
-  1. ``create_template``  write  AMBER  idempotent  (parent+ only)
-  2. ``update_template``  write  AMBER              (parent+ only)
-  3. ``delete_template``  delete AMBER              (parent+ only)
+    1. ``create_template``  write  GREEN  idempotent  (parent+ only)
+    2. ``update_template``  write  GREEN              (parent+ only)
+    3. ``delete_template``  delete GREEN              (parent+ only)
 
 Occurrences (6):
-  4. ``assign_chore``     write  AMBER              (parent+ or guardian+)
-  5. ``complete_chore``   write  AMBER              (assignee | parent+)
-  6. ``skip_chore``       write  AMBER              (assignee | parent+)
-  7. ``reopen_chore``     write  AMBER              (parent+ only)
+    4. ``assign_chore``     write  GREEN              (parent+ or guardian+)
+    5. ``complete_chore``   write  GREEN              (assignee | parent+)
+    6. ``skip_chore``       write  GREEN              (assignee | parent+)
+    7. ``reopen_chore``     write  GREEN              (parent+ only)
   8. ``list_chores``      read   GREEN              (all roles incl. guest)
   9. ``chore_summary``    read   GREEN              (all roles incl. guest)
 """
@@ -101,7 +101,7 @@ CHORES_DEFINITION = ToolDefinition(
             name="assigned_to",
             type="string",
             required=False,
-            description="Filter by assignee ``member_id``.",
+            description="Filter by assignee family member reference, e.g. Riley or riley.",
         ),
         FieldSpec(
             name="status",
@@ -140,7 +140,10 @@ CHORES_DEFINITION = ToolDefinition(
                     name="assigned_to",
                     type="string",
                     required=False,
-                    description="Default assignee member_id; ``null`` = pool.",
+                    description=(
+                        "Default assignee family member reference, e.g. Riley or riley; "
+                        "null = pool. Do not ask the user for member IDs."
+                    ),
                 ),
                 FieldSpec(
                     name="frequency",
@@ -248,7 +251,10 @@ CHORES_DEFINITION = ToolDefinition(
                     name="assigned_to",
                     type="string",
                     required=True,
-                    description="member_id of the assignee.",
+                    description=(
+                        "Assignee family member reference, e.g. Riley or riley. "
+                        "Do not ask the user for member IDs."
+                    ),
                 ),
                 FieldSpec(
                     name="due_at",
@@ -294,7 +300,7 @@ CHORES_DEFINITION = ToolDefinition(
                     name="completed_by",
                     type="string",
                     required=False,
-                    description="member_id completing the chore; defaults to caller.",
+                    description="Family member reference completing the chore; defaults to caller.",
                 ),
                 FieldSpec(
                     name="points_override",
@@ -399,7 +405,7 @@ CHORES_DEFINITION = ToolDefinition(
                     name="assigned_to",
                     type="string",
                     required=False,
-                    description="Filter by assignee member_id.",
+                    description="Filter by assignee family member reference, e.g. Riley or riley.",
                 ),
                 FieldSpec(
                     name="status",

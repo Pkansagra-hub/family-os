@@ -7,11 +7,13 @@ behind the single IDispatchPort Protocol.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import replace
 from typing import Any
 
 from k1.concierge.bus.builders import build_task_complete, build_task_failed
+from k1.fabric.fabric import BatchStrategy
 from k1.fabric.types import CapabilityRequest, CapabilityResult, ErrorInfo
 
 logger = logging.getLogger(__name__)
@@ -364,7 +366,20 @@ class FabricDispatchAdapter:
         self, requests: list[CapabilityRequest], strategy: str = "PARALLEL"
     ) -> list[CapabilityResult]:
         """IFabricPort.execute_batch alias."""
-        return [await self.dispatch_direct(r) for r in requests]
+        if not requests:
+            return []
+        has_workflow = any(
+            request.capability_name.startswith(_WORKFLOW_PREFIX) for request in requests
+        )
+        fabric_batch = getattr(self._fabric, "execute_batch", None)
+        if callable(fabric_batch) and not has_workflow:
+            batch_strategy = BatchStrategy(str(strategy).upper())
+            return await fabric_batch(requests, strategy=batch_strategy)
+        if str(strategy).upper() == BatchStrategy.PARALLEL.value:
+            return list(
+                await asyncio.gather(*(self.dispatch_direct(request) for request in requests))
+            )
+        return [await self.dispatch_direct(request) for request in requests]
 
     async def discover_capabilities(
         self, intent: str = "", domain: str | None = None, **kwargs: Any

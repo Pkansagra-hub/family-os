@@ -98,8 +98,11 @@ def test_empty_capsule_text_is_skipped() -> None:
 
 def test_standard_prompt_examples_do_not_override_greeting_rules() -> None:
     out = _build(grounding_capsule=None)
-    assert "Greeting / banter turn:\n  1. Text response only. No tools." in out.system_prompt
-    assert "Mixed banter + request turn:" in out.system_prompt
+    assert (
+        "Pure greeting (hi/hey/morning)         -> text only, one line, no tools."
+        in out.system_prompt
+    )
+    assert "Explicit single action" in out.system_prompt
     assert (
         "1. recall_memory() + update_scoreboard() + update_beliefs()  [all at once]"
         not in out.system_prompt
@@ -108,11 +111,31 @@ def test_standard_prompt_examples_do_not_override_greeting_rules() -> None:
 
 def test_standard_prompt_forces_text_only_salutations() -> None:
     out = _build(grounding_capsule=None)
-    assert "good morning" in out.system_prompt
-    assert "good evening" in out.system_prompt
-    assert "Greeting / salutation turns: reply directly with text. No tools." in out.system_prompt
-    assert "Never use this path for greetings, salutations," in out.system_prompt
+    # Greeting rule is now a single-row in the first-iteration decision table
+    assert "Pure greeting (hi/hey/morning)" in out.system_prompt
+    # Cognitive-tool discipline preserved (no update_* for filler)
+    assert "Do NOT call cognitive tools (update_*) for greetings or filler." in out.system_prompt
     assert "1. update_beliefs() or text response directly" not in out.system_prompt
+
+
+def test_standard_prompt_routes_work_outside_conversation_through_authority() -> None:
+    out = _build(grounding_capsule=None)
+    # First-iteration table routes live-state work to dispatch_task (tightened wording)
+    assert "Explicit live-state work (book/send/" in out.system_prompt
+    assert "Brainstorm / advice / recipe / idea    -> text only. Do NOT dispatch." in out.system_prompt
+    # DISPATCH_RULES still owns the conversation-vs-work contract
+    assert "Front owns conversation. Work outside conversation leaves Front" in out.system_prompt
+    assert "Calendar, tasks, reminders, chores, shopping" in out.system_prompt
+    assert "examples of work; memory and cognitive tools are not authoritative" in out.system_prompt
+    # The "don't narrate action without dispatching" contract
+    assert (
+        "Announcing\nintent-to-act without a dispatch_task call is a contract violation"
+        in out.system_prompt
+    )
+    assert (
+        "Front does not call discover_capabilities or invoke_capability directly."
+        in out.system_prompt
+    )
 
 
 def test_standard_prompt_drops_duplicate_active_member_when_capsule_present() -> None:

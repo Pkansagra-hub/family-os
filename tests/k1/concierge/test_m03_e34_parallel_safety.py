@@ -21,7 +21,9 @@ import pytest
 from k1.concierge.task.parallel_safety import (
     ALWAYS_SEQUENTIAL,
     PARALLEL_SAFE_GROUPS,
+    capability_invocation_is_parallel_safe,
     classify_tool_batch,
+    classify_tool_calls,
     is_parallel_safe,
 )
 
@@ -132,6 +134,41 @@ class TestIsParallelSafe:
         assert not is_parallel_safe("totally_unknown_tool_xyz")
 
 
+class TestContractAwareCapabilityClassification:
+    """M8.E2 -- concrete invoke_capability calls can be read-parallel."""
+
+    def test_read_capability_name_is_parallel_safe(self):
+        assert capability_invocation_is_parallel_safe(
+            {"capability_name": "tool.read.tasks.list_tasks"}
+        )
+
+    def test_side_effect_metadata_forces_sequential(self):
+        assert not capability_invocation_is_parallel_safe(
+            {"capability_name": "tool.read.tasks.list_tasks"},
+            {"side_effects": [{"type": "write"}]},
+        )
+
+    def test_write_capability_marker_overrides_read_prefix(self):
+        assert not capability_invocation_is_parallel_safe(
+            {"capability_name": "tool.read.tasks.list_tasks"},
+            {"capabilities": ["read", "write"]},
+        )
+
+    def test_batch_wrapper_is_explicitly_sequential(self):
+        assert "batch_invoke_capabilities" in ALWAYS_SEQUENTIAL
+
+    def test_classify_tool_calls_distinguishes_invoke_capability_instances(self):
+        parallel, sequential = classify_tool_calls(
+            [
+                ("invoke_capability", {"capability_name": "tool.read.tasks.list_tasks"}),
+                ("invoke_capability", {"capability_name": "tool.execute.tasks.create_task"}),
+            ]
+        )
+
+        assert parallel == [0]
+        assert sequential == [1]
+
+
 # =========================================================================
 # 3.4.2 -- classify_tool_batch integrated into react_loop (source inspection)
 # =========================================================================
@@ -140,23 +177,23 @@ class TestIsParallelSafe:
 class TestReactLoopIntegration:
     """Verify react_loop calls classify_tool_batch."""
 
-    def test_react_loop_imports_classify_tool_batch(self):
-        """react_loop module imports classify_tool_batch."""
+    def test_react_loop_imports_classify_tool_calls(self):
+        """react_loop module imports concrete tool-call classifier."""
         import inspect
 
         from k1.concierge.react import loop
 
         source = inspect.getsource(loop)
-        assert "classify_tool_batch" in source
+        assert "classify_tool_calls" in source
 
-    def test_react_loop_calls_classify_tool_batch(self):
-        """react_loop function source calls classify_tool_batch."""
+    def test_react_loop_calls_classify_tool_calls(self):
+        """react_loop function source calls concrete tool-call classifier."""
         import inspect
 
         from k1.concierge.react.loop import react_loop
 
         source = inspect.getsource(react_loop)
-        assert "classify_tool_batch" in source
+        assert "classify_tool_calls" in source
 
     def test_react_loop_uses_parallel_enabled_config(self):
         """react_loop reads parallel_tools_enabled from config."""

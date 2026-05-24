@@ -1,9 +1,9 @@
 """
 k1.kernel.ports -- Hexagonal port interfaces for the Kernel.
 
-Defines all 8 port protocols that KernelService uses for external
-communication. These are the hexagonal boundary: ALL Tier 1 and Tier 2
-lifecycle operations go through these ports.
+Defines kernel port protocols that KernelService uses for external
+communication. These are the hexagonal boundary: Tier 1 and Tier 2
+lifecycle operations cross subsystem boundaries through these ports.
 
 Pattern: All ports are ``typing.Protocol`` classes (structural subtyping).
          No ABC inheritance. Enforced by type checker. ``@runtime_checkable``
@@ -18,6 +18,10 @@ Ports:
   IPlannerPort        (2.0.8) -- Shared Planner lifecycle
   ISessionManagerPort (2.0.8) -- Per-session component bag CRUD
   ILifecyclePort      (2.0.8) -- Top-level startup/shutdown/health
+  ITemporalPort       (M0)    -- Temporal grounding boundary
+  ISpatialPort        (M0)    -- Spatial grounding boundary
+  IGroundingPort      (M0)    -- Policy-filtered grounding envelope boundary
+  IDeviceContextPort  (M0)    -- Installed-device observation boundary
 
 Supporting types:
   HealthStatus -- Aggregated health snapshot from ILifecyclePort
@@ -45,25 +49,75 @@ Usage::
 
 from k1.kernel.ports.bridge_port import IBridgeRuntime
 from k1.kernel.ports.bus_port import IBusPort
+from k1.kernel.ports.device_context_port import (
+    DeviceContextSnapshot,
+    IDeviceContextPort,
+)
 from k1.kernel.ports.fabric_port import IFabricPort
+from k1.kernel.ports.grounding_port import (
+    AgentGroundingLease,
+    ConsumerScope,
+    GroundingEnvelope,
+    GroundingFreshness,
+    GroundingProjection,
+    GroundingSource,
+    IGroundingPort,
+)
 from k1.kernel.ports.hil_port import IHILPort
 from k1.kernel.ports.lifecycle_port import HealthStatus, ILifecyclePort
 from k1.kernel.ports.model_hub_port import IModelHubPort
 from k1.kernel.ports.orchestrator_port import IOrchestratorPort
 from k1.kernel.ports.planner_port import IPlannerPort
 from k1.kernel.ports.session_manager_port import ISessionManagerPort
+from k1.kernel.ports.spatial_port import (
+    ISpatialPort,
+    LocationFix,
+    PlaceRef,
+    SpatialContext,
+    SpatialProjection,
+    SpatialTurnSnapshot,
+)
+from k1.kernel.ports.temporal_port import (
+    ITemporalPort,
+    ResolvedTemporalExpression,
+    TemporalAnchor,
+    TemporalProjection,
+    TemporalTurnSnapshot,
+    TemporalWindow,
+)
 
 __all__ = [
-    # --- 8 Kernel Port Protocols ---
+    # --- Kernel Port Protocols ---
     "IBridgeRuntime",
     "IBusPort",
+    "IDeviceContextPort",
     "IFabricPort",
+    "IGroundingPort",
     "IHILPort",
     "ILifecyclePort",
     "IModelHubPort",
     "IOrchestratorPort",
     "IPlannerPort",
     "ISessionManagerPort",
+    "ISpatialPort",
+    "ITemporalPort",
     # --- Supporting types ---
+    "AgentGroundingLease",
+    "ConsumerScope",
+    "DeviceContextSnapshot",
+    "GroundingEnvelope",
+    "GroundingFreshness",
+    "GroundingProjection",
+    "GroundingSource",
     "HealthStatus",
+    "LocationFix",
+    "PlaceRef",
+    "ResolvedTemporalExpression",
+    "SpatialContext",
+    "SpatialProjection",
+    "SpatialTurnSnapshot",
+    "TemporalAnchor",
+    "TemporalProjection",
+    "TemporalTurnSnapshot",
+    "TemporalWindow",
 ]

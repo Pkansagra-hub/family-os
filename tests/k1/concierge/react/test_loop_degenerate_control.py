@@ -400,7 +400,12 @@ async def test_back_discovery_context_spin_gets_authority_nudge() -> None:
     third_request_text = "\n".join(
         message.content for message in model.requests[2].payload.messages
     )
-    assert (
-        "Do NOT call discover_capabilities, recall_memory, or summarize_context again"
-        in third_request_text
-    )
+    # Kernel-grade spin guard envelope: a structured JSON object the
+    # model reads as grounded state, not English imperatives.  This
+    # works for any locale and any LLM that can read JSON.
+    assert '"_type": "kernel.back_execution_plan_state"' in third_request_text
+    assert '"required_next_action": "batch_invoke_capabilities"' in third_request_text
+    assert '"forbidden_tools"' in third_request_text
+    assert "discover_capabilities" in third_request_text
+    assert "recall_memory" in third_request_text
+    assert "summarize_context" in third_request_text
