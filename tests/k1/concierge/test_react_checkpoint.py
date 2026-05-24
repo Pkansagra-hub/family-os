@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-from k1.concierge.actors.back import _deserialize_messages, _serialize_messages
-from k1.concierge.llm.types import ModelMessage, ToolCallResult
 from k1.concierge.react.checkpoint import ReActCheckpoint, ReActCheckpointVersionError
 
 
@@ -51,31 +49,3 @@ def test_completed_tool_keys_include_successful_tool_arg_hashes_only() -> None:
     )
 
     assert checkpoint.completed_tool_keys() == {"a:111", "b:222"}
-
-
-def test_react_history_round_trip_preserves_assistant_tool_calls() -> None:
-    messages = [
-        ModelMessage(
-            role="assistant",
-            content="",
-            tool_calls=[
-                ToolCallResult(
-                    id="call-1",
-                    name="invoke_capability",
-                    arguments={"capability_name": "tool.read.tasks.list_tasks"},
-                )
-            ],
-        ),
-        ModelMessage(
-            role="tool",
-            content='{"ok": true}',
-            tool_call_id="call-1",
-            name="invoke_capability",
-        ),
-    ]
-
-    restored = _deserialize_messages(_serialize_messages(messages))
-
-    assert restored[0].tool_calls is not None
-    assert restored[0].tool_calls[0].id == "call-1"
-    assert restored[0].tool_calls[0].arguments == {"capability_name": "tool.read.tasks.list_tasks"}

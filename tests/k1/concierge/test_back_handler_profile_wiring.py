@@ -45,20 +45,6 @@ def _model_for_scenario(scenario: str) -> TestModelHubBridge:
             ConciergeModelResponse(
                 tool_calls=[
                     ToolCallResult(
-                        id=f"call-invoke-{scenario}",
-                        name="invoke_capability",
-                        arguments={
-                            "capability_name": "tool.execute.calendar.create_event",
-                            "params": {"title": "profile wiring probe"},
-                        },
-                    )
-                ],
-                finish_reason=FinishReason.TOOL_CALLS,
-                model_id="test-model",
-            ),
-            ConciergeModelResponse(
-                tool_calls=[
-                    ToolCallResult(
                         id=f"call-submit-{scenario}",
                         name="submit_result",
                         arguments={
@@ -117,20 +103,6 @@ def _model_for_unified_hil() -> TestModelHubBridge:
                 tool_calls=[
                     ToolCallResult(
                         id="call-submit-after-hil",
-                        name="invoke_capability",
-                        arguments={
-                            "capability_name": "tool.execute.reminders.create_reminder",
-                            "params": {"title": "profile wiring probe"},
-                        },
-                    )
-                ],
-                finish_reason=FinishReason.TOOL_CALLS,
-                model_id="test-model",
-            ),
-            ConciergeModelResponse(
-                tool_calls=[
-                    ToolCallResult(
-                        id="call-submit-after-hil-complete",
                         name="submit_result",
                         arguments={
                             "result_type": "complete",
@@ -279,7 +251,7 @@ async def test_back_resume_handler_reuses_profile_metadata(
                     ],
                 },
                 "react_history": [{"role": "assistant", "content": "Need clarification."}],
-                "remaining_budget": 4,
+                "remaining_budget": 2,
             },
         }
     )

@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 
+from k1.tools.family.acl import filter_rows
 from k1.tools.family.base import WriteContext
 from k1.tools.family.events import EventEmitter
 from k1.tools.family.family_settings.definition import FAMILY_SETTINGS_DEFINITION
@@ -157,12 +158,12 @@ class TestFamilySettingsDefinition:
                     role not in action.allowed_roles
                 ), f"action {action.name!r} should not allow role {role!r}"
 
-    def test_write_actions_green(self):
+    def test_write_actions_amber(self):
         write_actions = {a.name for a in FAMILY_SETTINGS_DEFINITION.actions if a.kind == "write"}
         assert write_actions == {"update_visibility_policy", "set_feature_flag"}
         for action in FAMILY_SETTINGS_DEFINITION.actions:
             if action.name in write_actions:
-                assert action.min_band == "GREEN"
+                assert action.min_band == "AMBER"
 
     def test_read_actions_green(self):
         for action in FAMILY_SETTINGS_DEFINITION.actions:
@@ -200,7 +201,7 @@ class TestGetVisibilityPolicy:
 
     async def test_returns_existing_doc(self, svc):
         service, _, _, _ = svc
-        ctx = _ctx(role="parent", band="GREEN")
+        ctx = _ctx(role="parent", band="AMBER")
         # First create a policy.
         await service.dispatch(
             "update_visibility_policy",
@@ -216,7 +217,7 @@ class TestGetVisibilityPolicy:
 class TestUpdateVisibilityPolicy:
     async def test_happy_path_returns_success(self, svc):
         service, pub, _, _ = svc
-        ctx = _ctx(role="parent", band="GREEN")
+        ctx = _ctx(role="parent", band="AMBER")
         res = await service.dispatch(
             "update_visibility_policy",
             {"rules": {"google_work": "adults", "outlook_default": "adults"}},
@@ -229,7 +230,7 @@ class TestUpdateVisibilityPolicy:
 
     async def test_emits_sse_on_update(self, svc):
         service, pub, _, _ = svc
-        ctx = _ctx(role="parent", band="GREEN")
+        ctx = _ctx(role="parent", band="AMBER")
         await service.dispatch(
             "update_visibility_policy",
             {"rules": {"google_work": "adults"}},
@@ -240,7 +241,7 @@ class TestUpdateVisibilityPolicy:
 
     async def test_invalid_rule_key_fails(self, svc):
         service, _, _, _ = svc
-        ctx = _ctx(role="parent", band="GREEN")
+        ctx = _ctx(role="parent", band="AMBER")
         res = await service.dispatch(
             "update_visibility_policy",
             {"rules": {"nonexistent_source": "adults"}},
@@ -251,7 +252,7 @@ class TestUpdateVisibilityPolicy:
 
     async def test_invalid_band_value_fails(self, svc):
         service, _, _, _ = svc
-        ctx = _ctx(role="parent", band="GREEN")
+        ctx = _ctx(role="parent", band="AMBER")
         res = await service.dispatch(
             "update_visibility_policy",
             {"rules": {"google_work": "super_private"}},
@@ -261,7 +262,7 @@ class TestUpdateVisibilityPolicy:
 
     async def test_sensitive_keywords_update(self, svc):
         service, _, _, _ = svc
-        ctx = _ctx(role="parent", band="GREEN")
+        ctx = _ctx(role="parent", band="AMBER")
         res = await service.dispatch(
             "update_visibility_policy",
             {"sensitive_keywords": ["salary", "insurance", "therapy"]},
@@ -272,7 +273,7 @@ class TestUpdateVisibilityPolicy:
 
     async def test_kid_capabilities_persisted(self, svc):
         service, _, _, _ = svc
-        ctx = _ctx(role="parent", band="GREEN")
+        ctx = _ctx(role="parent", band="AMBER")
         await service.dispatch(
             "update_visibility_policy",
             {"kid_capabilities": {"can_create_reminders": False}},
@@ -283,7 +284,7 @@ class TestUpdateVisibilityPolicy:
 
     async def test_version_increments_on_second_update(self, svc):
         service, _, _, _ = svc
-        ctx = _ctx(role="parent", band="GREEN")
+        ctx = _ctx(role="parent", band="AMBER")
         await service.dispatch(
             "update_visibility_policy",
             {"rules": {"google_work": "adults"}},
@@ -298,7 +299,7 @@ class TestUpdateVisibilityPolicy:
 
     async def test_rules_merge_across_updates(self, svc):
         service, _, _, _ = svc
-        ctx = _ctx(role="parent", band="GREEN")
+        ctx = _ctx(role="parent", band="AMBER")
         await service.dispatch(
             "update_visibility_policy",
             {"rules": {"google_work": "adults"}},
@@ -322,7 +323,7 @@ class TestUpdateVisibilityPolicy:
 class TestSetFeatureFlag:
     async def test_create_new_flag(self, svc):
         service, pub, _, _ = svc
-        ctx = _ctx(role="parent", band="GREEN")
+        ctx = _ctx(role="parent", band="AMBER")
         res = await service.dispatch(
             "set_feature_flag",
             {"flag_name": "health.dose_log_visible_to_kids", "enabled": True},
@@ -334,7 +335,7 @@ class TestSetFeatureFlag:
 
     async def test_emits_sse_on_set(self, svc):
         service, pub, _, _ = svc
-        ctx = _ctx(role="parent", band="GREEN")
+        ctx = _ctx(role="parent", band="AMBER")
         await service.dispatch(
             "set_feature_flag",
             {"flag_name": "beta.feature", "enabled": False},
@@ -344,7 +345,7 @@ class TestSetFeatureFlag:
 
     async def test_update_existing_flag(self, svc):
         service, _, _, _ = svc
-        ctx = _ctx(role="parent", band="GREEN")
+        ctx = _ctx(role="parent", band="AMBER")
         await service.dispatch(
             "set_feature_flag",
             {"flag_name": "my_flag", "enabled": True},
@@ -360,7 +361,7 @@ class TestSetFeatureFlag:
 
     async def test_missing_flag_name_fails(self, svc):
         service, _, _, _ = svc
-        ctx = _ctx(role="parent", band="GREEN")
+        ctx = _ctx(role="parent", band="AMBER")
         res = await service.dispatch(
             "set_feature_flag",
             {"enabled": True},
@@ -370,7 +371,7 @@ class TestSetFeatureFlag:
 
     async def test_missing_enabled_fails(self, svc):
         service, _, _, _ = svc
-        ctx = _ctx(role="parent", band="GREEN")
+        ctx = _ctx(role="parent", band="AMBER")
         res = await service.dispatch(
             "set_feature_flag",
             {"flag_name": "some_flag"},
@@ -389,7 +390,7 @@ class TestListFeatureFlags:
 
     async def test_returns_created_flags(self, svc):
         service, _, _, _ = svc
-        write_ctx = _ctx(role="parent", band="GREEN")
+        write_ctx = _ctx(role="parent", band="AMBER")
         await service.dispatch(
             "set_feature_flag",
             {"flag_name": "flag_a", "enabled": True},
@@ -408,7 +409,7 @@ class TestListFeatureFlags:
 
     async def test_flags_scoped_by_space(self, svc):
         service, _, _, _ = svc
-        write_ctx = _ctx(role="parent", space_id="h1", band="GREEN")
+        write_ctx = _ctx(role="parent", space_id="h1", band="AMBER")
         await service.dispatch(
             "set_feature_flag",
             {"flag_name": "scoped_flag", "enabled": True},
@@ -429,9 +430,9 @@ class TestRoleGates:
         "action,params,band",
         [
             ("get_visibility_policy", {}, "GREEN"),
-            ("update_visibility_policy", {"rules": {}}, "GREEN"),
+            ("update_visibility_policy", {"rules": {}}, "AMBER"),
             ("list_feature_flags", {}, "GREEN"),
-            ("set_feature_flag", {"flag_name": "x", "enabled": True}, "GREEN"),
+            ("set_feature_flag", {"flag_name": "x", "enabled": True}, "AMBER"),
         ],
     )
     async def test_child_denied_all_actions(self, svc, action, params, band):
@@ -445,9 +446,9 @@ class TestRoleGates:
         "action,params,band",
         [
             ("get_visibility_policy", {}, "GREEN"),
-            ("update_visibility_policy", {"rules": {}}, "GREEN"),
+            ("update_visibility_policy", {"rules": {}}, "AMBER"),
             ("list_feature_flags", {}, "GREEN"),
-            ("set_feature_flag", {"flag_name": "x", "enabled": True}, "GREEN"),
+            ("set_feature_flag", {"flag_name": "x", "enabled": True}, "AMBER"),
         ],
     )
     async def test_elder_denied_all_actions(self, svc, action, params, band):
@@ -464,7 +465,7 @@ class TestRoleGates:
         ],
     )
     async def test_write_actions_blocked_at_red_band(self, svc, action, params):
-        """GREEN write actions are blocked when session band has escalated to RED/CRISIS."""
+        """AMBER write actions are blocked when session band has escalated to RED/CRISIS."""
         service, _, _, _ = svc
         ctx = _ctx(role="parent", band="RED")
         res = await service.dispatch(action, params, ctx)
@@ -479,7 +480,7 @@ class TestRoleGates:
         ],
     )
     async def test_write_actions_allowed_at_green_band(self, svc, action, params):
-        """GREEN write actions are allowed at GREEN (calm session)."""
+        """AMBER write actions ARE allowed at GREEN (calm session)."""
         service, _, _, _ = svc
         ctx = _ctx(role="parent", band="GREEN")
         res = await service.dispatch(action, params, ctx)
@@ -489,7 +490,7 @@ class TestRoleGates:
     async def test_system_can_perform_all_actions(self, svc):
         service, _, _, _ = svc
         ctx_r = _ctx(role="system", band="GREEN")
-        ctx_w = _ctx(role="system", band="GREEN")
+        ctx_w = _ctx(role="system", band="AMBER")
         assert (await service.dispatch("get_visibility_policy", {}, ctx_r))["success"] is True
         assert (
             await service.dispatch(
@@ -517,7 +518,7 @@ class TestLivePolicyReload:
     async def test_update_policy_mutates_shared_policy_object(self, svc):
         """After update_visibility_policy, self._policy reflects the new rules."""
         service, _, _, policy = svc
-        ctx = _ctx(role="parent", band="GREEN")
+        ctx = _ctx(role="parent", band="AMBER")
 
         # Confirm google_work is initially handled by the default rule (adults).
         from k1.tools.family.base import BaseEntity
@@ -548,7 +549,7 @@ class TestLivePolicyReload:
     async def test_sensitive_keywords_swap_affects_policy(self, svc):
         """After updating sensitive_keywords, the policy's rule fires for new words."""
         service, _, _, policy = svc
-        ctx = _ctx(role="parent", band="GREEN")
+        ctx = _ctx(role="parent", band="AMBER")
 
         from k1.tools.family.base import BaseEntity
 
@@ -575,7 +576,7 @@ class TestLivePolicyReload:
 
     async def test_source_rule_overrides_cover_all_configurable_sources(self, svc):
         service, _, _, policy = svc
-        ctx = _ctx(role="parent", band="GREEN")
+        ctx = _ctx(role="parent", band="AMBER")
 
         from k1.tools.family.base import BaseEntity
 
@@ -619,7 +620,7 @@ class TestLivePolicyReload:
     async def test_policy_sensitive_keywords_field_updated(self, svc):
         """policy.sensitive_keywords mirrors the active keyword set."""
         service, _, _, policy = svc
-        ctx = _ctx(role="parent", band="GREEN")
+        ctx = _ctx(role="parent", band="AMBER")
         await service.dispatch(
             "update_visibility_policy",
             {"sensitive_keywords": ["testword1", "testword2"]},
@@ -631,7 +632,7 @@ class TestLivePolicyReload:
     async def test_rules_splice_does_not_grow_rules_list(self, svc):
         """Repeated updates don't accumulate stale rules in the list."""
         service, _, _, policy = svc
-        ctx = _ctx(role="parent", band="GREEN")
+        ctx = _ctx(role="parent", band="AMBER")
         from k1.tools.family.policy import DEFAULT_RULES
 
         initial_len = len(list(DEFAULT_RULES))

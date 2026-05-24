@@ -129,6 +129,83 @@ async def test_repeated_empty_back_response_returns_loop_degenerate() -> None:
 
 
 @pytest.mark.asyncio
+async def test_repeated_front_tool_calls_can_continue_to_dispatch() -> None:
+    class Model:
+        def __init__(self) -> None:
+            self.requests = 0
+
+        async def execute(self, request):  # type: ignore[no-untyped-def]
+            self.requests += 1
+            if self.requests <= 3:
+                return make_hub_tool_response(
+                    [
+                        {
+                            "id": f"belief-{self.requests}",
+                            "name": "update_beliefs",
+                            "arguments": {
+                                "facts": [
+                                    {
+                                        "subject": "Alex",
+                                        "predicate": "has_appointment",
+                                        "object": "dentist appointment Friday 9 AM",
+                                    }
+                                ]
+                            },
+                        }
+                    ]
+                )
+            return make_hub_tool_response(
+                [
+                    {
+                        "id": "dispatch-1",
+                        "name": "dispatch_task",
+                        "arguments": {
+                            "intents": [
+                                {
+                                    "action": "create dentist appointment calendar event",
+                                    "domain": "calendar",
+                                }
+                            ]
+                        },
+                    }
+                ]
+            )
+
+    dispatcher = _SubmitDispatcher()
+
+    result = await react_loop(
+        actor="front",
+        system_prompt="system",
+        messages=[],
+        tools=[_tool("update_beliefs"), _tool("dispatch_task")],
+        max_iterations=6,
+        model=Model(),  # type: ignore[arg-type]
+        tool_dispatcher=dispatcher,  # type: ignore[arg-type]
+        on_text_response=lambda text: None,  # type: ignore[arg-type]
+        cancellation_check=_never_cancel,
+        trace_id="front-repeat-test",
+        scenario="standard",
+    )
+
+    assert result.status == "complete"
+    assert "dispatch_task" in dispatcher.calls
+    assert result.dispatched_tasks == [
+        {
+            "intents": [
+                {
+                    "action": "create dentist appointment calendar event",
+                    "domain": "calendar",
+                }
+            ]
+        }
+    ]
+    assert not any(
+        event.get("payload", {}).get("reason") == "repeated_tool_call"
+        for event in result.loop_events
+    )
+
+
+@pytest.mark.asyncio
 async def test_back_missing_submit_result_is_typed_terminal_status() -> None:
     class Model:
         async def execute(self, request):  # type: ignore[no-untyped-def]
@@ -400,12 +477,7 @@ async def test_back_discovery_context_spin_gets_authority_nudge() -> None:
     third_request_text = "\n".join(
         message.content for message in model.requests[2].payload.messages
     )
-    # Kernel-grade spin guard envelope: a structured JSON object the
-    # model reads as grounded state, not English imperatives.  This
-    # works for any locale and any LLM that can read JSON.
-    assert '"_type": "kernel.back_execution_plan_state"' in third_request_text
-    assert '"required_next_action": "batch_invoke_capabilities"' in third_request_text
-    assert '"forbidden_tools"' in third_request_text
-    assert "discover_capabilities" in third_request_text
-    assert "recall_memory" in third_request_text
-    assert "summarize_context" in third_request_text
+    assert (
+        "Do NOT call discover_capabilities, recall_memory, or summarize_context again"
+        in third_request_text
+    )

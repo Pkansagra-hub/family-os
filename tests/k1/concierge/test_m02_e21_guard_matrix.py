@@ -29,7 +29,6 @@ from k1.concierge.bus.topics import (
     TOPIC_DEAD_LETTER,
     TOPIC_FINAL_RESPONSE,
     TOPIC_FINDINGS_READY,
-    TOPIC_HIL_REQUEST,
     TOPIC_PROACTIVE_FILL,
     TOPIC_TASK_CANCEL,
     TOPIC_TASK_COMPLETE,
@@ -479,7 +478,6 @@ class TestHardcodedConstantsReplaced:
         # All keys should match known topic constants
         known = {
             TOPIC_USER_INPUT,
-            TOPIC_HIL_REQUEST,
             TOPIC_TASK_SUSPENDED,
             TOPIC_TASK_COMPLETE,
             TOPIC_TASK_FAILED,

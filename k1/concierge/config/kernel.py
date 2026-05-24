@@ -83,13 +83,6 @@ class KernelConfig:
     dead_letter_enabled: bool = True
     poll_interval_s: float = 0.05
     dedup_cache_size: int = 4096
-    backpool_size: int = 3
-    backpool_max_concurrent_per_session: int = 2
-    backpool_lease_ttl_s: float = 300.0
-    backpool_reclaim_check_interval_s: float = 30.0
-    backpool_enable_dependency_ordering: bool = True
-    backpool_max_renewals: int = 3
-    backpool_lease_grace_period_s: float = 5.0
     # Issue 2.0.5 (deferred from 2.0.3): Bus middleware config
     bus: BusConfig = field(default_factory=BusConfig)
     # Issue 2.1.3: Tier 1 boot/wiring config for multi-session KernelService
@@ -151,12 +144,12 @@ class KernelConfig:
     #   * RecallCitationWrapper around ToolContext.recall_fn
     # Defaults to False so existing kernel + session tests are unchanged.
     enable_self_model: bool = False
-    # K1 temporal/spatial/grounding migration flags. M0 exposes only
-    # configuration, Protocols, and pure payload types. Later milestones
-    # wire S2.7/S2.8/S2.9 and P3.6/P3.7/P3.8 behind these gates.
+    # Temporal/spatial/grounding are on by default after the M3 exit gate.
+    # Operators can still disable each slice explicitly for isolated tests
+    # or incident rollback.
     enable_temporal: bool = True
-    enable_grounding: bool = False
-    enable_spatial: bool = False
+    enable_grounding: bool = True
+    enable_spatial: bool = True
     # Path to the SQLite projection store used by k1.selfmodel. When
     # empty / None the kernel falls back to an in-memory store
     # (suitable for tests + dev). Honored only when
@@ -178,10 +171,6 @@ class KernelConfig:
     # back to the opaque "actor:{session_id}" form.  Set by the web UI
     # coordinator after resolving the device → family member mapping.
     active_member_id: str = ""
-    # The active installed device for this single-session runtime. The web UI
-    # sets this before start_kernel() so per-session temporal handles can read
-    # device-context timezone observations from the first turn onward.
-    active_device_id: str = ""
     # M15: Family-tools (k1.tools.family) wiring. When True, S8 of
     # ``KernelService._startup_tier1`` bootstraps the FamilyToolsBundle
     # (K1FamilyStore + IdempotencyStore + ToolRegistry + NativeToolProvider)

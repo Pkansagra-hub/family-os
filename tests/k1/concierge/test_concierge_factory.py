@@ -235,7 +235,7 @@ class TestPortBundle:
 
     def test_all_port_keys_frozenset(self):
         assert _ALL_PORT_KEYS == frozenset(
-            {"input_", "output", "llm", "state", "dispatch", "delta", "memory", "temporal"}
+            {"input_", "output", "llm", "state", "dispatch", "delta", "memory"}
         )
 
     def test_optional_ports_default_to_none(self):

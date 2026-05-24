@@ -119,7 +119,7 @@ class SectionBudget:
 # Source: k1/sessionstate/README.md Sections 5-6
 
 SECTION_BUDGETS: Dict[str, SectionBudget] = {
-    # HOT CORE sections (56KB total, matches config hot_budget_bytes)
+    # HOT CORE sections (52KB total, matches config hot_budget_bytes)
     "control": SectionBudget(
         name="control",
         tier=Tier.HOT,
@@ -176,6 +176,27 @@ SECTION_BUDGETS: Dict[str, SectionBudget] = {
         eviction_priority=None,  # NEVER EVICT
         can_migrate=False,
     ),
+    "temporal": SectionBudget(
+        name="temporal",
+        tier=Tier.HOT,
+        max_bytes=4 * 1024,
+        eviction_priority=None,  # NEVER EVICT
+        can_migrate=False,
+    ),
+    "grounding": SectionBudget(
+        name="grounding",
+        tier=Tier.HOT,
+        max_bytes=2 * 1024,
+        eviction_priority=None,  # NEVER EVICT
+        can_migrate=False,
+    ),
+    "spatial": SectionBudget(
+        name="spatial",
+        tier=Tier.HOT,
+        max_bytes=4 * 1024,
+        eviction_priority=None,  # NEVER EVICT
+        can_migrate=False,
+    ),
     "task_state": SectionBudget(
         name="task_state",
         tier=Tier.HOT,
@@ -189,13 +210,6 @@ SECTION_BUDGETS: Dict[str, SectionBudget] = {
         max_bytes=4 * 1024,
         eviction_priority=3,  # Demotes to artifacts_warm
         can_migrate=True,
-    ),
-    "temporal": SectionBudget(
-        name="temporal",
-        tier=Tier.HOT,
-        max_bytes=4 * 1024,
-        eviction_priority=None,  # NEVER EVICT during an active session
-        can_migrate=False,
     ),
     # WARM TIER sections (48KB total)
     "beliefs_history": SectionBudget(
@@ -231,6 +245,13 @@ SECTION_BUDGETS: Dict[str, SectionBudget] = {
         tier=Tier.WARM,
         max_bytes=8 * 1024,
         eviction_priority=2,  # Evict after telemetry
+        can_migrate=True,
+    ),
+    "place_registry": SectionBudget(
+        name="place_registry",
+        tier=Tier.WARM,
+        max_bytes=8 * 1024,
+        eviction_priority=4,
         can_migrate=True,
     ),
 }

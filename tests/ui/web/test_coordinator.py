@@ -111,9 +111,10 @@ async def test_output_channel_wired(coordinator: UiCoordinator) -> None:
 
 @pytest.mark.asyncio
 async def test_web_bus_subscriptions_created(coordinator: UiCoordinator) -> None:
-    # 4 subscriptions: TOPIC_STATE_UPDATED, TOPIC_AFFECT_UPDATE,
-    # TOPIC_TOOL_STARTED, TOPIC_TOOL_COMPLETED
-    assert len(coordinator._web_subscriptions) == 4
+    # 7 subscriptions: TOPIC_STATE_UPDATED, TOPIC_AFFECT_UPDATE,
+    # TOPIC_TOOL_STARTED, TOPIC_TOOL_COMPLETED, TOPIC_TOOL_STATE_CHANGED,
+    # TOPIC_HIL_REQUEST, TOPIC_TASK_FAILED
+    assert len(coordinator._web_subscriptions) == 7
 
 
 # -------------------------------------------------------------------------

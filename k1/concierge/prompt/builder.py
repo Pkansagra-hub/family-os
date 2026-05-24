@@ -183,6 +183,9 @@ SS_READ_CONFIGS: dict[PromptMode, list[SSReadConfig]] = {
     ],
 }
 
+for _mode, _configs in list(SS_READ_CONFIGS.items()):
+    SS_READ_CONFIGS[_mode] = [cfg for cfg in _configs if cfg.section != "temporal"]
+
 
 # =========================================================================
 # BuiltContext -- output of DynamicPromptBuilder.build()
@@ -300,7 +303,7 @@ def _render_beliefs_active_full(section: Any, cfg: SSReadConfig) -> str:
     if hasattr(section, "_mentioned_location") and section._mentioned_location:
         raw = getattr(section._mentioned_location, "raw_text", "")
         if raw:
-            lines.append(f"  [location: {raw}]")
+            lines.append(f"  [mentioned location: {raw}]")
     return "\n".join(lines)
 
 
@@ -574,41 +577,46 @@ def _render_persona_slim(section: Any, cfg: SSReadConfig) -> str:
     return ""
 
 
-# =========================================================================
-# Temporal renderers (reads canonical temporal section via typed projection)
-# =========================================================================
-
-
-def _temporal_projection_from_section(section: Any, consumer: str = "front") -> Any | None:
-    """Build a typed TemporalProjection from the canonical SS temporal section."""
-    try:
-        payload = section.to_dict() if hasattr(section, "to_dict") else section.get_data()
-    except Exception:
-        return None
-    if not isinstance(payload, dict) or not payload.get("anchor"):
+def _build_temporal_projection(section: Any, *, consumer: str) -> Any | None:
+    if section is None or not hasattr(section, "to_dict"):
         return None
     try:
-        from k1.temporal.config import TemporalConfig
-        from k1.temporal.service.projection_builder import build_projection
+        from k1.temporal.serialization import (
+            dict_to_anchor,
+            dict_to_resolution,
+            dict_to_window,
+        )
+        from k1.temporal.types import TemporalProjection
 
-        anchor = payload.get("anchor") or {}
-        now_utc = str(anchor.get("now_utc") or anchor.get("captured_at_utc") or "")
-        if not now_utc:
+        payload = section.to_dict() or {}
+        anchor_payload = payload.get("anchor")
+        if not isinstance(anchor_payload, dict) or not anchor_payload:
             return None
-        return build_projection(
-            payload,
+        windows_payload = payload.get("windows") or {}
+        resolutions_payload = payload.get("resolved_expressions") or []
+        return TemporalProjection(
+            anchor=dict_to_anchor(anchor_payload),
+            windows={
+                str(key): dict_to_window(value)
+                for key, value in windows_payload.items()
+                if isinstance(value, dict)
+            },
+            resolved_expressions=tuple(
+                dict_to_resolution(value)
+                for value in resolutions_payload
+                if isinstance(value, dict)
+            ),
             consumer=consumer,
-            now_utc=now_utc,
-            config=TemporalConfig(stale_after_ms=int(payload.get("stale_after_ms", 120_000))),
+            freshness="live",
+            precision="execution" if consumer != "front" else "anchor",
         )
     except Exception:
-        logger.debug("temporal projection build failed", exc_info=True)
+        logger.exception("Temporal projection build failed")
         return None
 
 
 def _render_temporal_full(section: Any, cfg: SSReadConfig) -> str:
-    """Full temporal block rendered from TemporalProjection."""
-    projection = _temporal_projection_from_section(section, consumer="front")
+    projection = _build_temporal_projection(section, consumer="front")
     if projection is None:
         return ""
     from k1.temporal.service.projection_renderer import render_execution_block
@@ -617,13 +625,15 @@ def _render_temporal_full(section: Any, cfg: SSReadConfig) -> str:
 
 
 def _render_temporal_slim(section: Any, cfg: SSReadConfig) -> str:
-    """Slim temporal block rendered from TemporalProjection."""
-    projection = _temporal_projection_from_section(section, consumer="front")
+    projection = _build_temporal_projection(section, consumer="front")
     if projection is None:
         return ""
     from k1.temporal.service.projection_renderer import render_now_block
 
     return render_now_block(projection)
+
+
+SECTION_SOURCE_MAP: dict[str, str] = {}
 
 
 # Dispatch table: section_name -> (full_renderer, slim_renderer)
@@ -784,7 +794,7 @@ class DynamicPromptBuilder:
         tier: str = "LOW",
         ss: Any = None,
         grounding_capsule: Any = None,
-        temporal_projection: Any = None,
+        grounding_projection: Any = None,
     ) -> BuiltContext:
         """Assemble complete context for one Front LLM invocation.
 
@@ -808,6 +818,10 @@ class DynamicPromptBuilder:
                 its ``as_prompt_text()`` output to ``prompt_parts`` so
                 every Front prompt is grounded in the actor's
                 SituationFrame. ``None`` keeps the pre-M4 baseline.
+            grounding_projection: Optional ``GroundingProjection`` from
+                ``k1.grounding``. When provided, stage 9.5 renders NOW
+                and PLACE from the projection. Temporal SessionState is
+                not read directly for prompt construction.
 
         Returns:
             BuiltContext with everything react_loop() needs.
@@ -965,7 +979,7 @@ class DynamicPromptBuilder:
         # and 10 directly reference them. We now promote three blocks to
         # sit RIGHT AFTER IDENTITY so they precede every rule that depends
         # on them:
-        #   1. == NOW ==              one-line clock from TemporalProjection
+        #   1. == NOW ==              one-line clock from temporal_context
         #   2. == AFFECT STATE ==     band + tone-rule + length-rule (consolidated)
         #   3. == CONSCIENCE ==       forbidden / must_ask acts (from capsule)
         #
@@ -976,7 +990,11 @@ class DynamicPromptBuilder:
         # M6 framing note: the LLM previously confused the conscience
         # (behavioural) with ``tools=[]`` (capability menu). The new
         # preamble keeps that disambiguation while being much shorter.
-        live_now_block = self._build_now_block(ss, temporal_projection=temporal_projection)
+        live_grounding_blocks = self._build_grounding_live_blocks(grounding_projection)
+        if not live_grounding_blocks:
+            now_block = self._build_now_block(ss)
+            if now_block:
+                live_grounding_blocks = [now_block]
         affect_state_block = self._build_affect_state_block(affect_band, modifiers, ss)
         conscience_block_text = ""
         capsule_text = ""
@@ -1001,8 +1019,7 @@ class DynamicPromptBuilder:
         promoted: list[str] = []
         if active_member_block:
             promoted.append(active_member_block)
-        if live_now_block:
-            promoted.append(live_now_block)
+        promoted.extend(live_grounding_blocks)
         if affect_state_block:
             promoted.append(affect_state_block)
         if conscience_block_text:
@@ -1128,33 +1145,40 @@ class DynamicPromptBuilder:
     # -----------------------------------------------------------------
 
     @staticmethod
-    def _build_now_block(ss: Any, temporal_projection: Any = None) -> str:
-        """One-line ``== NOW ==`` header derived from TemporalProjection.
+    def _build_grounding_live_blocks(projection: Any) -> list[str]:
+        """Render Front live grounding blocks from a GroundingProjection."""
+        if projection is None:
+            return []
+        try:
+            from k1.grounding.service.prompt_block_renderer import (
+                render_now_block,
+                render_place_block,
+            )
+
+            blocks = [render_now_block(projection)]
+            place = render_place_block(projection)
+            if place:
+                blocks.append(place)
+            return [block for block in blocks if block]
+        except Exception:
+            logger.exception("  Stage 9.5  grounding projection render raised; skipping")
+            return []
+
+    @staticmethod
+    def _build_now_block(ss: Any) -> str:
+        """One-line ``== NOW ==`` header derived from the temporal section.
 
         Returns ``""`` if ss is None or temporal anchor unavailable.
         """
-        if temporal_projection is not None:
-            try:
-                from k1.temporal.service.projection_renderer import render_now_block
-
-                return render_now_block(temporal_projection)
-            except Exception:
-                logger.debug("_build_now_block: projection render failed", exc_info=True)
         if ss is None:
             return ""
         section = _safe_get_ss_section(ss, "temporal")
-        if section is None:
-            return ""
-        projection = _temporal_projection_from_section(section, consumer="front")
+        projection = _build_temporal_projection(section, consumer="front")
         if projection is None:
             return ""
-        try:
-            from k1.temporal.service.projection_renderer import render_now_block
+        from k1.temporal.service.projection_renderer import render_now_block
 
-            return render_now_block(projection)
-        except Exception:
-            logger.debug("_build_now_block: temporal section render failed", exc_info=True)
-            return ""
+        return render_now_block(projection)
 
     @staticmethod
     def _build_affect_state_block(
@@ -1411,7 +1435,9 @@ class DynamicPromptBuilder:
         for cfg in configs:
             if cfg.read_mode == "skip":
                 continue
-            section = _safe_get_ss_section(ss, cfg.section)
+            # Get section from SS manager (resolve virtual names via source map)
+            source_name = SECTION_SOURCE_MAP.get(cfg.section, cfg.section)
+            section = _safe_get_ss_section(ss, source_name)
             if section is None:
                 continue
             renderers = SECTION_RENDERERS.get(cfg.section)

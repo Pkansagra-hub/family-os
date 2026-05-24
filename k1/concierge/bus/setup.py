@@ -77,9 +77,12 @@ def build_middleware_chain(cfg) -> MiddlewareChain | None:
         registry = TopicRegistry()
         for topic in ALL_TOPICS:
             registry.register(topic)
-        # Dynamic topics: k1.agent.*.delta.*, k1.session.*
+        # Dynamic topics: k1.agent.*.delta.*, k1.session.*, and grounding
+        # runtime event families emitted outside the static Concierge topic list.
         registry.register_prefix("k1.agent.")
+        registry.register_prefix("k1.grounding.")
         registry.register_prefix("k1.session.")
+        registry.register_prefix("k1.spatial.")
         registry.register_prefix("k1.temporal.")
         middlewares.append(TopicValidationMiddleware(registry))
 

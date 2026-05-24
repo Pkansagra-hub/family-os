@@ -1329,9 +1329,7 @@ class OrchestratorService:
             which catches exceptions from this call to emit
             ``task.failed.v1``.
         """
-        from k1.concierge.orchestrator.types import (
-            TaskEnvelope as _ConciergeTaskEnvelope,
-        )
+        from k1.concierge.orchestrator.types import TaskEnvelope as _ConciergeTaskEnvelope
         from k1.concierge.task.complexity import ComplexityTier as _CTier
 
         if isinstance(envelope, TaskEnvelope):
@@ -1363,6 +1361,9 @@ class OrchestratorService:
             params = {cap: {} for cap in capabilities}
 
         try:
+            grounding_payload = getattr(envelope, "grounding", None)
+            if grounding_payload is None and isinstance(envelope.context, dict):
+                grounding_payload = envelope.context.get("grounding")
             translated = TaskEnvelope(
                 intent=intent,
                 trace_id=envelope.trace_id or f"trace-{envelope.task_id}",
@@ -1375,6 +1376,7 @@ class OrchestratorService:
                 tier=tier_str,
                 capabilities=capabilities,
                 params=params,
+                grounding=grounding_payload,
             )
         except ValueError as exc:
             log.error(
@@ -1740,6 +1742,7 @@ class OrchestratorService:
             context=snapshot,
             request_id=request_id,
             constraints=envelope.constraints,
+            grounding=envelope.grounding,
             timeout_ms=self._config.plan_request_timeout_ms,
         )
 

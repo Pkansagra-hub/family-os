@@ -339,11 +339,11 @@ Dispatch table `SECTION_RENDERERS: dict[str, tuple]` maps section names to (full
 | affective_now | Emotion + intensity + valence + arousal + tone hints + style hints | `emotion (intensity) | Style: pref` |
 | control | Full `get_metadata()` dict | FSM state + safety band |
 | persona | All preferences key/value | Preference key names |
-| temporal | Canonical temporal anchor, windows, freshness, resolved expressions | One-line temporal grounding summary |
+| temporal_context | Human-readable time, day, time_of_day, weekend, timezone, location | One-liner time summary |
 
-Temporal prompt rendering reads the canonical `temporal` SessionState section produced by `k1.temporal`.
+**Virtual section mapping:** `SECTION_SOURCE_MAP` maps `temporal_context` → `control` (reads from control sub-field).
 
-The legacy lazy temporal-context fallback has been removed; missing temporal state is handled as an unavailable grounding section.
+**Temporal context renderer** includes lazy fallback: if `get_temporal_anchor()` returns None, computes from Persona timezone via `k1.sessionstate.sections.temporal_context.compute_temporal_anchor()`.
 
 **Affective now renderer** includes:
 - Tone fine-tuning from `AffectiveMirror` (Experience Layer): warmth, formality, pace, mirror_intensity
@@ -353,6 +353,7 @@ The legacy lazy temporal-context fallback has been removed; missing temporal sta
 
 ```python
 from k1.concierge.prompt.mode import PromptMode  # sibling
+from k1.sessionstate.sections.temporal_context import compute_temporal_anchor  # lazy, in renderer
 ```
 
 ---
@@ -1291,7 +1292,7 @@ react_loop() with Back tools (recall_memory, discover_capabilities, invoke_capab
 |--------|---------|---------|
 | `k1.concierge.bus.topics` | `prompt.mode` | 5 canonical topic constants |
 | `k1.concierge.config` | 6 modules | Central config singleton |
-| `k1.temporal` | prompt temporal projection bridge | canonical temporal anchors and projection rendering |
+| `k1.sessionstate.sections.temporal_context` | `prompt.sections` (lazy) | `compute_temporal_anchor()` fallback |
 | `k1.model_hub.ports` | `llm.model_hub_bridge` | `HubHealthReport`, `ProviderHealthStatus` |
 | `k1.model_hub.types` | `llm.model_hub_bridge` | 18 K1 type imports (HubRequest, HubResponse, CapabilityType, etc.) |
 | `google.genai` | `llm.gemini_adapter` (lazy) | Gemini SDK |

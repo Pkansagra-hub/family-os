@@ -30,6 +30,10 @@ tool_contract:
     - "no_state_mutation"
     - "max_top_k_25"
 
+  context_precision:
+    temporal: "anchor"
+    spatial: "hidden"
+
   required_inputs:
     - name: "intent"
       type: "STRING"
@@ -62,9 +66,6 @@ tool_contract:
             score:
               type: "number"
               description: "Cosine similarity score [0.0, 1.0]"
-            diagnostics:
-              type: "object"
-              description: "Candidate ranking evidence such as semantic similarity, domain match, contract evidence, and exact-domain hint status."
         description: "Scored capability contracts sorted by descending score"
       total_matched:
         type: "integer"
@@ -81,9 +82,6 @@ tool_contract:
       embedding_model:
         type: "string"
         description: "Embedding model used for similarity search"
-      diagnostics:
-        type: "object"
-        description: "Query-level retrieval diagnostics such as candidate count, survivor count, fallback status, and hard-filter rejection counts."
     required:
       - "capabilities"
       - "total_matched"

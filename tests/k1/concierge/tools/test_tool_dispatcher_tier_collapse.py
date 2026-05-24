@@ -38,6 +38,8 @@ class TestFrontAllowlists:
             "recall_memory",
             "summarize_context",
             "dispatch_task",
+            "discover_capabilities",
+            "invoke_capability",
         }
         assert set(FRONT_TIER_ALLOWLISTS["simple"]) == expected
 
@@ -76,7 +78,6 @@ class TestBackAllowlists:
         expected = {
             "recall_memory",
             "discover_capabilities",
-            "get_capability_schemas",
             "invoke_capability",
             "batch_invoke_capabilities",
             "submit_result",

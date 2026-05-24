@@ -24,7 +24,6 @@ from k1.concierge.llm.types import ToolSchema
 # (`from k1.concierge.tools.schemas_back import DISCOVER_CAPABILITIES_SCHEMA`).
 from k1.concierge.tools.schemas_fabric import (
     DISCOVER_CAPABILITIES_SCHEMA,
-    GET_CAPABILITY_SCHEMAS_SCHEMA,
     INVOKE_CAPABILITY_SCHEMA,
 )
 
@@ -42,9 +41,7 @@ BATCH_INVOKE_CAPABILITIES_SCHEMA = ToolSchema(
         "in the batch runs independently. Use when you need to execute 2+ "
         "capabilities (e.g. calendar event + reminder + task update) to save "
         "tool budget. Costs only 1 tool call regardless of batch size. "
-        "Copy exact capability names from discovery and supply schema-valid params "
-        "for each item. Do not batch prompt templates, activity profiles, or "
-        "natural-language labels. Available at all tiers."
+        "Available at all tiers."
     ),
     parameters={
         "type": "object",
@@ -56,9 +53,7 @@ BATCH_INVOKE_CAPABILITIES_SCHEMA = ToolSchema(
                     "properties": {
                         "capability_name": {
                             "type": "string",
-                            "description": (
-                                "Exact executable capability name copied verbatim from discovery."
-                            ),
+                            "description": "Exact name of the capability to invoke",
                         },
                         "params": {
                             "type": "object",
@@ -215,9 +210,7 @@ SUBMIT_RESULT_SCHEMA = ToolSchema(
         "by a capability/tool contract (missing required input, no viable "
         "capability candidates, explicit choice/escalation). Do not use "
         "needs_human just because no bulk wrapper exists; decompose through "
-        "read/list + write capability contracts first. Never ask the user which "
-        "internal capability, tool, registry entry, schema, adapter, or prompt "
-        "profile to use. "
+        "read/list + write capability contracts first. "
         "Available at all tiers."
     ),
     parameters={
@@ -266,12 +259,7 @@ SUBMIT_RESULT_SCHEMA = ToolSchema(
             },
             "question": {
                 "type": "string",
-                "description": (
-                    "Question to present to user (for needs_human). Ask only for missing "
-                    "real-world information such as date, person, account, or approval. "
-                    "Never ask for internal capability names, tool names, schema names, "
-                    "registry entries, adapters, prompts, or activity profiles."
-                ),
+                "description": "Question to present to user (for needs_human)",
             },
             "options": {
                 "type": "array",
@@ -305,7 +293,6 @@ BACK_TOOL_SCHEMAS: list[ToolSchema] = [
     # Read
     RECALL_MEMORY_SCHEMA,
     DISCOVER_CAPABILITIES_SCHEMA,
-    GET_CAPABILITY_SCHEMAS_SCHEMA,
     # Action
     INVOKE_CAPABILITY_SCHEMA,
     BATCH_INVOKE_CAPABILITIES_SCHEMA,
@@ -322,7 +309,6 @@ BACK_TOOL_SCHEMAS: list[ToolSchema] = [
 _BACK_SIMPLE_LIST: list[str] = [
     "recall_memory",
     "discover_capabilities",
-    "get_capability_schemas",
     "invoke_capability",
     "batch_invoke_capabilities",
     "submit_result",

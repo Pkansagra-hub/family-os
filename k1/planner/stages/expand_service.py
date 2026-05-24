@@ -245,6 +245,22 @@ def _safe_float(value: Any, *, default: float) -> float:
         return default
 
 
+def _render_planning_grounding_block(grounding: Mapping[str, Any] | None) -> str:
+    """Render typed grounding for the EXPAND user prompt."""
+    if not grounding:
+        return ""
+    try:
+        from k1.grounding.serialization import dict_to_projection
+        from k1.grounding.service.prompt_block_renderer import (
+            render_planning_grounding_block,
+        )
+
+        return render_planning_grounding_block(dict_to_projection(dict(grounding)))
+    except Exception:
+        log.warning("expand: failed to render planning grounding block", exc_info=True)
+        return ""
+
+
 def _coerce_prompt_inventory(
     prompt_inventory: Mapping[str, Any] | Iterable[Any],
 ) -> Dict[str, _PromptDescriptor]:
@@ -274,40 +290,6 @@ def _is_step_id(value: Any) -> bool:
     if not isinstance(value, str) or len(value) < 2 or value[0] != "s":
         return False
     return value[1:].isdigit()
-
-
-def _format_temporal_constraint_block(temporal: Mapping[str, Any]) -> str:
-    """Format typed temporal constraints for EXPAND without ad-hoc now strings."""
-    fields = {
-        "anchor_id": temporal.get("anchor_id"),
-        "now_utc": temporal.get("now_utc"),
-        "timezone": temporal.get("timezone"),
-    }
-    lines = ["Temporal:"]
-    for key, value in fields.items():
-        if value:
-            lines.append(f"  {key}: {value}")
-    for key in ("today", "tomorrow"):
-        value = temporal.get(key)
-        if isinstance(value, Mapping):
-            start = value.get("start_local") or value.get("start_utc") or value.get("start")
-            end = value.get("end_local") or value.get("end_utc") or value.get("end")
-            if start or end:
-                lines.append(f"  {key}: {start or '?'} -> {end or '?'}")
-        elif value:
-            lines.append(f"  {key}: {value}")
-    resolved = temporal.get("resolved_expressions")
-    if isinstance(resolved, list) and resolved:
-        lines.append("  resolved_expressions:")
-        for item in resolved:
-            if isinstance(item, Mapping):
-                raw = item.get("raw_text", "")
-                label = item.get("normalized_label", item.get("resolution_kind", ""))
-                if raw or label:
-                    lines.append(f"    - {raw}: {label}")
-            elif item:
-                lines.append(f"    - {item}")
-    return "\n".join(lines) if len(lines) > 1 else ""
 
 
 # ---------------------------------------------------------------------------
@@ -827,13 +809,12 @@ class ExpandService:
             safety_band = request.constraints.get("safety_band")
             if safety_band and safety_band != "GREEN":
                 constraint_lines.append(f"Safety restriction: {safety_band}")
-            temporal = request.constraints.get("temporal", {})
-            if isinstance(temporal, dict):
-                temporal_block = _format_temporal_constraint_block(temporal)
-                if temporal_block:
-                    constraint_lines.append(temporal_block)
             if constraint_lines:
-                parts.append("\nCONSTRAINTS:\n" + "\n".join(constraint_lines))
+                parts.append("\n[Constraints: " + ", ".join(constraint_lines) + "]")
+
+        grounding_block = _render_planning_grounding_block(request.grounding)
+        if grounding_block:
+            parts.append("\n" + grounding_block)
 
         # Arbiter feedback (revise loop).
         if arbiter_feedback:

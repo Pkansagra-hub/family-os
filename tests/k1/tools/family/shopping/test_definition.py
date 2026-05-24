@@ -49,9 +49,12 @@ def test_kind_sets() -> None:
     assert idempotent == {"create_list", "add_item"}
 
 
-def test_all_actions_are_green() -> None:
+def test_write_actions_are_amber_and_reads_are_green() -> None:
     for action in SHOPPING_DEFINITION.actions:
-        assert action.min_band == "GREEN", action.name
+        if action.kind == "read":
+            assert action.min_band == "GREEN", action.name
+        else:
+            assert action.min_band == "AMBER", action.name
 
 
 def test_child_can_request_but_not_approve_or_check_off() -> None:

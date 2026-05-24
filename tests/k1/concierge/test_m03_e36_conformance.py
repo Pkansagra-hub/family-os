@@ -19,6 +19,7 @@ import asyncio
 import json
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -350,6 +351,107 @@ class TestFrontEmissionOrdering:
         assert dump["messages"] == [{"role": "user", "content": "hello there"}]
         assert isinstance(dump["system_prompt"], str)
         assert dump["system_prompt"]
+
+    def test_runtime_prompt_dump_includes_tool_definitions(self, tmp_path: Path) -> None:
+        """Front prompt dumps include the full LLM-facing tool definitions."""
+        import k1.concierge.actors.front as front_mod
+
+        context = SimpleNamespace(
+            affect_band="neutral",
+            max_iterations=3,
+            tools=[_make_tool_schema("recall_memory")],
+            messages=[SimpleNamespace(role="user", content="hello")],
+            system_prompt="system prompt",
+        )
+        env = _make_envelope(
+            topic="k1.session.user.input.v1",
+            payload={"text": "hello"},
+            envelope_id=456,
+        )
+
+        with patch.object(front_mod, "_PROMPT_DUMP_DIR", tmp_path):
+            front_mod._write_runtime_prompt_dump(
+                envelope=env,
+                mode=front_mod.PromptMode.STANDARD,
+                context=context,
+                domain=None,
+                tier="hot",
+                clarify_depth=0,
+                trace_id="trace-front-tool-dump",
+            )
+
+        dump = json.loads((tmp_path / "front_prompt_latest.json").read_text(encoding="utf-8"))
+        assert dump["tool_names"] == ["recall_memory"]
+        assert dump["tools"] == [
+            {
+                "name": "recall_memory",
+                "description": "Test tool: recall_memory",
+                "parameters": {"type": "object", "properties": {}},
+                "returns": None,
+                "actor": None,
+                "category": None,
+                "side_effects": False,
+            }
+        ]
+
+    def test_first_front_llm_call_dump_includes_hub_request(self, tmp_path: Path) -> None:
+        """The first Front LLM dump captures the actual HubRequest payload."""
+        import k1.concierge.react.loop as loop_mod
+        from k1.model_hub.types import (
+            CapabilityType,
+            HubRequest,
+            Message,
+            RequestConstraints,
+            ToolCallPayload,
+            ToolDefinition,
+        )
+
+        request = HubRequest(
+            capability=CapabilityType.TOOL_CALL,
+            payload=ToolCallPayload(
+                messages=[Message(role="user", content="hello")],
+                tools=[
+                    ToolDefinition(
+                        name="dispatch_task",
+                        description="Dispatch work",
+                        parameters={"type": "object"},
+                    )
+                ],
+                tool_choice="auto",
+                system_prompt="system prompt",
+            ),
+            constraints=RequestConstraints(
+                max_tokens=1234,
+                temperature=1.0,
+                consumer_id="concierge.front",
+            ),
+            trace_id="front-test-trace",
+            session_id="web-test",
+        )
+
+        with patch.object(loop_mod, "_PROMPT_DUMP_DIR", tmp_path):
+            loop_mod._write_front_llm_first_call_dump(
+                actor="front",
+                scenario="standard",
+                iteration=0,
+                request=request,
+                use_streaming=True,
+                force_text=False,
+            )
+
+        dump = json.loads(
+            (tmp_path / "front_llm_first_call_latest.json").read_text(encoding="utf-8")
+        )
+        assert dump["actor"] == "front"
+        assert dump["scenario"] == "standard"
+        assert dump["capability"] == "TOOL_CALL"
+        assert dump["use_streaming"] is True
+        assert dump["constraints"]["consumer_id"] == "concierge.front"
+        assert dump["payload"]["system_prompt"] == "system prompt"
+        assert dump["payload"]["messages"] == [{"role": "user", "content": "hello"}]
+        assert dump["payload"]["tools"][0]["name"] == "dispatch_task"
+        assert dump["payload"]["tool_choice"] == "auto"
+        assert dump["provider_mapping_preview"]["tools"].endswith("function_declarations")
 
 
 # =========================================================================

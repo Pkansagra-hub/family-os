@@ -48,6 +48,7 @@ from k1.concierge.actors.shared import never_cancel as _never_cancel
 from k1.concierge.actors.shared import parse_envelope_payload as _parse_payload
 from k1.concierge.actors.shared import safe_get_section as _safe_get_section
 from k1.concierge.bus.builders import (
+    SYNTHETIC_ID_START,
     build_final_response,
     build_hil_response,
     build_response_stream,
@@ -72,6 +73,19 @@ logger = logging.getLogger(__name__)
 _PROMPT_DUMP_DIR = Path(__file__).resolve().parents[3] / "data" / "prompt_dumps"
 
 
+def _dump_tool_schema(tool: Any) -> dict[str, Any]:
+    """Serialize a Front tool schema exactly as the model receives it."""
+    return {
+        "name": getattr(tool, "name", ""),
+        "description": getattr(tool, "description", ""),
+        "parameters": getattr(tool, "parameters", {}) or {},
+        "returns": getattr(tool, "returns", None),
+        "actor": getattr(tool, "actor", None),
+        "category": getattr(tool, "category", None),
+        "side_effects": bool(getattr(tool, "side_effects", False)),
+    }
+
+
 def _correlate_envelope(env: Envelope, source: Envelope, trace_id: str) -> Envelope:
     """Copy source correlation headers onto a Front-emitted envelope."""
     return replace(
@@ -80,6 +94,13 @@ def _correlate_envelope(env: Envelope, source: Envelope, trace_id: str) -> Envel
         session_id=source.session_id,
         request_id=source.request_id,
     )
+
+
+def _response_parent_id(envelope: Envelope) -> int:
+    """Return the bus-visible parent for Front-emitted response events."""
+    if envelope.envelope_id >= SYNTHETIC_ID_START:
+        return envelope.parent_id
+    return envelope.envelope_id
 
 
 def _bind_tool_context(tool_dispatcher: ToolDispatcher, *, trace_id: str, session_id: str) -> None:
@@ -135,6 +156,7 @@ def _write_runtime_prompt_dump(
             "affect_band": context.affect_band,
             "max_iterations": context.max_iterations,
             "tool_names": [t.name for t in context.tools],
+            "tools": [_dump_tool_schema(t) for t in context.tools],
             "messages": [
                 {
                     "role": m.role,
@@ -229,35 +251,11 @@ def _strip_leaked_reasoning(text: str) -> str:
     return text
 
 
-# NOTE: A deterministic English fallback ack used to live here
-# ("_build_dispatch_ack").  It was removed because the K1 kernel is
-# domain-, language-, locale-, and LLM-agnostic: it MUST NOT synthesize
-# natural-language strings.  When the LLM returns no text after a
-# dispatch, the structured `k1.orchestration.task.dispatch.v1` event on
-# the bus is the kernel-grade acknowledgement.  Presentation surfaces
-# (UI / voice / non-English locales / bank, gov, health verticals)
-# render their own affordance from that structured signal.
-
-
-def _hitl_answer_rejects_background_task(text: str) -> bool:
-    normalized = " ".join(str(text or "").lower().split())
-    if not normalized:
-        return False
-    return any(
-        marker in normalized
-        for marker in (
-            "without dispatch",
-            "don't dispatch",
-            "do not dispatch",
-            "dont dispatch",
-            "just answer",
-            "answer directly",
-            "give me things without dispatch",
-            "no background task",
-            "stop the task",
-            "cancel that",
-        )
-    )
+def _build_dispatch_ack(dispatches: list[dict[str, Any]]) -> str:
+    """Return a deterministic in-progress acknowledgement for dispatched work."""
+    if len(dispatches) > 1:
+        return "I'm working on those now."
+    return "I'm working on that now."
 
 
 # Patterns matching raw system/HIL blocks that LLMs sometimes pass through
@@ -326,11 +324,6 @@ def _strip_leaked_back_frame(text: str) -> str:
 
 
 _INTERNAL_FAILURE_MARKERS: tuple[str, ...] = (
-    "react_loop_degenerate",
-    "capability_name",
-    "member_id",
-    "tool.read",
-    "tool.execute",
     "tool invocation",
     "tool budget",
     "discover or invoke",
@@ -356,32 +349,10 @@ def _user_safe_failure_text(action: str = "") -> str:
     return f"I couldn't finish {target}. Want me to try again?"
 
 
-def _sanitize_result_summary(text: str, action: str = "") -> str:
-    """Strip lines containing internal failure markers while preserving
-    substantive content.
-
-    Previous behavior nuked the entire text and substituted a generic
-    "I couldn't finish that task" message whenever ANY internal marker
-    appeared.  That caused successful Back results to be presented to
-    Front as failures whenever the result summary happened to mention a
-    tool/capability/worker name (see logs.txt 2026-05-20 -- successful
-    `tool.execute.calendar.create_event` was reported to the user as a
-    snag).
-
-    New behavior:
-      * Drop only the offending lines.
-      * Return the remaining substantive text.
-      * Only when nothing substantive remains do we fall back to the
-        safe "couldn't finish" message (with optional action context).
-    """
-    if not text:
+def _sanitize_result_summary(text: str) -> str:
+    if not text or not _looks_internal_failure_text(text):
         return text
-    lines = text.splitlines()
-    clean_lines = [ln for ln in lines if not _looks_internal_failure_text(ln)]
-    cleaned = "\n".join(clean_lines).strip()
-    if cleaned:
-        return cleaned
-    return _user_safe_failure_text(action)
+    return _user_safe_failure_text()
 
 
 # =========================================================================
@@ -482,23 +453,7 @@ def _extract_scenario_data(
     if mode == PromptMode.WEAVE:
         frame = WeavePresentationFrame.from_payload_and_pending(payload, None, ss)
         data = frame.to_scenario_dict()
-        # Extract the first task's action so the sanitizer can include
-        # it in any fallback "couldn't finish <action>" message.
-        _first_action = ""
-        _payload_results = payload.get("results") or []
-        if _payload_results and isinstance(_payload_results[0], dict):
-            _first_item = _payload_results[0]
-            _first_inner = (
-                _first_item.get("result", _first_item)
-                if isinstance(_first_item.get("result"), dict)
-                else _first_item
-            )
-            if isinstance(_first_inner, dict):
-                _first_action = str(_first_inner.get("action", "") or "")
-        data["results_summary"] = _sanitize_result_summary(
-            str(data.get("results_summary") or ""),
-            action=_first_action,
-        )
+        data["results_summary"] = _sanitize_result_summary(str(data.get("results_summary") or ""))
         return data
 
     if mode == PromptMode.HITL_RELAY:
@@ -652,8 +607,6 @@ def _extract_family_context(ss: Any) -> dict[str, Any]:
 
         if family_data:
             lines_family.append(f"Family: {family_data.get('family_name', '?')}")
-            lines_family.append(f"Location: {family_data.get('location', '?')}")
-            lines_family.append(f"Timezone: {family_data.get('timezone', '?')}")
 
             members = family_data.get("members", [])
             for m in members:
@@ -988,6 +941,119 @@ def _task_pending_hil_payload(task: Any) -> dict[str, Any]:
     return {}
 
 
+_GROUNDING_PROPAGATION_FIELDS = (
+    "grounding_envelope_id",
+    "temporal_anchor_id",
+    "spatial_context_id",
+    "resolved_temporal_refs",
+    "resolved_spatial_refs",
+)
+
+_TEMPORAL_CLARIFICATION_FIELDS = (
+    "requires_temporal_clarification",
+    "temporal_clarification_reasons",
+)
+
+
+def _sync_dispatch_reference_context(dispatch_payload: dict[str, Any]) -> None:
+    reference_context = dict(dispatch_payload.get("reference_context") or {})
+    grounding_context = dict(reference_context.get("grounding") or {})
+    for key in _GROUNDING_PROPAGATION_FIELDS:
+        value = dispatch_payload.get(key)
+        if value is None:
+            continue
+        reference_context[key] = value
+        grounding_context[key] = value
+    for key in _TEMPORAL_CLARIFICATION_FIELDS:
+        value = dispatch_payload.get(key)
+        if value is not None:
+            reference_context[key] = value
+    if grounding_context:
+        reference_context["grounding"] = grounding_context
+    if reference_context:
+        dispatch_payload["reference_context"] = reference_context
+
+
+def _resolved_temporal_refs_from_projection(
+    projection: Any,
+) -> tuple[dict[str, Any], dict[str, str]]:
+    from k1.temporal.serialization import resolution_to_dict
+
+    temporal_projection = getattr(projection, "temporal", projection)
+    resolutions = getattr(temporal_projection, "resolved_expressions", ()) or ()
+    refs: dict[str, Any] = {}
+    reasons: dict[str, str] = {}
+    for resolution in resolutions:
+        raw_text = str(getattr(resolution, "raw_text", "") or "").strip()
+        if not raw_text:
+            raw_text = str(getattr(resolution, "normalized_label", "") or "").strip()
+        if not raw_text:
+            continue
+        refs[raw_text] = resolution_to_dict(resolution)
+        if getattr(resolution, "needs_clarification", False):
+            reasons[raw_text] = str(
+                getattr(resolution, "clarification_reason", None) or "ambiguous"
+            )
+    return refs, reasons
+
+
+async def _resolve_temporal_refs_for_dispatch(
+    dispatch_payload: dict[str, Any],
+    *,
+    grounding: Any,
+    temporal: Any,
+    session_id: str | None,
+    turn_id: str,
+    trace_id: str,
+    device_id: str | None,
+    installation_id: str | None,
+) -> None:
+    from k1.temporal.service.expression_candidates import extract_from_dispatch
+
+    candidates = extract_from_dispatch(dispatch_payload)
+    if not candidates:
+        return
+
+    projection = None
+    if grounding is not None:
+        grounding_envelope = await grounding.refresh_turn(
+            session_id,
+            consumer="front",
+            turn_id=turn_id,
+            trace_id=trace_id,
+            candidates=candidates,
+            device_id=device_id,
+            installation_id=installation_id,
+        )
+        projection = await grounding.build_projection(grounding_envelope, consumer="front")
+        from k1.grounding.serialization import projection_to_dict
+        from k1.grounding.service.propagation import build_propagation_metadata
+
+        dispatch_payload.update(build_propagation_metadata(projection))
+        dispatch_payload["grounding"] = projection_to_dict(projection)
+    elif temporal is not None:
+        await temporal.refresh_turn(
+            session_id,
+            turn_id=turn_id,
+            trace_id=trace_id,
+            candidates=candidates,
+            device_id=device_id,
+            installation_id=installation_id,
+        )
+        projection = await temporal.build_projection(session_id, consumer="front")
+        dispatch_payload["temporal_anchor_id"] = projection.anchor.anchor_id
+    else:
+        return
+
+    refs, reasons = _resolved_temporal_refs_from_projection(projection)
+    if refs:
+        dispatch_payload["resolved_temporal_refs"] = refs
+    if reasons:
+        dispatch_payload["requires_temporal_clarification"] = True
+        dispatch_payload["temporal_clarification_reasons"] = reasons
+    _sync_dispatch_reference_context(dispatch_payload)
+
+
 def _get_fsm_state(ss: Any) -> str:
     """Get FSM flow_state from control section, default from config."""
     _default = get_config().actors.front.default_fsm_state
@@ -1113,8 +1179,10 @@ async def front_handler(
     all_tool_schemas: list[Any] | None = None,
     fsm_state: str | None = None,
     opp_pipeline: Any | None = None,
+    temporal: Any = None,
+    spatial: Any = None,
+    grounding: Any = None,
     self_model: Any = None,
-    temporal: Any | None = None,
 ) -> ReactResult:
     """Front handler with mode-driven prompt assembly.
 
@@ -1137,17 +1205,20 @@ async def front_handler(
     Returns:
         ReactResult from the ReAct loop execution.
     """
+    effective_session_id = (
+        envelope.session_id
+        or getattr(grounding, "session_id", "")
+        or getattr(spatial, "session_id", "")
+        or getattr(temporal, "session_id", "")
+        or ""
+    )
+    if effective_session_id and envelope.session_id != effective_session_id:
+        envelope = replace(envelope, session_id=effective_session_id)
+
     trace_id = (
         envelope.cognitive_trace_id or envelope.request_id or f"front-{uuid.uuid4().hex[:12]}"
     )
-    effective_session_id = envelope.session_id or getattr(temporal, "session_id", "") or ""
-    effective_session_id = str(effective_session_id) if effective_session_id else ""
-    correlation_source = (
-        replace(envelope, session_id=effective_session_id)
-        if effective_session_id and effective_session_id != envelope.session_id
-        else envelope
-    )
-    _bind_tool_context(tool_dispatcher, trace_id=trace_id, session_id=effective_session_id)
+    _bind_tool_context(tool_dispatcher, trace_id=trace_id, session_id=envelope.session_id)
 
     # 0. Guard: skip observability-only topics that should never trigger
     #    an LLM call. These are informational events (turn lifecycle,
@@ -1227,16 +1298,80 @@ async def front_handler(
 
     # 6. Build scenario data
     scenario_data = _extract_scenario_data(mode, envelope, ss)
+    envelope_payload = _parse_payload(envelope)
+
+    front_grounding_projection: Any = None
+    grounding_dispatch_metadata: dict[str, Any] = {}
+    grounding_projection_payload: dict[str, Any] | None = None
+    if grounding is not None:
+        device_id = str(envelope_payload.get("device_id") or "") or None
+        installation_id = device_id
+        try:
+            grounding_envelope = await grounding.refresh_turn(
+                envelope.session_id or None,
+                consumer="front",
+                turn_id=str(envelope.envelope_id),
+                trace_id=trace_id,
+                device_id=device_id,
+                installation_id=installation_id,
+            )
+            effective_session_id = (
+                getattr(grounding_envelope, "session_id", None) or envelope.session_id
+            )
+            if effective_session_id and envelope.session_id != effective_session_id:
+                envelope = replace(envelope, session_id=effective_session_id)
+                _bind_tool_context(
+                    tool_dispatcher,
+                    trace_id=trace_id,
+                    session_id=effective_session_id,
+                )
+            front_grounding_projection = await grounding.build_projection(
+                grounding_envelope,
+                consumer="front",
+            )
+            from k1.grounding.serialization import projection_to_dict
+            from k1.grounding.service.propagation import build_propagation_metadata
+
+            grounding_dispatch_metadata = build_propagation_metadata(front_grounding_projection)
+            grounding_projection_payload = projection_to_dict(front_grounding_projection)
+        except Exception:
+            logger.warning("front_handler: grounding refresh/projection failed", exc_info=True)
+    elif temporal is not None:
+        device_id = str(envelope_payload.get("device_id") or "") or None
+        installation_id = device_id
+        try:
+            snapshot = await temporal.refresh_turn(
+                envelope.session_id or None,
+                turn_id=str(envelope.envelope_id),
+                trace_id=trace_id,
+                device_id=device_id,
+                installation_id=installation_id,
+            )
+            effective_session_id = getattr(snapshot, "session_id", None) or envelope.session_id
+            if effective_session_id and envelope.session_id != effective_session_id:
+                envelope = replace(envelope, session_id=effective_session_id)
+                _bind_tool_context(
+                    tool_dispatcher,
+                    trace_id=trace_id,
+                    session_id=effective_session_id,
+                )
+            await temporal.build_projection(envelope.session_id or None, consumer="front")
+        except Exception:
+            logger.warning("front_handler: temporal refresh/projection failed", exc_info=True)
+
     if mode == PromptMode.WEAVE and (
         int(scenario_data.get("result_count", 0) or 0) == 0
         or not str(scenario_data.get("results_summary", "") or "").strip()
     ):
         logger.info("front_handler: WEAVE skipped because no concrete results are available")
-        _ack_env = build_final_response(
-            payload={"text": "", "is_ack": True},
-            parent_id=envelope.envelope_id,
+        _ack_env = _correlate_envelope(
+            build_final_response(
+                payload={"text": "", "is_ack": True, "trace_id": trace_id},
+                parent_id=_response_parent_id(envelope),
+            ),
+            envelope,
+            trace_id,
         )
-        _ack_env = _correlate_envelope(_ack_env, correlation_source, trace_id)
         bus.publish(_ack_env)
         return ReactResult(status="skipped", text="", dispatched_tasks=[])
 
@@ -1273,26 +1408,6 @@ async def front_handler(
                 "front_handler: appended current user turn to messages: %s",
                 current_user_text[:60],
             )
-
-    temporal_projection: Any = None
-    if temporal is not None:
-        try:
-            temporal_session_id = effective_session_id or None
-            temporal_payload = _parse_payload(envelope)
-            temporal_device_id = str(
-                temporal_payload.get("device") or temporal_payload.get("device_id") or ""
-            )
-            await temporal.refresh_turn(
-                temporal_session_id,
-                turn_id=str(envelope.envelope_id),
-                trace_id=trace_id,
-                candidates=(),
-                device_id=temporal_device_id or None,
-                installation_id=temporal_device_id or None,
-            )
-            temporal_projection = await temporal.build_projection(temporal_session_id, "front")
-        except Exception:
-            logger.warning("front_handler: temporal refresh/projection failed", exc_info=True)
 
     # 8. Assemble prompt via mode-driven builder
     # OPP-6/OPP-7: Enrich prompt with episodic compression + dynamic identity.
@@ -1371,7 +1486,7 @@ async def front_handler(
         tier=tier,
         ss=ss,
         grounding_capsule=grounding_capsule,
-        temporal_projection=temporal_projection,
+        grounding_projection=front_grounding_projection,
     )
     event_turn_text = _build_event_turn_text(mode, scenario_data)
     if event_turn_text:
@@ -1407,12 +1522,7 @@ async def front_handler(
     # timing chain to buffer those events indefinitely waiting for a parent
     # delivery that will never happen.  Fall back to the envelope's own
     # parent_id which DID go through the bus.
-    from k1.concierge.bus.builders import SYNTHETIC_ID_START
-
-    if envelope.envelope_id >= SYNTHETIC_ID_START:
-        parent_id = envelope.parent_id
-    else:
-        parent_id = envelope.envelope_id
+    parent_id = _response_parent_id(envelope)
 
     logger.info(
         "front_handler: LLM INPUT  prompt_len=%d messages=%d tools=%d max_iter=%d affect=%s",
@@ -1446,7 +1556,7 @@ async def front_handler(
             payload={"text": text, "trace_id": trace_id},
             parent_id=parent_id,
         )
-        env = _correlate_envelope(env, correlation_source, trace_id)
+        env = _correlate_envelope(env, envelope, trace_id)
         bus.publish(env)
         logger.info(
             "front_handler._on_text_response: FINAL published (envelope_id=%d)", env.envelope_id
@@ -1477,7 +1587,7 @@ async def front_handler(
                 },
                 parent_id=parent_id,
             )
-            env = _correlate_envelope(env, correlation_source, trace_id)
+            env = _correlate_envelope(env, envelope, trace_id)
             bus.publish(env)
             _stream_chunk_idx += 1
         elif chunk.chunk_type == "text_delta" and chunk.text:
@@ -1491,7 +1601,7 @@ async def front_handler(
                 },
                 parent_id=parent_id,
             )
-            env = _correlate_envelope(env, correlation_source, trace_id)
+            env = _correlate_envelope(env, envelope, trace_id)
             bus.publish(env)
             _stream_chunk_idx += 1
 
@@ -1529,14 +1639,6 @@ async def front_handler(
             result.text[:120],
         )
 
-    # NOTE: a heuristic "phantom dispatch" detector that matched English
-    # phrases ("I'll add", "I'm scheduling", ...) used to live here.
-    # Removed: the kernel does not parse natural language to second-guess
-    # the LLM.  Whether the LLM's text honoured DISPATCH_RULES is a
-    # prompt/model contract concern, not a kernel concern.  The only
-    # structural signal the kernel exposes is `dispatched=0 tool_calls=0`,
-    # already in the LLM OUTPUT log line above.
-
     # 10. Post-loop: emit bus events in correct FSM order.
     #
     #     The react_loop no longer fires on_text_response directly.
@@ -1568,7 +1670,6 @@ async def front_handler(
             reason="User requested cancellation",
             parent_id=parent_id,
             trace_id=trace_id,
-            source_envelope=correlation_source,
         )
 
     # 10b. Emit normal dispatches BEFORE response.final
@@ -1587,35 +1688,45 @@ async def front_handler(
         else:
             canonical_tier = "LOW"
         tier_enum = ComplexityTier(canonical_tier)
+        dispatch_payload = {
+            **task_spec,
+            "tier": canonical_tier,
+            "budget_hint": budget_for_tier(tier_enum),
+            "trace_id": trace_id,
+        }
+        if grounding_dispatch_metadata:
+            dispatch_payload.update(grounding_dispatch_metadata)
+            if grounding_projection_payload is not None:
+                dispatch_payload["grounding"] = grounding_projection_payload
+            _sync_dispatch_reference_context(dispatch_payload)
+        device_id = str(envelope_payload.get("device_id") or "") or None
+        installation_id = device_id
+        try:
+            await _resolve_temporal_refs_for_dispatch(
+                dispatch_payload,
+                grounding=grounding,
+                temporal=temporal,
+                session_id=envelope.session_id or None,
+                turn_id=str(envelope.envelope_id),
+                trace_id=trace_id,
+                device_id=device_id,
+                installation_id=installation_id,
+            )
+        except Exception:
+            logger.warning("front_handler: dispatch temporal resolution failed", exc_info=True)
         env = build_task_dispatch(
-            payload={
-                **task_spec,
-                "tier": canonical_tier,
-                "budget_hint": budget_for_tier(tier_enum),
-                "trace_id": trace_id,
-            },
+            payload=dispatch_payload,
             parent_id=parent_id,
         )
-        env = _correlate_envelope(env, correlation_source, trace_id)
+        env = _correlate_envelope(env, envelope, trace_id)
         bus.publish(env)
 
     # 10c. Emit response.final AFTER all dispatches (correct FSM ordering)
     #      For STANDARD/PRESENT modes, emit stream chunks first (Epic 4.2).
     _final_text = result.text or ""
     if mode == PromptMode.STANDARD and normal_dispatches:
-        if _final_text.strip():
-            logger.info("front_handler: preserving model text after dispatch")
-        else:
-            # KERNEL CONTRACT: do NOT synthesize an English fallback.
-            # The structured task.dispatch.v1 event already carries the
-            # acknowledgement signal; presentation layers render from it
-            # in their own language/locale.  Empty text here means
-            # "LLM had nothing to say beyond the dispatch" -- a valid,
-            # domain-agnostic outcome.
-            logger.info(
-                "front_handler: empty post-dispatch text; relying on "
-                "structured task.dispatch.v1 event for ack signal"
-            )
+        _final_text = _build_dispatch_ack(normal_dispatches)
+        logger.info("front_handler: replaced post-dispatch text with deterministic ack")
     # WEAVE degenerate guard: if the LLM produced the generic fallback
     # ("Let me think about that for a moment.") during a WEAVE/proactive
     # delivery, replace it with a deterministic summary built from the
@@ -1657,7 +1768,8 @@ async def front_handler(
             _final_text = _question if _question else ""
             logger.info("front_handler: HITL_RELAY degenerate replaced with deterministic prompt")
     if mode == PromptMode.HITL_RESOLVE and _final_text:
-        logger.info("front_handler: preserving HITL_RESOLVE model text")
+        _final_text = "Got it. I'll keep going."
+        logger.info("front_handler: HITL_RESOLVE final text replaced with deterministic ack")
     if _final_text:
         clean_text = _strip_leaked_reasoning(_final_text)
         clean_text = _strip_leaked_system_blocks(clean_text)
@@ -1669,7 +1781,7 @@ async def front_handler(
                     text=clean_text,
                     trace_id=trace_id,
                     parent_id=parent_id,
-                    source_envelope=correlation_source,
+                    source_envelope=envelope,
                 )
             await _on_text_response(clean_text)
         else:
@@ -1688,26 +1800,6 @@ async def front_handler(
                 {},
             )
         suspended_task_id = _task_field(suspended_task, "task_id", "")
-        raw_hil_answer = str(scenario_data.get("user_answer") or "")
-        if _hitl_answer_rejects_background_task(raw_hil_answer):
-            if suspended_task_id:
-                emit_task_cancel(
-                    bus=bus,
-                    task_id=suspended_task_id,
-                    reason="User asked to stop background dispatch and answer directly",
-                    parent_id=parent_id,
-                    trace_id=trace_id,
-                    source_envelope=correlation_source,
-                )
-            logger.info("front_handler: HITL_RESOLVE rejected background task; skipped resume")
-            logger.info(
-                "front_handler complete: status=%s dispatched=%d cancel=%d trace=%s",
-                result.status,
-                len(normal_dispatches),
-                len(cancel_dispatches),
-                trace_id[:8] if trace_id else "",
-            )
-            return result
         # E1.M2.1 / E4: when the suspension was created by the unified
         # HumanInTheLoopService, ``pending_hil.envelope`` carries the
         # original HILEnvelope.  In that case we publish ONLY the
@@ -1738,9 +1830,7 @@ async def front_handler(
                         else scenario_data.get("user_answer")
                     ),
                 )
-                resp_env = build_hil_response(resp_payload, parent_id=parent_id)
-                resp_env = _correlate_envelope(resp_env, correlation_source, trace_id)
-                bus.publish(resp_env)
+                bus.publish(build_hil_response(resp_payload, parent_id=parent_id))
                 logger.info(
                     "front_emit_hil_response hil_request_id=%s kind=%s",
                     resp_payload.get("hil_request_id"),
@@ -1755,7 +1845,7 @@ async def front_handler(
                         resolution_frame=resolution_frame.to_dict() if resolution_frame else None,
                         parent_id=parent_id,
                         trace_id=trace_id,
-                        source_envelope=correlation_source,
+                        source_envelope=envelope,
                     )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
@@ -1780,7 +1870,7 @@ async def front_handler(
                 resolution_frame=resolution_frame.to_dict() if resolution_frame else None,
                 parent_id=parent_id,
                 trace_id=trace_id,
-                source_envelope=correlation_source,
+                source_envelope=envelope,
             )
 
     logger.info(
@@ -1841,7 +1931,6 @@ def emit_task_cancel(
     reason: str,
     parent_id: int = 0,
     trace_id: str = "",
-    source_envelope: Envelope | None = None,
 ) -> Envelope:
     """Emit k1.orchestration.task.cancel.v1 on bus -- Epic 6.3.4.
 
@@ -1859,8 +1948,6 @@ def emit_task_cancel(
         payload={"task_id": task_id, "reason": reason, "trace_id": trace_id},
         parent_id=parent_id,
     )
-    if source_envelope is not None:
-        env = _correlate_envelope(env, source_envelope, trace_id)
     bus.publish(env)
     logger.info("emit_task_cancel: task_id=%s reason=%s", task_id, reason)
     return env

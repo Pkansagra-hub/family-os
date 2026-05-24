@@ -62,7 +62,7 @@ _VISIBLE_TO_FIELD = FieldSpec(
     type="array",
     required=False,
     description=(
-        "Allow-list of family member references consulted when "
+        "Allow-list of ``member_id`` strings consulted when "
         "``visibility`` is ``named``.  Ignored otherwise."
     ),
 )
@@ -106,7 +106,7 @@ CALENDAR_DEFINITION = ToolDefinition(
             name="member",
             type="array",
             required=False,
-            description="Filter events whose attendees include any of these family member references.",
+            description="Filter events whose attendees include any of these member_ids.",
         ),
         FieldSpec(
             name="source",
@@ -159,7 +159,7 @@ CALENDAR_DEFINITION = ToolDefinition(
                     name="attendees",
                     type="array",
                     required=False,
-                    description="List of attending family member references, e.g. Riley or riley.",
+                    description="List of attending member_ids.",
                 ),
                 FieldSpec(name="location", type="string", required=False),
                 FieldSpec(name="notes", type="string", required=False),
@@ -401,7 +401,7 @@ CALENDAR_DEFINITION = ToolDefinition(
                     name="visible_to",
                     type="array",
                     required=False,
-                    description="Allow-list of family member references when visibility=named.",
+                    description="Allow-list of member_ids when visibility=named.",
                 ),
             ],
             result=[
@@ -449,10 +449,7 @@ CALENDAR_DEFINITION = ToolDefinition(
                     name="member_id",
                     type="string",
                     required=False,
-                    description=(
-                        "Family member reference who owns the account, e.g. Riley or riley; "
-                        "defaults to caller. Do not ask the user for member IDs."
-                    ),
+                    description="Family member who owns the account (defaults to caller).",
                 ),
             ],
             result=[
@@ -506,7 +503,7 @@ CALENDAR_DEFINITION = ToolDefinition(
                     name="member_id",
                     type="string",
                     required=False,
-                    description="Optional filter: feeds owned by this family member reference.",
+                    description="Optional filter: feeds owned by this member.",
                 ),
             ],
             result=[

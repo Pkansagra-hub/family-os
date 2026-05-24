@@ -16,9 +16,9 @@ SPECIFICATION
 
 PURPOSE:
     Manage HOT CORE sections (always in memory).
-    Coordinate 56KB budget across 11 sections.
+    Coordinate 52KB budget across 10 sections.
 
-TOTAL BUDGET: 56KB (57344 bytes)
+TOTAL BUDGET: 52KB (53248 bytes)
 
 SECTIONS (with individual budgets):
     - control:          8KB (NEVER demote)
@@ -31,7 +31,6 @@ SECTIONS (with individual budgets):
     - meta:             2KB (NEVER demote)
     - task_state:       4KB (NEVER demote)
     - task_artifacts:   4KB (demotes to artifacts_warm)
-    - temporal:         4KB (NEVER demote)
 
 DEMOTION PAIRS:
     beliefs_active -> beliefs_history (WARM)
@@ -66,10 +65,12 @@ from ..sections import (
     BeliefsActiveSection,
     ClarificationsSection,
     ControlSection,
+    GroundingSection,
     HistoryActiveSection,
     MetaSection,
     NarrativeActiveSection,
     ScoreboardSection,
+    SpatialSection,
     TemporalSection,
 )
 from ..sections.task_artifacts import TaskArtifactsSection
@@ -86,7 +87,7 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 # Budget in bytes
-HOT_BUDGET_BYTES: int = 57344  # config: sessionstate.tiers.hot_budget_bytes
+HOT_BUDGET_BYTES: int = 53248  # config: sessionstate.tiers.hot_budget_bytes
 
 # Section budgets (from sizetracker.py)
 SECTION_BUDGETS: Dict[str, int] = {
@@ -98,9 +99,11 @@ SECTION_BUDGETS: Dict[str, int] = {
     "affective_now": 4 * 1024,
     "narrative_active": 4 * 1024,
     "meta": 2 * 1024,
+    "temporal": 4 * 1024,
+    "spatial": 4 * 1024,
+    "grounding": 2 * 1024,
     "task_state": 4 * 1024,
     "task_artifacts": 4 * 1024,
-    "temporal": 4 * 1024,
 }
 
 # Sections that are ordered for demotion (lower index = demote first)
@@ -112,7 +115,9 @@ DEMOTE_ORDER: List[str] = [
 ]
 
 # Sections that can never be demoted
-NEVER_DEMOTE: frozenset[str] = frozenset(["control", "meta", "task_state", "temporal"])
+NEVER_DEMOTE: frozenset[str] = frozenset(
+    ["control", "meta", "temporal", "spatial", "grounding", "task_state"]
+)
 
 # Demotion target pairs: HOT section -> WARM section
 DEMOTE_TARGETS: Dict[str, str] = {
@@ -131,9 +136,11 @@ HOT_SECTION_NAMES: List[str] = [
     "affective_now",
     "narrative_active",
     "meta",
+    "temporal",
+    "spatial",
+    "grounding",
     "task_state",
     "task_artifacts",
-    "temporal",
 ]
 
 
@@ -279,9 +286,11 @@ SectionType = Union[
     AffectiveNowSection,
     NarrativeActiveSection,
     MetaSection,
+    TemporalSection,
+    SpatialSection,
+    GroundingSection,
     TaskStateSection,
     TaskArtifactsSection,
-    TemporalSection,
 ]
 
 
@@ -289,13 +298,13 @@ class HotTier:
     """
     HOT CORE tier manager.
 
-    Manages 11 HOT sections with a combined 56KB budget.
+    Manages 10 HOT sections with a combined 52KB budget.
     Coordinates demotion to WARM tier when under pressure.
 
-    Budget: 56KB (57344 bytes)
-    Sections: 11 (control, beliefs_active, scoreboard, history_active,
+    Budget: 52KB (53248 bytes)
+    Sections: 10 (control, beliefs_active, scoreboard, history_active,
                   clarifications, affective_now, narrative_active, meta,
-                  task_state, task_artifacts, temporal)
+                  task_state, task_artifacts)
 
     Thread Safety:
         - Read operations are safe for concurrent access
@@ -336,7 +345,7 @@ class HotTier:
         config: Optional[SessionStateConfig] = None,
     ) -> None:
         """
-        Initialize HotTier with all hot sections.
+        Initialize HotTier with all 10 sections.
 
         Args:
             session_id: Session UUID (for section initialization)
@@ -348,7 +357,7 @@ class HotTier:
         self._migration_engine = migration_engine
         self._created_at_ms = int(time.time() * 1000)
 
-        # Initialize all hot sections
+        # Initialize all 10 sections
         self._sections: Dict[str, SectionType] = {
             "control": ControlSection(session_id=session_id),
             "beliefs_active": BeliefsActiveSection(session_id=session_id),
@@ -358,9 +367,11 @@ class HotTier:
             "affective_now": AffectiveNowSection(),
             "narrative_active": NarrativeActiveSection(),
             "meta": MetaSection(session_id=session_id),
+            "temporal": TemporalSection(session_id=session_id),
+            "spatial": SpatialSection(session_id=session_id),
+            "grounding": GroundingSection(session_id=session_id),
             "task_state": TaskStateSection(),
             "task_artifacts": TaskArtifactsSection(),
-            "temporal": TemporalSection(session_id=session_id),
         }
 
         logger.info(

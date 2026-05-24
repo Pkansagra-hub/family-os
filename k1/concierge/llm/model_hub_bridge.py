@@ -78,10 +78,6 @@ _POC_TO_HUB_FINISH: dict[str, HubFinishReason] = {
     "length": HubFinishReason.LENGTH,
     "error": HubFinishReason.ERROR,
     "safety": HubFinishReason.SAFETY,
-    # Workflow v2 / Fix F: propagate distinct malformed-tool-call signal so
-    # the ReAct loop can run a targeted slim-and-retry path instead of
-    # collapsing to a hard error.
-    "malformed_tool_call": HubFinishReason.MALFORMED_TOOL_CALL,
 }
 
 # ThinkingLevel mapping: ReasonPayload.reasoning_effort → POC ThinkingLevel

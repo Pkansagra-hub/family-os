@@ -5,7 +5,7 @@ the Fabric manifest translator, UI manifest generator, LLM tool spec builder,
 and :class:`RemindersToolService`.
 
 8 actions total:
-    Writes (GREEN):  create_reminder, update_reminder, snooze_reminder,
+  Writes (AMBER):  create_reminder, update_reminder, snooze_reminder,
                    dismiss_reminder, fire_reminder, delete_reminder
   Reads (GREEN):   list_reminders, get_reminder
 
@@ -87,7 +87,7 @@ REMINDERS_DEFINITION = ToolDefinition(
             name="recipient",
             type="string",
             required=False,
-            description="Filter by recipient family member reference, e.g. Riley or riley.",
+            description="Filter by recipient ``member_id``.",
         ),
         FieldSpec(
             name="status",
@@ -125,7 +125,7 @@ REMINDERS_DEFINITION = ToolDefinition(
                     type="string",
                     required=True,
                     description=(
-                        "Family member reference who receives the alert, e.g. Riley or riley. "
+                        "``member_id`` who receives the alert.  "
                         "Setting this to another member requires ``guardian`` or higher."
                     ),
                 ),
@@ -174,8 +174,8 @@ REMINDERS_DEFINITION = ToolDefinition(
                     "user wants to add a shopping item → shopping.add_item",
                 ],
                 examples=[
-                    "Remind dad to grab milk when he leaves work → create_reminder(title='Grab milk', recipient=dad, trigger={kind:'location_leave', location:{name:'work', lat:..., lon:..., radius_m:200}})",
-                    "Remind Riley to take medication at 8pm → create_reminder(title='Take medication', recipient=riley, trigger={kind:'time', fire_at:'2026-05-12T20:00:00Z'})",
+                    "Remind dad to grab milk when he leaves work → create_reminder(title='Grab milk', recipient=dad_id, trigger={kind:'location_leave', location:{name:'work', lat:..., lon:..., radius_m:200}})",
+                    "Remind Riley to take medication at 8pm → create_reminder(title='Take medication', recipient=riley_id, trigger={kind:'time', fire_at:'2026-05-12T20:00:00Z'})",
                     "Alert everyone 30 min before the dentist → one create_reminder per member with trigger={kind:'event_offset', event_id:'...', offset_minutes:-30}",
                 ],
             ),
@@ -373,7 +373,7 @@ REMINDERS_DEFINITION = ToolDefinition(
                     name="recipient",
                     type="string",
                     required=False,
-                    description="Filter to a specific recipient family member reference, e.g. Riley or riley.",
+                    description="Filter to a specific recipient ``member_id``.",
                 ),
                 FieldSpec(
                     name="status",
@@ -400,8 +400,8 @@ REMINDERS_DEFINITION = ToolDefinition(
                     "user asks what reminders are set for a specific family member",
                 ],
                 examples=[
-                    "Check for duplicate before creating → list_reminders(recipient=riley, status='scheduled')",
-                    "What reminders does Riley have? → list_reminders(recipient=riley)",
+                    "Check for duplicate before creating → list_reminders(recipient=member_id, status='scheduled')",
+                    "What reminders does Riley have? → list_reminders(recipient=riley_id)",
                     "Show all pending alerts → list_reminders(status='scheduled')",
                 ],
             ),

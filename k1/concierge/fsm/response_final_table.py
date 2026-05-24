@@ -218,13 +218,11 @@ def decide_response_final(
     if fsm_state == ConciergeState.CLARIFYING_WORKER:
         if has_active_tasks:
             # Branch 11: HITL question delivered; stay open for the user's answer.
-            # Drain the FrontLock so an answer typed while HITL_RELAY was rendering
-            # can immediately enter HITL_RESOLVE.
             return ResponseFinalDecision(
                 action=ResponseFinalAction.STAY,
                 target_state=None,
                 emit_turn_completed=False,
-                drain_front_lock=True,
+                drain_front_lock=False,
                 schedule_weave=False,
                 release_front_lock=True,
                 entry_type=entry_type,

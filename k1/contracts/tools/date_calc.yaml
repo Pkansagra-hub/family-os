@@ -24,6 +24,10 @@ tool_contract:
   required_context:
     - "temporal"
 
+  context_precision:
+    temporal: "anchor"
+    spatial: "hidden"
+
   required_inputs:
     - name: "operation"
       type: "STRING"

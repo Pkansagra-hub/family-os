@@ -29,6 +29,25 @@ tool_contract:
     - "no_agent_chains"
     - "max_depth_1"
 
+  required_context:
+    - "temporal"
+    - "spatial"
+    - "beliefs_active"
+    - "interaction_history"
+    - "task_context"
+
+  optional_context:
+    - "active_plans"
+    - "pending_clarifications"
+
+  context_precision:
+    temporal: "execution"
+    spatial: "semantic"
+
+  lease:
+    ttl_seconds: 900
+    allow_refresh: true
+
   required_inputs:
     - name: "agent_name"
       type: "STRING"

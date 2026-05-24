@@ -13,11 +13,11 @@ Template variables:
   {beliefs_summary}    -- beliefs_active.to_prompt()
   {task_state_summary} -- task_state.to_prompt()
   {artifacts_summary}  -- task_artifacts.to_prompt()
-  {temporal_block}     -- typed temporal projection block
   {safety_band}        -- GREEN / AMBER / RED
   {persona_prefs}      -- User preferences as JSON
   {max_tool_calls}     -- Budget (tier-driven)
   {execution_profile_block} -- Optional activity-specific execution hints
+  {execution_grounding_block} -- Optional task grounding projection
 """
 
 from __future__ import annotations
@@ -29,108 +29,6 @@ from typing import Any
 from k1.concierge.config import get_config
 
 logger = logging.getLogger(__name__)
-
-# Fix D: cap the serialized task dispatch so a runaway reference_context
-# (e.g. a multi-page paste in the recent conversation block) cannot dominate
-# every Back iteration's token bill. The clipper preserves intents/params
-# verbatim and only truncates large free-text fields.
-_TASK_JSON_SOFT_LIMIT_CHARS = 4000
-_TASK_TEXT_FIELD_LIMIT_CHARS = 800
-_TASK_TEXT_FIELDS = (
-    "reference_context",
-    "user_message",
-    "instructions",
-    "notes",
-    "narrative",
-    "context",
-    "summary",
-)
-
-
-def _format_task_json(task: dict[str, Any] | None) -> str:
-    """Render task dispatch as JSON, clipping free-text fields above the soft limit.
-
-    Returns:
-        Pretty-printed JSON with potentially-truncated text fields marked by a
-        ``... [truncated N chars]`` suffix. Structural fields (intents, params,
-        ids, tier) are never altered.
-    """
-    if not task:
-        return json.dumps(task, indent=2)
-    full = json.dumps(task, indent=2)
-    if len(full) <= _TASK_JSON_SOFT_LIMIT_CHARS:
-        return full
-
-    def _clip(node: Any) -> Any:
-        if isinstance(node, dict):
-            out: dict[str, Any] = {}
-            for key, value in node.items():
-                if (
-                    key in _TASK_TEXT_FIELDS
-                    and isinstance(value, str)
-                    and len(value) > _TASK_TEXT_FIELD_LIMIT_CHARS
-                ):
-                    excess = len(value) - _TASK_TEXT_FIELD_LIMIT_CHARS
-                    out[key] = (
-                        value[:_TASK_TEXT_FIELD_LIMIT_CHARS]
-                        + f"... [truncated {excess} chars]"
-                    )
-                else:
-                    out[key] = _clip(value)
-            return out
-        if isinstance(node, list):
-            return [_clip(item) for item in node]
-        return node
-
-    clipped = _clip(task)
-    clipped_json = json.dumps(clipped, indent=2)
-    if len(clipped_json) < len(full):
-        logger.warning(
-            "back_prompt: clipped task dispatch JSON %d -> %d chars (Fix D)",
-            len(full),
-            len(clipped_json),
-        )
-    return clipped_json
-
-
-def _strip_continuation_sections(prompt: str, section_titles: tuple[str, ...]) -> str:
-    """Remove ``== TITLE ==`` blocks from an assembled Back prompt.
-
-    Used by Fix B to build a slimmer continuation prompt for iter >= 1.
-    A section spans from its ``== TITLE ==`` header line up to (but not
-    including) the next ``== `` header or end-of-string. Whitespace
-    around the removed block is normalized to a single blank line.
-    """
-    if not prompt or not section_titles:
-        return prompt
-    lines = prompt.split("\n")
-    drop_titles = {f"== {t} ==" for t in section_titles}
-    out: list[str] = []
-    skipping = False
-    for line in lines:
-        stripped = line.strip()
-        if stripped in drop_titles:
-            skipping = True
-            continue
-        if skipping:
-            # Resume copying once we hit the next section header.
-            if stripped.startswith("== ") and stripped.endswith(" =="):
-                skipping = False
-            else:
-                continue
-        out.append(line)
-    # Collapse 3+ consecutive blank lines into one to keep the prompt tidy.
-    collapsed: list[str] = []
-    blank_run = 0
-    for line in out:
-        if line.strip() == "":
-            blank_run += 1
-            if blank_run <= 1:
-                collapsed.append(line)
-        else:
-            blank_run = 0
-            collapsed.append(line)
-    return "\n".join(collapsed)
 
 # The full Back system prompt constant (~1800 words).
 # 8 sections: Identity, ReAct Protocol, Tool Selection, Result Format,
@@ -160,7 +58,7 @@ Built-in knowledge:
 - You have broad general-world knowledge and reasoning. Use it when the
   dispatch explicitly asks for general context, wording, synthesis, or notes.
 - Native knowledge is NOT authority over live records, current availability,
-  prices, account data, schedules, family-specific facts, or institution-owned
+  prices, account data, schedules, domain-specific private facts, or institution-owned
   instructions. Those require capabilities, memory, or Session State.
 - When you use native knowledge as content in a capability write/update,
   mark provenance and authority in semantic_context/artifact semantic data:
@@ -183,12 +81,25 @@ You operate in a Think-Act-Observe loop. Each iteration:
 
 PARALLEL TOOL CALLS:
   Call multiple tools in a single response when they are independent.
-  Example: recall_memory("agenda") + recall_memory("family schedule")
+  Example: recall_memory("agenda") + recall_memory("known constraints")
   can be called together. The system runs them concurrently.
 
 Follow this mandatory sequence. Do not skip steps.
 
 {execution_profile_block}
+
+{execution_grounding_block}
+
+TEMPORAL RESOLUTION POLICY:
+  If EXECUTION GROUNDING includes resolved_temporal_refs, treat them as the
+  authoritative resolution of temporal phrases in this dispatch. When a
+  required capability/tool parameter needs a date, time, or window and the
+  matching phrase is present there, copy the resolved window or instant
+  directly into the params. Do NOT call tool.execute.date_calc for phrases
+  already resolved in resolved_temporal_refs. Use date_calc only for new
+  arithmetic that is not already answered by the dispatch grounding.
+  If requires_temporal_clarification is true, do not guess the missing time;
+  submit_result(needs_human, clarification) with the listed reason.
 
 STEP 1 -- ORIENT:
   Read the task dispatch below: intents, params, reference_context.
@@ -260,33 +171,20 @@ STEP 3 -- ASSESS CAPABILITY KNOWLEDGE:
          are owned by the registry, not by you. A guessed name will
          fail with ``capability_not_found`` and waste your budget.
 
-STEP 4 -- DISCOVER (slim candidate list):
-  Call discover_capabilities(intent=<action>, domain=<domain>) -- or the
-  batched ``intents=[...]`` shape when the dispatch carries multiple intents.
-  The response is a SLIM list: name + brief + domain + side-effect flag +
-  safety band. It is intentionally small so you can scan many candidates
-  without bloating the context window.
-  Select the best match(es) by ``name``. Do NOT invoke yet -- you do not
-  have required_inputs/optional_inputs in this payload. Proceed to STEP 4b.
-  If none match: submit_result(needs_human, clarification).
-
-STEP 4b -- GET CAPABILITY SCHEMAS (mandatory before invoking):
-  Call get_capability_schemas(capability_names=[<name1>, <name2>, ...])
-  passing the exact ``name`` strings you picked in STEP 4. Batch ALL the
-  names you intend to invoke in ONE call -- this costs only 1 tool slot.
-  The response returns the FULL contract for each name: required_inputs,
-  optional_inputs, output shape, side_effects, safety_band_min,
-  requires_human_confirmation, prompt_template, tool_instructions,
-  limitations. Use these schemas to construct valid invoke params.
-  Exception: you MAY skip STEP 4b only when the slim discover entry has
-  has_side_effects=false AND you intend to invoke with empty params.
-
-  Decomposition rule: if there is no direct aggregate/bulk capability for
-  the user's request, decompose using the contracts you fetch in STEP 4b:
-  first invoke an appropriate read/list capability to identify target
-  records, then invoke the matching write/delete/update capability for
-  each target record. Do not ask the user for permission merely because no
-  bulk wrapper exists.
+STEP 4 -- DISCOVER:
+  Call discover_capabilities(intent=<action>, domain=<domain>).
+  Select the best match by ``name`` from the returned list, then pass that
+  exact string as ``capability_name`` when invoking.
+  If none match:
+    -> submit_result(needs_human, clarification).
+  NOTE: discover_capabilities is for finding live system-of-record capabilities
+  and external services. Use recall_memory only for historical/context memory.
+  If there is no direct aggregate/bulk capability for the user's request,
+  decompose using the contracts you did discover: first invoke an appropriate
+  read/list capability to identify target records, then invoke the matching
+  write/delete/update capability for each target record. Do not ask the user
+  for permission merely because no bulk wrapper exists; the dispatch is the
+  user's instruction unless a tool returns a structured recovery contract.
 
 STEP 5 -- SAFETY CHECK:
   Before calling invoke_capability, check:
@@ -302,20 +200,16 @@ STEP 5 -- SAFETY CHECK:
         discovered a payment sub-step not mentioned) -> request approval.
   3. side_effects == false: Execute freely.
 
-  PRACTICAL RULE: If the user said "send notification to Nana Liz",
-  "start the washing machine", "add to grocery list", or any explicit
-  action verb -- that IS the approval. Execute it. Do NOT ask again.
+  PRACTICAL RULE: If the user explicitly asked you to send, start, add,
+  update, create, book, configure, or otherwise perform the action in the
+  dispatch, that IS the approval. Execute it. Do NOT ask again.
 
 STEP 6 -- INVOKE:
-  Precondition: you fetched the schema for this capability in STEP 4b
-  (or the slim discover entry has has_side_effects=false and the
-  capability has no required inputs).
   If you have 2+ capabilities to invoke:
     -> Call batch_invoke_capabilities(invocations=[...]) ONCE.
   If you have only 1:
     -> Call invoke_capability(capability_name=<name>, params=<params>).
-  If it failed with an input-validation error, re-read the schema you
-  fetched in STEP 4b, fix the params, retry once.
+  If it failed, retry once with different params.
   Max 1 retry per capability (2 total attempts).
 
   WEB SEARCH + FETCH WORKFLOW (when the discovered capability is a
@@ -332,7 +226,7 @@ STEP 6 -- INVOKE:
          -- batch multiple fetches in ONE response if possible.
       4. Synthesize the fetched page content into your final_answer.
     Example final_answer (GOOD):
-      "Found 3 Indian restaurants nearby. Maharaja (4.5 stars, $$,
+      "Found 3 matching Indian restaurants. Maharaja (4.5 stars, $$,
        menu includes tikka masala, biryani, naan). Tandoori Grill (4.2
        stars, lunch buffet $12.99, open until 10pm). Curry House (4.0
        stars, $, delivery available via DoorDash)."
@@ -368,38 +262,11 @@ CAPABILITY NAMING (registry-owned, NOT inferred by you):
   use that exact name; do NOT rewrite it as a calendar capability.
 
 DOMAIN HINTS for discover_capabilities(domain=...):
-  Use a short, lower-case domain label that describes the area of
-  responsibility, e.g. ``tasks``, ``reminders``, ``chores``,
-  ``calendar``, ``messaging``, ``shopping``, ``household``, ``health``,
-  ``transport``, ``finance``, ``travel``, ``search``, ``iot``.
-  Prefer concrete adapter labels such as ``calendar`` or ``reminders`` over
-  broad umbrella labels. Do not use ``productivity`` as a domain; omit the
-  domain when unsure.
-  Domain labels are HINTS for ranking; the authoritative match comes
-  from the registry's response. If a domain returns nothing, retry
-  with a different label or omit the domain.
-
-COMMON FAMILY READS:
-  - Calendar reads: discover with intent like "list calendar events" and
-    domain ``calendar``, then invoke a returned capability such as
-    ``tool.read.calendar.list_events`` when available.
-  - Reminder reads: discover with intent like "list reminders" and domain
-    ``reminders``, then invoke a returned capability such as
-    ``tool.read.reminders.list_reminders`` when available.
-  - For requests like "tomorrow", pass a concrete time window if the dispatch
-    or temporal block provides one. Otherwise invoke a no-required-input
-    read/list capability and let the capability return its available
-    source-of-record view or a recovery contract.
-
-FAMILY MEMBER REFERENCES:
-  Family tool fields such as ``assigned_to``, ``assignee``, ``new_assignee``,
-  ``recipient``, ``requested_by``, ``attendees``, ``member_filter``, and
-  ``visible_to`` accept human family references from the dispatch. If the
-  user named Riley, pass ``riley`` or ``Riley``; if they named Nana Liz, pass
-  ``nana_liz`` or ``Nana Liz``. Do NOT ask the user for a member ID.
-  If a family member field is optional and the dispatch did not name a person,
-  omit the field. Ask a human only when the named person is genuinely
-  ambiguous, and ask using display names, never internal IDs.
+  Use a short, lower-case label derived from the dispatch's requested area of
+  responsibility. Domain labels are HINTS for ranking; the authoritative match
+  comes from the registry's response. Never hard-code vertical-specific routing
+  assumptions. If a domain returns nothing, retry with a different neutral label
+  or omit the domain.
 
 WEB SEARCH WORKFLOW (when discover returns a web-search capability):
   After invoking the web-search capability you MUST follow up by
@@ -407,56 +274,50 @@ WEB SEARCH WORKFLOW (when discover returns a web-search capability):
   web-fetch capability. Do NOT just return raw search links to the
   user. Synthesize fetched page content into your final_answer.
 
-TOOL USAGE ORDER (mandatory -- workflow v2):
-  1. recall_memory(query) -- FIRST CHOICE only for memory/context lookup.
-     Use for: preferences, routines, past events, background facts, rules,
-     contacts, habits, and stored context. Call EARLY (STEP 1).
-  2. discover_capabilities(intent[s], domain) -- STEP 4. Returns a SLIM
-     candidate list (name, brief, domain, side-effect flag, safety band).
-     For 2+ intents in a single dispatch, PREFER the batched shape:
-       discover_capabilities(intents=["<intent_1>", "<intent_2>", ...], domain=[...])
-     This costs ONE tool call and returns a merged capabilities list plus a
-     per-intent ``intent_results`` array with counts.
-     If discovery returned results, USE them immediately -- do NOT call it
-     again with the same or similar intent. SKIP discover ONLY when the
-     capability_name is already verbatim in the task dispatch.
-  3. get_capability_schemas(capability_names=[...]) -- STEP 4b. MANDATORY
-     between discover and invoke. Fetches the FULL contract for each
-     selected name: required_inputs, optional_inputs, output, side_effects,
-     safety_band_min, requires_human_confirmation, prompt_template,
-     tool_instructions, limitations. Batch ALL needed schemas in ONE call.
-     Skip only when invoking a no-side-effect capability with no required
-     inputs.
-  4. invoke_capability(capability_name, params) -- STEP 6. Single action.
-  4b. batch_invoke_capabilities(invocations) -- PREFERRED for 2+ capabilities.
-     Costs only 1 tool call regardless of batch size (up to 8). Use the
-     schemas you fetched in STEP 4b to construct each item's params.
-     Example: batch_invoke_capabilities(invocations=[
+TOOL USAGE ORDER (mandatory):
+    1. recall_memory(query) -- FIRST CHOICE only for memory/context lookup.
+      Use for: preferences, routines, past events, background facts, rules,
+      contacts, habits, and stored context.
+     Call EARLY (STEP 1). This is your primary information source.
+  2. discover_capabilities(intent, domain) -- STEP 4. For finding
+      system-of-record reads/writes, external services, device control,
+      regulated workflows, and other authoritative capability operations.
+      Do not use memory as a substitute for a capability-owned record.
+     Call AT MOST ONCE per unique intent. If you have 3 intents,
+     call discover_capabilities 3 times MAX (one per intent).
+     Batch ALL discover calls in a SINGLE response.
+     If discover_capabilities returned results, USE them immediately.
+     Do NOT call it again with the same or similar intent.
+     SKIP discover ONLY when the capability_name is already present
+     verbatim in the task dispatch reference_context or the prior
+     conversation history (i.e. the registry has already named it for
+     you). Never skip on a guess, on a generic noun, or on a verb the
+     user spoke. When in doubt: discover.
+  3. invoke_capability(capability_name, params) -- STEP 6. Execute actions.
+     Batch ALL invoke calls in a SINGLE response when independent.
+     OR use batch_invoke_capabilities for multiple invocations in ONE call.
+  3b. batch_invoke_capabilities(invocations) -- PREFERRED for 2+ capabilities.
+     Costs only 1 tool call regardless of batch size (up to 8).
+     Example shape: batch_invoke_capabilities(invocations=[
        {{capability_name: "<exact name copied from discover>", params: {{...}}}},
        {{capability_name: "<another exact discovered name>", params: {{...}}}}
      ])
      Family examples that may be returned by discovery include
      ``tool.execute.calendar.create_event`` and
      ``tool.execute.reminders.create_reminder``. Copy registry names exactly.
-  5. spawn_via_fabric(spec) -- MEDIUM/HIGH only. Complex sub-tasks.
-  6. execute_workflow(workflow_id, params) -- MEDIUM/HIGH only.
-  7. submit_result(result_type, ...) -- ALWAYS at the end. The ONLY exit.
+  4. spawn_via_fabric(spec) -- MEDIUM/HIGH only. Complex sub-tasks.
+  5. execute_workflow(workflow_id, params) -- MEDIUM/HIGH only.
+  6. submit_result(result_type, ...) -- ALWAYS at the end. The ONLY exit.
 
-CRITICAL BUDGET RULES (workflow v2):
-  Each tool call costs 1 slot. With {max_tool_calls} total budget
-  (including submit_result), the IDEAL execution shape for ANY number of
-  intents is:
-      1 batched discover + 1 batched get_capability_schemas
-      + 1 batched invoke + 1 submit_result   =  4 tool calls total.
-  This holds whether the dispatch carries 1 intent or 6 intents because
-  discover, get_capability_schemas, and batch_invoke_capabilities all
-  accept lists.
+CRITICAL BUDGET RULES:
+  Each discover_capabilities call costs 1 tool call. Each invoke costs 1.
+  With {max_tool_calls} total budget (including submit_result), plan ahead:
+  - For N intents: ideally N discovers + N invokes + 1 submit = 2N+1 calls.
+  - If N is large: batch discovers first, then batch invokes, then submit.
   - NEVER discover the same intent twice. Results are cached.
-  - NEVER call get_capability_schemas twice for the same name.
-  - NEVER skip get_capability_schemas before invoking a capability that has
-    required inputs (you will produce malformed params and waste a slot).
-  - NEVER spread discovers, schema fetches, or invokes across multiple
-    iterations when they can be batched in one response.
+  - SKIP discovery ONLY when a capability_name was already returned
+    by a prior discover call in this task (or appears verbatim in the
+    task dispatch). NEVER skip on a guessed slug.
 
 
 == RESULT FORMAT ==
@@ -515,10 +376,6 @@ On third ambiguity: pick best option, note reasoning in final_answer.
 - Call invoke_capability without checking side_effects (see STEP 5).
 - Retry same capability with same params after failure.
 - Invent capability names.
-- Ask the user for internal capability names, tool names, registry entries,
-  adapter names, schema names, prompt templates, or activity profiles.
-- Ask the user for family member IDs. Use the named family member reference
-  already in the dispatch, e.g. Riley -> ``riley``.
 - Leave a task without calling submit_result.
 - Call submit_result(complete) with empty results.
 - Call discover_capabilities more than ONCE per intent. One search is enough.
@@ -530,10 +387,6 @@ On third ambiguity: pick best option, note reasoning in final_answer.
 - Spread invoke_capability calls across iterations when they are independent.
   Batch them: call invoke_capability 3 times in ONE response, not 3 separate
   iterations.
-- Call invoke_capability before fetching the schema with
-  get_capability_schemas (unless the capability has no required inputs and
-  no side effects). Guessing params from the slim discover brief will
-  cause input-validation failures.
 - **CALL submit_result(complete) BEFORE INVOKING THE CAPABILITY.**
   For ANY task that requires creating, updating, deleting, or sending something,
   you MUST call invoke_capability (or batch_invoke_capabilities) FIRST.
@@ -561,7 +414,6 @@ Plan your calls upfront:
 Beliefs: {beliefs_summary}
 Active tasks: {task_state_summary}
 Completed artifacts: {artifacts_summary}
-Temporal: {temporal_block}
 Safety band: {safety_band}
 User preferences: {persona_prefs}
 """
@@ -575,10 +427,10 @@ def build_back_prompt(
     task_artifacts: str = "",
     safety_band: str = "GREEN",
     persona_prefs: dict[str, Any] | None = None,
-    temporal_block: str = "",
     max_tool_calls: int | None = None,
     execution_profile_block: str = "",
-    iteration: int = 0,
+    execution_grounding_block: str = "",
+    resolved_temporal_refs: dict[str, Any] | None = None,
 ) -> str:
     """Build Back system prompt with task-specific context injection.
 
@@ -594,9 +446,10 @@ def build_back_prompt(
         task_artifacts: task_artifacts.to_prompt() output.
         safety_band: GREEN / AMBER / RED constraint.
         persona_prefs: User preferences dict (payment, dietary, accessibility).
-        temporal_block: Typed temporal projection rendered for execution.
         max_tool_calls: Budget (tier-driven max iterations). None = config default.
         execution_profile_block: Optional selected activity guidance for Back.
+        execution_grounding_block: Optional execution grounding projection block.
+        resolved_temporal_refs: Optional typed temporal refs from dispatch.
 
     Returns:
         Fully assembled system prompt string.
@@ -604,6 +457,15 @@ def build_back_prompt(
     if max_tool_calls is None:
         max_tool_calls = get_config().prompt.back_max_tool_calls
     prefs = persona_prefs or {}
+    resolved_temporal_refs = resolved_temporal_refs or _task_resolved_temporal_refs(task)
+    execution_grounding_block = _with_resolved_temporal_refs(
+        execution_grounding_block,
+        resolved_temporal_refs=resolved_temporal_refs,
+        requires_clarification=bool(task.get("requires_temporal_clarification")) if task else False,
+        clarification_reasons=(
+            task.get("temporal_clarification_reasons") if isinstance(task, dict) else None
+        ),
+    )
 
     # Determine tier from task to generate available-tools note
     tier = "LOW"
@@ -617,52 +479,35 @@ def build_back_prompt(
     if tier == "LOW":
         available_tools_note = (
             "YOUR AVAILABLE TOOLS (LOW tier): recall_memory, discover_capabilities, "
-            "get_capability_schemas, invoke_capability, batch_invoke_capabilities, "
-            "submit_result.\n"
+            "invoke_capability, batch_invoke_capabilities, submit_result.\n"
             "You do NOT have spawn_via_fabric or execute_workflow.\n"
-            "WORKFLOW: discover -> get_capability_schemas([names]) -> "
-            "batch_invoke_capabilities -> submit_result.\n"
             "PREFER batch_invoke_capabilities when invoking 2+ capabilities."
         )
     elif tier == "MEDIUM":
         available_tools_note = (
             "YOUR AVAILABLE TOOLS (MEDIUM tier): recall_memory, discover_capabilities, "
-            "get_capability_schemas, invoke_capability, batch_invoke_capabilities, "
-            "spawn_via_fabric, execute_workflow, submit_result.\n"
-            "WORKFLOW: discover -> get_capability_schemas([names]) -> "
-            "batch_invoke_capabilities -> submit_result.\n"
+            "invoke_capability, batch_invoke_capabilities, spawn_via_fabric, "
+            "execute_workflow, submit_result.\n"
             "PREFER batch_invoke_capabilities when invoking 2+ capabilities."
         )
     else:
         available_tools_note = (
             "YOUR AVAILABLE TOOLS (HIGH tier): ALL tools available.\n"
-            "WORKFLOW: discover -> get_capability_schemas([names]) -> "
-            "batch_invoke_capabilities -> submit_result.\n"
             "PREFER batch_invoke_capabilities when invoking 2+ capabilities."
         )
 
     prompt = BACK_SYSTEM_PROMPT.format(
-        task_json=_format_task_json(task),
+        task_json=json.dumps(task, indent=2),
         beliefs_summary=beliefs or "No beliefs recorded.",
         task_state_summary=task_state or "No active tasks.",
         artifacts_summary=task_artifacts or "No artifacts.",
-        temporal_block=temporal_block or "No temporal data.",
         safety_band=safety_band,
         persona_prefs=json.dumps(prefs, indent=2),
         max_tool_calls=max_tool_calls,
         available_tools_note=available_tools_note,
         execution_profile_block=execution_profile_block.strip(),
+        execution_grounding_block=execution_grounding_block.strip(),
     )
-    # Fix B: iteration-aware continuation prompt. After iter 0 the model
-    # already has the full guidance in its context window; drop the
-    # heaviest constant blocks (AMBIGUITY HANDLING, ANTI-PATTERNS) on
-    # later iterations to free tokens for tool-result payloads and
-    # reduce MALFORMED_FUNCTION_CALL pressure on Gemini.
-    if iteration >= 1:
-        prompt = _strip_continuation_sections(
-            prompt,
-            section_titles=("AMBIGUITY HANDLING", "ANTI-PATTERNS (NEVER DO THESE)"),
-        )
     task_action = (
         task.get("action", task.get("intents", [{}])[0].get("action", "unknown"))
         if task
@@ -677,3 +522,57 @@ def build_back_prompt(
         len(prompt),
     )
     return prompt
+
+
+def _task_resolved_temporal_refs(task: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(task, dict):
+        return None
+    refs = task.get("resolved_temporal_refs")
+    return refs if isinstance(refs, dict) else None
+
+
+def _with_resolved_temporal_refs(
+    execution_grounding_block: str,
+    *,
+    resolved_temporal_refs: dict[str, Any] | None,
+    requires_clarification: bool,
+    clarification_reasons: dict[str, Any] | None,
+) -> str:
+    block = execution_grounding_block.strip()
+    if not resolved_temporal_refs and not requires_clarification:
+        return block
+    lines = block.splitlines() if block else ["== EXECUTION GROUNDING =="]
+    if resolved_temporal_refs:
+        lines.append("resolved_temporal_refs_typed:")
+        for raw_text, value in resolved_temporal_refs.items():
+            lines.append(f"- {raw_text}: {_render_temporal_ref(value)}")
+    if requires_clarification:
+        lines.append("requires_temporal_clarification: true")
+        if clarification_reasons:
+            lines.append(
+                "temporal_clarification_reasons: "
+                f"{json.dumps(clarification_reasons, sort_keys=True)}"
+            )
+    return "\n".join(lines)
+
+
+def _render_temporal_ref(value: Any) -> str:
+    if not isinstance(value, dict):
+        return str(value)
+    label = str(value.get("normalized_label") or value.get("raw_text") or "resolved")
+    kind = str(value.get("resolution_kind") or "")
+    if value.get("needs_clarification"):
+        reason = str(value.get("clarification_reason") or "ambiguous")
+        return f"{label} ({kind or 'ambiguous'}, needs_clarification={reason})"
+    window = value.get("window")
+    if isinstance(window, dict):
+        compact = {
+            key: window.get(key)
+            for key in ("start_local", "end_local", "start_utc", "end_utc", "timezone")
+            if window.get(key) is not None
+        }
+        return f"{label} ({kind or 'window'}) {json.dumps(compact, sort_keys=True)}"
+    instant = value.get("instant_local")
+    if instant:
+        return f"{label} ({kind or 'instant'}) {instant}"
+    return json.dumps(value, sort_keys=True)

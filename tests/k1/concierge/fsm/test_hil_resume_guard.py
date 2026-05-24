@@ -7,7 +7,6 @@ from typing import Any
 from k1.concierge.bus.builders import (
     build_hil_request,
     build_hil_response,
-    build_task_complete,
     build_task_resume,
 )
 from k1.concierge.bus.setup import create_poc_bus, create_poc_router
@@ -115,34 +114,3 @@ def test_unified_pending_hil_drops_legacy_task_resume(monkeypatch) -> None:
 
     assert delivered_to_back == []
     assert task_id not in ctrl._hitl_responded_tasks
-
-
-def test_unified_hil_task_complete_exits_clarifying_worker(monkeypatch) -> None:
-    bus = create_poc_bus(capture=True)
-    router = create_poc_router()
-    ctrl = ConciergeController(bus=bus, router=router)
-    ctrl._state = ConciergeState.CLARIFYING_WORKER
-
-    task_id = "task-unified-complete"
-    ctrl._task_bridge.dispatch_task(task_id, "needs a human")
-    ctrl._task_bridge.activate_task(task_id)
-    ctrl._active_task_ids.add(task_id)
-
-    delivered_to_front: list[Any] = []
-    monkeypatch.setattr(ctrl, "_deliver_to_front", delivered_to_front.append)
-
-    ctrl._on_task_complete(
-        build_task_complete(
-            {
-                "task_id": task_id,
-                "action": "needs a human",
-                "result_type": "complete",
-                "final_answer": "Done.",
-                "results": [],
-            }
-        )
-    )
-
-    assert ctrl._state == ConciergeState.DELIVERING
-    assert task_id not in ctrl._active_task_ids
-    assert delivered_to_front

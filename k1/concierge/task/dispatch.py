@@ -85,6 +85,14 @@ class TaskDispatch:
     depends_on: str | None = None
     context_snapshot: dict[str, Any] | None = None
     execution_profiles: list[dict[str, Any]] | None = None
+    grounding_envelope_id: str | None = None
+    temporal_anchor_id: str | None = None
+    spatial_context_id: str | None = None
+    resolved_temporal_refs: dict[str, Any] | None = None
+    resolved_spatial_refs: dict[str, Any] | None = None
+    requires_temporal_clarification: bool = False
+    temporal_clarification_reasons: dict[str, Any] | None = None
+    grounding: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if not self.intents:
@@ -98,6 +106,7 @@ class TaskDispatch:
                 f"safety_band must be one of {sorted(_VALID_SAFETY_BANDS)}, "
                 f"got '{self.safety_band}'"
             )
+        self._mirror_grounding_into_reference_context()
 
     @property
     def is_bundled(self) -> bool:
@@ -138,6 +147,22 @@ class TaskDispatch:
             d["context_snapshot"] = self.context_snapshot
         if self.execution_profiles is not None:
             d["execution_profiles"] = self.execution_profiles
+        if self.grounding_envelope_id is not None:
+            d["grounding_envelope_id"] = self.grounding_envelope_id
+        if self.temporal_anchor_id is not None:
+            d["temporal_anchor_id"] = self.temporal_anchor_id
+        if self.spatial_context_id is not None:
+            d["spatial_context_id"] = self.spatial_context_id
+        if self.resolved_temporal_refs is not None:
+            d["resolved_temporal_refs"] = self.resolved_temporal_refs
+        if self.resolved_spatial_refs is not None:
+            d["resolved_spatial_refs"] = self.resolved_spatial_refs
+        if self.requires_temporal_clarification:
+            d["requires_temporal_clarification"] = True
+        if self.temporal_clarification_reasons is not None:
+            d["temporal_clarification_reasons"] = self.temporal_clarification_reasons
+        if self.grounding is not None:
+            d["grounding"] = self.grounding
         return d
 
     @classmethod
@@ -153,7 +178,45 @@ class TaskDispatch:
             depends_on=data.get("depends_on"),
             context_snapshot=data.get("context_snapshot"),
             execution_profiles=data.get("execution_profiles"),
+            grounding_envelope_id=data.get("grounding_envelope_id"),
+            temporal_anchor_id=data.get("temporal_anchor_id"),
+            spatial_context_id=data.get("spatial_context_id"),
+            resolved_temporal_refs=data.get("resolved_temporal_refs"),
+            resolved_spatial_refs=data.get("resolved_spatial_refs"),
+            requires_temporal_clarification=bool(
+                data.get("requires_temporal_clarification", False)
+            ),
+            temporal_clarification_reasons=data.get("temporal_clarification_reasons"),
+            grounding=data.get("grounding"),
         )
+
+    def _mirror_grounding_into_reference_context(self) -> None:
+        metadata: dict[str, Any] = {}
+        for key in (
+            "grounding_envelope_id",
+            "temporal_anchor_id",
+            "spatial_context_id",
+            "resolved_temporal_refs",
+            "resolved_spatial_refs",
+        ):
+            value = getattr(self, key)
+            if value is not None:
+                metadata[key] = value
+        clarification_metadata: dict[str, Any] = {}
+        if self.requires_temporal_clarification:
+            clarification_metadata["requires_temporal_clarification"] = True
+        if self.temporal_clarification_reasons is not None:
+            clarification_metadata["temporal_clarification_reasons"] = (
+                self.temporal_clarification_reasons
+            )
+        if not metadata and not clarification_metadata:
+            return
+        reference_context = dict(self.reference_context or {})
+        reference_context.update(metadata)
+        reference_context.update(clarification_metadata)
+        if metadata:
+            reference_context["grounding"] = dict(metadata)
+        self.reference_context = reference_context
 
     @classmethod
     def from_payload(cls, payload: bytes) -> TaskDispatch:

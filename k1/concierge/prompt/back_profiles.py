@@ -28,7 +28,6 @@ class BackExecutionProfile:
     domains: tuple[str, ...] = ()
     prompt_template: str | None = None
     guidance: tuple[str, ...] = ()
-    compatible_tools: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -174,15 +173,6 @@ def render_back_execution_profile_block(
         lines.append(f"  evidence: score={selected.score}; {evidence}")
         for guidance in selected.profile.guidance[:5]:
             lines.append(f"  - {guidance}")
-        preferred = selected.profile.compatible_tools[:8]
-        if preferred:
-            lines.append("  preferred capabilities (soft hint — not an allowlist):")
-            for cap in preferred:
-                lines.append(f"    * {cap}")
-            lines.append(
-                "  Prefer these when the task fits. Reach beyond them only "
-                "when the task clearly requires it."
-            )
 
     rendered = "\n".join(lines)
     logger.debug(
@@ -447,9 +437,6 @@ def _profile_from_prompt_contract(path: Path) -> BackExecutionProfile | None:
         domains=domains,
         prompt_template=str(contract.get("name", "") or "") or None,
         guidance=guidance,
-        compatible_tools=tuple(
-            str(item) for item in (contract.get("compatible_tools") or []) if item
-        ),
     )
 
 

@@ -442,7 +442,7 @@ class SessionStateManager:
 
     Attributes:
         session_id: Unique session identifier
-        hot: HotTier manager (11 sections, 56KB)
+        hot: HotTier manager (8 sections, 48KB)
         warm: WarmTier manager (4 sections, 48KB)
         local_cold: LocalColdTier (K1 SQLite archive)
         size_tracker: Per-section byte accounting
@@ -695,10 +695,10 @@ class SessionStateManager:
 
     def get_hot(self) -> HotTier:
         """
-        Get the HOT tier (11 sections, 56KB max).
+        Get the HOT tier (8 sections, 52KB max).
 
         Returns:
-            HotTier: HOT tier manager with all hot sections
+            HotTier: HOT tier manager with all 8 sections
 
         Sections:
             - control (8KB, NEVER EVICT)

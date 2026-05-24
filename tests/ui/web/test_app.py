@@ -95,6 +95,81 @@ def test_static_assets_served(client: TestClient) -> None:
     assert r.status_code == 200
 
 
+class _MessageOutput:
+    _turn_session_ops: list[str] = []
+    _turn_tool_calls: list[str] = []
+    _turn_state_changes: dict[str, str] = {}
+    _turn_fsm_states: list[str] = []
+    _turn_bytes_in: int = 0
+    _turn_bytes_out: int = 0
+    _turn_start_ns: int = 0
+
+
+class _MessageRenderer:
+    def __init__(self, calls: list[str]) -> None:
+        self._calls = calls
+
+    def send_turn_info(self, turn: int, member: str) -> None:
+        self._calls.append("turn_info")
+
+    def send_activity(self, data: dict[str, object]) -> None:
+        self._calls.append("activity")
+
+    def render_system(self, text: str) -> None:
+        self._calls.append("system")
+
+
+class _MessageCoord:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self.renderer = _MessageRenderer(self.calls)
+        self.fsm = None
+        self.recorded: dict[str, object] | None = None
+        self.sent: dict[str, object] | None = None
+        self._output = _MessageOutput()
+
+    async def _record_device_context(
+        self, *, device: str, device_context: dict[str, object]
+    ) -> None:
+        self.calls.append("record")
+        self.recorded = {"device": device, "device_context": device_context}
+
+    async def send_message(self, **kwargs: object) -> None:
+        self.calls.append("send")
+        self.sent = dict(kwargs)
+
+    def get_output_channel(self) -> _MessageOutput:
+        return self._output
+
+
+@pytest.mark.asyncio
+async def test_handle_user_message_records_device_context_before_send() -> None:
+    coord = _MessageCoord()
+    msg = {
+        "type": "message",
+        "text": "what time is it",
+        "member": "Alex",
+        "device": "alex_phone",
+        "device_context": {
+            "timezone": "America/Chicago",
+            "locale": "en-US",
+            "observed_at_utc": "2026-05-22T02:19:00.000Z",
+            "timezone_offset_minutes": 300,
+            "surface": "web",
+        },
+    }
+
+    await app_module._handle_user_message(coord, object(), msg)  # type: ignore[arg-type]
+
+    assert coord.calls[:3] == ["record", "turn_info", "send"]
+    assert coord.recorded == {
+        "device": "alex_phone",
+        "device_context": msg["device_context"],
+    }
+    assert coord.sent is not None
+    assert coord.sent["device"] == "alex_phone"
+
+
 def test_family_app_static_contracts_are_manifest_aligned(client: TestClient) -> None:
     """Regression guard for family-tool SPA wiring that is easy to break."""
     html = client.get("/").text
@@ -111,12 +186,15 @@ def test_family_app_static_contracts_are_manifest_aligned(client: TestClient) ->
     assert "data-setting-rule" in js
     assert "data-kid-capability" in js
     assert "data-keyword-add" in js
+    assert "navigator.geolocation.getCurrentPosition" in js
+    assert "navigator.geolocation.watchPosition" in js
+    assert "BROWSER_LOCATION_TARGET_ACCURACY_M = 1" in js
+    assert "maximumAge: 0" in js
+    assert "location_fix" in js
+    assert "browser_geolocation" in js
     assert "Privacy, kid permissions, and family feature controls" in html
     assert "_buildHomeActivityFeed" in js
     assert "_renderHomeActivity" in js
-    assert "getDeviceContext" in js
-    assert "Intl.DateTimeFormat().resolvedOptions().timeZone" in js
-    assert "device_context: getDeviceContext()" in js
     assert "Family activity will appear as people update the apps." in js
     assert "state.timelineEntries.slice(-6)" not in js
     assert "section_payloads" in js

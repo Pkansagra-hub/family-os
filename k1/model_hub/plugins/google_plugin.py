@@ -29,6 +29,7 @@ import logging
 import queue as _queue_mod
 import threading as _threading_mod
 import time
+from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional
 from uuid import uuid4
 
@@ -50,6 +51,166 @@ from k1.model_hub.types import (
 )
 
 logger = logging.getLogger(__name__)
+_PROMPT_DUMP_DIR = Path(__file__).resolve().parents[3] / "data" / "prompt_dumps"
+_FRONT_PROVIDER_REQUEST_DUMPED: set[str] = set()
+
+
+def _dump_provider_message(message: Message) -> dict[str, Any]:
+    """Serialize a normalized message before Gemini SDK conversion."""
+    payload: dict[str, Any] = {"role": message.role, "content": message.content}
+    if message.tool_call_id:
+        payload["tool_call_id"] = message.tool_call_id
+    if message.name:
+        payload["name"] = message.name
+    if message.tool_calls:
+        payload["tool_calls"] = [
+            {
+                "id": call.id,
+                "name": call.name,
+                "arguments": call.arguments,
+            }
+            for call in message.tool_calls
+        ]
+    return payload
+
+
+def _dump_gemini_contents_preview(messages: list[Message]) -> list[dict[str, Any]]:
+    """Show the Gemini Content roles/parts produced from normalized messages."""
+    contents: list[dict[str, Any]] = []
+    for message in messages:
+        if message.role == "user":
+            contents.append(
+                {
+                    "role": "user",
+                    "parts": [{"text": message.content}],
+                }
+            )
+        elif message.role == "assistant":
+            if message.content:
+                contents.append(
+                    {
+                        "role": "model",
+                        "parts": [{"text": message.content}],
+                    }
+                )
+        elif message.role == "tool":
+            try:
+                response = json.loads(message.content)
+            except (json.JSONDecodeError, TypeError):
+                response = {"result": message.content}
+            contents.append(
+                {
+                    "role": "user",
+                    "parts": [
+                        {
+                            "function_response": {
+                                "name": message.name or "unknown_tool",
+                                "response": response,
+                            }
+                        }
+                    ],
+                }
+            )
+    return contents
+
+
+def _dump_gemini_tool_config_preview(tool_choice: str | None) -> dict[str, Any] | None:
+    """Show the FunctionCallingConfig implied by tool_choice."""
+    if not tool_choice:
+        return None
+    mode_map = {"auto": "AUTO", "required": "ANY", "none": "NONE"}
+    mode = mode_map.get(tool_choice, "AUTO")
+    config: dict[str, Any] = {"mode": mode}
+    if tool_choice not in mode_map:
+        config["mode"] = "ANY"
+        config["allowed_function_names"] = [tool_choice]
+    return {"function_calling_config": config}
+
+
+def _dump_gemini_config_preview(request: NormalizedRequest) -> dict[str, Any]:
+    """Show the GenerateContentConfig fields built for Gemini/Vertex."""
+    config: dict[str, Any] = {
+        "system_instruction": request.system_prompt or "",
+        "temperature": request.temperature,
+        "max_output_tokens": request.max_tokens,
+    }
+    if request.tools:
+        config["tools"] = [{"function_declarations": request.tools}]
+        tool_config = _dump_gemini_tool_config_preview(request.tool_choice)
+        if tool_config is not None:
+            config["tool_config"] = tool_config
+    if request.reasoning_effort:
+        config["thinking_config"] = {
+            "thinking_budget": _THINKING_BUDGET_MAP.get(request.reasoning_effort, 8192),
+            "include_thoughts": True,
+        }
+    if request.output_schema:
+        config["response_mime_type"] = "application/json"
+        config["response_json_schema"] = request.output_schema
+    if request.extra.get("code_execution"):
+        config.setdefault("tools", []).append({"code_execution": True})
+    if request.extra.get("google_search"):
+        config.setdefault("tools", []).append({"google_search": True})
+    return config
+
+
+def _write_front_provider_request_dump(
+    *,
+    provider_id: str,
+    request: NormalizedRequest,
+    model_id: str,
+    stream: bool,
+) -> None:
+    """Persist the first Front provider request for each trace id."""
+    if request.consumer_id != "concierge.front":
+        return
+    trace_key = f"{provider_id}:{request.trace_id or 'no-trace'}"
+    if trace_key in _FRONT_PROVIDER_REQUEST_DUMPED:
+        return
+    _FRONT_PROVIDER_REQUEST_DUMPED.add(trace_key)
+    try:
+        _PROMPT_DUMP_DIR.mkdir(parents=True, exist_ok=True)
+        timestamp_ms = int(time.time() * 1000)
+        payload = {
+            "timestamp_ms": timestamp_ms,
+            "provider_id": provider_id,
+            "model_id": model_id,
+            "trace_id": request.trace_id,
+            "consumer_id": request.consumer_id,
+            "capability": request.capability.value,
+            "stream": stream,
+            "normalized_request": {
+                "system_prompt": request.system_prompt or "",
+                "messages": [_dump_provider_message(message) for message in request.messages],
+                "tools": request.tools or [],
+                "tool_choice": request.tool_choice,
+                "output_schema": request.output_schema,
+                "max_tokens": request.max_tokens,
+                "timeout_ms": request.timeout_ms,
+                "temperature": request.temperature,
+                "reasoning_effort": request.reasoning_effort,
+            },
+            "gemini_generate_content": {
+                "model": model_id,
+                "contents": _dump_gemini_contents_preview(request.messages),
+                "config": _dump_gemini_config_preview(request),
+            },
+        }
+        trace_slug = (request.trace_id or "front").replace("/", "_").replace("\\", "_")
+        stem = f"front_provider_request_{provider_id}_{trace_slug}_{timestamp_ms}"
+        stamped_path = _PROMPT_DUMP_DIR / f"{stem}.json"
+        latest_path = _PROMPT_DUMP_DIR / "front_provider_request_latest.json"
+        serialized = json.dumps(payload, ensure_ascii=False, indent=2)
+        stamped_path.write_text(serialized, encoding="utf-8")
+        latest_path.write_text(serialized, encoding="utf-8")
+        logger.info(
+            "GooglePlugin: first Front provider request dump written file=%s latest=%s",
+            stamped_path,
+            latest_path,
+        )
+    except Exception:
+        logger.warning("GooglePlugin: provider request dump failed", exc_info=True)
+
 
 # ---------------------------------------------------------------------------
 # Lazy import of google.genai -- only this module touches it
@@ -84,7 +245,7 @@ _FINISH_MAP: Dict[str, FinishReason] = {
     "BLOCKLIST": FinishReason.SAFETY,
     "PROHIBITED_CONTENT": FinishReason.SAFETY,
     "SPII": FinishReason.SAFETY,
-    "MALFORMED_FUNCTION_CALL": FinishReason.MALFORMED_TOOL_CALL,
+    "MALFORMED_FUNCTION_CALL": FinishReason.ERROR,
 }
 
 
@@ -172,6 +333,12 @@ class GooglePlugin:
         contents = self._to_genai_contents(request, types)
         config = self._build_config(request, types)
         model_id = self._resolve_model_id(request)
+        _write_front_provider_request_dump(
+            provider_id=self.provider_id,
+            request=request,
+            model_id=model_id,
+            stream=False,
+        )
 
         try:
             loop = asyncio.get_event_loop()
@@ -206,6 +373,12 @@ class GooglePlugin:
         contents = self._to_genai_contents(request, types)
         config = self._build_config(request, types)
         model_id = self._resolve_model_id(request)
+        _write_front_provider_request_dump(
+            provider_id=self.provider_id,
+            request=request,
+            model_id=model_id,
+            stream=True,
+        )
 
         # Bridge the synchronous google-genai streaming iterator into async
         # using a thread + queue so chunks are yielded progressively.
@@ -263,49 +436,12 @@ class GooglePlugin:
                         prompt_tokens = int(getattr(um, "prompt_token_count", 0) or 0)
                         completion_tokens = int(getattr(um, "candidates_token_count", 0) or 0)
                     if streamed_text_chars == 0 and streamed_tool_calls == 0:
-                        # Kernel-grade diagnostics: pull safety/block info
-                        # off the chunk so an empty terminal stream is not
-                        # opaque downstream.
-                        safety_ratings = None
-                        try:
-                            sr = getattr(candidate, "safety_ratings", None)
-                            if sr:
-                                safety_ratings = [
-                                    {
-                                        "category": str(getattr(r, "category", "")),
-                                        "probability": str(getattr(r, "probability", "")),
-                                        "blocked": bool(getattr(r, "blocked", False)),
-                                    }
-                                    for r in sr
-                                ]
-                        except Exception:  # pragma: no cover - diagnostics
-                            safety_ratings = None
-                        pf_block_reason = None
-                        pf_block_message = None
-                        try:
-                            prompt_feedback = getattr(chunk, "prompt_feedback", None)
-                            if prompt_feedback is not None:
-                                pf_block_reason = str(
-                                    getattr(prompt_feedback, "block_reason", "") or ""
-                                )
-                                pf_block_message = str(
-                                    getattr(prompt_feedback, "block_reason_message", "") or ""
-                                )
-                        except Exception:  # pragma: no cover - diagnostics
-                            pf_block_reason = None
                         logger.warning(
                             "GooglePlugin.stream_execute: empty terminal chunk "
-                            "finish_reason=%s mapped=%s prompt_tokens=%d "
-                            "completion_tokens=%d safety_ratings=%s "
-                            "prompt_feedback.block_reason=%s "
-                            "prompt_feedback.message=%s trace=%s",
+                            "finish_reason=%s prompt_tokens=%d completion_tokens=%d trace=%s",
                             candidate.finish_reason,
-                            finish_reason.value,
                             prompt_tokens,
                             completion_tokens,
-                            safety_ratings,
-                            pf_block_reason,
-                            pf_block_message,
                             request.trace_id[:8] if request.trace_id else "",
                         )
                     yield ProviderChunk(
@@ -585,92 +721,12 @@ class GooglePlugin:
 
         # Finish reason
         finish_reason = FinishReason.STOP
-        raw_finish: Any = None
         if tool_calls:
             finish_reason = FinishReason.TOOL_CALLS
         elif response.candidates:
-            raw_finish = getattr(response.candidates[0], "finish_reason", None)
-            if raw_finish is not None:
-                finish_reason = _map_finish_reason(raw_finish)
-
-        # Kernel-grade observability: when the model returns ERROR or
-        # SAFETY, or returns no candidates at all, surface the raw
-        # Gemini/Vertex diagnostics so we can decide structurally
-        # instead of guessing.  No PII is logged -- only category
-        # codes and counts.
-        if (
-            finish_reason in (
-                FinishReason.ERROR,
-                FinishReason.SAFETY,
-                FinishReason.MALFORMED_TOOL_CALL,
-            )
-            or not response.candidates
-            or (response.candidates and not (
-                response.candidates[0].content
-                and response.candidates[0].content.parts
-            ))
-        ):
-            try:
-                cand = response.candidates[0] if response.candidates else None
-                safety_ratings = None
-                if cand is not None:
-                    sr = getattr(cand, "safety_ratings", None)
-                    if sr:
-                        safety_ratings = [
-                            {
-                                "category": str(getattr(r, "category", "")),
-                                "probability": str(getattr(r, "probability", "")),
-                                "blocked": bool(getattr(r, "blocked", False)),
-                            }
-                            for r in sr
-                        ]
-                prompt_feedback = getattr(response, "prompt_feedback", None)
-                pf_block_reason = None
-                pf_block_message = None
-                pf_safety = None
-                if prompt_feedback is not None:
-                    pf_block_reason = str(getattr(prompt_feedback, "block_reason", "") or "")
-                    pf_block_message = str(
-                        getattr(prompt_feedback, "block_reason_message", "") or ""
-                    )
-                    pf_sr = getattr(prompt_feedback, "safety_ratings", None)
-                    if pf_sr:
-                        pf_safety = [
-                            {
-                                "category": str(getattr(r, "category", "")),
-                                "probability": str(getattr(r, "probability", "")),
-                                "blocked": bool(getattr(r, "blocked", False)),
-                            }
-                            for r in pf_sr
-                        ]
-                logger.error(
-                    "google_plugin: degenerate response model=%s finish_raw=%s "
-                    "mapped=%s candidates=%d has_parts=%s tool_calls=%d "
-                    "tokens_in=%d tokens_out=%d safety_ratings=%s "
-                    "prompt_feedback.block_reason=%s prompt_feedback.message=%s "
-                    "prompt_feedback.safety_ratings=%s",
-                    model_id or request.model_id,
-                    raw_finish,
-                    finish_reason.value,
-                    len(response.candidates) if response.candidates else 0,
-                    bool(
-                        response.candidates
-                        and response.candidates[0].content
-                        and response.candidates[0].content.parts
-                    ),
-                    len(tool_calls),
-                    tokens_in,
-                    tokens_out,
-                    safety_ratings,
-                    pf_block_reason,
-                    pf_block_message,
-                    pf_safety,
-                )
-            except Exception as diag_exc:  # pragma: no cover - diagnostics must not break flow
-                logger.warning(
-                    "google_plugin: degenerate response diagnostics failed: %s",
-                    diag_exc,
-                )
+            fr = getattr(response.candidates[0], "finish_reason", None)
+            if fr is not None:
+                finish_reason = _map_finish_reason(fr)
 
         raw = {"thought_text": thought_text} if thought_text else {}
 

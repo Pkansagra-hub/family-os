@@ -612,6 +612,60 @@ class TestGoogleRequestBuilding:
         has_search = any(getattr(t, "google_search", None) is not None for t in genai_tools)
         assert has_search
 
+    def test_front_provider_request_dump_includes_gemini_shape(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Provider dump shows what Vertex/Gemini receives for the first Front call."""
+        google_plugin_module._FRONT_PROVIDER_REQUEST_DUMPED.clear()
+        monkeypatch.setattr(google_plugin_module, "_PROMPT_DUMP_DIR", tmp_path)
+
+        req = NormalizedRequest(
+            capability=CapabilityType.TOOL_CALL,
+            messages=[Message(role="user", content="hello")],
+            system_prompt="system prompt",
+            tools=[
+                {
+                    "name": "dispatch_task",
+                    "description": "Dispatch work",
+                    "parameters": {"type": "object"},
+                }
+            ],
+            tool_choice="auto",
+            max_tokens=2048,
+            temperature=1.0,
+            model_id="gemini-2.5-flash",
+            trace_id="front-provider-trace",
+            consumer_id="concierge.front",
+        )
+
+        google_plugin_module._write_front_provider_request_dump(
+            provider_id="vertex",
+            request=req,
+            model_id="gemini-2.5-flash",
+            stream=True,
+        )
+
+        dump = json.loads(
+            (tmp_path / "front_provider_request_latest.json").read_text(encoding="utf-8")
+        )
+        assert dump["provider_id"] == "vertex"
+        assert dump["model_id"] == "gemini-2.5-flash"
+        assert dump["consumer_id"] == "concierge.front"
+        assert dump["gemini_generate_content"]["model"] == "gemini-2.5-flash"
+        assert dump["gemini_generate_content"]["contents"] == [
+            {"role": "user", "parts": [{"text": "hello"}]}
+        ]
+        config = dump["gemini_generate_content"]["config"]
+        assert config["system_instruction"] == "system prompt"
+        assert config["temperature"] == 1.0
+        assert config["max_output_tokens"] == 2048
+        assert config["tools"][0]["function_declarations"][0]["name"] == "dispatch_task"
+        assert config["tool_config"]["function_calling_config"]["mode"] == "AUTO"
+
+        google_plugin_module._FRONT_PROVIDER_REQUEST_DUMPED.clear()
+
 
 class TestVertexRequestBuilding:
     """Gemini Enterprise Agent Platform SDK client configuration."""

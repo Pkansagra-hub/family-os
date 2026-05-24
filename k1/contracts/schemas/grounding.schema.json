@@ -1,0 +1,32 @@
+{
+  "$id": "grounding.schema.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Grounding Invocation Schema",
+  "description": "Provider metadata block binding a Fabric invocation to grounding references.",
+  "type": "object",
+  "required": [
+    "invoked_at_utc",
+    "grounding_envelope_id",
+    "grounding_projection_id",
+    "temporal_anchor_id",
+    "spatial_context_id"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "invoked_at_utc": { "type": "string", "format": "date-time" },
+    "grounding_envelope_id": { "type": "string", "minLength": 1 },
+    "grounding_projection_id": { "type": "string", "minLength": 1 },
+    "temporal_anchor_id": { "type": "string", "minLength": 1 },
+    "spatial_context_id": { "type": "string", "minLength": 1 },
+    "resolved_temporal_refs": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "resolved_spatial_refs": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "grounding_lease_id": { "type": "string", "minLength": 1 },
+    "grounding_lease_expires_at_utc": { "type": "string", "format": "date-time" }
+  }
+}

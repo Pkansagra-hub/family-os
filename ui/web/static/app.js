@@ -37,9 +37,24 @@ const state = {
     tasksSelectedListId: null,
     shoppingSelectedListId: null,
     sessionStateSelectedSection: null,
+    browserLocationFix: null,
+    browserLocationPermission: "unknown",
+    browserLocationStatus: "idle",
+    browserLocationError: null,
+    browserLocationRequested: false,
+    browserLocationPromise: null,
+    browserLocationLastAttemptMs: 0,
 };
 
 const DEFAULT_STREAMING_LABEL = "Concierge is thinking...";
+const BROWSER_LOCATION_TARGET_ACCURACY_M = 1;
+const BROWSER_LOCATION_WATCH_TIMEOUT_MS = 12000;
+const BROWSER_LOCATION_REFRESH_INTERVAL_MS = 60000;
+const BROWSER_LOCATION_POSITION_OPTIONS = Object.freeze({
+    enableHighAccuracy: true,
+    timeout: BROWSER_LOCATION_WATCH_TIMEOUT_MS,
+    maximumAge: 0,
+});
 
 const STREAMING_TOOL_LABELS = {
     update_beliefs: "Updating context...",
@@ -220,11 +235,11 @@ async function loadHomeDashboard() {
         } catch { return null; }
     };
 
-    const todayIso = new Date().toISOString().slice(0, 10);
+    const todayIso = _localDateIso();
     const endIso = (() => {
         const d = new Date();
         d.setDate(d.getDate() + 14);
-        return d.toISOString().slice(0, 10);
+        return _localDateIso(d);
     })();
 
     const [taskData, eventData, reminderData, choreData, shoppingListData, shoppingItemData] = await Promise.all([
@@ -459,23 +474,6 @@ function send(data) {
     }
 }
 
-function getDeviceContext() {
-    let timezone = null;
-    try {
-        timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || null;
-    } catch (e) {
-        timezone = null;
-    }
-    return {
-        timezone,
-        locale: navigator.language || null,
-        observed_at_utc: new Date().toISOString(),
-        timezone_offset_minutes: new Date().getTimezoneOffset(),
-        surface: "web",
-        installation_id: state.device,
-    };
-}
-
 // ============================================================================
 // Message router
 // ============================================================================
@@ -500,6 +498,7 @@ function handleMessage(msg) {
         case "tool_refresh":    handleToolRefresh(msg); break;
         case "status_report":   /* silent */ break;
         case "hil_request":     handleHilRequest(msg); break;
+        case "task_failed":     handleTaskFailed(msg); break;
     }
 }
 
@@ -515,6 +514,8 @@ function handleInit(msg) {
     setFsmBadge(msg.fsm_state || "READY");
     renderMemberDropdown();
     renderActiveMember();
+    _sendDeviceContext();
+    _ensureBrowserLocation().then(_sendDeviceContext).catch(_sendDeviceContext);
     if (dom.turnBadge) dom.turnBadge.textContent = `Turn ${state.turn}`;
     if (state.currentView === "home") loadHomeDashboard();
 }
@@ -611,6 +612,25 @@ function handleSystem(msg) {
 function handleSystem(msg) {
     finishStreaming(true);
     addSystemMessage(msg.text);
+}
+
+function handleTaskFailed(msg) {
+    // Back failed (e.g. exceeded iteration budget without submit_result, or
+    // dispatcher rejected the final tool call). Front may never publish a
+    // response.final, so we clear the spinner ourselves and surface a brief
+    // fallback so the user knows the turn is over.
+    finishStreaming(true);
+    const reason = (msg && msg.reason) ? String(msg.reason) : "error";
+    const detail = (msg && msg.error_message) ? String(msg.error_message) : "";
+    let text = "Hmm, I couldn't finish that one. Want to try again?";
+    if (reason === "missing_submit_result") {
+        text = "I ran out of room to finish that. Want me to try again with a shorter ask?";
+    } else if (reason === "timeout") {
+        text = "That took too long. Try again or rephrase?";
+    } else if (detail) {
+        text = `I hit a snag: ${detail}. Want to try again?`;
+    }
+    addSystemMessage(text);
 }
 
 // ============================================================================
@@ -801,6 +821,8 @@ function handleMemberSwitched(msg) {
     state.member = msg.member;
     state.device = msg.device;
     renderActiveMember();
+    _sendDeviceContext();
+    _ensureBrowserLocation({ force: true }).then(_sendDeviceContext).catch(_sendDeviceContext);
 }
 
 const EXTERNAL_TOOLS = new Set([
@@ -1137,17 +1159,17 @@ function setupInput() {
     if (!dom.form) return;
     dom.form.addEventListener("submit", (e) => {
         e.preventDefault();
-        sendMessage();
+        sendMessage().catch((err) => console.error("sendMessage failed:", err));
     });
     dom.input.addEventListener("keydown", (e) => {
         if (e.key === "Enter" && !e.shiftKey) {
             e.preventDefault();
-            sendMessage();
+            sendMessage().catch((err) => console.error("sendMessage failed:", err));
         }
     });
 }
 
-function sendMessage() {
+async function sendMessage() {
     const text = dom.input.value.trim();
     if (!text || !state.connected) return;
 
@@ -1160,16 +1182,18 @@ function sendMessage() {
 
     addUserMessage(text);
     ensureStreamingMessage();
+    dom.input.value = "";
+    showStreaming(true, DEFAULT_STREAMING_LABEL);
+
+    await _ensureBrowserLocation();
+
     send({
         type: "message",
         text,
         member: state.member,
         device: state.device,
-        device_context: getDeviceContext(),
+        device_context: _browserDeviceContext(),
     });
-
-    dom.input.value = "";
-    showStreaming(true, DEFAULT_STREAMING_LABEL);
 }
 
 // ============================================================================
@@ -1226,7 +1250,334 @@ function formatMessageText(text) {
 }
 
 function formatTime() {
-    return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const options = { hour: "2-digit", minute: "2-digit" };
+    const timeZone = _displayTimeZone();
+    if (timeZone) options.timeZone = timeZone;
+    try {
+        return new Intl.DateTimeFormat([], options).format(new Date());
+    } catch {
+        return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    }
+}
+
+function _familyTimeZone() {
+    const tz = state.family && typeof state.family.timezone === "string" ? state.family.timezone.trim() : "";
+    return tz || null;
+}
+
+function _familyLocation() {
+    const loc = state.family && typeof state.family.location === "string" ? state.family.location.trim() : "";
+    return loc || null;
+}
+
+function _browserTimeZone() {
+    try {
+        return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+    } catch {
+        return null;
+    }
+}
+
+function _displayTimeZone() {
+    return _familyTimeZone() || _browserTimeZone() || null;
+}
+
+function _localDateIso(date = new Date()) {
+    const timeZone = _displayTimeZone();
+    if (timeZone && typeof Intl !== "undefined") {
+        try {
+            const parts = new Intl.DateTimeFormat("en-US", {
+                timeZone,
+                year: "numeric",
+                month: "2-digit",
+                day: "2-digit",
+            }).formatToParts(date).reduce((acc, part) => {
+                acc[part.type] = part.value;
+                return acc;
+            }, {});
+            if (parts.year && parts.month && parts.day) {
+                return `${parts.year}-${parts.month}-${parts.day}`;
+            }
+        } catch {/* fall through */}
+    }
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, "0");
+    const d = String(date.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+}
+
+function _timeZoneOffsetMs(date, timeZone) {
+    const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone,
+        hourCycle: "h23",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+    }).formatToParts(date).reduce((acc, part) => {
+        acc[part.type] = part.value;
+        return acc;
+    }, {});
+    const wallTimeMs = Date.UTC(
+        Number(parts.year),
+        Number(parts.month) - 1,
+        Number(parts.day),
+        Number(parts.hour),
+        Number(parts.minute),
+        Number(parts.second),
+    );
+    return wallTimeMs - date.getTime();
+}
+
+function _zonedDateTimeToIso(dateIso, timeText) {
+    const timeZone = _displayTimeZone();
+    const [year, month, day] = String(dateIso || "").split("-").map(Number);
+    const [hour, minute, second = 0] = String(timeText || "00:00:00").split(":").map(Number);
+    if (![year, month, day, hour, minute, second].every(Number.isFinite)) {
+        return new Date().toISOString();
+    }
+    const wallTimeMs = Date.UTC(year, month - 1, day, hour, minute, second, 0);
+    if (!timeZone || typeof Intl === "undefined") {
+        return new Date(`${dateIso}T${timeText}`).toISOString();
+    }
+    try {
+        let utcMs = wallTimeMs - _timeZoneOffsetMs(new Date(wallTimeMs), timeZone);
+        utcMs = wallTimeMs - _timeZoneOffsetMs(new Date(utcMs), timeZone);
+        return new Date(utcMs).toISOString();
+    } catch {
+        return new Date(`${dateIso}T${timeText}`).toISOString();
+    }
+}
+
+function _browserDeviceContext() {
+    const browserTimezone = _browserTimeZone();
+    const profileTimezone = _familyTimeZone();
+    const context = {
+        timezone: _displayTimeZone(),
+        locale: navigator.language || "en-US",
+        observed_at_utc: new Date().toISOString(),
+        timezone_offset_minutes: new Date().getTimezoneOffset(),
+        surface: "web",
+        browser_timezone: browserTimezone,
+        profile_timezone: profileTimezone,
+        profile_location: _familyLocation(),
+        browser_geolocation_supported: _browserGeolocationSupported(),
+        browser_geolocation_permission: state.browserLocationPermission,
+        browser_geolocation_status: state.browserLocationStatus,
+        location_permission: state.browserLocationPermission,
+        location_fix: state.browserLocationFix,
+    };
+    if (state.browserLocationError) {
+        context.browser_geolocation_error = state.browserLocationError;
+    }
+    return context;
+}
+
+function _sendDeviceContext() {
+    if (!state.connected || !state.device) return;
+    send({
+        type: "device_context",
+        member: state.member,
+        device: state.device,
+        device_context: _browserDeviceContext(),
+    });
+}
+
+function _browserGeolocationSupported() {
+    return typeof navigator !== "undefined" && !!navigator.geolocation && !!window.isSecureContext;
+}
+
+function _ensureBrowserLocation(options = {}) {
+    const force = !!options.force;
+    if (state.browserLocationPromise && !force) return state.browserLocationPromise;
+    if (state.browserLocationRequested && !force && !_browserLocationNeedsRefresh()) {
+        return Promise.resolve(state.browserLocationFix);
+    }
+
+    state.browserLocationRequested = true;
+    state.browserLocationLastAttemptMs = Date.now();
+    state.browserLocationPromise = _requestBrowserLocation()
+        .catch((err) => {
+            state.browserLocationPermission = "unavailable";
+            state.browserLocationStatus = "unavailable";
+            state.browserLocationFix = null;
+            state.browserLocationError = {
+                code: "location_request_failed",
+                message: err && err.message ? String(err.message) : "Browser location request failed.",
+            };
+            return null;
+        })
+        .finally(() => {
+            state.browserLocationPromise = null;
+        });
+    return state.browserLocationPromise;
+}
+
+async function _requestBrowserLocation() {
+    if (!_browserGeolocationSupported()) {
+        state.browserLocationPermission = "unavailable";
+        state.browserLocationStatus = "unavailable";
+        state.browserLocationFix = null;
+        state.browserLocationError = {
+            code: "unsupported_or_insecure_context",
+            message: "Browser geolocation is unavailable on this page.",
+        };
+        return null;
+    }
+
+    const permission = await _readBrowserLocationPermission();
+    if (permission === "denied") {
+        state.browserLocationPermission = "denied";
+        state.browserLocationStatus = "denied";
+        state.browserLocationFix = null;
+        state.browserLocationError = {
+            code: "permission_denied",
+            message: "Browser geolocation permission is denied.",
+        };
+        return null;
+    }
+
+    state.browserLocationPermission = _browserPermissionToSpatialPermission(permission);
+    state.browserLocationStatus = "requesting";
+    const position = await _getCurrentBrowserPosition();
+    const coords = position.coords || {};
+    state.browserLocationPermission = "granted";
+    state.browserLocationStatus = "available";
+    state.browserLocationError = null;
+    state.browserLocationFix = {
+        latitude: coords.latitude,
+        longitude: coords.longitude,
+        accuracy_m: coords.accuracy,
+        altitude_m: coords.altitude,
+        heading_deg: coords.heading,
+        speed_mps: coords.speed,
+        captured_at_utc: new Date(position.timestamp || Date.now()).toISOString(),
+        source: "browser_geolocation",
+        permission_state: "granted",
+        metadata: {
+            browser_geolocation: true,
+            high_accuracy_requested: true,
+            high_accuracy_strategy: "best_watch_position",
+            desired_accuracy_m: BROWSER_LOCATION_TARGET_ACCURACY_M,
+            observed_accuracy_m: coords.accuracy,
+            accuracy_target_met: _positionAccuracy(position) <= BROWSER_LOCATION_TARGET_ACCURACY_M,
+            maximum_age_ms: BROWSER_LOCATION_POSITION_OPTIONS.maximumAge,
+            position_age_ms: Math.max(0, Date.now() - (position.timestamp || Date.now())),
+        },
+    };
+    return state.browserLocationFix;
+}
+
+function _readBrowserLocationPermission() {
+    const permissions = navigator.permissions;
+    if (!permissions || typeof permissions.query !== "function") {
+        return Promise.resolve("unknown");
+    }
+    return permissions.query({ name: "geolocation" })
+        .then((result) => {
+            result.onchange = () => {
+                state.browserLocationPermission = _browserPermissionToSpatialPermission(result.state);
+                state.browserLocationRequested = false;
+                _sendDeviceContext();
+            };
+            return result.state || "unknown";
+        })
+        .catch(() => "unknown");
+}
+
+function _getCurrentBrowserPosition() {
+    return new Promise((resolve, reject) => {
+        let bestPosition = null;
+        let lastError = null;
+        let settled = false;
+        let watchId = null;
+        let timerId = null;
+
+        const cleanup = () => {
+            if (timerId !== null) window.clearTimeout(timerId);
+            if (watchId !== null) {
+                try { navigator.geolocation.clearWatch(watchId); } catch (_) { /* noop */ }
+            }
+        };
+        const settle = (position, error) => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            if (position) {
+                resolve(position);
+                return;
+            }
+            const denied = error && error.code === error.PERMISSION_DENIED;
+            state.browserLocationPermission = denied ? "denied" : "unavailable";
+            state.browserLocationStatus = denied ? "denied" : "unavailable";
+            state.browserLocationFix = null;
+            state.browserLocationError = {
+                code: error && error.code ? String(error.code) : "unknown",
+                message: error && error.message ? String(error.message) : "Browser location unavailable.",
+            };
+            reject(error || new Error("Browser location unavailable."));
+        };
+        const consider = (position) => {
+            if (!position || !position.coords) return;
+            if (!bestPosition || _positionAccuracy(position) < _positionAccuracy(bestPosition)) {
+                bestPosition = position;
+            }
+            if (_positionAccuracy(bestPosition) <= BROWSER_LOCATION_TARGET_ACCURACY_M) {
+                settle(bestPosition, null);
+            }
+        };
+        const rememberError = (error) => {
+            lastError = error;
+        };
+
+        try {
+            navigator.geolocation.getCurrentPosition(
+                consider,
+                rememberError,
+                BROWSER_LOCATION_POSITION_OPTIONS,
+            );
+        } catch (error) {
+            lastError = error;
+        }
+        try {
+            watchId = navigator.geolocation.watchPosition(
+                consider,
+                rememberError,
+                BROWSER_LOCATION_POSITION_OPTIONS,
+            );
+        } catch (error) {
+            lastError = error;
+        }
+        timerId = window.setTimeout(() => {
+            settle(bestPosition, lastError);
+        }, BROWSER_LOCATION_WATCH_TIMEOUT_MS);
+    });
+}
+
+function _browserLocationNeedsRefresh() {
+    const elapsedMs = Date.now() - (state.browserLocationLastAttemptMs || 0);
+    if (!state.browserLocationFix) return elapsedMs > BROWSER_LOCATION_REFRESH_INTERVAL_MS;
+    const capturedMs = Date.parse(state.browserLocationFix.captured_at_utc || "");
+    if (!Number.isNaN(capturedMs) && Date.now() - capturedMs > BROWSER_LOCATION_REFRESH_INTERVAL_MS) {
+        return true;
+    }
+    const accuracy = Number(state.browserLocationFix.accuracy_m);
+    return Number.isFinite(accuracy)
+        && accuracy > BROWSER_LOCATION_TARGET_ACCURACY_M
+        && elapsedMs > BROWSER_LOCATION_REFRESH_INTERVAL_MS;
+}
+
+function _positionAccuracy(position) {
+    const accuracy = Number(position && position.coords ? position.coords.accuracy : NaN);
+    return Number.isFinite(accuracy) ? accuracy : Number.POSITIVE_INFINITY;
+}
+
+function _browserPermissionToSpatialPermission(permission) {
+    if (permission === "granted") return "granted";
+    if (permission === "denied") return "denied";
+    return "unknown";
 }
 
 function formatBytes(bytes) {
@@ -1295,7 +1646,7 @@ const SETTINGS_KID_CAPABILITIES = [
 const calState = {
     year: new Date().getFullYear(),
     month: new Date().getMonth(),
-    selectedDate: new Date().toISOString().slice(0, 10),
+    selectedDate: _localDateIso(),
     events: [],
     feeds: [],
     manifest: null,
@@ -1458,10 +1809,10 @@ function _isoMinutesFromNow(minutes) {
 }
 
 function _defaultEventTimes(dateIso) {
-    const base = /^\d{4}-\d{2}-\d{2}$/.test(dateIso || "") ? dateIso : new Date().toISOString().slice(0, 10);
+    const base = /^\d{4}-\d{2}-\d{2}$/.test(dateIso || "") ? dateIso : _localDateIso();
     return {
-        start: new Date(`${base}T09:00:00`).toISOString(),
-        end: new Date(`${base}T10:00:00`).toISOString(),
+        start: _zonedDateTimeToIso(base, "09:00:00"),
+        end: _zonedDateTimeToIso(base, "10:00:00"),
         visibility: "family",
     };
 }
@@ -1477,7 +1828,7 @@ function _renderCalendarView(viewId, manifest, writeActions, listData) {
     const body = dom.viewBody[viewId];
 
     const now = new Date();
-    const todayIso = now.toISOString().slice(0, 10);
+    const todayIso = _localDateIso(now);
     const nextWeek = new Date(now);
     nextWeek.setDate(nextWeek.getDate() + 7);
     const upcoming = calState.events.filter((event) => event.start && new Date(event.start) >= now);
@@ -2752,7 +3103,7 @@ async function _callListAction(adapterId, action) {
         const today = new Date();
         const end = new Date(today);
         end.setDate(end.getDate() + 60);
-        const fmt = (d) => d.toISOString().split("T")[0];
+        const fmt = (d) => _localDateIso(d);
         url += `?start_date=${fmt(today)}&end_date=${fmt(end)}`;
     }
     try {

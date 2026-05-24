@@ -132,8 +132,6 @@ TRANSITION_TABLE: dict[ConciergeState, dict[str, ConciergeState | None]] = {
     },
     ConciergeState.CLARIFYING_WORKER: {
         TOPIC_USER_INPUT: ConciergeState.CLARIFYING_WORKER,
-        TOPIC_TASK_COMPLETE: ConciergeState.DELIVERING,
-        TOPIC_TASK_FAILED: ConciergeState.DELIVERING,
         TOPIC_TASK_RESUME: ConciergeState.COMPANIONING,
         TOPIC_FINAL_RESPONSE: None,
     },
@@ -329,8 +327,8 @@ FULL_GUARD_TABLE: dict[
         TOPIC_ARTIFACT_CREATED: (_O, None),
         TOPIC_AFFECT_UPDATE: (_O, None),
         TOPIC_PROACTIVE_FILL: (_O, None),
-        TOPIC_TOOL_STARTED: (_O, None),  # PHASE3: observability only, no FSM transition
-        TOPIC_TOOL_COMPLETED: (_O, None),  # PHASE3: observability only, no FSM transition
+        TOPIC_TOOL_STARTED: (_T, S.PROGRESSING),
+        TOPIC_TOOL_COMPLETED: (_D, None),
         TOPIC_WEAVE_BATCH: (_P, None),
         TOPIC_INTENT_ARBITRATED: (_O, None),  # M5 5.5.1: arbiter event, informational
         TOPIC_TASK_MODIFY: (_O, None),  # M5 5.5.1: modify-inflight event, informational
@@ -362,8 +360,8 @@ FULL_GUARD_TABLE: dict[
         TOPIC_ARTIFACT_CREATED: (_O, None),
         TOPIC_AFFECT_UPDATE: (_O, None),
         TOPIC_PROACTIVE_FILL: (_O, None),
-        TOPIC_TOOL_STARTED: (_O, None),  # PHASE3: observability only, no FSM transition
-        TOPIC_TOOL_COMPLETED: (_O, None),  # PHASE3: observability only, no FSM transition
+        TOPIC_TOOL_STARTED: (_D, None),
+        TOPIC_TOOL_COMPLETED: (_T, S.COMPANIONING),
         TOPIC_WEAVE_BATCH: (_P, None),
         TOPIC_INTENT_ARBITRATED: (_O, None),  # M5 5.5.1: arbiter event, informational
         TOPIC_TASK_MODIFY: (_O, None),  # M5 5.5.1: modify-inflight event, informational
@@ -452,8 +450,8 @@ FULL_GUARD_TABLE: dict[
         TOPIC_FINAL_RESPONSE: (_T, None),  # target decided by response_final_table
         TOPIC_TASK_DISPATCH: (_D, None),
         TOPIC_DAG_COMPLETED: (_P, None),
-        TOPIC_TASK_COMPLETE: (_T, S.DELIVERING),
-        TOPIC_TASK_FAILED: (_T, S.DELIVERING),
+        TOPIC_TASK_COMPLETE: (_Q, None),
+        TOPIC_TASK_FAILED: (_Q, None),
         TOPIC_TASK_CANCEL: (_D, None),
         TOPIC_TASK_SUSPENDED: (_O, None),
         TOPIC_TASK_RESUME: (_T, S.COMPANIONING),

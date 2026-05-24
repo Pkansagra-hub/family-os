@@ -42,6 +42,10 @@ from k1.fabric.types import CapabilityContract, ExecutionContext
 
 logger = logging.getLogger(__name__)
 
+_DEPRECATED_GROUNDING_OVERRIDE_KEYS = frozenset(
+    {"now", "place", "time", "temporal", "spatial", "grounding"}
+)
+
 
 # ---------------------------------------------------------------------------
 # Port protocols (declared locally to avoid circular imports)
@@ -214,16 +218,18 @@ class ContextBuilder:
         context = result.context  # ExecutionContext (frozen)
     """
 
-    __slots__ = ("_state_reader", "_prompt_system", "_budget", "_config")
+    __slots__ = ("_state_reader", "_prompt_system", "_grounding_port", "_budget", "_config")
 
     def __init__(
         self,
         state_reader: Optional[ISessionStateReader] = None,
         prompt_system: Optional[IPromptSystemPort] = None,
+        grounding_port: Optional[Any] = None,
         config: Optional[ContextBuilderConfig] = None,
     ) -> None:
         self._state_reader = state_reader
         self._prompt_system = prompt_system
+        self._grounding_port = grounding_port
         self._config: ContextBuilderConfig = config or ContextBuilderConfig()
         self._budget = ContextBudget(self._config.budget_config)
 
@@ -245,6 +251,20 @@ class ContextBuilder:
     def has_prompt_system(self) -> bool:
         """Whether a prompt system port is connected."""
         return self._prompt_system is not None
+
+    @property
+    def has_grounding_port(self) -> bool:
+        """Whether a grounding port is connected for invocation metadata."""
+        return self._grounding_port is not None
+
+    @property
+    def grounding_port(self) -> Optional[Any]:
+        """The attached grounding port, if any."""
+        return self._grounding_port
+
+    def set_grounding_port(self, grounding_port: Optional[Any]) -> None:
+        """Attach or clear the session grounding port after construction."""
+        self._grounding_port = grounding_port
 
     # ------------------------------------------------------------------
     # Public API
@@ -398,6 +418,65 @@ class ContextBuilder:
             prompt_resolved=prompt_resolved,
         )
 
+    async def build_async(
+        self,
+        contract: CapabilityContract,
+        params: Optional[Dict[str, Any]] = None,
+        session_id: Optional[str] = None,
+        trace_id: str = "",
+        prompt_template_name: Optional[str] = None,
+        prompt_variables: Optional[Dict[str, Any]] = None,
+        context_override: Optional[Dict[str, Any]] = None,
+    ) -> ContextBuildResult:
+        """Async build path used when invocation grounding is available."""
+        effective_override = dict(context_override or {})
+        if "grounding_invocation" not in effective_override:
+            grounding_invocation = await self._build_grounding_invocation(
+                session_id=session_id or self._config.default_session_id,
+                trace_id=trace_id,
+            )
+            if grounding_invocation:
+                effective_override["grounding_invocation"] = grounding_invocation
+
+        return self.build(
+            contract=contract,
+            params=params,
+            session_id=session_id,
+            trace_id=trace_id,
+            prompt_template_name=prompt_template_name,
+            prompt_variables=prompt_variables,
+            context_override=effective_override or context_override,
+        )
+
+    async def _build_grounding_invocation(
+        self,
+        *,
+        session_id: str,
+        trace_id: str,
+    ) -> Dict[str, Any] | None:
+        if self._grounding_port is None or not session_id:
+            return None
+        try:
+            from k1.grounding.service.invocation_metadata import (
+                build_invocation_metadata,
+            )
+
+            envelope = await self._grounding_port.create_envelope(
+                session_id,
+                "tool",
+                trace_id=trace_id,
+            )
+            projection = await self._grounding_port.build_projection(envelope, "tool")
+            return build_invocation_metadata(projection)
+        except Exception:
+            logger.warning(
+                "Failed to build grounding invocation metadata (session=%s, trace=%s)",
+                session_id,
+                trace_id,
+                exc_info=True,
+            )
+            return None
+
     @staticmethod
     def _build_context_override_section(
         *,
@@ -412,7 +491,11 @@ class ContextBuilder:
 
         if isinstance(context_override, dict):
             section.update(
-                {key: value for key, value in context_override.items() if key != "prompt_template"}
+                {
+                    key: value
+                    for key, value in context_override.items()
+                    if key != "prompt_template" and key not in _DEPRECATED_GROUNDING_OVERRIDE_KEYS
+                }
             )
 
         selected_prompt_template = prompt_template_name or contract.prompt_template

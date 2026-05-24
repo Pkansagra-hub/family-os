@@ -69,6 +69,10 @@ def build_provider_metadata(
     if prompt_template:
         metadata["__prompt_template__"] = prompt_template
 
+    grounding_invocation = override.get("grounding_invocation")
+    if isinstance(grounding_invocation, dict) and grounding_invocation:
+        metadata["__grounding_invocation__"] = dict(grounding_invocation)
+
     return metadata
 
 

@@ -34,8 +34,8 @@ from k1.sessionstate import SessionStateFactory, SessionStateManager
 # SLI TARGETS (bytes)
 # =============================================================================
 
-SLI_TOTAL_LIMIT_BYTES = 110592  # 108 KB
-SLI_HOT_LIMIT_BYTES = 57344  # 56 KB
+SLI_TOTAL_LIMIT_BYTES = 102400  # 96 KB
+SLI_HOT_LIMIT_BYTES = 53248  # 52 KB
 SLI_WARM_LIMIT_BYTES = 49152  # 48 KB
 
 # Pressure thresholds
@@ -98,13 +98,13 @@ class TestBudgetEnforcement:
     def test_budget_limit_values_correct(self, manager: SessionStateManager) -> None:
         """Budget limits match SLI spec."""
         # Verify our constants are correct
-        assert SLI_TOTAL_LIMIT_BYTES == 108 * 1024  # 108KB
-        assert SLI_HOT_LIMIT_BYTES == 56 * 1024  # 56KB
+        assert SLI_TOTAL_LIMIT_BYTES == 100 * 1024  # 96KB
+        assert SLI_HOT_LIMIT_BYTES == 52 * 1024  # 52KB
         assert SLI_WARM_LIMIT_BYTES == 48 * 1024  # 48KB
 
     def test_hot_warm_split_correct(self) -> None:
-        """HOT + WARM stays within TOTAL limit."""
-        assert SLI_HOT_LIMIT_BYTES + SLI_WARM_LIMIT_BYTES <= SLI_TOTAL_LIMIT_BYTES
+        """HOT + WARM = TOTAL limit."""
+        assert SLI_HOT_LIMIT_BYTES + SLI_WARM_LIMIT_BYTES == SLI_TOTAL_LIMIT_BYTES
 
     def test_pressure_thresholds_ordered(self) -> None:
         """Pressure thresholds are properly ordered."""

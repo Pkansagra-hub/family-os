@@ -559,6 +559,7 @@ class TaskEnvelope:
     capabilities: List[str] = field(default_factory=list)
     params: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     constraints: Dict[str, Any] = field(default_factory=dict)
+    grounding: Optional[Dict[str, Any]] = None
     timeout_ms: int = 30_000
 
     _VALID_TIERS = frozenset({Tier.MEDIUM.value, Tier.HIGH.value})
@@ -853,6 +854,7 @@ class PlanRequest:
     context: Optional[SessionSnapshot] = None
     request_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     constraints: Dict[str, Any] = field(default_factory=dict)
+    grounding: Optional[Dict[str, Any]] = None
     timeout_ms: int = 45_000
 
     def __post_init__(self) -> None:
@@ -878,6 +880,7 @@ class PlanRequest:
             "context": ctx,
             "request_id": self.request_id,
             "constraints": dict(self.constraints),
+            "grounding": dict(self.grounding) if self.grounding is not None else None,
             "timeout_ms": self.timeout_ms,
         }
 
@@ -900,6 +903,7 @@ class PlanRequest:
             context=context,
             request_id=data.get("request_id") or str(uuid.uuid4()),
             constraints=dict(data.get("constraints") or {}),
+            grounding=(dict(data.get("grounding")) if data.get("grounding") else None),
             timeout_ms=int(data.get("timeout_ms", 45_000)),
         )
 

@@ -161,10 +161,10 @@ class TestLlmSpecToContract:
         assert c.safety_band_min == "GREEN"
         assert c.risk_class == "benign"
 
-    def test_write_capability_gets_green_band(self) -> None:
+    def test_write_capability_gets_amber_band(self) -> None:
         c = _llm_spec_to_contract(self._write_spec())
-        assert c.safety_band_min == "GREEN"
-        assert c.risk_class == "benign"
+        assert c.safety_band_min == "AMBER"
+        assert c.risk_class == "safety_sensitive"
 
     def test_description_carried_through(self) -> None:
         c = _llm_spec_to_contract(self._read_spec())

@@ -174,9 +174,6 @@ def _make_ctx(actor: str) -> Any:
     return SimpleNamespace(
         actor=actor,
         dispatch=None,
-        session_id="test-session",
-        active_task_id=None,
-        capability_cache={},
         cognitive_trace_id="trace-1",
         allow_dispatch_passthrough=True,
         # The remaining attributes are unused by execute_invoke_capability

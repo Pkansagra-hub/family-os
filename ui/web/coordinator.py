@@ -42,12 +42,11 @@ logger = logging.getLogger(__name__)
 
 
 def _env_flag(name: str, *, default: bool = False) -> bool:
-    """Parse an operator feature flag from the process environment."""
-
-    value = os.environ.get(name)
-    if value is None:
+    """Parse a boolean environment flag using shell-friendly truthy strings."""
+    raw = os.environ.get(name)
+    if raw is None:
         return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
 # ---------------------------------------------------------------------------
@@ -466,7 +465,6 @@ class UiCoordinator:
             session_mode="standalone",
             session_id=f"web-{uuid.uuid4().hex[:8]}",
             active_member_id=active_member_id,
-            active_device_id=self._current_device,
             enable_experience=True,
             enable_delta=True,
             enable_hitl=True,
@@ -476,6 +474,9 @@ class UiCoordinator:
             auto_start_consumer=True,
             seed_memories=seed_mems,
             k0_endpoint=k0_endpoint,
+            enable_temporal=_env_flag("K1_ENABLE_TEMPORAL", default=True),
+            enable_grounding=_env_flag("K1_ENABLE_GROUNDING", default=True),
+            enable_spatial=_env_flag("K1_ENABLE_SPATIAL", default=True),
             # M13: self-model seeding is MANDATORY per product spec — the L1/L2
             # space-graph projection must be populated so downstream services
             # (composer, capsule builder, policy evaluator) see the family.
@@ -492,9 +493,6 @@ class UiCoordinator:
             # Concierge planner can dispatch calendar/tasks/reminders/chores/
             # family_settings natively (no K0 round-trip needed).
             enable_family_tools=True,
-            enable_temporal=_env_flag("K1_ENABLE_TEMPORAL"),
-            enable_grounding=_env_flag("K1_ENABLE_GROUNDING"),
-            enable_spatial=_env_flag("K1_ENABLE_SPATIAL"),
             family_tool_service_paths=(
                 "k1.tools.family.calendar.service:CalendarToolService",
                 "k1.tools.family.tasks.service:TasksToolService",
@@ -556,6 +554,8 @@ class UiCoordinator:
         self.dead_letter_consumer = rt.dead_letter_consumer
         self.front_ctx = rt.front_ctx
         self.back_ctx = rt.back_ctx
+
+        await self._record_device_context(device=self._current_device, device_context={})
 
         self._record(
             "phase2",
@@ -723,12 +723,13 @@ class UiCoordinator:
     def _wire_web_timeline_hooks(self) -> None:
         """Subscribe FSM/affect/tool topics; forward to the WebSocketRenderer."""
         from k1.bus import Envelope
+        from k1.concierge.bus.topics import TOPIC_TOOL_STATE_CHANGED  # E15.10
         from k1.concierge.bus.topics import (
             TOPIC_AFFECT_UPDATE,
             TOPIC_STATE_UPDATED,
+            TOPIC_TASK_FAILED,
             TOPIC_TOOL_COMPLETED,
             TOPIC_TOOL_STARTED,
-            TOPIC_TOOL_STATE_CHANGED,  # E15.10
         )
         from k1.hil.topics import TOPIC_HIL_REQUEST as _TOPIC_HIL_REQUEST
 
@@ -814,6 +815,27 @@ class UiCoordinator:
 
         self._web_subscriptions.append(bus.subscribe(_TOPIC_HIL_REQUEST, _on_hil_request))
 
+        # Task failure: clear browser spinner so the user isn't stuck waiting
+        # when Back fails and Front never publishes a response.final.
+        def _on_task_failed(envelope: Envelope) -> None:
+            p = _safe_payload(envelope)
+            try:
+                logger.info(
+                    "WEB: task_failed forwarded task_id=%s reason=%s",
+                    p.get("task_id", ""),
+                    p.get("reason", ""),
+                )
+                renderer.send_task_failed(
+                    task_id=str(p.get("task_id", "")),
+                    reason=str(p.get("reason", "error")),
+                    error_message=str(p.get("error_message", "") or p.get("error", "")),
+                    error_code=str(p.get("error_code", "")),
+                )
+            except Exception:
+                logger.debug("Task failed web hook failed", exc_info=True)
+
+        self._web_subscriptions.append(bus.subscribe(TOPIC_TASK_FAILED, _on_task_failed))
+
     # =================================================================
     # PHASE 4 — Health check
     # =================================================================
@@ -879,6 +901,109 @@ class UiCoordinator:
             raise RuntimeError("Output channel not wired (phase 3 not complete)")
         return self.output_channel
 
+    async def _record_device_context(
+        self,
+        *,
+        device: str,
+        device_context: Dict[str, Any] | None,
+    ) -> None:
+        """Record the latest browser/device timezone snapshot into the kernel port."""
+        context = self._device_context_with_defaults(device_context)
+        runtime = self._runtime
+        service = getattr(runtime, "_service", None) if runtime is not None else None
+        port = getattr(service, "device_context_port", None) if service is not None else None
+        if port is None:
+            return
+
+        from k1.grounding.types import DeviceContextSnapshot
+
+        session_id = str(getattr(runtime, "_session_id", "") or "")
+        if not session_id:
+            session_id = str(getattr(getattr(runtime, "config", None), "session_id", "") or "web")
+        device_id = str(device or context.get("device_id") or "").strip()
+        if not device_id:
+            return
+        installation_id = str(context.get("installation_id") or device_id)
+        metadata = dict(context.get("metadata") or {})
+        known_keys = {
+            "timezone",
+            "locale",
+            "observed_at_utc",
+            "surface",
+            "clock_skew_ms",
+            "location_permission",
+            "location_fix",
+            "semantic_place_hint",
+            "installation_id",
+            "metadata",
+        }
+        for key, value in context.items():
+            if key not in known_keys and value is not None:
+                metadata[key] = value
+
+        observed_at = str(context.get("observed_at_utc") or datetime.now(timezone.utc).isoformat())
+        snapshot = DeviceContextSnapshot(
+            session_id=session_id,
+            device_id=device_id,
+            installation_id=installation_id,
+            observed_at_utc=observed_at,
+            surface=str(context.get("surface") or "web"),
+            timezone=(
+                (str(context.get("timezone")).strip() or None)
+                if context.get("timezone") is not None
+                else None
+            ),
+            locale=(
+                (str(context.get("locale")).strip() or None)
+                if context.get("locale") is not None
+                else None
+            ),
+            clock_skew_ms=context.get("clock_skew_ms"),
+            location_permission=str(context.get("location_permission") or "unknown"),
+            location_fix=context.get("location_fix"),
+            semantic_place_hint=context.get("semantic_place_hint"),
+            metadata=metadata,
+        )
+        await port.update_snapshot(snapshot)
+
+        try:
+            meta = (
+                self.session_state.get_section("meta") if self.session_state is not None else None
+            )
+            if meta is not None and hasattr(meta, "set_active_device"):
+                meta.set_active_device(device_id)
+        except Exception:
+            logger.debug("Device context active-device update failed", exc_info=True)
+
+    def _device_context_with_defaults(
+        self, device_context: Dict[str, Any] | None
+    ) -> Dict[str, Any]:
+        context = dict(device_context or {}) if isinstance(device_context, dict) else {}
+        family_timezone = self._family_timezone()
+        timezone_name = str(context.get("timezone") or "").strip()
+        if not timezone_name:
+            timezone_name = (
+                str(context.get("profile_timezone") or "").strip()
+                or family_timezone
+                or str(context.get("browser_timezone") or "").strip()
+            )
+        if timezone_name:
+            context["timezone"] = timezone_name
+        if family_timezone and not context.get("profile_timezone"):
+            context["profile_timezone"] = family_timezone
+        context.setdefault("surface", "web")
+        context.setdefault("observed_at_utc", datetime.now(timezone.utc).isoformat())
+        return context
+
+    def _family_timezone(self) -> str | None:
+        candidate = getattr(self.family_profile_obj, "timezone", None) or self.family_profile.get(
+            "timezone"
+        )
+        if isinstance(candidate, str):
+            candidate = candidate.strip()
+            return candidate or None
+        return None
+
     async def send_message(
         self,
         *,
@@ -886,7 +1011,6 @@ class UiCoordinator:
         member: str,
         device: str,
         turn: int,
-        device_context: Dict[str, Any] | None = None,
         timeout_s: float = 180.0,
     ) -> None:
         """Publish a user input envelope and await the response.
@@ -900,7 +1024,6 @@ class UiCoordinator:
         output = self.get_output_channel()
         output.set_member(member)
         output.start_turn(turn)
-        await self._record_device_context(device=device, device_context=device_context)
 
         # Reset dispatchers (per-turn tool budget bookkeeping)
         try:
@@ -922,65 +1045,6 @@ class UiCoordinator:
         self.get_bus().publish(envelope)
 
         await output.wait_for_response(timeout=timeout_s)
-
-    async def _record_device_context(
-        self,
-        *,
-        device: str,
-        device_context: Dict[str, Any] | None,
-    ) -> None:
-        if not self._runtime or not device:
-            return
-        service = getattr(self._runtime, "_service", None)
-        port = getattr(service, "device_context_port", None)
-        if port is None:
-            return
-        context = dict(device_context or {})
-        session_id = str(getattr(self._runtime, "_session_id", "") or "")
-        if not session_id:
-            return
-        timezone_name = context.get("timezone")
-        locale = context.get("locale")
-        installation_id = str(context.get("installation_id") or device)
-        observed_at = str(context.get("observed_at_utc") or datetime.now(timezone.utc).isoformat())
-        metadata = {
-            key: value
-            for key, value in context.items()
-            if key
-            not in {
-                "timezone",
-                "locale",
-                "observed_at_utc",
-                "surface",
-                "installation_id",
-                "clock_skew_ms",
-            }
-        }
-        from k1.grounding.types import DeviceContextSnapshot
-
-        await port.update_snapshot(
-            DeviceContextSnapshot(
-                session_id=session_id,
-                device_id=str(device),
-                installation_id=installation_id,
-                observed_at_utc=observed_at,
-                surface=str(context.get("surface") or "web"),
-                timezone=str(timezone_name).strip() if timezone_name else None,
-                locale=str(locale).strip() if locale else None,
-                clock_skew_ms=context.get("clock_skew_ms"),
-                metadata=metadata,
-            )
-        )
-        try:
-            meta = (
-                self.session_state.get_section("meta") if self.session_state is not None else None
-            )
-            if meta is not None and hasattr(meta, "set_active_device"):
-                meta.set_active_device(str(device))
-        except Exception:
-            logger.debug(
-                "Device context recorded but meta active-device update failed", exc_info=True
-            )
 
     def get_status_report(self) -> Dict[str, Any]:
         """Status snapshot for `/api/status` and `/status` command."""

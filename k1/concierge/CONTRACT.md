@@ -28,13 +28,6 @@ def set_self_model(self, handle: SelfModelHandle) -> None
     # Non-fatal — Concierge continues without a self-model if this raises
 ```
 
-### 1.2b Temporal integration (set before `start()`)
-
-```python
-def set_temporal(self, handle: TemporalHandle) -> None
-   # Non-fatal — Concierge continues without temporal projection if this raises
-```
-
 ### 1.3 Dispatcher surfaces (used by Kernel to install SelfModel gate)
 
 ```python
@@ -60,7 +53,6 @@ ConciergeFactory.create_with_ports(
     ports: PortBundle,
     config: ConciergeConfig,
     hil_port: HumanInTheLoopService | None = None,
-   temporal_port: TemporalHandle | None = None,
 ) -> ConciergeRuntime
 ```
 

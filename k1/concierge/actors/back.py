@@ -36,7 +36,7 @@ import json
 import logging
 import uuid
 from dataclasses import replace
-from typing import Any, Awaitable, Callable, Iterable, cast
+from typing import Any
 
 from k1.bus.envelope import Envelope
 from k1.bus.ports.bus import IBus
@@ -55,7 +55,7 @@ from k1.concierge.bus.builders import (
     build_tool_started,
 )
 from k1.concierge.config import get_config
-from k1.concierge.llm.types import ModelMessage, ToolCallResult
+from k1.concierge.llm.types import ModelMessage
 from k1.concierge.llm.validator import LLMOutputValidator
 from k1.concierge.obs.actor_metrics import (
     BackProfileSelectionOutcome,
@@ -69,7 +69,6 @@ from k1.concierge.prompt.back_profiles import (
 from k1.concierge.prompt.back_prompt import build_back_prompt
 from k1.concierge.protocols.cancellation import CancellationToken, CancelReason
 from k1.concierge.protocols.suspension import SuspensionResolutionNotFound
-from k1.concierge.react.back_execution_plan import BackExecutionPlan
 from k1.concierge.react.checkpoint import ReActCheckpoint
 from k1.concierge.react.control import BackControlEvent
 from k1.concierge.react.history import build_chat_history_for_back
@@ -134,6 +133,61 @@ def _bind_tool_context(
         ctx.active_execution_profiles = [
             dict(profile) for profile in execution_profiles if isinstance(profile, dict)
         ]
+
+
+async def _build_execution_grounding_block(task: dict[str, Any], grounding: Any | None) -> str:
+    """Render Back's execution grounding block from task payload or handle."""
+    projection = None
+    grounding_payload = task.get("grounding") if isinstance(task, dict) else None
+    if isinstance(grounding_payload, dict):
+        try:
+            from k1.grounding.serialization import dict_to_projection
+
+            projection = dict_to_projection(grounding_payload)
+        except Exception:
+            logger.warning(
+                "back_handler: failed to decode task grounding projection", exc_info=True
+            )
+
+    if projection is None and grounding is not None:
+        try:
+            projection = await grounding.get_projection("back")
+        except Exception:
+            logger.warning("back_handler: live grounding projection failed", exc_info=True)
+
+    if projection is not None:
+        try:
+            from k1.grounding.service.prompt_block_renderer import (
+                render_execution_grounding_block,
+            )
+
+            return render_execution_grounding_block(projection)
+        except Exception:
+            logger.warning("back_handler: execution grounding render failed", exc_info=True)
+
+    fields = {
+        key: task.get(key)
+        for key in (
+            "grounding_envelope_id",
+            "temporal_anchor_id",
+            "spatial_context_id",
+            "resolved_temporal_refs",
+            "resolved_spatial_refs",
+            "requires_temporal_clarification",
+            "temporal_clarification_reasons",
+        )
+        if isinstance(task, dict) and task.get(key) is not None
+    }
+    if not fields:
+        return ""
+    lines = ["== EXECUTION GROUNDING =="]
+    for key, value in fields.items():
+        if isinstance(value, (dict, list)):
+            rendered = json.dumps(value, sort_keys=True)
+        else:
+            rendered = str(value)
+        lines.append(f"{key}: {rendered}")
+    return "\n".join(lines)
 
 
 # Compatibility export -- max ReAct iterations per tier
@@ -281,7 +335,6 @@ def _read_ss_snapshot(ss: Any) -> dict[str, Any]:
     Sections read:
       beliefs_active   -- User facts, constraints, preferences
       scoreboard       -- Referent resolution (pronouns)
-            temporal         -- Typed current time/window projection
       task_state       -- Dependency info, active tasks
       task_artifacts   -- What has been done (avoid re-doing)
       control          -- Safety band only
@@ -301,7 +354,6 @@ def _read_ss_snapshot(ss: Any) -> dict[str, Any]:
     control = _safe_get_section(ss, "control")
     history = _safe_get_section(ss, "history_active")
     persona = _safe_get_section(ss, "persona")
-    temporal = _safe_get_section(ss, "temporal")
 
     def _render_via_renderer(section: Any, section_name: str) -> str:
         """Render section using SECTION_RENDERERS (full mode) for consistency.
@@ -383,7 +435,6 @@ def _read_ss_snapshot(ss: Any) -> dict[str, Any]:
         "safety_band": _get_safety_band(control),
         "history_entries": _get_history_entries(history),
         "persona_prefs": _get_persona_prefs(persona),
-        "temporal_block": _render_via_renderer(temporal, "temporal"),
     }
 
 
@@ -414,28 +465,10 @@ def _serialize_messages(messages: list[ModelMessage]) -> list[dict[str, Any]]:
             entry["name"] = m.name
         if m.tool_calls:
             entry["tool_calls"] = [
-                {"id": tc.id, "name": tc.name, "arguments": tc.arguments} for tc in m.tool_calls
+                {"name": tc.name, "arguments": tc.arguments} for tc in m.tool_calls
             ]
         result.append(entry)
     return result
-
-
-def _deserialize_tool_calls(raw: Any) -> list[ToolCallResult] | None:
-    if not isinstance(raw, list):
-        return None
-    tool_calls: list[ToolCallResult] = []
-    for index, item in enumerate(raw):
-        if not isinstance(item, dict) or not item.get("name"):
-            continue
-        arguments = item.get("arguments")
-        tool_calls.append(
-            ToolCallResult(
-                id=str(item.get("id") or f"resume-call-{index}"),
-                name=str(item.get("name") or ""),
-                arguments=dict(arguments) if isinstance(arguments, dict) else {},
-            )
-        )
-    return tool_calls or None
 
 
 def _deserialize_messages(data: list[dict]) -> list[ModelMessage]:
@@ -450,7 +483,6 @@ def _deserialize_messages(data: list[dict]) -> list[ModelMessage]:
             content=d.get("content", ""),
             tool_call_id=d.get("tool_call_id"),
             name=d.get("name"),
-            tool_calls=_deserialize_tool_calls(d.get("tool_calls")),
         )
         for d in data
     ]
@@ -461,8 +493,7 @@ def _execution_records(tool_dispatcher: ToolDispatcher) -> list[dict[str, Any]]:
     if not callable(getter):
         return []
     try:
-        records = cast(Iterable[Any], getter())
-        return [record.to_dict() for record in records]
+        return [record.to_dict() for record in getter()]
     except Exception:
         logger.exception("back_handler: failed to read tool execution records")
         return []
@@ -534,7 +565,6 @@ def _build_react_checkpoint(
     max_iterations: int,
     result: ReactResult,
     suspension_count: int = 1,
-    execution_plan: BackExecutionPlan | None = None,
 ) -> ReActCheckpoint:
     tool_history = _execution_records(tool_dispatcher)
     completed_call_ids = [
@@ -545,9 +575,6 @@ def _build_react_checkpoint(
     ]
     last_iteration = len(result.iteration_durations_ms)
     remaining_budget = max(0, max_iterations - last_iteration)
-    scratchpad: dict[str, Any] = {"loop_events": list(getattr(result, "loop_events", []) or [])}
-    if execution_plan is not None:
-        scratchpad["back_execution_plan"] = execution_plan.to_dict()
     return ReActCheckpoint(
         task_id=task_id,
         messages=_serialize_messages(messages),
@@ -556,22 +583,8 @@ def _build_react_checkpoint(
         suspension_count=suspension_count,
         budget_remaining=remaining_budget,
         last_iteration=last_iteration,
-        scratchpad=scratchpad,
+        scratchpad={"loop_events": list(getattr(result, "loop_events", []) or [])},
     )
-
-
-def _execution_plan_from_checkpoint_or_task(
-    react_checkpoint: ReActCheckpoint | None,
-    task: dict[str, Any] | None,
-) -> BackExecutionPlan:
-    raw_plan = None
-    if react_checkpoint is not None:
-        raw_plan = react_checkpoint.scratchpad.get("back_execution_plan")
-    if isinstance(raw_plan, dict):
-        plan = BackExecutionPlan.from_dict(raw_plan)
-        if plan.work_items:
-            return plan
-    return BackExecutionPlan.from_task(task)
 
 
 def _get_back_control_queue(
@@ -582,9 +595,9 @@ def _get_back_control_queue(
         return None
     getter = getattr(fsm_state, "get_running_task_control_queue", None)
     if callable(getter):
-        existing_queue = cast(asyncio.Queue[BackControlEvent] | None, getter(task_id))
-        if existing_queue is not None:
-            return existing_queue
+        queue = getter(task_id)
+        if queue is not None:
+            return queue
     registrar = getattr(fsm_state, "register_running_task_control_queue", None)
     if callable(registrar):
         queue: asyncio.Queue[BackControlEvent] = asyncio.Queue()
@@ -660,7 +673,6 @@ async def _resolve_needs_human_in_process(
     validator: LLMOutputValidator | None,
     control_queue: asyncio.Queue[BackControlEvent] | None,
     fsm_state: Any | None,
-    execution_plan: BackExecutionPlan | None = None,
 ) -> ReactResult:
     needs_human = getattr(hil_port, "needs_human", None) if hil_port is not None else None
     if not callable(needs_human):
@@ -711,8 +723,7 @@ async def _resolve_needs_human_in_process(
             trace_id[:8] if trace_id else "",
         )
         try:
-            needs_human_call = cast(Callable[[NeedsHumanRequest], Awaitable[Any]], needs_human)
-            response = await needs_human_call(req)
+            response = await needs_human(req)
         except Exception as exc:  # noqa: BLE001
             logger.exception("back_handler: unified HIL request failed task_id=%s", task_id)
             return ReactResult(
@@ -749,7 +760,6 @@ async def _resolve_needs_human_in_process(
             scenario="task_execution_after_hil",
             validator=validator,
             control_queue=control_queue,
-            execution_plan=execution_plan,
         )
 
     if current.status == "suspended":
@@ -934,7 +944,7 @@ async def back_handler(
     fsm_state: Any | None = None,
     cancel_token: CancellationToken | None = None,
     hil_port: Any | None = None,
-    temporal: Any | None = None,
+    grounding: Any | None = None,
 ) -> ReactResult:
     """Back handler: ReAct agent for task execution.
 
@@ -1035,6 +1045,10 @@ async def back_handler(
         tool_dispatcher=tool_dispatcher,
     )
     execution_profile_block = _execution_profile_block_for_selection(profile_selection)
+    execution_grounding_block = await _build_execution_grounding_block(task, grounding)
+    resolved_temporal_refs = task.get("resolved_temporal_refs")
+    if not isinstance(resolved_temporal_refs, dict):
+        resolved_temporal_refs = None
     _bind_tool_context(
         tool_dispatcher,
         trace_id=trace_id,
@@ -1052,23 +1066,10 @@ async def back_handler(
         task_artifacts=snapshot["task_artifacts_prompt"],
         safety_band=effective_safety_band,
         persona_prefs=snapshot["persona_prefs"],
-        temporal_block=snapshot.get("temporal_block", ""),
         max_tool_calls=max_iterations,
         execution_profile_block=execution_profile_block,
-    )
-    # Fix B: pre-build slim continuation variant for iter >= 1.
-    system_prompt_continuation = build_back_prompt(
-        task=task,
-        beliefs=snapshot["beliefs_prompt"],
-        referents=snapshot["referents"],
-        task_state=snapshot["task_state_prompt"],
-        task_artifacts=snapshot["task_artifacts_prompt"],
-        safety_band=effective_safety_band,
-        persona_prefs=snapshot["persona_prefs"],
-        temporal_block=snapshot.get("temporal_block", ""),
-        max_tool_calls=max_iterations,
-        execution_profile_block=execution_profile_block,
-        iteration=1,
+        execution_grounding_block=execution_grounding_block,
+        resolved_temporal_refs=resolved_temporal_refs,
     )
 
     # 3. Build messages: last N entries + task as "user" message
@@ -1111,7 +1112,6 @@ async def back_handler(
 
     # Build output validator with tier-filtered tools (Epic 4.1)
     validator = LLMOutputValidator(tools) if tools else None
-    execution_plan = BackExecutionPlan.from_task(task)
 
     # 5. Build cancellation callback (M3 E3.2.3: per-task token)
     if cancel_token is None:
@@ -1136,8 +1136,6 @@ async def back_handler(
         scenario="task_execution",
         validator=validator,
         control_queue=control_queue,
-        execution_plan=execution_plan,
-        system_prompt_continuation=system_prompt_continuation,
     )
 
     # 6b. Live needs_human is resolved through the unified HIL port. The
@@ -1159,7 +1157,6 @@ async def back_handler(
         validator=validator,
         control_queue=control_queue,
         fsm_state=fsm_state,
-        execution_plan=execution_plan,
     )
 
     # 7. Emit result to bus (Epic 7.3)
@@ -1173,7 +1170,6 @@ async def back_handler(
             tool_dispatcher=tool_dispatcher,
             max_iterations=max_iterations,
             result=result,
-            execution_plan=execution_plan,
         )
         if result.status == "suspended"
         else None
@@ -1226,7 +1222,6 @@ async def back_resume_handler(
     tool_dispatcher: ToolDispatcher,
     fsm_state: Any | None = None,
     cancel_token: CancellationToken | None = None,
-    hil_port: Any | None = None,
 ) -> ReactResult:
     """Resume a suspended Back task with user's resolution.
 
@@ -1416,23 +1411,9 @@ async def back_resume_handler(
         task_artifacts=snapshot["task_artifacts_prompt"],
         safety_band=effective_safety_band,
         persona_prefs=snapshot["persona_prefs"],
-        temporal_block=snapshot.get("temporal_block", ""),
         max_tool_calls=original_budget,
         execution_profile_block=_execution_profile_block_for_selection(profile_selection),
-    )
-    # Fix B: slim continuation variant for iter >= 1 (resume path).
-    system_prompt_continuation = build_back_prompt(
-        task=original_task,
-        beliefs=snapshot["beliefs_prompt"],
-        referents=snapshot["referents"],
-        task_state=snapshot["task_state_prompt"],
-        task_artifacts=snapshot["task_artifacts_prompt"],
-        safety_band=effective_safety_band,
-        persona_prefs=snapshot["persona_prefs"],
-        temporal_block=snapshot.get("temporal_block", ""),
-        max_tool_calls=original_budget,
-        execution_profile_block=_execution_profile_block_for_selection(profile_selection),
-        iteration=1,
+        execution_grounding_block=await _build_execution_grounding_block(original_task, None),
     )
 
     # 4. Hydrate resolution into messages (copy to avoid mutation)
@@ -1493,7 +1474,6 @@ async def back_resume_handler(
 
     # Build output validator for resume (Epic 4.1)
     resume_validator = LLMOutputValidator(tools) if tools else None
-    execution_plan = _execution_plan_from_checkpoint_or_task(react_checkpoint, original_task)
 
     # 7. Build cancellation callback (M3 E3.2.3: per-task token)
     if cancel_token is None:
@@ -1525,27 +1505,6 @@ async def back_resume_handler(
         completed_tool_arg_keys=(
             react_checkpoint.completed_tool_keys() if react_checkpoint is not None else None
         ),
-        execution_plan=execution_plan,
-        system_prompt_continuation=system_prompt_continuation,
-    )
-
-    result = await _resolve_needs_human_in_process(
-        result=result,
-        hil_port=hil_port,
-        task_id=task_id,
-        trace_id=trace_id,
-        safety_band=effective_safety_band,
-        messages=messages,
-        model=model,
-        system_prompt=system_prompt,
-        tools=tools,
-        max_iterations=remaining_budget,
-        tool_dispatcher=tool_dispatcher,
-        cancellation_check=cancellation_check,
-        validator=resume_validator,
-        control_queue=control_queue,
-        fsm_state=fsm_state,
-        execution_plan=execution_plan,
     )
 
     # 9. Emit result (same as back_handler)
@@ -1562,7 +1521,6 @@ async def back_resume_handler(
             suspension_count=(
                 (react_checkpoint.suspension_count + 1) if react_checkpoint is not None else 1
             ),
-            execution_plan=execution_plan,
         )
         if result.status == "suspended"
         else None
@@ -1667,14 +1625,14 @@ def back_cancel_handler(
 
 async def route_back_envelope(
     envelope: Envelope,
-    model: IModelHubPort,
+    model: IConciergeModelPort,
     ss: Any,
     bus: IBus,
     tool_dispatcher: ToolDispatcher,
     fsm_state: Any | None = None,
     cancel_token: CancellationToken | None = None,
     hil_port: Any | None = None,
-    temporal: Any | None = None,
+    grounding: Any | None = None,
 ) -> ReactResult | None:
     """Central topic-based dispatcher for all back-bound envelopes.
 
@@ -1708,7 +1666,6 @@ async def route_back_envelope(
     """
     from k1.concierge.bus.topics import (
         TOPIC_CLARIFICATION_RESPONSE,
-        TOPIC_HIL_RESPONSE,
         TOPIC_TASK_CANCEL,
         TOPIC_TASK_DISPATCH,
         TOPIC_TASK_RESUME,
@@ -1734,7 +1691,7 @@ async def route_back_envelope(
             fsm_state=fsm_state,
             cancel_token=cancel_token,
             hil_port=hil_port,
-            temporal=temporal,
+            grounding=grounding,
         )
 
     if topic == TOPIC_TASK_RESUME:
@@ -1747,7 +1704,6 @@ async def route_back_envelope(
             tool_dispatcher=tool_dispatcher,
             fsm_state=fsm_state,
             cancel_token=cancel_token,
-            hil_port=hil_port,
         )
 
     if topic == TOPIC_CLARIFICATION_RESPONSE:
@@ -1763,16 +1719,7 @@ async def route_back_envelope(
             tool_dispatcher=tool_dispatcher,
             fsm_state=fsm_state,
             cancel_token=cancel_token,
-            hil_port=hil_port,
         )
-
-    if topic == TOPIC_HIL_RESPONSE:
-        logger.debug(
-            "route_back_envelope: ignoring service-owned HIL response topic=%s envelope_id=%s",
-            topic,
-            getattr(envelope, "envelope_id", "?"),
-        )
-        return None
 
     if topic == TOPIC_TASK_CANCEL:
         logger.info("route_back_envelope: dispatching to back_cancel_handler topic=%s", topic)

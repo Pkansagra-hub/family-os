@@ -20,13 +20,12 @@ References:
   - SessionState ARCHITECTURE.md §4.3
 
 Exports grouped by source module:
-  1. Writer port types (IWriterPort, MutationRequest, BatchRequest, etc.)
+  1. Writer port types (MutationRequest, BatchRequest, etc.)
   2. Control section types (IntentClassification, PrivacyBand)
   3. Task section types (TaskStatus, TaskStateEntry, TaskStateSection)
   4. Task artifact types (ArtifactType, TaskArtifactEntry, TaskArtifactsSection)
-  5. Temporal section (anchor payloads live under k1.temporal)
-  6. Meta section (MetaSection)
-  7. Factory (SessionStateFactory)
+  5. Meta section (MetaSection)
+  6. Factory (SessionStateFactory)
 """
 
 from __future__ import annotations
@@ -41,7 +40,6 @@ from k1.sessionstate.factory import SessionStateFactory
 # ---------------------------------------------------------------------------
 from k1.sessionstate.ports.writer import (
     BatchRequest,
-    IWriterPort,
     MutationRequest,
     RejectionCategory,
 )
@@ -49,11 +47,7 @@ from k1.sessionstate.ports.writer import (
 # ---------------------------------------------------------------------------
 # 2. Control section types
 # ---------------------------------------------------------------------------
-from k1.sessionstate.sections.control import (
-    ControlSection,
-    IntentClassification,
-    PrivacyBand,
-)
+from k1.sessionstate.sections.control import IntentClassification, PrivacyBand
 
 # ---------------------------------------------------------------------------
 # 6. Meta section
@@ -78,19 +72,12 @@ from k1.sessionstate.sections.task_state import (
     TaskStatus,
 )
 
-# ---------------------------------------------------------------------------
-# 5. Temporal section
-# ---------------------------------------------------------------------------
-from k1.sessionstate.sections.temporal import TemporalSection
-
 __all__ = [
     # Writer port types
     "BatchRequest",
-    "IWriterPort",
     "MutationRequest",
     "RejectionCategory",
     # Control section types
-    "ControlSection",
     "IntentClassification",
     "PrivacyBand",
     # Task state types
@@ -101,8 +88,6 @@ __all__ = [
     "ArtifactType",
     "TaskArtifactEntry",
     "TaskArtifactsSection",
-    # Temporal section
-    "TemporalSection",
     # Meta section
     "MetaSection",
     # Factory

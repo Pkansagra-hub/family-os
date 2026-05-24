@@ -31,7 +31,6 @@ IMPORTANT:
 
 from __future__ import annotations
 
-import asyncio
 import inspect as _inspect
 import logging
 import re
@@ -44,7 +43,6 @@ from k1.concierge.ports import IDispatchPort
 from k1.concierge.task.complexity import ComplexityTier
 from k1.concierge.task.dispatch import TaskDispatch
 from k1.concierge.task.intent import TaskIntent
-from k1.concierge.task.parallel_safety import capability_invocation_is_parallel_safe
 from k1.concierge.tools.recovery_contract import recovery_for_unsatisfied_contract
 from k1.concierge.tools.result_protocol import ToolResult
 from k1.fabric.types import CapabilityRequest
@@ -55,7 +53,7 @@ if TYPE_CHECKING:
     # block in `execute_invoke_capability` was deleted in favour of the
     # fabric-level capability gate (E3), which guards every invocation
     # uniformly regardless of caller.
-    from k1.sessionstate.public_types import IWriterPort
+    from k1.sessionstate.ports.writer import IWriterPort
 
 logger = logging.getLogger(__name__)
 
@@ -182,49 +180,6 @@ def _member_id_alias(value: Any) -> Any:
     return "_".join("".join(ch.lower() if ch.isalnum() else " " for ch in text).split())
 
 
-_FAMILY_MEMBER_REF_FIELDS = frozenset(
-    {
-        "assigned_to",
-        "new_assignee",
-        "recipient",
-        "requested_by",
-        "completed_by",
-        "member_id",
-        "target_member_id",
-    }
-)
-_FAMILY_MEMBER_REF_LIST_FIELDS = frozenset(
-    {
-        "attendees",
-        "member_filter",
-        "visible_to",
-        "named_visible",
-    }
-)
-
-
-def _normalize_member_ref_value(value: Any) -> Any:
-    if isinstance(value, list):
-        return [_member_id_alias(item) for item in value]
-    return _member_id_alias(value)
-
-
-def _normalize_family_member_params(params: dict[str, Any]) -> dict[str, Any]:
-    for field in _FAMILY_MEMBER_REF_FIELDS:
-        if field in params and params[field] is not None:
-            params[field] = _normalize_member_ref_value(params[field])
-    for field in _FAMILY_MEMBER_REF_LIST_FIELDS:
-        if field in params and params[field] is not None:
-            params[field] = _normalize_member_ref_value(params[field])
-    if not params.get("assigned_to") and params.get("assignee"):
-        params["assigned_to"] = _member_id_alias(params["assignee"])
-    if not params.get("recipient") and params.get("recipient_name"):
-        params["recipient"] = _member_id_alias(params["recipient_name"])
-    if not params.get("requested_by") and params.get("requester"):
-        params["requested_by"] = _member_id_alias(params["requester"])
-    return params
-
-
 def _task_text_assignee_alias(value: Any) -> str:
     if not isinstance(value, str):
         return ""
@@ -245,14 +200,14 @@ def _task_text_assignee_alias(value: Any) -> str:
 
 def _normalize_capability_params(capability_name: str, params: Any) -> dict[str, Any]:
     normalized = dict(params) if isinstance(params, dict) else {}
-    if capability_name.startswith(("tool.execute.", "tool.read.")):
-        normalized = _normalize_family_member_params(normalized)
     if capability_name == "tool.execute.tasks.create_task":
         if not normalized.get("title"):
             for title_key in ("description", "content", "task", "task_title", "name", "summary"):
                 if normalized.get(title_key):
                     normalized["title"] = normalized[title_key]
                     break
+        if not normalized.get("assigned_to") and normalized.get("assignee"):
+            normalized["assigned_to"] = _member_id_alias(normalized["assignee"])
         if not normalized.get("assigned_to"):
             assignee = _task_text_assignee_alias(normalized.get("title"))
             if assignee:
@@ -295,26 +250,6 @@ def _capability_prompt_schema(contract: Any) -> dict[str, Any]:
         "output": dict(getattr(contract, "output", {}) or {}),
         "safety_band_min": str(getattr(contract, "safety_band_min", "") or ""),
     }
-
-
-def _capability_namespace(name: str) -> str:
-    return name.split(".", 1)[0] if name else ""
-
-
-def _normalize_domain_hints(value: Any) -> list[str] | None:
-    if value in (None, ""):
-        return None
-    raw_values = value if isinstance(value, (list, tuple, set)) else [value]
-    domains: list[str] = []
-    seen: set[str] = set()
-    for raw in raw_values:
-        text = str(raw or "").strip()
-        key = text.lower()
-        if not text or key in seen:
-            continue
-        seen.add(key)
-        domains.append(text)
-    return domains or None
 
 
 async def _lookup_capability_contract(ctx: ToolContext, capability_name: str) -> Any | None:
@@ -1424,104 +1359,9 @@ async def execute_discover_capabilities(args: dict, ctx: ToolContext) -> ToolRes
     Results are cached per-session by (intent, domain) to avoid
     redundant lookups when the LLM calls discover_capabilities
     repeatedly with the same or similar parameters.
-
-    Multi-intent batch shape: if ``args["intents"]`` is a non-empty
-    list of strings, the kernel fans out internally (one
-    discover_capabilities call per intent, in parallel via
-    ``asyncio.gather``) and returns a single merged ToolResult whose
-    ``capabilities`` array is deduplicated by name and whose
-    ``intent_results`` field lists per-intent counts.  This collapses
-    N tool-result messages into 1 for the model context, which is the
-    primary control on Vertex/Gemini input-budget overflow when a
-    bundled dispatch carries multiple intents.
     """
-    raw_intents = args.get("intents")
-    if isinstance(raw_intents, list):
-        intents_list: list[str] = [
-            str(item).strip() for item in raw_intents if str(item or "").strip()
-        ]
-    else:
-        intents_list = []
-    if intents_list:
-        shared_domain = args.get("domain")
-        shared_constraints = args.get("constraints")
-
-        async def _one(sub_intent: str) -> tuple[str, ToolResult]:
-            sub_args = {"intent": sub_intent}
-            if shared_domain is not None:
-                sub_args["domain"] = shared_domain
-            if shared_constraints is not None:
-                sub_args["constraints"] = shared_constraints
-            sub_result = await execute_discover_capabilities(sub_args, ctx)
-            return sub_intent, sub_result
-
-        gathered = await asyncio.gather(
-            *[_one(it) for it in intents_list], return_exceptions=True
-        )
-        merged_caps: list[dict[str, Any]] = []
-        seen_names: set[str] = set()
-        intent_results: list[dict[str, Any]] = []
-        any_error: str = ""
-        for entry in gathered:
-            if isinstance(entry, BaseException):
-                any_error = any_error or str(entry)
-                continue
-            sub_intent, sub_result = entry
-            if sub_result.is_error():
-                intent_results.append(
-                    {
-                        "intent": sub_intent,
-                        "count": 0,
-                        "error": sub_result.error,
-                    }
-                )
-                any_error = any_error or str(sub_result.error or "")
-                continue
-            sub_data = sub_result.data if isinstance(sub_result.data, dict) else {}
-            sub_caps = sub_data.get("capabilities") or []
-            for cap in sub_caps:
-                if not isinstance(cap, dict):
-                    continue
-                name = str(cap.get("name") or "")
-                if name and name not in seen_names:
-                    seen_names.add(name)
-                    merged_caps.append(cap)
-            # workflow v2: drop capability_names duplication -- they're already
-            # in the merged capabilities[] array. Keep only intent + count for
-            # the LLM to see per-intent retrieval health.
-            intent_results.append(
-                {
-                    "intent": sub_intent,
-                    "count": len(sub_caps),
-                }
-            )
-        merged_data: dict[str, Any] = {
-            "capabilities": merged_caps,
-            "count": len(merged_caps),
-            "intent_results": intent_results,
-            "batched": True,
-        }
-        logger.info(
-            "tool:discover_capabilities  BATCH intents=%d merged_count=%d",
-            len(intents_list),
-            len(merged_caps),
-        )
-        if not merged_caps and any_error:
-            return ToolResult(
-                tool_name="discover_capabilities",
-                status="error",
-                data=merged_data,
-                error=any_error,
-            )
-        return ToolResult(
-            tool_name="discover_capabilities",
-            status="ok",
-            data=merged_data,
-        )
-
     intent = args.get("intent", "")
     domain = args.get("domain")
-    domain_hints = _normalize_domain_hints(domain)
     constraints = args.get("constraints")
     logger.info(
         "tool:discover_capabilities  intent=%s domain=%s has_fn=%s",
@@ -1540,7 +1380,7 @@ async def execute_discover_capabilities(args: dict, ctx: ToolContext) -> ToolRes
     # Per-session cache: avoid redundant capability lookups
     if ctx.capability_cache is None:
         ctx.capability_cache = {}
-    cache_key = (intent.strip().lower(), tuple(item.lower() for item in domain_hints or ()))
+    cache_key = (intent.strip().lower(), (domain or "").strip().lower())
     if cache_key in ctx.capability_cache:
         logger.info(
             "tool:discover_capabilities  CACHE HIT intent=%s domain=%s",
@@ -1554,23 +1394,14 @@ async def execute_discover_capabilities(args: dict, ctx: ToolContext) -> ToolRes
         try:
             caps: list[dict[str, Any]] = []
             seen_names: set[str] = set()
-            query_diagnostics: list[dict[str, Any]] = []
 
             async def _collect(domain_filter: Any) -> None:
                 retrieval = await ctx.dispatch.discover_capabilities(
                     intent=intent,
                     domain=domain_filter,
-                    top_k=5,  # workflow v2: keep payload small; LLM fetches schemas on demand
+                    top_k=10,
                     safety_band=_context_safety_band(ctx),
                 )
-                diagnostics = getattr(retrieval, "diagnostics", None)
-                if isinstance(diagnostics, dict):
-                    query_diagnostics.append(
-                        {
-                            "domain": domain_filter,
-                            **dict(diagnostics),
-                        }
-                    )
                 for sc in retrieval.capabilities:
                     contract = sc.contract
                     name = contract.name if contract else ""
@@ -1580,57 +1411,37 @@ async def execute_discover_capabilities(args: dict, ctx: ToolContext) -> ToolRes
                         seen_names.add(name)
                     if contract is not None:
                         ctx.capability_cache[_contract_cache_key(contract.name)] = contract
-                    # SLIM DISCOVERY PAYLOAD (workflow v2: discover -> get_schemas -> invoke).
-                    # The LLM only needs enough to choose which capabilities to fetch
-                    # full schemas for. Full schema lives in ctx.capability_cache and
-                    # is exposed via get_capability_schemas tool. Keeping this payload
-                    # small is critical to avoid MALFORMED_FUNCTION_CALL when the back
-                    # actor composes the next round-trip (~80-150 chars per cap vs
-                    # ~600-1200 before this slim-down).
-                    side_effects = list(getattr(contract, "side_effects", ()) or ()) if contract else []
-                    raw_brief = contract.description if contract else ""
-                    brief = (raw_brief or "").strip().split("\n", 1)[0][:140]
                     cap_dict = {
                         "name": name,
-                        "brief": brief,
+                        "description": contract.description if contract else "",
                         "domain": contract.domain[0] if contract and contract.domain else "",
-                        "has_side_effects": bool(side_effects),
-                        "safety_band_min": str(
-                            getattr(contract, "safety_band_min", "") or ""
-                        ) if contract else "",
+                        "domains": list(contract.domain) if contract else [],
+                        "score": sc.score,
                     }
                     if contract is not None:
-                        requires_confirmation = getattr(
-                            contract,
-                            "requires_human_confirmation",
-                            None,
+                        cap_dict["prompt_template"] = str(
+                            getattr(contract, "prompt_template", "") or ""
                         )
-                        if requires_confirmation:
-                            cap_dict["requires_human_confirmation"] = True
+                        cap_dict["activity_profile"] = str(
+                            getattr(contract, "activity_profile", "") or ""
+                        )
+                        cap_dict["tool_instructions"] = str(
+                            getattr(contract, "tool_instructions", "") or ""
+                        )
+                        cap_dict["limitations"] = list(getattr(contract, "limitations", ()) or ())
+                        cap_dict["schema"] = _capability_prompt_schema(contract)
                     caps.append(cap_dict)
 
-            if domain_hints:
-                await _collect(domain_hints)
-                if not caps:
-                    await _collect(None)
-            else:
-                await _collect(None)
+            if domain:
+                await _collect([domain])
+            await _collect(None)
 
             data = {"capabilities": caps, "count": len(caps)}
-            if query_diagnostics:
-                data["diagnostics"] = {"queries": query_diagnostics}
             if not caps:
                 logger.warning(
                     "discover_capabilities: no match for intent=%s domain=%s",
                     intent[:60],
                     domain,
-                )
-            else:
-                logger.info(
-                    "tool:discover_capabilities  RESULT count=%d names=%s domains=%s",
-                    len(caps),
-                    [cap.get("name") for cap in caps[:10]],
-                    [cap.get("domains") for cap in caps[:10]],
                 )
             tool_result = ToolResult(
                 tool_name="discover_capabilities",
@@ -1657,115 +1468,6 @@ async def execute_discover_capabilities(args: dict, ctx: ToolContext) -> ToolRes
     )
     ctx.capability_cache[cache_key] = tool_result
     return tool_result
-
-
-# =========================================================================
-# BACK -- READ (workflow v2: schema fetch after discovery, before invoke)
-# =========================================================================
-
-
-@_register("get_capability_schemas")
-async def execute_get_capability_schemas(args: dict, ctx: ToolContext) -> ToolResult:
-    """Fetch full schemas for capabilities the LLM has already discovered.
-
-    Workflow v2 step: discover -> get_capability_schemas -> invoke.
-
-    ``discover_capabilities`` returns a slim payload (name, brief, domain,
-    side-effect flag, safety band) so the model can pick which capabilities
-    matter. This tool returns the FULL contract for selected names:
-    required_inputs, optional_inputs, output shape, side_effects,
-    safety_band_min, requires_human_confirmation, prompt_template,
-    tool_instructions, limitations.
-
-    Reads from ``ctx.capability_cache`` populated during discovery, with
-    a fallback to ``_lookup_capability_contract`` (which re-queries the
-    fabric registry if a name is not yet cached).
-
-    Args:
-        args["capability_names"]: list[str] of exact discover names.
-
-    Returns:
-        ToolResult.data = {"schemas": [...], "count": N, "missing": [...]}.
-    """
-    raw = args.get("capability_names")
-    if raw is None:
-        raw = args.get("names")
-    if isinstance(raw, str):
-        raw = [raw]
-    if not isinstance(raw, (list, tuple)):
-        return ToolResult(
-            tool_name="get_capability_schemas",
-            status="error",
-            error="capability_names must be an array of exact discover names",
-        )
-    names: list[str] = []
-    seen: set[str] = set()
-    for entry in raw:
-        text = str(entry or "").strip()
-        if not text or text in seen:
-            continue
-        seen.add(text)
-        names.append(text)
-    if not names:
-        return ToolResult(
-            tool_name="get_capability_schemas",
-            status="error",
-            error="capability_names is required (non-empty array)",
-        )
-    schemas: list[dict[str, Any]] = []
-    missing: list[str] = []
-    for name in names:
-        contract = await _lookup_capability_contract(ctx, name)
-        if contract is None:
-            missing.append(name)
-            continue
-        side_effects = list(getattr(contract, "side_effects", ()) or ())
-        schema_dict: dict[str, Any] = {
-            "name": _contract_name(contract),
-            "description": str(getattr(contract, "description", "") or ""),
-            "required_inputs": _input_specs_to_prompt_schema(
-                getattr(contract, "required_inputs", ())
-            ),
-            "optional_inputs": _input_specs_to_prompt_schema(
-                getattr(contract, "optional_inputs", ())
-            ),
-            "has_side_effects": bool(side_effects),
-            "side_effects": side_effects,
-            "safety_band_min": str(getattr(contract, "safety_band_min", "") or ""),
-            "output": dict(getattr(contract, "output", {}) or {}),
-        }
-        rhc = getattr(contract, "requires_human_confirmation", None)
-        if rhc is not None:
-            schema_dict["requires_human_confirmation"] = bool(rhc)
-        limitations = list(getattr(contract, "limitations", ()) or ())
-        if limitations:
-            schema_dict["limitations"] = limitations
-        prompt_template = str(getattr(contract, "prompt_template", "") or "")
-        if prompt_template:
-            schema_dict["prompt_template"] = prompt_template
-        tool_instructions = str(getattr(contract, "tool_instructions", "") or "")
-        if tool_instructions:
-            schema_dict["tool_instructions"] = tool_instructions
-        schemas.append(schema_dict)
-    data: dict[str, Any] = {"schemas": schemas, "count": len(schemas)}
-    if missing:
-        data["missing"] = missing
-    logger.info(
-        "tool:get_capability_schemas  requested=%d returned=%d missing=%d",
-        len(names),
-        len(schemas),
-        len(missing),
-    )
-    status = "ok" if schemas else "error"
-    error = None
-    if not schemas:
-        error = f"no schemas found for: {', '.join(missing)}"
-    return ToolResult(
-        tool_name="get_capability_schemas",
-        status=status,
-        data=data,
-        error=error,
-    )
 
 
 # =========================================================================
@@ -1948,61 +1650,6 @@ async def execute_invoke_capability(args: dict, ctx: ToolContext) -> ToolResult:
     )
 
 
-def _capability_request_parallel_safe(capability_name: str, contract: Any | None) -> bool:
-    metadata: dict[str, Any] | None = None
-    if contract is not None:
-        metadata = {
-            "capabilities": list(getattr(contract, "capabilities", []) or []),
-            "requires_human_confirmation": getattr(
-                contract,
-                "requires_human_confirmation",
-                None,
-            ),
-            "side_effects": list(getattr(contract, "side_effects", []) or []),
-        }
-    return capability_invocation_is_parallel_safe(
-        {"capability_name": capability_name},
-        metadata,
-    )
-
-
-def _batch_row_from_capability_result(
-    capability_name: str,
-    k1_result: Any,
-    *,
-    duration_ms: int,
-) -> dict[str, Any]:
-    success = bool(getattr(k1_result, "success", False))
-    error = getattr(k1_result, "error", None)
-    return {
-        "capability_name": capability_name,
-        "status": "success" if success else "error",
-        "result": getattr(k1_result, "data", None) or {},
-        "error": (str(getattr(error, "message", "") or "") if not success else ""),
-        "retryable": bool(getattr(error, "retriable", False)) if error else False,
-        "duration_ms": duration_ms,
-    }
-
-
-async def _execute_dispatch_batch(
-    dispatch: Any,
-    requests: list[CapabilityRequest],
-    *,
-    strategy: str,
-) -> list[Any]:
-    execute_batch = getattr(dispatch, "execute_batch", None)
-    if callable(execute_batch):
-        return list(await execute_batch(requests, strategy=strategy))
-    if strategy == "PARALLEL":
-        return list(
-            await asyncio.gather(*(dispatch.dispatch_direct(request) for request in requests))
-        )
-    results = []
-    for request in requests:
-        results.append(await dispatch.dispatch_direct(request))
-    return results
-
-
 @_register("batch_invoke_capabilities")
 async def execute_batch_invoke_capabilities(args: dict, ctx: ToolContext) -> ToolResult:
     """Invoke multiple capabilities in a single tool call.
@@ -2010,9 +1657,8 @@ async def execute_batch_invoke_capabilities(args: dict, ctx: ToolContext) -> Too
     Each invocation in the batch runs independently. This saves tool
     budget: 4 capability invocations cost only 1 tool call instead of 4.
 
-    Read/no-side-effect requests are delegated to dispatch.execute_batch
-    with PARALLEL strategy when the port supports it. Writes, HIL-gated
-    contracts, and unknown contracts execute sequentially.
+    The implementation delegates to fabric_port.execute() for each
+    invocation in sequence.
     """
     invocations = args.get("invocations", [])
     if not invocations:
@@ -2039,27 +1685,30 @@ async def execute_batch_invoke_capabilities(args: dict, ctx: ToolContext) -> Too
             ),
         )
 
-    results: list[dict[str, Any] | None] = [None] * len(invocations)
-    prepared_requests: list[tuple[int, CapabilityRequest, str, bool]] = []
+    results = []
     succeeded = 0
     failed = 0
     session_id = ctx.session_id or ""
     safety_band = _context_safety_band(ctx)
 
-    for index, inv in enumerate(invocations):
+    for inv in invocations:
         cap_name = inv.get("capability_name", "")
         params = _normalize_capability_params(cap_name, inv.get("params", {}))
 
         if not cap_name:
-            results[index] = {
-                "capability_name": cap_name,
-                "status": "error",
-                "error": "capability_name is required",
-                "result": None,
-                "retryable": False,
-            }
+            results.append(
+                {
+                    "capability_name": cap_name,
+                    "status": "error",
+                    "error": "capability_name is required",
+                    "result": None,
+                    "retryable": False,
+                }
+            )
             failed += 1
             continue
+
+        start_ms = int(time.time() * 1000)
 
         binding = await _bind_capability_for_back_action(
             ctx=ctx,
@@ -2071,42 +1720,25 @@ async def execute_batch_invoke_capabilities(args: dict, ctx: ToolContext) -> Too
         )
         if binding is not None:
             if binding.status != "bound" or not binding.capability_name:
-                results[index] = {
-                    "capability_name": cap_name,
-                    "status": "error",
-                    "error": f"capability_binding_{binding.status}",
-                    "duration_ms": 0,
-                    "binding": binding.to_dict(),
-                    "candidates": [dict(candidate) for candidate in binding.candidates],
-                    "recovery": dict(binding.recovery) if binding.recovery else None,
-                    "retryable": False,
-                }
+                duration = int(time.time() * 1000) - start_ms
+                results.append(
+                    {
+                        "capability_name": cap_name,
+                        "status": "error",
+                        "error": f"capability_binding_{binding.status}",
+                        "duration_ms": duration,
+                        "binding": binding.to_dict(),
+                        "candidates": [dict(candidate) for candidate in binding.candidates],
+                        "recovery": dict(binding.recovery) if binding.recovery else None,
+                        "retryable": False,
+                    }
+                )
                 failed += 1
                 continue
             cap_name = binding.capability_name
             params = _normalize_capability_params(cap_name, binding.params)
 
         contract = await _lookup_capability_contract(ctx, cap_name)
-        recovery = None
-        if contract is not None:
-            recovery = recovery_for_unsatisfied_contract(
-                contract=contract,
-                params=params,
-                retry_tool="batch_invoke_capabilities",
-                retry_args={"invocations": [dict(inv)]},
-            )
-        if recovery is not None:
-            results[index] = {
-                "capability_name": cap_name,
-                "status": "needs_human",
-                "error": "capability_params_incomplete",
-                "schema": _capability_prompt_schema(contract),
-                "params": params,
-                "recovery": recovery.to_dict(),
-                "retryable": False,
-            }
-            failed += 1
-            continue
         prompt_template, context_override = _request_prompt_metadata(
             binding=binding,
             contract=contract,
@@ -2114,103 +1746,81 @@ async def execute_batch_invoke_capabilities(args: dict, ctx: ToolContext) -> Too
             ctx=ctx,
         )
 
-        if ctx.dispatch is None:
-            # No dispatch port wired
-            results[index] = {
-                "capability_name": cap_name,
-                "status": "success",
-                "result": {"_poc": True, "capability": cap_name, "params": params},
-                "duration_ms": 0,
-            }
-            succeeded += 1
-            continue
-
-        k1_request = CapabilityRequest(
-            capability_name=cap_name,
-            params=params,
-            prompt_template=prompt_template,
-            context_override=context_override,
-            session_id=session_id,
-            trace_id=_tool_trace_id(ctx),
-            caller="concierge",
-            caller_id=f"concierge.{ctx.actor}",
-            safety_band=safety_band,
-        )
-        prepared_requests.append(
-            (index, k1_request, cap_name, _capability_request_parallel_safe(cap_name, contract))
-        )
-
-    if prepared_requests and ctx.dispatch is not None:
-        all_parallel_safe = all(item[3] for item in prepared_requests)
-        use_batch = all_parallel_safe and len(prepared_requests) > 1
-        start_ms = int(time.time() * 1000)
-        try:
-            if use_batch:
-                k1_results = await _execute_dispatch_batch(
-                    ctx.dispatch,
-                    [item[1] for item in prepared_requests],
-                    strategy="PARALLEL",
+        if ctx.dispatch is not None:
+            try:
+                k1_request = CapabilityRequest(
+                    capability_name=cap_name,
+                    params=params,
+                    prompt_template=prompt_template,
+                    context_override=context_override,
+                    session_id=session_id,
+                    trace_id=_tool_trace_id(ctx),
+                    caller="concierge",
+                    caller_id=f"concierge.{ctx.actor}",
+                    safety_band=safety_band,
                 )
+                k1_result = await ctx.dispatch.dispatch_direct(k1_request)
                 duration = int(time.time() * 1000) - start_ms
-                for (index, _request, cap_name, _), k1_result in zip(
-                    prepared_requests,
-                    k1_results,
-                ):
-                    row = _batch_row_from_capability_result(
-                        cap_name,
-                        k1_result,
-                        duration_ms=duration,
-                    )
-                    results[index] = row
-                    if row["status"] == "success":
-                        succeeded += 1
-                    else:
-                        failed += 1
-            else:
-                for index, request, cap_name, _ in prepared_requests:
-                    item_start_ms = int(time.time() * 1000)
-                    k1_result = await ctx.dispatch.dispatch_direct(request)
-                    row = _batch_row_from_capability_result(
-                        cap_name,
-                        k1_result,
-                        duration_ms=int(time.time() * 1000) - item_start_ms,
-                    )
-                    results[index] = row
-                    if row["status"] == "success":
-                        succeeded += 1
-                    else:
-                        failed += 1
-        except Exception as e:
-            duration = int(time.time() * 1000) - start_ms
-            for index, _request, cap_name, _ in prepared_requests:
-                if results[index] is not None:
-                    continue
-                results[index] = {
-                    "capability_name": cap_name,
-                    "status": "error",
-                    "error": str(e),
-                    "duration_ms": duration,
-                    "retryable": True,
-                }
+                results.append(
+                    {
+                        "capability_name": cap_name,
+                        "status": "success" if k1_result.success else "error",
+                        "result": k1_result.data or {},
+                        "error": (
+                            (k1_result.error.message if k1_result.error else "")
+                            if not k1_result.success
+                            else ""
+                        ),
+                        "retryable": bool(
+                            getattr(k1_result.error, "retriable", False)
+                            if k1_result.error
+                            else False
+                        ),
+                        "duration_ms": duration,
+                    }
+                )
+                if k1_result.success:
+                    succeeded += 1
+                else:
+                    failed += 1
+            except Exception as e:
+                duration = int(time.time() * 1000) - start_ms
+                results.append(
+                    {
+                        "capability_name": cap_name,
+                        "status": "error",
+                        "error": str(e),
+                        "duration_ms": duration,
+                        "retryable": True,
+                    }
+                )
                 failed += 1
+        else:
+            # No dispatch port wired
+            duration = int(time.time() * 1000) - start_ms
+            results.append(
+                {
+                    "capability_name": cap_name,
+                    "status": "success",
+                    "result": {"_poc": True, "capability": cap_name, "params": params},
+                    "duration_ms": duration,
+                }
+            )
+            succeeded += 1
 
     all_failed = failed > 0 and succeeded == 0
-    final_results = [
-        result if result is not None else {"status": "error", "error": "not_executed"}
-        for result in results
-    ]
     return ToolResult(
         tool_name="batch_invoke_capabilities",
         status="error" if all_failed else "ok",
         error="batch_invoke_all_failed" if all_failed else None,
         data={
-            "results": final_results,
+            "results": results,
             "total": len(invocations),
             "succeeded": succeeded,
             "failed": failed,
             "retryable": any(
                 bool(result.get("retryable"))
-                for result in final_results
+                for result in results
                 if isinstance(result, dict) and result.get("status") == "error"
             ),
         },

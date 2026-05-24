@@ -247,6 +247,17 @@ def _task_dispatch_from_payload(payload: dict[str, Any]) -> TaskDispatch:
         "safety_band": payload.get("safety_band", "GREEN"),
         "depends_on": payload.get("depends_on"),
         "context_snapshot": payload.get("context_snapshot"),
+        "execution_profiles": payload.get("execution_profiles"),
+        "grounding_envelope_id": payload.get("grounding_envelope_id"),
+        "temporal_anchor_id": payload.get("temporal_anchor_id"),
+        "spatial_context_id": payload.get("spatial_context_id"),
+        "resolved_temporal_refs": payload.get("resolved_temporal_refs"),
+        "resolved_spatial_refs": payload.get("resolved_spatial_refs"),
+        "requires_temporal_clarification": bool(
+            payload.get("requires_temporal_clarification", False)
+        ),
+        "temporal_clarification_reasons": payload.get("temporal_clarification_reasons"),
+        "grounding": payload.get("grounding"),
     }
 
     # Gracefully strip bad depends_on (LLM may pass a description string)
@@ -490,7 +501,6 @@ class ConciergeController:
         # `HILCoordinator` class. The unified HIL service is wired via
         # `_hil_port` (set by `set_hil_port`) and the factory in E4.M1.6.
         self._hil_port: "IHILPort | None" = None
-        self._temporal_port: Any | None = None
         self._weave_batcher: Any | None = None  # WeaveBatcher for queue mgmt
         self._subscription_handles: list[Any] = []
         self._idempotency = IdempotencyLedger(
@@ -664,14 +674,6 @@ class ConciergeController:
         logger.info(
             "ConciergeController.set_hil_port: attached %s",
             type(hil_port).__name__,
-        )
-
-    def set_temporal(self, temporal_port: Any) -> None:
-        """Attach the per-session TemporalHandle."""
-        self._temporal_port = temporal_port
-        logger.info(
-            "ConciergeController.set_temporal: attached %s",
-            type(temporal_port).__name__,
         )
 
     def set_session_state(self, ss: Any) -> None:
@@ -906,7 +908,7 @@ class ConciergeController:
             data = record.to_pending_hil_data()
             if self._task_bridge.get_task(task_id) is None:
                 try:
-                    from k1.sessionstate.public_types import TaskStatus
+                    from k1.sessionstate.sections.task_state import TaskStatus
 
                     self._task_bridge.task_state.add_task(
                         action=f"hil:{record.kind or record.hil_type}",
@@ -2896,8 +2898,8 @@ class ConciergeController:
         self._cleanup_terminal_hitl_state(task_id)
         self._task_dispatch_turns.pop(task_id, None)
 
-        # === Step 5: ReadyQueue notification ===
-        # Runtime owns dependency release because worker scheduling lives in ConciergeRuntime.
+        # === Step 5: M7 ReadyQueue notification ===
+        # (ReadyQueue integration is M7 -- placeholder for dependency ordering)
 
         # === Step 6: M5 Remove RunningTaskHandle ===
         self._remove_running_task(task_id)
@@ -3001,7 +3003,6 @@ class ConciergeController:
         if self._state in (
             ConciergeState.COMPANIONING,
             ConciergeState.PROGRESSING,
-            ConciergeState.CLARIFYING_WORKER,
         ):
             self._transition(
                 ConciergeState.DELIVERING,
@@ -3094,7 +3095,6 @@ class ConciergeController:
         if self._state in (
             ConciergeState.COMPANIONING,
             ConciergeState.PROGRESSING,
-            ConciergeState.CLARIFYING_WORKER,
             ConciergeState.CANCELLING,
         ):
             self._transition(
@@ -3915,7 +3915,7 @@ class ConciergeController:
             # Synthesise a SUSPENDED entry; Front reads pending_hil.envelope
             # off it and `determine_mode` resolves to HITL_RELAY via topic.
             try:
-                from k1.sessionstate.public_types import TaskStatus
+                from k1.sessionstate.sections.task_state import TaskStatus
 
                 task_state.add_task(
                     action=f"hil:{kind}",
@@ -4184,10 +4184,7 @@ class ConciergeController:
 
         # FrontLock release
         if decision.release_front_lock:
-            if decision.drain_front_lock and not decision.emit_turn_completed:
-                self._drain_front_lock_queue()
-            else:
-                self._front_lock.busy = False
+            self._front_lock.busy = False
 
         # Weave scheduling
         if decision.schedule_weave:
@@ -4216,7 +4213,6 @@ class ConciergeController:
         )
         if next_env.topic == TOPIC_USER_INPUT:
             # Re-dispatch through _on_user_input so FSM transitions happen
-            self._front_lock.busy = False
             self._on_user_input(next_env)
         else:
             self._deliver_to_front(next_env)
@@ -4617,11 +4613,7 @@ class ConciergeController:
             self._proactive_wake.record_wake(task_id)
             self._transition(ConciergeState.PROACTIVE_WAKE, TOPIC_TASK_COMPLETE, envelope)
             self._transition(ConciergeState.DELIVERING, TRIGGER_PROACTIVE_ROUTED, envelope)
-        elif self._state in (
-            ConciergeState.COMPANIONING,
-            ConciergeState.PROGRESSING,
-            ConciergeState.CLARIFYING_WORKER,
-        ):
+        elif self._state in (ConciergeState.COMPANIONING, ConciergeState.PROGRESSING):
             self._transition(ConciergeState.DELIVERING, TOPIC_TASK_COMPLETE, envelope)
 
         results, expired = self._turn_state.drain_results()

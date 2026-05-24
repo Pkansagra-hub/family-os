@@ -29,7 +29,6 @@ References:
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, FrozenSet, List, Optional
 
@@ -50,9 +49,6 @@ W_SUCCESS: float = 0.15
 
 W_COST_LATENCY: float = 0.15
 """Weight for cost/latency dimension."""
-
-W_CONTRACT_EVIDENCE: float = 0.20
-"""Additive boost for action/adapter/profile evidence in the contract."""
 
 DEFAULT_SUCCESS_RATE: float = 0.50
 """Default success_rate_30d for newly-registered capabilities (no history)."""
@@ -124,7 +120,6 @@ class RankedResult:
     domain_match: float = 0.0
     success_rate: float = 0.0
     cost_latency_score: float = 0.0
-    contract_evidence_score: float = 0.0
     degraded_penalty_applied: bool = False
     contract: Any = None
 
@@ -136,7 +131,6 @@ class RankedResult:
             "domain_match": round(self.domain_match, 6),
             "success_rate": round(self.success_rate, 6),
             "cost_latency_score": round(self.cost_latency_score, 6),
-            "contract_evidence_score": round(self.contract_evidence_score, 6),
             "degraded_penalty_applied": self.degraded_penalty_applied,
         }
 
@@ -196,7 +190,6 @@ class SoftRanker:
         *,
         max_cost: Optional[float] = None,
         max_latency_ms: Optional[int] = None,
-        query_text: str = "",
     ) -> List[RankedResult]:
         """
         Score every candidate and return ranked results (descending score).
@@ -234,7 +227,6 @@ class SoftRanker:
                 query_domains,
                 max_cost,
                 max_latency_ms,
-                query_text,
             )
             results.append(result)
 
@@ -264,7 +256,6 @@ class SoftRanker:
         query_domains: FrozenSet[str],
         max_cost: float,
         max_latency_ms: int,
-        query_text: str = "",
     ) -> RankedResult:
         """Score a single candidate against the 4 dimensions."""
 
@@ -290,13 +281,10 @@ class SoftRanker:
             max_latency_ms,
         )
 
-        evidence = self._contract_evidence_score(candidate, query_text)
-
         # Weighted composite
         score = (
             cfg.w_semantic * sem + cfg.w_domain * dom + cfg.w_success * sr + cfg.w_cost_latency * cl
         )
-        score += W_CONTRACT_EVIDENCE * evidence
 
         # DEGRADED penalty
         degraded = candidate.availability == "DEGRADED"
@@ -313,7 +301,6 @@ class SoftRanker:
             domain_match=dom,
             success_rate=sr,
             cost_latency_score=cl,
-            contract_evidence_score=evidence,
             degraded_penalty_applied=degraded,
             contract=candidate.contract,
         )
@@ -390,68 +377,3 @@ class SoftRanker:
 
         score = 1.0 - combined
         return max(0.0, min(1.0, score))
-
-    @staticmethod
-    def _contract_evidence_score(candidate: RankerCandidate, query_text: str) -> float:
-        """Score lexical/action evidence from contract metadata.
-
-        This is intentionally generic: it looks at registry-owned names,
-        domains, adapter/profile metadata, and declared capabilities.  It is
-        not a Concierge Back prompt cue table.
-        """
-        query_tokens = _tokenize(query_text)
-        if not query_tokens:
-            return 0.0
-
-        contract = candidate.contract
-        metadata_text = " ".join(
-            str(value or "")
-            for value in (
-                candidate.contract_name,
-                " ".join(candidate.domains),
-                getattr(contract, "description", "") if contract is not None else "",
-                getattr(contract, "provider_id", "") if contract is not None else "",
-                getattr(contract, "activity_profile", "") if contract is not None else "",
-                getattr(contract, "prompt_template", "") if contract is not None else "",
-                (
-                    " ".join(getattr(contract, "capabilities", []) or [])
-                    if contract is not None
-                    else ""
-                ),
-            )
-        )
-        metadata_tokens = _tokenize(metadata_text)
-        if not metadata_tokens:
-            return 0.0
-
-        overlap = query_tokens & metadata_tokens
-        score = min(0.65, len(overlap) / max(1, len(query_tokens)))
-
-        action_tokens = {"list", "read", "create", "add", "update", "delete", "complete"}
-        if (query_tokens & action_tokens) and (query_tokens & action_tokens & metadata_tokens):
-            score += 0.20
-
-        adapter_tokens = _adapter_tokens(candidate)
-        if adapter_tokens and query_tokens.intersection(adapter_tokens):
-            score += 0.25
-
-        return max(0.0, min(1.0, score))
-
-
-def _tokenize(text: str) -> set[str]:
-    tokens = set(re.findall(r"[a-z0-9]+", str(text or "").lower().replace("_", " ")))
-    singulars = {token[:-1] for token in tokens if len(token) > 3 and token.endswith("s")}
-    return tokens | singulars
-
-
-def _adapter_tokens(candidate: RankerCandidate) -> set[str]:
-    tokens = set(_tokenize(candidate.contract_name)) | set(_tokenize(" ".join(candidate.domains)))
-    contract = candidate.contract
-    if contract is not None:
-        for attr in ("provider_id", "activity_profile", "prompt_template"):
-            tokens.update(_tokenize(getattr(contract, attr, "")))
-        for capability in getattr(contract, "capabilities", []) or []:
-            text = str(capability or "")
-            if text.startswith("adapter:"):
-                tokens.update(_tokenize(text.split(":", 1)[1]))
-    return tokens
