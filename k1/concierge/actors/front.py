@@ -50,6 +50,7 @@ from k1.concierge.actors.shared import safe_get_section as _safe_get_section
 from k1.concierge.bus.builders import (
     SYNTHETIC_ID_START,
     build_final_response,
+    build_hil_presented,
     build_hil_response,
     build_response_stream,
     build_task_cancel,
@@ -66,9 +67,69 @@ from k1.concierge.prompt.mode import PromptMode, determine_mode
 from k1.concierge.react.loop import ReactResult, react_loop
 from k1.concierge.task.complexity import ComplexityTier, budget_for_tier
 from k1.concierge.tools.dispatcher import ToolDispatcher
+from k1.hil.config import HILConfig
+from k1.hil.types import HILKind, HILPresentedEnvelope
 from k1.model_hub.ports import IModelHubPort
 
 logger = logging.getLogger(__name__)
+
+# GAP-HIL-007 / GAP-HIL-009 -- default HIL config used by Front to gate
+# the fast-path and emit presentation acks. Production wiring may swap
+# this for a process-wide instance; the values here mirror the dataclass
+# defaults so behaviour is deterministic when not explicitly configured.
+_FRONT_HIL_CFG: HILConfig = HILConfig()
+
+
+def _publish_hil_presented(
+    *,
+    bus: IBus,
+    hil_envelope: dict[str, Any] | None,
+    scenario_data: dict[str, Any],
+    parent_id: int,
+    trace_id: str,
+    channel: str = "front_chat",
+) -> None:
+    """Emit ``TOPIC_HIL_PRESENTED`` for the HIL request Front just rendered.
+
+    Best-effort: missing ``hil_request_id`` skips the publish (the service
+    cannot correlate without one). Unknown kinds map to NEEDS_HUMAN so the
+    envelope still validates.
+    """
+    if not isinstance(hil_envelope, dict):
+        # Some callers (legacy bridge / synthetic frames) only carry the
+        # scenario_data path. Fall back to it.
+        hil_envelope = {}
+    hil_request_id = str(
+        hil_envelope.get("hil_request_id") or scenario_data.get("pending_hil_id") or ""
+    )
+    if not hil_request_id:
+        return
+    raw_kind = str(
+        hil_envelope.get("kind") or scenario_data.get("hil_type") or HILKind.NEEDS_HUMAN.value
+    )
+    try:
+        kind = HILKind(raw_kind)
+    except ValueError:
+        kind = HILKind.NEEDS_HUMAN
+    inner_payload = hil_envelope.get("payload") if isinstance(hil_envelope, dict) else None
+    task_id = ""
+    if isinstance(inner_payload, dict):
+        task_id = str(inner_payload.get("task_id", "") or "")
+    if not task_id:
+        task_id = str(scenario_data.get("task_id", "") or "")
+    presented = HILPresentedEnvelope(
+        hil_request_id=hil_request_id,
+        task_id=task_id,
+        kind=kind,
+        presented_at_ms=int(time.time() * 1000),
+        presentation_channel=channel,
+        trace_id=str(trace_id or ""),
+    )
+    try:
+        bus.publish(build_hil_presented(payload=presented.to_dict(), parent_id=parent_id))
+    except Exception:  # noqa: BLE001
+        logger.warning("front_handler: hil_presented publish failed", exc_info=True)
+
 
 _PROMPT_DUMP_DIR = Path(__file__).resolve().parents[3] / "data" / "prompt_dumps"
 
@@ -249,13 +310,6 @@ def _strip_leaked_reasoning(text: str) -> str:
             )
         return clean
     return text
-
-
-def _build_dispatch_ack(dispatches: list[dict[str, Any]]) -> str:
-    """Return a deterministic in-progress acknowledgement for dispatched work."""
-    if len(dispatches) > 1:
-        return "I'm working on those now."
-    return "I'm working on that now."
 
 
 # Patterns matching raw system/HIL blocks that LLMs sometimes pass through
@@ -1723,53 +1777,63 @@ async def front_handler(
 
     # 10c. Emit response.final AFTER all dispatches (correct FSM ordering)
     #      For STANDARD/PRESENT modes, emit stream chunks first (Epic 4.2).
+    #      All visible text comes from the LLM -- no deterministic acks, no
+    #      placeholder substitutions, no scripted filler. If the LLM produced
+    #      nothing we publish nothing.
     _final_text = result.text or ""
-    if mode == PromptMode.STANDARD and normal_dispatches:
-        _final_text = _build_dispatch_ack(normal_dispatches)
-        logger.info("front_handler: replaced post-dispatch text with deterministic ack")
-    # WEAVE degenerate guard: if the LLM produced the generic fallback
-    # ("Let me think about that for a moment.") during a WEAVE/proactive
-    # delivery, replace it with a deterministic summary built from the
-    # Back worker's final_answer.  This prevents useless "thinking" phrases
-    # leaking to the user after routine task completions.
-    if mode == PromptMode.WEAVE:
-        _degenerate_fallback = get_config().react.front_degenerate_fallback
-        if not _final_text or _final_text.strip() == _degenerate_fallback.strip():
-            _weave_payload = _parse_payload(envelope)
-            _weave_pending = _weave_payload.get("results") or []
-            _weave_lines: list[str] = []
-            for _r in _weave_pending:
-                _inner = _r.get("result", _r) if isinstance(_r, dict) else {}
-                _fa = _inner.get("final_answer", "") if isinstance(_inner, dict) else ""
-                if _fa:
-                    _action = (
-                        str(_inner.get("action", "") or "") if isinstance(_inner, dict) else ""
-                    )
-                    _weave_lines.append(
-                        _user_safe_failure_text(_action)
-                        if _looks_internal_failure_text(_fa)
-                        else _fa
-                    )
-            if _weave_lines:
-                _final_text = " ".join(_weave_lines)
-                logger.info(
-                    "front_handler: WEAVE degenerate suppressed, "
-                    "using Back final_answer (%d chars)",
-                    len(_final_text),
-                )
-            else:
-                # Nothing useful from Back either — suppress entirely.
-                _final_text = ""
-                logger.info("front_handler: WEAVE degenerate suppressed, no final_answer available")
+    # HITL_RELAY: if Front's LLM produced no rephrased question, fall back
+    # to the Back-LLM-generated question text verbatim. The question itself
+    # is already LLM output (from Back's submit_result(needs_human) call),
+    # so this preserves the "all visible text from an LLM" invariant. The
+    # only kernel-canned fallback we explicitly avoid is config-defined
+    # strings like react.front_degenerate_fallback.
+    _degen_fb = get_config().react.front_degenerate_fallback
+    _budget_fb = get_config().react.front_budget_fallback
     if mode == PromptMode.HITL_RELAY:
-        _degenerate_fallback = get_config().react.front_degenerate_fallback
-        if not _final_text or _final_text.strip() == _degenerate_fallback.strip():
-            _question = str(scenario_data.get("hil_question") or "").strip()
-            _final_text = _question if _question else ""
-            logger.info("front_handler: HITL_RELAY degenerate replaced with deterministic prompt")
-    if mode == PromptMode.HITL_RESOLVE and _final_text:
-        _final_text = "Got it. I'll keep going."
-        logger.info("front_handler: HITL_RESOLVE final text replaced with deterministic ack")
+        if not _final_text or _final_text == _degen_fb or _final_text == _budget_fb:
+            _hil_q = str(scenario_data.get("hil_question") or "").strip()
+            if _hil_q:
+                logger.info(
+                    "front_handler: HITL_RELAY Front LLM produced no text -- "
+                    "forwarding Back-LLM hil_question verbatim (len=%d)",
+                    len(_hil_q),
+                )
+                _final_text = _hil_q
+    # HITL_RESOLVE / WEAVE / PRESENT / ERROR: if the LLM produced only a
+    # kernel-canned fallback string, do NOT publish it -- mandate is
+    # "all visible text must be LLM-authored". Suppress the publish; the
+    # downstream auto-resume / task.complete chain will carry the real
+    # LLM-authored response when Back's result triggers PRESENT mode.
+    if mode in (
+        PromptMode.HITL_RESOLVE,
+        PromptMode.WEAVE,
+        PromptMode.PRESENT,
+        PromptMode.ERROR,
+        PromptMode.CANCEL,
+    ):
+        if _final_text in (_degen_fb, _budget_fb):
+            logger.info(
+                "front_handler: mode=%s -- suppressing kernel fallback "
+                "string '%s' (mandate: no deterministic visible text); "
+                "downstream chain will deliver LLM-authored response",
+                mode.value,
+                _final_text,
+            )
+            _final_text = ""
+    if mode == PromptMode.HITL_RELAY and _final_text:
+        # GAP-HIL-009 -- whenever Front actually delivered a HIL prompt to
+        # the user (whatever wording the LLM produced), tell the HIL service
+        # so it can arm the human-response timer.
+        try:
+            _publish_hil_presented(
+                bus=bus,
+                hil_envelope=scenario_data.get("_hil_envelope"),
+                scenario_data=scenario_data,
+                parent_id=parent_id,
+                trace_id=trace_id,
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("front_handler: HITL_RELAY hil_presented publish failed", exc_info=True)
     if _final_text:
         clean_text = _strip_leaked_reasoning(_final_text)
         clean_text = _strip_leaked_system_blocks(clean_text)

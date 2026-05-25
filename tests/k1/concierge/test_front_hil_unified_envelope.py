@@ -381,6 +381,10 @@ def _mock_front_config() -> Any:
     front.history_window_fallback = 10
     actors.front = front
     cfg.actors = actors
+    react = type("React", (), {})()
+    react.front_degenerate_fallback = "Let me think about that for a moment."
+    react.front_budget_fallback = "Let me get back to you on that."
+    cfg.react = react
     return cfg
 
 

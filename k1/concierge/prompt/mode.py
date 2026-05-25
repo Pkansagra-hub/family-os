@@ -302,6 +302,17 @@ def determine_mode(
         )
         return PromptMode.INTERRUPT
 
+    # 1c. GAP-HIL-005 -- late-HIL recovery. The HIL service timed out a
+    # request just before this user input arrived. Route through
+    # HITL_RESOLVE so Front acknowledges the (now-expired) question and
+    # the user's reply is treated as the answer, rather than starting a
+    # fresh turn that strands the original task.
+    if routing_metadata and routing_metadata.get("late_hil_recovery"):
+        logger.info(
+            "determine_mode  routing_metadata.late_hil_recovery -> HITL_RESOLVE",
+        )
+        return PromptMode.HITL_RESOLVE
+
     # 2. FSM state + event topic combinations
     if fsm_state == "CLARIFYING_USER":
         if envelope_topic == _TOPIC_USER_INPUT:

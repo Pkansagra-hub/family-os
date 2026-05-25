@@ -91,6 +91,11 @@ TOPIC_TOOL_COMPLETED = "k1.tool.completed.v1"
 # ---------------------------------------------------------------------------
 TOPIC_HIL_REQUEST = "k1.hil.request.v1"
 TOPIC_HIL_RESPONSE = "k1.hil.response.v1"
+# GAP-HIL-009: presentation ack -- published by a HIL presenter (Front)
+# once an answerable prompt has been rendered to a user surface. The
+# HumanInTheLoopService consumes it to arm the per-kind human-response
+# timer after presentation. Mirrors k1.hil.topics.TOPIC_HIL_PRESENTED.
+TOPIC_HIL_PRESENTED = "k1.hil.presented.v1"
 
 # ---------------------------------------------------------------------------
 # M6 HITL Lifecycle topics -- observability events emitted by the FSM/
@@ -393,6 +398,7 @@ __all__ = [
     "TOPIC_TOOL_COMPLETED",
     "TOPIC_HIL_REQUEST",
     "TOPIC_HIL_RESPONSE",
+    "TOPIC_HIL_PRESENTED",
     "TOPIC_HITL_REQUESTED",
     "TOPIC_HITL_RESOLVED",
     "TOPIC_HITL_TIMED_OUT",

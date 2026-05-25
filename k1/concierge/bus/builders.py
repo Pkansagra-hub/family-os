@@ -67,6 +67,7 @@ from k1.concierge.bus.topics import (
     TOPIC_DEAD_LETTER,
     TOPIC_FINAL_RESPONSE,
     TOPIC_FINDINGS_READY,
+    TOPIC_HIL_PRESENTED,
     TOPIC_HIL_REQUEST,
     TOPIC_HIL_RESPONSE,
     TOPIC_HITL_BLOCKED_RED,
@@ -355,6 +356,16 @@ def build_hil_request(payload: dict[str, Any], parent_id: int = 0) -> Envelope:
 def build_hil_response(payload: dict[str, Any], parent_id: int = 0) -> Envelope:
     """Human-in-the-loop response -- URGENT, must follow request."""
     return _build(TOPIC_HIL_RESPONSE, Priority.URGENT, payload, parent_id)
+
+
+def build_hil_presented(payload: dict[str, Any], parent_id: int = 0) -> Envelope:
+    """GAP-HIL-009: presentation ack -- INTERACTIVE.
+
+    Published once an answerable HIL prompt has reached a user surface.
+    Consumed by HumanInTheLoopService to arm the per-kind human-response
+    timer after presentation.
+    """
+    return _build(TOPIC_HIL_PRESENTED, Priority.INTERACTIVE, payload, parent_id)
 
 
 # ===================================================================
@@ -739,6 +750,7 @@ __all__ = [
     # HITL
     "build_hil_request",
     "build_hil_response",
+    "build_hil_presented",
     # Planner
     "build_plan_ready",
     # Internal

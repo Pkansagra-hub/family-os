@@ -731,6 +731,7 @@ class UiCoordinator:
             TOPIC_TOOL_COMPLETED,
             TOPIC_TOOL_STARTED,
         )
+        from k1.hil.topics import TOPIC_HIL_PRESENTED as _TOPIC_HIL_PRESENTED
         from k1.hil.topics import TOPIC_HIL_REQUEST as _TOPIC_HIL_REQUEST
 
         renderer = self.renderer
@@ -814,6 +815,25 @@ class UiCoordinator:
                 logger.debug("HIL request web hook failed", exc_info=True)
 
         self._web_subscriptions.append(bus.subscribe(_TOPIC_HIL_REQUEST, _on_hil_request))
+
+        # GAP-HIL-009 -- broadcast presentation acks to the browser so the
+        # chat input can be marked as the active answer channel for the
+        # currently-open HIL request. The bus publish is performed by the
+        # Front actor when it has rendered the question text.
+        def _on_hil_presented(envelope: Envelope) -> None:
+            p = _safe_payload(envelope)
+            try:
+                logger.info(
+                    "WEB: hil_presented forwarded hil_request_id=%s kind=%s channel=%s",
+                    p.get("hil_request_id", ""),
+                    p.get("kind", ""),
+                    p.get("presentation_channel", ""),
+                )
+                renderer.send_hil_presented(p)
+            except Exception:
+                logger.debug("HIL presented web hook failed", exc_info=True)
+
+        self._web_subscriptions.append(bus.subscribe(_TOPIC_HIL_PRESENTED, _on_hil_presented))
 
         # Task failure: clear browser spinner so the user isn't stuck waiting
         # when Back fails and Front never publishes a response.final.

@@ -218,6 +218,25 @@ class WebSocketRenderer:
             }
         )
 
+    def send_hil_presented(self, envelope: dict[str, Any]) -> None:
+        """GAP-HIL-009: notify the browser that a HIL question is now visible.
+
+        Emitted in response to TOPIC_HIL_PRESENTED. The browser uses this
+        to mark the chat input as the active answer channel (data-hil-active)
+        so free-text input is correlated with the open HIL request.
+        """
+        self._broadcast_sync(
+            {
+                "type": "hil_presented",
+                "hil_request_id": envelope.get("hil_request_id", ""),
+                "task_id": envelope.get("task_id", ""),
+                "kind": envelope.get("kind", ""),
+                "presentation_channel": envelope.get("presentation_channel", ""),
+                "presented_at_ms": envelope.get("presented_at_ms", 0),
+                "timestamp": time.time(),
+            }
+        )
+
     def send_task_failed(
         self,
         task_id: str,

@@ -398,7 +398,7 @@ async def test_m1_l4_medium_dispatch_reaches_orchestrator_fabric_result(
             final_payload = _decode_payload(final_env)
             assert final_env.cognitive_trace_id == trace_id
             assert final_env.session_id == session_id
-            assert final_payload["text"] == "I'm working on that now."
+            assert final_payload["text"] == "OK"
             assert final_payload["trace_id"] == trace_id
 
             completed_env = recorder.by_topic(TOPIC_TURN_COMPLETED)[0]
@@ -611,7 +611,7 @@ async def test_m1_l5_high_dispatch_runs_planner_orchestrator_fabric(
             assert completed_payload["session_id"] == session.concierge._ledger.session_id
             assert completed_payload["cognitive_trace_id"] == trace_id
             assert completed_payload["user_message"] == user_text
-            assert completed_payload["assistant_response"] == "I'm working on that now."
+            assert completed_payload["assistant_response"] == "OK"
 
             fired_labels = [rule.label for rule in scripted.rules if rule.fired]
             assert "front-dispatch-high" in fired_labels

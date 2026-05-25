@@ -498,6 +498,7 @@ function handleMessage(msg) {
         case "tool_refresh":    handleToolRefresh(msg); break;
         case "status_report":   /* silent */ break;
         case "hil_request":     handleHilRequest(msg); break;
+        case "hil_presented":   handleHilPresented(msg); break;
         case "task_failed":     handleTaskFailed(msg); break;
     }
 }
@@ -660,6 +661,27 @@ function _setHilWidgetState(baseIds, statusText) {
             statusEl.style.display = "block";
         }
     });
+}
+
+// GAP-HIL-009 -- mark the chat input as the active HIL answer channel
+// when a presentation ack arrives. Front publishes TOPIC_HIL_PRESENTED
+// once it has rendered the question text to chat (or, in widget paths,
+// once the widget is on screen). The data-hil-active attribute lets
+// styling / submit logic know the next user message should be treated
+// as a reply to the open HIL request rather than a new turn.
+function handleHilPresented(msg) {
+    const input = document.getElementById("chatInput");
+    if (!input) return;
+    const requestId = msg.hil_request_id || "";
+    if (!requestId) return;
+    input.setAttribute("data-hil-active", "true");
+    input.setAttribute("data-hil-request-id", requestId);
+    if (msg.kind) input.setAttribute("data-hil-kind", msg.kind);
+    if (msg.task_id) input.setAttribute("data-hil-task-id", msg.task_id);
+    console.info(
+        "hil_presented: chat input armed for request_id=" + requestId.slice(0, 8) +
+        " kind=" + (msg.kind || "")
+    );
 }
 
 function handleHilRequest(msg) {
@@ -1183,6 +1205,16 @@ async function sendMessage() {
     addUserMessage(text);
     ensureStreamingMessage();
     dom.input.value = "";
+    // GAP-HIL-009 -- once the user has dispatched a reply, the chat
+    // input is no longer the dedicated answer channel for the prior
+    // HIL request. Clear the data-hil-* markers so a subsequent
+    // unrelated user message isn't mis-tagged.
+    if (dom.input.hasAttribute("data-hil-active")) {
+        dom.input.removeAttribute("data-hil-active");
+        dom.input.removeAttribute("data-hil-request-id");
+        dom.input.removeAttribute("data-hil-kind");
+        dom.input.removeAttribute("data-hil-task-id");
+    }
     showStreaming(true, DEFAULT_STREAMING_LABEL);
 
     await _ensureBrowserLocation();

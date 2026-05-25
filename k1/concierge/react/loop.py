@@ -50,20 +50,26 @@ from k1.model_hub.types import (
     CapabilityType,
     ChatPayload,
     ChatResult,
+)
+from k1.model_hub.types import FinishReason as K1FinishReason
+from k1.model_hub.types import (
     HubChunk,
     HubRequest,
     HubResponse,
+)
+from k1.model_hub.types import Message as K1Message
+from k1.model_hub.types import (
     ReasonResult,
     RequestConstraints,
     ResponseMetadata,
     StructuredResult,
     TokenUsage,
     ToolCallPayload,
+)
+from k1.model_hub.types import ToolCallResult as K1ToolCallResult
+from k1.model_hub.types import (
     ToolCallResultSet,
 )
-from k1.model_hub.types import FinishReason as K1FinishReason
-from k1.model_hub.types import Message as K1Message
-from k1.model_hub.types import ToolCallResult as K1ToolCallResult
 from k1.model_hub.types import ToolDefinition as K1ToolDefinition
 
 logger = logging.getLogger(__name__)
@@ -1617,16 +1623,45 @@ async def react_loop(
                 # return empty output. Forcing text-only on the retry
                 # guarantees we get a real answer.
                 if iteration < effective_max_iterations - 1:
+                    # Context-aware nudge: HITL_RELAY / hitl_resolve / weave
+                    # modes never call tools, so the "synthesize from tools
+                    # above" wording confuses the model and we get a second
+                    # empty turn. Use a mode-appropriate nudge instead.
+                    scenario_lower = (scenario or "").lower()
+                    if scenario_lower == "hitl_resolve":
+                        nudge_text = (
+                            "The user just answered your earlier clarifying "
+                            "question. Acknowledge their answer warmly in ONE "
+                            "short sentence and confirm you are proceeding "
+                            "with that detail. Do NOT call tools. Do NOT "
+                            "include reasoning. Output ONLY the message."
+                        )
+                    elif scenario_lower == "hitl_relay":
+                        nudge_text = (
+                            "A background task needs the user's input. Ask "
+                            "the pending question naturally and briefly in "
+                            "ONE sentence. Do NOT call tools. Do NOT include "
+                            "reasoning. Output ONLY the question."
+                        )
+                    elif scenario_lower in ("weave", "present"):
+                        nudge_text = (
+                            "Respond now in one short, natural user-facing "
+                            "message based on the prior context. Do NOT call "
+                            "tools. Do NOT include reasoning. Output ONLY "
+                            "the message."
+                        )
+                    else:
+                        nudge_text = (
+                            "Now respond directly to the user. Synthesize "
+                            "everything you learned from the tools above "
+                            "into a helpful, natural response. Do NOT call "
+                            "any more tools. Do NOT include your reasoning "
+                            "or analysis -- output ONLY the user-facing message."
+                        )
                     messages.append(
                         ModelMessage(
                             role="user",
-                            content=(
-                                "Now respond directly to the user. Synthesize "
-                                "everything you learned from the tools above "
-                                "into a helpful, natural response. Do NOT call "
-                                "any more tools. Do NOT include your reasoning "
-                                "or analysis -- output ONLY the user-facing message."
-                            ),
+                            content=nudge_text,
                         )
                     )
                     logger.info(
@@ -2069,13 +2104,35 @@ async def react_loop(
         if actor == "front" and any(
             tc.name == "dispatch_task" and result.is_ok() for tc, result in paired_results
         ):
+            # If the model already produced text alongside the dispatch tool
+            # call, surface it immediately. Otherwise, inject a synthesis
+            # nudge and continue the loop so the LLM (not the kernel) crafts
+            # the user-facing acknowledgement. No deterministic ACK text is
+            # ever emitted by the kernel.
+            if last_text_with_tools:
+                logger.info(
+                    "react_loop: front dispatched task(s) on iter=%d -- "
+                    "using mixed-response text from LLM",
+                    iteration,
+                )
+                _iter_dur = int((time.monotonic() - _iter_start) * 1000)
+                _iteration_durations.append(_iter_dur)
+                return _make_result("complete", text=last_text_with_tools)
+            messages.append(
+                ModelMessage(
+                    role="user",
+                    content=(
+                        "You have dispatched the background task. Now write a brief, "
+                        "natural acknowledgement to the user confirming you are working "
+                        "on their request. Do NOT call any more tools. Respond with text only."
+                    ),
+                )
+            )
             logger.info(
-                "react_loop: front dispatched task(s) on iter=%d -- ending turn for ack",
+                "react_loop: front dispatched task(s) on iter=%d -- "
+                "no text yet, looping for LLM ack",
                 iteration,
             )
-            _iter_dur = int((time.monotonic() - _iter_start) * 1000)
-            _iteration_durations.append(_iter_dur)
-            return _make_result("complete", text=last_text_with_tools or "")
 
         # Per-iteration timing for the tool-execution branch
         _iter_dur = int((time.monotonic() - _iter_start) * 1000)

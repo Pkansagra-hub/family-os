@@ -526,6 +526,15 @@ class ConciergeController:
         self._pending_hil_subtasks: dict[str, HILSubTask] = (
             {}
         )  # M6 E6.1.2: task_id -> HILSubTask (single SOT for HITL context)
+        # GAP-HIL-005 -- late-answer recovery ring buffer. Stores the most
+        # recent expired/timed-out HIL requests so a user reply that
+        # arrives just after the timeout can still be recognised as an
+        # answer to the prior HIL question instead of a fresh turn.
+        # Entries: {"hil_request_id","hil_type","task_id","expired_at_ms"}.
+        from collections import deque as _deque
+
+        self._recently_expired_hil: _deque[dict[str, Any]] = _deque(maxlen=8)
+        self._late_hil_recovery_window_ms: int = 60_000
         self._running_tasks: dict[str, RunningTaskHandle] = (
             {}
         )  # M5 E5.5.4: inter-iteration injection
@@ -2244,12 +2253,35 @@ class ConciergeController:
         # 5. Arbiter classification (deterministic, no LLM)
         arbiter_result = self._arbiter.classify(text, inputs, inflight)
 
+        # GAP-HIL-005 -- late-HIL recovery. If a HIL just timed out within
+        # the recovery window, tag routing metadata so determine_mode()
+        # routes the reply through HITL_RESOLVE instead of opening a new
+        # turn. The user history entry below also carries the flag for
+        # downstream observability.
+        _late_hil = self._consume_recent_expired_hil()
+        if _late_hil is not None:
+            arbiter_result.routing_metadata["late_hil_recovery"] = True
+            arbiter_result.routing_metadata["late_hil_request_id"] = _late_hil.get(
+                "hil_request_id", ""
+            )
+            arbiter_result.routing_metadata["late_hil_type"] = _late_hil.get("hil_type", "")
+            arbiter_result.routing_metadata["late_hil_task_id"] = _late_hil.get("task_id", "")
+            logger.info(
+                "FSM._route_user_turn: late_hil_recovery armed (request=%s kind=%s)",
+                str(_late_hil.get("hil_request_id", ""))[:8],
+                _late_hil.get("hil_type", ""),
+            )
+
         # Annotate user history entry with arbiter snapshot
         if self._history:
             last = self._history[-1]
             if last.entry_type == "user":
                 last.metadata.update(inputs.to_metadata())
                 last.metadata["arbiter"] = arbiter_result.to_dict()
+                if _late_hil is not None:
+                    last.metadata["late_hil_recovery"] = True
+                    last.metadata["late_hil_request_id"] = _late_hil.get("hil_request_id", "")
+                    last.metadata["late_hil_type"] = _late_hil.get("hil_type", "")
 
         # 6. Emit intent.arbitrated BEFORE delivering to Front
         self._bus.publish(
@@ -2412,6 +2444,50 @@ class ConciergeController:
             self._task_bridge.set_pending_hil_data(task_id, None)
         except Exception:
             logger.debug("FSM: pending HIL cleanup skipped for %s", task_id, exc_info=True)
+
+    # GAP-HIL-005 -- late-answer recovery helpers.
+    def _record_expired_hil(
+        self,
+        *,
+        hil_request_id: str,
+        hil_type: str,
+        task_id: str,
+    ) -> None:
+        """Push an expired/timed-out HIL into the recovery ring buffer."""
+        if not hil_request_id:
+            return
+        try:
+            self._recently_expired_hil.append(
+                {
+                    "hil_request_id": hil_request_id,
+                    "hil_type": hil_type,
+                    "task_id": task_id,
+                    "expired_at_ms": int(time.time() * 1000),
+                }
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("FSM: _record_expired_hil failed", exc_info=True)
+
+    def _consume_recent_expired_hil(self) -> dict[str, Any] | None:
+        """Pop the most recent in-window expired HIL entry, if any.
+
+        Called by _route_user_turn so a user message that arrives shortly
+        after a HIL timeout can be tagged ``late_hil_recovery=True`` in
+        routing metadata. Stale entries (older than the recovery window)
+        are discarded.
+        """
+        if not self._recently_expired_hil:
+            return None
+        now_ms = int(time.time() * 1000)
+        window_ms = self._late_hil_recovery_window_ms
+        # Drop stale entries from the left.
+        while self._recently_expired_hil and (
+            now_ms - int(self._recently_expired_hil[0].get("expired_at_ms", 0)) > window_ms
+        ):
+            self._recently_expired_hil.popleft()
+        if not self._recently_expired_hil:
+            return None
+        return self._recently_expired_hil.popleft()
 
     def _deliver_crisis_response(self, envelope: Envelope) -> None:
         """Emit a canned safety-protocol response without invoking Front LLM.
@@ -3064,6 +3140,12 @@ class ConciergeController:
         self._remove_running_task(task_id)  # M5 E5.5.4
         # M3 E3.3.5: Clean up suspension context on terminal state
         self._after_task_cleanup(task_id, context="task_failed")
+        # GAP-HIL-004 -- atomic terminal cleanup of pending HIL state so a
+        # stale subtask record never outlives the task it belonged to.
+        # Mirrors _on_task_complete (L2898) which has performed this since
+        # M6; the failed path was the gap leaking into _has_pending_hitl()
+        # and the response-final STAY decision.
+        self._cleanup_terminal_hitl_state(task_id)
 
         # M4 E4.5.1: Ledger write BEFORE TaskBridge mutation
         self._write_history(
@@ -3771,6 +3853,17 @@ class ConciergeController:
         self._after_task_cleanup(task_id, context="hitl_timeout")
         self._hitl_responded_tasks.pop(task_id, None)
 
+        # GAP-HIL-005 -- remember the expiry so a late user reply can be
+        # recognised as the answer to this HIL question rather than the
+        # start of a brand-new turn. Window is bounded by
+        # self._late_hil_recovery_window_ms; older entries are evicted by
+        # _consume_recent_expired_hil.
+        self._record_expired_hil(
+            hil_request_id=subtask.pending_hil_id,
+            hil_type=str(subtask.hil_type or ""),
+            task_id=task_id,
+        )
+
     def _on_hil_request(self, envelope: Envelope) -> None:
         """Handle k1.hil.request.v1 (HIL Unification E4 unified entry point).
 
@@ -4073,6 +4166,9 @@ class ConciergeController:
             has_active_tasks=bool(self._active_task_ids),
             is_fallback=is_fallback,
             weave_flush_running=bool(self._weave_flush_task and not self._weave_flush_task.done()),
+            # GAP-HIL-006 -- keep CLARIFYING_WORKER open while HIL is pending
+            # even after the worker task has gone terminal.
+            pending_hitl=self._has_pending_hitl(),
         )
 
         # M2 E2.5.4: Record response-final decision in ledger for audit trail

@@ -154,22 +154,24 @@ async def test_repeated_front_tool_calls_can_continue_to_dispatch() -> None:
                         }
                     ]
                 )
-            return make_hub_tool_response(
-                [
-                    {
-                        "id": "dispatch-1",
-                        "name": "dispatch_task",
-                        "arguments": {
-                            "intents": [
-                                {
-                                    "action": "create dentist appointment calendar event",
-                                    "domain": "calendar",
-                                }
-                            ]
-                        },
-                    }
-                ]
-            )
+            if self.requests == 4:
+                return make_hub_tool_response(
+                    [
+                        {
+                            "id": "dispatch-1",
+                            "name": "dispatch_task",
+                            "arguments": {
+                                "intents": [
+                                    {
+                                        "action": "create dentist appointment calendar event",
+                                        "domain": "calendar",
+                                    }
+                                ]
+                            },
+                        }
+                    ]
+                )
+            return make_hub_text_response("Booking it now.")
 
     dispatcher = _SubmitDispatcher()
 
