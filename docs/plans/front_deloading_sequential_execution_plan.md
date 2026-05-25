@@ -148,6 +148,54 @@ Do not treat the current Gemini 2.5 Flash Lite POC as active-write proof.
 Do not broaden validation beyond targeted evidence commands.
 ```
 
+M0 execution lock:
+
+```text
+Started: 2026-05-24
+
+M0 production code edit decision:
+   no runtime code edits
+   no prompt allowlist edits
+   no classifier package creation
+   no schema deletion or tool relocation
+
+Exact M0 edit target:
+   docs/plans/front_deloading_sequential_execution_plan.md
+
+Reason:
+   M0 freezes evidence, rollback surfaces, and code anchors.
+   M1-M5 may edit runtime code, but only against this frozen baseline.
+```
+
+M0 verified evidence snapshot:
+
+```text
+front_prompt_compare live_results.json aggregate:
+   records=141
+   errors=0
+   variants=current=47,iteration1=47,iteration1_no_cognitive=47
+   iteration1_no_cognitive cognitive calls=0/47
+
+section_update_classifier live summary:
+   records=12
+   validation pass rate=16.7%
+   batch pass rate=33.3%
+   parallel pass rate=0.0%
+   active mode blocked
+```
+
+M0 code-edit map for later milestones:
+
+```text
+M1 owns new classifier contract/compiler code under k1/concierge/section_update/.
+M2 owns lifecycle wiring around response.final -> turn.completed coordination.
+M3 owns shadow/active quality gates and observability.
+M4 owns Front allowlist and prompt text cutover.
+M5 owns rollback proof and final validation.
+
+M0 does not pre-edit any of those surfaces.
+```
+
 #### M0.I1 Freeze Current Front Prompt Compare Baseline
 
 Core concept: preserve the existing Front prompt comparison evidence so later prompt and tool-surface changes can be judged against a stable baseline.
@@ -199,12 +247,23 @@ current prompt size: roughly 9.3k-9.5k estimated tokens
 deloaded prompt size: roughly 4.9k-5.1k estimated tokens
 ```
 
+Verified JSON aggregate:
+
+```text
+records=141
+errors=0
+no_cognitive_records=47
+no_cognitive_cognitive_calls=0
+variants=current=47,iteration1=47,iteration1_no_cognitive=47
+```
+
 Acceptance:
 
 ```text
 Baseline run directory is recorded in this plan.
 Known response-wording misses are documented as prompt behavior, not classifier failure.
 The baseline remains available for M3/M5 comparisons.
+The live_results.json aggregate is recorded so summary-table drift is detectable.
 ```
 
 Targeted validation:
@@ -298,6 +357,16 @@ Active writes are blocked until no-op precision, schema validity, and section/op
 4-9 second model latency is acceptable for async/shadow diagnostics, not for same-turn synchronous dispatch-critical paths.
 ```
 
+Observed active-mode blockers:
+
+```text
+no-op precision failure: greeting_noop produced a beliefs_active mutation
+schema/tool reliability failure: several cases returned no tool calls
+batch vocabulary failure: clarifications.cancel_commitment is not a valid target operation
+parallel mode failure: no-op tool was mixed with mutation tools
+latency risk: current live model path is too slow for synchronous dispatch-critical use
+```
+
 Targeted validation:
 
 ```powershell
@@ -364,10 +433,16 @@ Code boundaries:
 
 ```text
 k1/concierge/prompt/mode.py
+k1/concierge/prompt/builder.py
+k1/concierge/prompt/sections.py
+k1/concierge/actors/front.py
+k1/concierge/fsm/controller.py
 k1/concierge/tools/schemas_front.py
 k1/concierge/tools/implementations.py
 k1/sessionstate/config.py
+k1/sessionstate/ports/writer.py
 k1/sessionstate/adapters/direct_writer.py
+k1/sessionstate/guard.py
 ```
 
 Current ownership boundary:
@@ -377,6 +452,37 @@ Front currently owns cognitive writes through prompt-seated tools.
 Target owner is SectionUpdateClassifier through writer_port.
 control, task_state, task_artifacts, history, telemetry, and meta remain runtime/FSM-owned.
 MemoryWriter reads SessionState and writes durable memory outside SessionState.
+```
+
+Current code truth:
+
+```text
+k1/concierge/prompt/mode.py:
+   active modes still seat per-section cognitive tools
+   update_session_bundle is not seated in active Front modes
+
+k1/concierge/prompt/builder.py:
+   DynamicPromptBuilder._select_tools filters FRONT_TOOL_SCHEMAS by TOOL_ALLOWLIST
+
+k1/concierge/prompt/sections.py:
+   current prompt text still instructs Front on cognitive tool discipline
+
+k1/concierge/tools/schemas_front.py:
+   FRONT_TOOL_SCHEMAS exports 12 schemas, including 7 cognitive/session-write schemas
+
+k1/concierge/tools/implementations.py:
+   execute_update_session_bundle proves MutationRequest -> BatchRequest -> writer_port.batch_mutations mechanics
+
+k1/sessionstate/config.py:
+   llm_writable_sections are beliefs_active, scoreboard, clarifications, narrative_active, affective_now
+
+k1/sessionstate/adapters/direct_writer.py:
+   batch_mutations applies requests in order and can stop/cancel remaining requests
+   it does not provide transactional rollback for already-applied mutations
+
+k1/concierge/fsm/controller.py:
+   response.final writes assistant history, then executes the response-final decision
+   turn.completed is emitted from finalization and is a MemoryWriter trigger
 ```
 
 Acceptance:
@@ -447,6 +553,31 @@ K1_SECTION_UPDATE_MODEL=gemini-2.5-flash-lite
 K1_FRONT_DELOAD_COGNITIVE_TOOLS
 ```
 
+M0 flag semantics lock:
+
+```text
+K1_ENABLE_SECTION_UPDATE_CLASSIFIER=false
+   classifier is disabled; current Front cognitive tools remain authoritative
+
+K1_SECTION_UPDATE_MODE=shadow
+   classifier may run for diagnostics only; Front cognitive writes remain authoritative
+
+K1_SECTION_UPDATE_MODE=active
+   classifier may apply only after M3 quality gates pass and M2 ordering is implemented
+
+K1_SECTION_UPDATE_MODE=offline_stub
+   deterministic local/test behavior; no live provider dependency
+
+K1_SECTION_UPDATE_MODE=degraded_noop
+   classifier emits diagnostics and writes nothing
+
+K1_FRONT_DELOAD_COGNITIVE_TOOLS=false
+   rollback/default during M0-M3; cognitive tools remain visible to Front
+
+K1_FRONT_DELOAD_COGNITIVE_TOOLS=true
+   allowed only after M4 cutover criteria; cognitive schemas still remain for rollback/internal tests
+```
+
 Acceptance:
 
 ```text
@@ -498,6 +629,18 @@ python .\poc\section_update_classifier_poc.py --live --mode both --preferred-pro
 pytest tests/k1/concierge/test_m04_e43_session_bundle.py tests/k1/concierge/test_m04_e44_prompt_ss.py -v
 ```
 
+M0 validation run:
+
+```text
+2026-05-24:
+   pytest tests/k1/concierge/test_m04_e43_session_bundle.py tests/k1/concierge/test_m04_e44_prompt_ss.py -v
+   result: 87 passed
+
+2026-05-24:
+   git diff --check -- docs/plans/front_deloading_sequential_execution_plan.md
+   result: no whitespace errors
+```
+
 Constraints:
 
 ```text
@@ -512,6 +655,8 @@ M0 blockers and contradictions:
 Current Gemini 2.5 Flash Lite classifier pass rate is 16.7%, which blocks active-mode use.
 Current classifier latency is acceptable for async shadow evaluation but too slow for synchronous same-turn paths.
 No section-update config class exists yet; M0 defines the contract but does not implement it.
+update_session_bundle schema text says atomic, but DirectWriterAdapter.batch_mutations is ordered/non-transactional; M1 must require whole-plan validation before writer_port.
+Front prompt text still teaches cognitive tool use; M4 owns that rewrite, not M0.
 ```
 
 ### M1 Detailed Plan: Typed Classifier Contract And Compiler Boundary
