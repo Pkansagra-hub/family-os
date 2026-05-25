@@ -3178,6 +3178,10 @@ class ConciergeController:
             ConciergeState.COMPANIONING,
             ConciergeState.PROGRESSING,
             ConciergeState.CANCELLING,
+            # CLARIFYING_WORKER: HIL watchdog can cancel the suspended task
+            # before user resolution completes (or Front HITL_RESOLVE stalls).
+            # Surface the failure to the user instead of queuing it forever.
+            ConciergeState.CLARIFYING_WORKER,
         ):
             self._transition(
                 ConciergeState.DELIVERING,
