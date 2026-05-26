@@ -168,10 +168,12 @@ class CalendarToolService(BaseToolService):
         return {"success": True, "event_id": event_id}
 
     async def list_events(self, params: dict[str, Any], ctx: WriteContext) -> dict[str, Any]:
+        start = params.get("start") or params.get("start_date")
+        end = params.get("end") or params.get("end_date")
         rows = self._scan_events(
             space_id=ctx.space_id,
-            start=params.get("start"),
-            end=params.get("end"),
+            start=start,
+            end=end,
             source_filter=params.get("source_filter"),
         )
         member_filter = params.get("member_filter")

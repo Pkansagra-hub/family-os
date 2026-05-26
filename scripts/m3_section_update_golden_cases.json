@@ -1,0 +1,2590 @@
+{
+  "cases": [
+    {
+      "id": "soccer_pickup_contact_fact",
+      "live_turn": {
+        "thread": "soccer pickup correction and handoff",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "For today, remember that Jordan is the carpool contact for Emma's soccer pickup.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:soccer_pickup_contact_fact",
+        "turn_id": "golden:1",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "Jordan",
+              "predicate": "is_carpool_contact_for",
+              "obj": "Emma's soccer pickup today",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User explicitly stated a durable contact fact.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:soccer_pickup_contact_fact:add_fact",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "soccer_pickup_contact_correction",
+      "live_turn": {
+        "thread": "soccer pickup correction and handoff",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Actually, Priya is covering soccer pickup today, not Jordan.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:soccer_pickup_contact_correction",
+        "turn_id": "golden:2",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "Emma's soccer pickup",
+              "predicate": "has_carpool_contact",
+              "obj": "Priya",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User corrected the prior pickup contact fact.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:soccer_pickup_contact_correction:add_fact",
+            "commit_class": "prompt_critical"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "soccer_pickup_deictic_definition",
+      "live_turn": {
+        "thread": "soccer pickup correction and handoff",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "If I ask about the pickup later, soccer pickup means Emma at North Field.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:soccer_pickup_deictic_definition",
+        "turn_id": "golden:3",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "soccer pickup",
+              "predicate": "means",
+              "obj": "Emma at North Field",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User defined a future referent for pickup.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:soccer_pickup_deictic_definition:add_fact",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "pickup_close_ack_noop",
+      "live_turn": {
+        "thread": "soccer pickup correction and handoff",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Thanks, that is all for pickup.",
+        "dangerous_false_write_if_unexpected": false
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:pickup_close_ack_noop",
+        "turn_id": "golden:4",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "all",
+            "reason": "Acknowledgement closes the exchange without new cognitive state."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_ack_thanks_only",
+      "live_turn": {
+        "thread": "low signal acknowledgements",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Thanks.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_ack_thanks_only",
+        "turn_id": "golden:noop:001",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "all",
+            "reason": "Acknowledgement contains no durable cognitive state."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_ack_got_it",
+      "live_turn": {
+        "thread": "low signal acknowledgements",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Got it.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_ack_got_it",
+        "turn_id": "golden:noop:002",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "all",
+            "reason": "Acknowledgement contains no durable cognitive state."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_ack_sounds_good",
+      "live_turn": {
+        "thread": "low signal acknowledgements",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Sounds good.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_ack_sounds_good",
+        "turn_id": "golden:noop:003",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "all",
+            "reason": "Acknowledgement contains no durable cognitive state."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_ack_okay",
+      "live_turn": {
+        "thread": "low signal acknowledgements",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Okay.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_ack_okay",
+        "turn_id": "golden:noop:004",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "all",
+            "reason": "Acknowledgement contains no durable cognitive state."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_close_all_set",
+      "live_turn": {
+        "thread": "topic closure",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "All set for now.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_close_all_set",
+        "turn_id": "golden:noop:005",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "all",
+            "reason": "Topic closure adds no future-state fact, commitment, or thread id mutation."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_close_dinner_done",
+      "live_turn": {
+        "thread": "topic closure",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "That is all for dinner planning.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_close_dinner_done",
+        "turn_id": "golden:noop:006",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "all",
+            "reason": "Topic closure adds no future-state fact, commitment, or thread id mutation."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_close_school_forms",
+      "live_turn": {
+        "thread": "topic closure",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "No more on school forms today.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_close_school_forms",
+        "turn_id": "golden:noop:007",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "all",
+            "reason": "Topic closure adds no future-state fact, commitment, or thread id mutation."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_close_nevermind",
+      "live_turn": {
+        "thread": "topic closure",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Never mind, we can drop it.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_close_nevermind",
+        "turn_id": "golden:noop:008",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "all",
+            "reason": "Cancellation or closure is runtime/conversation control, not cognitive memory."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_close_ignore_last_bit",
+      "live_turn": {
+        "thread": "topic closure",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Ignore that last bit.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_close_ignore_last_bit",
+        "turn_id": "golden:noop:009",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "all",
+            "reason": "Conversation/history handling is not classifier-owned cognitive memory."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_wrap_up_no_more",
+      "live_turn": {
+        "thread": "topic closure",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Nothing else from me right now.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_wrap_up_no_more",
+        "turn_id": "golden:noop:010",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "all",
+            "reason": "Conversation wrap-up contains no durable cognitive state."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_forbidden_control_fsm_state_question",
+      "live_turn": {
+        "thread": "runtime owned state questions",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "What state is the conversation controller in right now?",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_forbidden_control_fsm_state_question",
+        "turn_id": "golden:noop:011",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "control",
+            "reason": "Control/FSM state is runtime-owned and not classifier-writable."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_forbidden_control_set_state_request",
+      "live_turn": {
+        "thread": "runtime owned state questions",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "If the controller needed to wait, would you set that state yourself?",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_forbidden_control_set_state_request",
+        "turn_id": "golden:noop:012",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "control",
+            "reason": "Control/FSM state is runtime-owned and not classifier-writable."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_forbidden_history_exact_transcript",
+      "live_turn": {
+        "thread": "runtime owned state questions",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Can you show the exact transcript line I just sent?",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_forbidden_history_exact_transcript",
+        "turn_id": "golden:noop:013",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "history_active",
+            "reason": "Raw transcript/history is already runtime-owned and must not be rewritten by classifier."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_forbidden_temporal_current_date_question",
+      "live_turn": {
+        "thread": "runtime owned state questions",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "What is today's date?",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_forbidden_temporal_current_date_question",
+        "turn_id": "golden:noop:014",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "temporal",
+            "reason": "Temporal grounding/current time is runtime-owned and not classifier-writable."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_forbidden_spatial_location_question",
+      "live_turn": {
+        "thread": "runtime owned state questions",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Do you know where this device is located right now?",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_forbidden_spatial_location_question",
+        "turn_id": "golden:noop:015",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "spatial",
+            "reason": "Spatial/device location is runtime-owned and not classifier-writable."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_forbidden_grounding_context_question",
+      "live_turn": {
+        "thread": "runtime owned state questions",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "What grounding context are you using for this turn?",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_forbidden_grounding_context_question",
+        "turn_id": "golden:noop:016",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "grounding",
+            "reason": "Grounding context is runtime-owned and not classifier-writable."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_forbidden_telemetry_latency_question",
+      "live_turn": {
+        "thread": "runtime owned state questions",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Did the model latency spike on that response?",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_forbidden_telemetry_latency_question",
+        "turn_id": "golden:noop:017",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "telemetry",
+            "reason": "Telemetry is runtime-owned and not classifier-writable."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_forbidden_meta_policy_question",
+      "live_turn": {
+        "thread": "runtime owned state questions",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Which internal policy says what you are allowed to write?",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_forbidden_meta_policy_question",
+        "turn_id": "golden:noop:018",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "meta",
+            "reason": "Meta/policy state is runtime-owned and not classifier-writable."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_forbidden_task_state_question",
+      "live_turn": {
+        "thread": "runtime owned state questions",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Is there an active task in task state right now?",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_forbidden_task_state_question",
+        "turn_id": "golden:noop:019",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "task_state",
+            "reason": "Task lifecycle state is runtime-owned and not classifier-writable."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_forbidden_task_artifact_question",
+      "live_turn": {
+        "thread": "runtime owned state questions",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "What artifact did the last task produce?",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_forbidden_task_artifact_question",
+        "turn_id": "golden:noop:020",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "task_artifacts",
+            "reason": "Task artifacts are runtime-owned and not classifier-writable."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_forbidden_archive_warm_memory_question",
+      "live_turn": {
+        "thread": "runtime owned state questions",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "What is in the warm beliefs archive?",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_forbidden_archive_warm_memory_question",
+        "turn_id": "golden:noop:021",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "beliefs_warm",
+            "reason": "Warm/archive sections are not classifier-writable."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_forbidden_capability_calendar_read_question",
+      "live_turn": {
+        "thread": "capability owned live records",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Can you check whether the family calendar has anything tomorrow?",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_forbidden_capability_calendar_read_question",
+        "turn_id": "golden:noop:022",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "all",
+            "reason": "Calendar live records belong to capability/system-of-record state, not beliefs."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_forbidden_capability_shopping_state_question",
+      "live_turn": {
+        "thread": "capability owned live records",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Can you see what is currently on the shopping list?",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_forbidden_capability_shopping_state_question",
+        "turn_id": "golden:noop:023",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "all",
+            "reason": "Shopping live records belong to capability/system-of-record state, not beliefs."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_forbidden_capability_reminder_status_question",
+      "live_turn": {
+        "thread": "capability owned live records",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Do we already have a reminder for trash night?",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_forbidden_capability_reminder_status_question",
+        "turn_id": "golden:noop:024",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "all",
+            "reason": "Reminder live records belong to capability/system-of-record state, not beliefs."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_forbidden_external_account_state_question",
+      "live_turn": {
+        "thread": "capability owned live records",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Can you tell whether the account is connected?",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_forbidden_external_account_state_question",
+        "turn_id": "golden:noop:025",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "all",
+            "reason": "External account/system truth is capability-owned, not classifier-owned cognitive memory."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_forbidden_device_state_question",
+      "live_turn": {
+        "thread": "capability owned live records",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Is this phone online right now?",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_forbidden_device_state_question",
+        "turn_id": "golden:noop:026",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "all",
+            "reason": "Device live state is runtime/system truth, not classifier-owned cognitive memory."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_ambiguous_referent_move_it",
+      "live_turn": {
+        "thread": "ambiguous deictic turns",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Move it there later.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_ambiguous_referent_move_it",
+        "turn_id": "golden:noop:027",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "all",
+            "reason": "Ambiguous deictic turn lacks a safe referent for cognitive write."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_ambiguous_referent_tell_her",
+      "live_turn": {
+        "thread": "ambiguous deictic turns",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Tell her that thing is fine.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_ambiguous_referent_tell_her",
+        "turn_id": "golden:noop:028",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "all",
+            "reason": "Ambiguous deictic turn lacks a safe referent for cognitive write."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_ambiguous_referent_other_one",
+      "live_turn": {
+        "thread": "ambiguous deictic turns",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Use the other one for pickup.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_ambiguous_referent_other_one",
+        "turn_id": "golden:noop:029",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "all",
+            "reason": "Ambiguous deictic turn lacks a safe referent for cognitive write."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_ambiguous_referent_usual_way",
+      "live_turn": {
+        "thread": "ambiguous deictic turns",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Do it the usual way.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_ambiguous_referent_usual_way",
+        "turn_id": "golden:noop:030",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "all",
+            "reason": "Ambiguous deictic turn lacks a safe referent for cognitive write."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_ambiguous_thread_switch_that",
+      "live_turn": {
+        "thread": "ambiguous deictic turns",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Switch back to that.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_ambiguous_thread_switch_that",
+        "turn_id": "golden:noop:031",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "narrative_active",
+            "reason": "Narrative switch requires an exact snapshot thread_id; none is provided by the user text."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_ambiguous_deictic_that_better",
+      "live_turn": {
+        "thread": "ambiguous deictic turns",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "That one is better.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_ambiguous_deictic_that_better",
+        "turn_id": "golden:noop:032",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "all",
+            "reason": "Ambiguous preference lacks a safe subject/object for cognitive write."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_ambiguous_same_plan_before",
+      "live_turn": {
+        "thread": "ambiguous deictic turns",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Same plan as before.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_ambiguous_same_plan_before",
+        "turn_id": "golden:noop:033",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "all",
+            "reason": "Ambiguous reference to a prior plan lacks a safe concrete payload."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_ambiguous_place_usual_place",
+      "live_turn": {
+        "thread": "ambiguous deictic turns",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Put it near the usual place.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_ambiguous_place_usual_place",
+        "turn_id": "golden:noop:034",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "all",
+            "reason": "Ambiguous place reference lacks a safe concrete payload."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_ambiguous_actor_make_sure_they_know",
+      "live_turn": {
+        "thread": "ambiguous deictic turns",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Make sure they know.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_ambiguous_actor_make_sure_they_know",
+        "turn_id": "golden:noop:035",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "all",
+            "reason": "Ambiguous actor and message lack a safe cognitive payload."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_ambiguous_time_then",
+      "live_turn": {
+        "thread": "ambiguous deictic turns",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Change the time to then.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_ambiguous_time_then",
+        "turn_id": "golden:noop:036",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "temporal",
+            "reason": "Ambiguous temporal reference is runtime-owned and lacks a safe concrete payload."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_ambiguous_partial_correction_other_parent",
+      "live_turn": {
+        "thread": "ambiguous deictic turns",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Not Jordan, the other parent.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_ambiguous_partial_correction_other_parent",
+        "turn_id": "golden:noop:037",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "beliefs_active",
+            "reason": "Correction lacks a concrete replacement value, so no safe add_fact exists."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_ambiguous_partial_time_earlier",
+      "live_turn": {
+        "thread": "ambiguous deictic turns",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Actually, make it earlier.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_ambiguous_partial_time_earlier",
+        "turn_id": "golden:noop:038",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "all",
+            "reason": "Ambiguous correction lacks an object and exact new value."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_ambiguous_unspecified_pickup_contact",
+      "live_turn": {
+        "thread": "ambiguous deictic turns",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Can you make the pickup contact the usual person?",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_ambiguous_unspecified_pickup_contact",
+        "turn_id": "golden:noop:039",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "beliefs_active",
+            "reason": "The replacement contact is underspecified, so no safe belief payload exists."
+          }
+        ]
+      }
+    },
+    {
+      "id": "noop_ambiguous_unspecified_preference",
+      "live_turn": {
+        "thread": "ambiguous deictic turns",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Let's use the normal option for that.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [],
+      "expected_plan": {
+        "plan_id": "golden:noop_ambiguous_unspecified_preference",
+        "turn_id": "golden:noop:040",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "no_op",
+        "mutations": [],
+        "rejected_candidates": [
+          {
+            "section": "all",
+            "reason": "The preference target is underspecified, so no safe cognitive payload exists."
+          }
+        ]
+      }
+    },
+    {
+      "id": "belief_school_pickup_contact_maya",
+      "live_turn": {
+        "thread": "family logistics durable facts",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Remember that Maya is the after-school pickup contact for Leo on Wednesdays.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:belief_school_pickup_contact_maya",
+        "turn_id": "golden:belief:001",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "Maya",
+              "predicate": "is_after_school_pickup_contact_for",
+              "obj": "Leo on Wednesdays",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User explicitly stated a durable pickup contact fact.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:belief_school_pickup_contact_maya:add_fact",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "belief_ravi_plain_pasta_before_swim",
+      "live_turn": {
+        "thread": "family logistics durable facts",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Ravi prefers plain pasta before swim practice.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:belief_ravi_plain_pasta_before_swim",
+        "turn_id": "golden:belief:002",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "Ravi",
+              "predicate": "prefers_before_swim_practice",
+              "obj": "plain pasta",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User stated a durable meal preference for a recurring context.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:belief_ravi_plain_pasta_before_swim:add_fact",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "belief_lena_no_peanuts_school_snacks",
+      "live_turn": {
+        "thread": "family logistics durable facts",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "For school snacks, Lena cannot have peanuts.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:belief_lena_no_peanuts_school_snacks",
+        "turn_id": "golden:belief:003",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "Lena",
+              "predicate": "cannot_have_for_school_snacks",
+              "obj": "peanuts",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User stated a durable school snack constraint.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:belief_lena_no_peanuts_school_snacks:add_fact",
+            "commit_class": "prompt_critical"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "belief_sam_blue_homework_folder",
+      "live_turn": {
+        "thread": "family logistics durable facts",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Sam uses the blue folder for homework papers.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:belief_sam_blue_homework_folder",
+        "turn_id": "golden:belief:004",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "Sam",
+              "predicate": "uses_for_homework_papers",
+              "obj": "blue folder",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User stated a durable school-material fact.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:belief_sam_blue_homework_folder:add_fact",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "belief_piano_teacher_contact_omar",
+      "live_turn": {
+        "thread": "family logistics durable facts",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Omar is the piano teacher contact for rescheduling.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:belief_piano_teacher_contact_omar",
+        "turn_id": "golden:belief:005",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "Omar",
+              "predicate": "is_contact_for",
+              "obj": "piano lesson rescheduling",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User stated a durable contact fact.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:belief_piano_teacher_contact_omar:add_fact",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "belief_pet_feeding_owner_nina",
+      "live_turn": {
+        "thread": "family logistics durable facts",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Nina is responsible for feeding the fish on school nights.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:belief_pet_feeding_owner_nina",
+        "turn_id": "golden:belief:006",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "Nina",
+              "predicate": "is_responsible_for",
+              "obj": "feeding the fish on school nights",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User stated a durable family responsibility.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:belief_pet_feeding_owner_nina:add_fact",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "belief_math_tutor_room_204",
+      "live_turn": {
+        "thread": "family logistics durable facts",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "The math tutor meets in room 204.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:belief_math_tutor_room_204",
+        "turn_id": "golden:belief:007",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "math tutor",
+              "predicate": "meets_in",
+              "obj": "room 204",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User stated a durable location fact.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:belief_math_tutor_room_204:add_fact",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "belief_art_supplies_hall_closet",
+      "live_turn": {
+        "thread": "family logistics durable facts",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "The art class supplies live in the hall closet.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:belief_art_supplies_hall_closet",
+        "turn_id": "golden:belief:008",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "art class supplies",
+              "predicate": "are_stored_in",
+              "obj": "hall closet",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User stated a durable household location fact.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:belief_art_supplies_hall_closet:add_fact",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "belief_sam_left_handed_scissors",
+      "live_turn": {
+        "thread": "family logistics durable facts",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Sam needs the left-handed scissors for craft projects.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:belief_sam_left_handed_scissors",
+        "turn_id": "golden:belief:009",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "Sam",
+              "predicate": "needs_for_craft_projects",
+              "obj": "left-handed scissors",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User stated a durable preference or need for recurring projects.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:belief_sam_left_handed_scissors:add_fact",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "belief_cleats_mudroom_bin",
+      "live_turn": {
+        "thread": "family logistics durable facts",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "The soccer cleats are in the mudroom bin.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:belief_cleats_mudroom_bin",
+        "turn_id": "golden:belief:010",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "soccer cleats",
+              "predicate": "are_in",
+              "obj": "mudroom bin",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User stated a durable item location fact.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:belief_cleats_mudroom_bin:add_fact",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "belief_mira_bus_route_12",
+      "live_turn": {
+        "thread": "family logistics durable facts",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Mira rides bus route 12 after chess club.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:belief_mira_bus_route_12",
+        "turn_id": "golden:belief:011",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "Mira",
+              "predicate": "rides_after_chess_club",
+              "obj": "bus route 12",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User stated a durable transportation fact.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:belief_mira_bus_route_12:add_fact",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "belief_detergent_fragrance_free",
+      "live_turn": {
+        "thread": "family logistics durable facts",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Use fragrance-free detergent for the kids' uniforms.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:belief_detergent_fragrance_free",
+        "turn_id": "golden:belief:012",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "kids' uniforms",
+              "predicate": "should_use_detergent",
+              "obj": "fragrance-free detergent",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User stated a durable laundry preference.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:belief_detergent_fragrance_free:add_fact",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "definition_blue_bag_means_diaper_bag",
+      "live_turn": {
+        "thread": "family shorthand definitions",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "When I say blue bag, I mean the diaper bag by the garage door.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:definition_blue_bag_means_diaper_bag",
+        "turn_id": "golden:definition:001",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "blue bag",
+              "predicate": "means",
+              "obj": "diaper bag by the garage door",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User defined a shorthand referent for future turns.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:definition_blue_bag_means_diaper_bag:add_fact",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "definition_snack_pack_means_apples_yogurt",
+      "live_turn": {
+        "thread": "family shorthand definitions",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Snack pack means sliced apples and yogurt for after school.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:definition_snack_pack_means_apples_yogurt",
+        "turn_id": "golden:definition:002",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "snack pack",
+              "predicate": "means",
+              "obj": "sliced apples and yogurt for after school",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User defined a shorthand referent for future turns.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:definition_snack_pack_means_apples_yogurt:add_fact",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "definition_nana_means_alex_mother",
+      "live_turn": {
+        "thread": "family shorthand definitions",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Nana means my mother, Elise.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:definition_nana_means_alex_mother",
+        "turn_id": "golden:definition:003",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "Nana",
+              "predicate": "means",
+              "obj": "Alex's mother Elise",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User defined a family shorthand referent.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:definition_nana_means_alex_mother:add_fact",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "definition_green_folder_means_field_trip_forms",
+      "live_turn": {
+        "thread": "family shorthand definitions",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "The green folder means the field trip forms.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:definition_green_folder_means_field_trip_forms",
+        "turn_id": "golden:definition:004",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "green folder",
+              "predicate": "means",
+              "obj": "field trip forms",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User defined a shorthand referent for future turns.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:definition_green_folder_means_field_trip_forms:add_fact",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "definition_music_day_means_wednesday_band",
+      "live_turn": {
+        "thread": "family shorthand definitions",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Music day means Wednesday band practice.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:definition_music_day_means_wednesday_band",
+        "turn_id": "golden:definition:005",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "music day",
+              "predicate": "means",
+              "obj": "Wednesday band practice",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User defined a recurring shorthand referent.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:definition_music_day_means_wednesday_band:add_fact",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "definition_short_walk_means_park_loop",
+      "live_turn": {
+        "thread": "family shorthand definitions",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Short walk means the park loop, not the river trail.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:definition_short_walk_means_park_loop",
+        "turn_id": "golden:definition:006",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "short walk",
+              "predicate": "means",
+              "obj": "park loop",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User defined a shorthand referent with a canonical positive meaning.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:definition_short_walk_means_park_loop:add_fact",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "definition_pickup_window_means_315_330",
+      "live_turn": {
+        "thread": "family shorthand definitions",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "The pickup window means 3:15 to 3:30 after school.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:definition_pickup_window_means_315_330",
+        "turn_id": "golden:definition:007",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "pickup window",
+              "predicate": "means",
+              "obj": "3:15 to 3:30 after school",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User defined a scheduling shorthand for future turns.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:definition_pickup_window_means_315_330:add_fact",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "definition_library_run_means_return_books",
+      "live_turn": {
+        "thread": "family shorthand definitions",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Library run means returning the kids' books to the downtown branch.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:definition_library_run_means_return_books",
+        "turn_id": "golden:definition:008",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "library run",
+              "predicate": "means",
+              "obj": "returning the kids' books to the downtown branch",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User defined a shorthand task phrase for future turns.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:definition_library_run_means_return_books:add_fact",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "definition_primary_contact_means_priya",
+      "live_turn": {
+        "thread": "family shorthand definitions",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Primary contact means Priya unless I say otherwise.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:definition_primary_contact_means_priya",
+        "turn_id": "golden:definition:009",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "primary contact",
+              "predicate": "means",
+              "obj": "Priya unless Alex says otherwise",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User defined a durable contact shorthand.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:definition_primary_contact_means_priya:add_fact",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "definition_homework_station_means_kitchen_counter",
+      "live_turn": {
+        "thread": "family shorthand definitions",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Homework station means the kitchen counter by the window.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:definition_homework_station_means_kitchen_counter",
+        "turn_id": "golden:definition:010",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "homework station",
+              "predicate": "means",
+              "obj": "kitchen counter by the window",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User defined a household shorthand location.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:definition_homework_station_means_kitchen_counter:add_fact",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "definition_late_practice_means_ends_630",
+      "live_turn": {
+        "thread": "family shorthand definitions",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Late practice means it ends at 6:30.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:definition_late_practice_means_ends_630",
+        "turn_id": "golden:definition:011",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "late practice",
+              "predicate": "means",
+              "obj": "practice ends at 6:30",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User defined a recurring schedule shorthand.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:definition_late_practice_means_ends_630:add_fact",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "definition_quiet_time_means_no_tablet_after_8",
+      "live_turn": {
+        "thread": "family shorthand definitions",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Quiet time means no tablet after 8 p.m.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:definition_quiet_time_means_no_tablet_after_8",
+        "turn_id": "golden:definition:012",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "quiet time",
+              "predicate": "means",
+              "obj": "no tablet after 8 p.m.",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User defined a household routine shorthand.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:definition_quiet_time_means_no_tablet_after_8:add_fact",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "correction_ballet_pickup_maya_not_luis",
+      "live_turn": {
+        "thread": "family correction turns",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Actually, Maya is handling ballet pickup today, not Luis.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:correction_ballet_pickup_maya_not_luis",
+        "turn_id": "golden:correction:001",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "ballet pickup today",
+              "predicate": "is_handled_by",
+              "obj": "Maya",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User corrected the pickup contact with a canonical positive replacement.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:correction_ballet_pickup_maya_not_luis:add_fact",
+            "commit_class": "prompt_critical"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "correction_dinner_time_630_not_6",
+      "live_turn": {
+        "thread": "family correction turns",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Correction: dinner is at 6:30, not 6.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:correction_dinner_time_630_not_6",
+        "turn_id": "golden:correction:002",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "dinner",
+              "predicate": "is_at",
+              "obj": "6:30",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User corrected the dinner time with a canonical positive replacement.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:correction_dinner_time_630_not_6:add_fact",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "correction_form_folder_blue_not_green",
+      "live_turn": {
+        "thread": "family correction turns",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Use the blue folder for the consent form, not the green one.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:correction_form_folder_blue_not_green",
+        "turn_id": "golden:correction:003",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "consent form",
+              "predicate": "uses_folder",
+              "obj": "blue folder",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User corrected which folder should be used.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:correction_form_folder_blue_not_green:add_fact",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "correction_bus_stop_oak_not_pine",
+      "live_turn": {
+        "thread": "family correction turns",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "The bus stop is Oak Street, not Pine Street.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:correction_bus_stop_oak_not_pine",
+        "turn_id": "golden:correction:004",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "bus stop",
+              "predicate": "is",
+              "obj": "Oak Street",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User corrected the bus stop location with a canonical positive replacement.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:correction_bus_stop_oak_not_pine:add_fact",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "correction_sofia_spelling_not_sophia",
+      "live_turn": {
+        "thread": "family correction turns",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Her name is spelled Sofia, not Sophia.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:correction_sofia_spelling_not_sophia",
+        "turn_id": "golden:correction:005",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "her name",
+              "predicate": "is_spelled",
+              "obj": "Sofia",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User corrected the spelling with a canonical positive value.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:correction_sofia_spelling_not_sophia:add_fact",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "correction_snack_apples_not_cookies",
+      "live_turn": {
+        "thread": "family correction turns",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "For tomorrow's snack, pack apples instead of cookies.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:correction_snack_apples_not_cookies",
+        "turn_id": "golden:correction:006",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "tomorrow's snack",
+              "predicate": "should_be",
+              "obj": "apples",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User corrected the snack choice with a canonical positive replacement.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:correction_snack_apples_not_cookies:add_fact",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "correction_practice_field_north_not_east",
+      "live_turn": {
+        "thread": "family correction turns",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Practice moved to North Field, not East Field.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:correction_practice_field_north_not_east",
+        "turn_id": "golden:correction:007",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "practice",
+              "predicate": "moved_to",
+              "obj": "North Field",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User corrected the practice location with a canonical positive replacement.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:correction_practice_field_north_not_east:add_fact",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "correction_parent_teacher_room_204_not_214",
+      "live_turn": {
+        "thread": "family correction turns",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Parent-teacher conferences are in room 204, not 214.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:correction_parent_teacher_room_204_not_214",
+        "turn_id": "golden:correction:008",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "parent-teacher conferences",
+              "predicate": "are_in",
+              "obj": "room 204",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User corrected the conference location with a canonical positive replacement.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:correction_parent_teacher_room_204_not_214:add_fact",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "correction_key_location_drawer_not_hook",
+      "live_turn": {
+        "thread": "family correction turns",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "The spare key is in the drawer now, not on the hook.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:correction_key_location_drawer_not_hook",
+        "turn_id": "golden:correction:009",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "spare key",
+              "predicate": "is_in",
+              "obj": "drawer",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User corrected the spare key location with a canonical positive replacement.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:correction_key_location_drawer_not_hook:add_fact",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "correction_party_saturday_not_sunday",
+      "live_turn": {
+        "thread": "family correction turns",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "The birthday party is Saturday afternoon, not Sunday.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:correction_party_saturday_not_sunday",
+        "turn_id": "golden:correction:010",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "birthday party",
+              "predicate": "is",
+              "obj": "Saturday afternoon",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User corrected the party day with a canonical positive replacement.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:correction_party_saturday_not_sunday:add_fact",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "correction_lunchbox_red_not_yellow",
+      "live_turn": {
+        "thread": "family correction turns",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Pack the red lunchbox for Mira, not the yellow one.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": [
+        "beliefs_active.add_fact"
+      ],
+      "expected_plan": {
+        "plan_id": "golden:correction_lunchbox_red_not_yellow",
+        "turn_id": "golden:correction:011",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "beliefs_active",
+            "operation": "add_fact",
+            "data": {
+              "subject": "Mira's lunchbox",
+              "predicate": "should_be",
+              "obj": "red lunchbox",
+              "confidence": 1.0,
+              "source": "classifier:section_update"
+            },
+            "confidence": 1.0,
+            "reason": "User corrected the lunchbox choice with a canonical positive replacement.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:correction_lunchbox_red_not_yellow:add_fact",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    }
+  ]
+}

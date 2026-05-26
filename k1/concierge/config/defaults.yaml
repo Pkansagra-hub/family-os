@@ -561,9 +561,13 @@ sessionstate:
     - task_state
     - task_artifacts
     - meta
+    - temporal
+    - spatial
+    - grounding
     - history_active
     - beliefs_history
     - history_recent
+    - place_registry
     - persona
     - telemetry
     - artifacts_warm

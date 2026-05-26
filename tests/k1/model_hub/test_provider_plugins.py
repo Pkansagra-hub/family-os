@@ -592,6 +592,14 @@ class TestGoogleRequestBuilding:
         assert config.thinking_config.thinking_budget == 24576
         assert config.thinking_config.include_thoughts is True
 
+    def test_thinking_config_skipped_for_unsupported_model_family(self) -> None:
+        from google.genai import types
+
+        p = self._plugin()
+        req = _make_request(model_id="gemini-1.5-flash", reasoning_effort="medium")
+        config = p._build_config(req, types)
+        assert getattr(config, "thinking_config", None) is None
+
     def test_code_execution_tool(self) -> None:
         from google.genai import types
 
@@ -880,6 +888,15 @@ class TestGoogleResponseParsing:
         result = p._normalize_response(resp, req)
         assert result.text == ""
         assert result.tool_calls is None
+
+    def test_parse_malformed_function_call_finish_reason(self) -> None:
+        p = self._plugin()
+        resp = self._mock_response(parts=[], finish_reason="MALFORMED_FUNCTION_CALL")
+        req = _make_request(model_id="gemini-2.5-flash")
+
+        result = p._normalize_response(resp, req)
+
+        assert result.finish_reason == FinishReason.MALFORMED_TOOL_CALL
 
 
 # ===========================================================================

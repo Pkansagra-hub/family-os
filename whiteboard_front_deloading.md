@@ -4642,7 +4642,12 @@ Tests:
 New:
   tests/k1/concierge/section_update/test_turn_input_builder.py
   tests/k1/concierge/section_update/test_classifier_turn_boundary.py
+  tests/k1/concierge/section_update/test_active_apply.py
   tests/k1/concierge/section_update/test_turn_completed_coordination.py
+  tests/k1/concierge/section_update/test_memory_writer_ordering.py
+  tests/k1/concierge/section_update/test_dispatch_overlay.py
+  tests/k1/concierge/section_update/test_back_snapshot_gating.py
+  tests/k1/concierge/section_update/test_live_turn_complete_contract.py
 
 Existing targeted coverage:
   tests/k1/concierge/test_front_event_fallbacks.py
@@ -4651,7 +4656,27 @@ Existing targeted coverage:
   tests/k1/concierge/test_front_error_event_turn.py
 
 Run:
-  pytest tests/k1/concierge/section_update/test_turn_input_builder.py tests/k1/concierge/section_update/test_classifier_turn_boundary.py tests/k1/concierge/section_update/test_turn_completed_coordination.py -v
+  pytest tests/k1/concierge/section_update -v
+```
+
+Implementation status, 2026-05-25:
+
+```text
+M2 implemented and validated through the expanded execution-plan issue set M2.I1-M2.I7.
+
+Completed:
+  SectionUpdateInput builder and shadow boundary.
+  Active apply through writer_port only.
+  Active turn-complete barrier before turn.completed and FrontLock drain.
+  MemoryWriter section_update metadata ordering.
+  Bounded dispatch-critical turn_state_overlay for Back snapshot-at-start behavior.
+  Live API final-turn normalizer with partial-transcript ignore semantics.
+
+Validation:
+  pytest tests/k1/concierge/section_update -v: 69 passed
+  pytest tests/k1/concierge/section_update/test_memory_writer_ordering.py tests/k1/concierge/section_update/test_dispatch_overlay.py tests/k1/concierge/section_update/test_back_snapshot_gating.py tests/k1/concierge/section_update/test_live_turn_complete_contract.py -v: 13 passed
+  pytest tests/k1/memory_writer/test_turn_dispatcher.py tests/k1/memory_writer/test_session_batch_dispatcher.py -v: 36 passed
+  pytest tests/k1/concierge/section_update/test_turn_completed_coordination.py tests/k1/concierge/test_m02_e23_response_final.py -v: 63 passed
 ```
 
 Missed items included by this milestone:

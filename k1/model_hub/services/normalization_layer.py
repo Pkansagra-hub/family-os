@@ -306,7 +306,7 @@ class NormalizationLayer:
             model_id=fields.get("model_id", ""),
             trace_id=request.trace_id,
             consumer_id=request.constraints.consumer_id,
-            reasoning_effort=fields.get("reasoning_effort"),
+            reasoning_effort=fields.get("reasoning_effort") or request.constraints.reasoning_effort,
             extra=fields.get("extra", {}),
         )
 

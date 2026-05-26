@@ -125,6 +125,9 @@ class TestConciergeAdapter:
         """Streaming stub. Yields text deltas from response, then done."""
         response = await self.generate(request)
 
+        if response.thought_text:
+            yield StreamChunk(chunk_type="thought_delta", thought_text=response.thought_text)
+
         # Yield text as deltas (simulate streaming)
         if response.text:
             # Split into word-level chunks for realistic simulation

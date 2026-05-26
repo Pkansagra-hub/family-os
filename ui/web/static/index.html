@@ -9,7 +9,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/styles.css?v=11">
+    <link rel="stylesheet" href="/static/styles.css?v=16">
     <style>
         html { background: #f9fafb; color: #111827; }
     </style>
@@ -422,6 +422,21 @@
         </section>
 
     </main>
+
+    <aside id="activity-rail" class="activity-rail" aria-label="Kernel activity">
+        <header class="activity-rail__header">
+            <div>
+                <p class="activity-rail__kicker">Kernel activity</p>
+                <h2>Working Now</h2>
+            </div>
+            <span id="activity-rail-status" class="activity-rail__status">Idle</span>
+        </header>
+        <div id="activity-rail-empty" class="activity-rail__empty">
+            <strong>No background work yet</strong>
+            <span>Back, Planner, Orchestrator, Fabric, and spawned agents will appear here while they work.</span>
+        </div>
+        <div id="activity-rail-list" class="activity-rail__list"></div>
+    </aside>
 </div>
 
 <!-- ============================================================
@@ -459,6 +474,6 @@
     <div id="member-list"></div>
 </div>
 
-    <script src="/static/app.js?v=11"></script>
+    <script src="/static/app.js?v=16"></script>
 </body>
 </html>

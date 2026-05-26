@@ -142,4 +142,3 @@ async def test_back_prompt_gets_resolved_refs_and_no_date_calc_invocation() -> N
     assert dispatch.requests == []
     assert "resolved_temporal_refs_typed:" in system_prompt
     assert "tomorrow (window)" in system_prompt
-    assert "Do NOT call tool.execute.date_calc" in system_prompt

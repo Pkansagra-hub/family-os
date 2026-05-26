@@ -26,8 +26,12 @@ const state = {
     streamingMsgId: null,
     streamBuffer: "",
     thinkingBuffer: "",
+    backReasoningBuffer: "",
     thinkingActive: false,
     _thinkingStartMs: null,
+    activityItems: [],
+    activityByKey: new Map(),
+    activitySeq: 0,
     timelineEntries: [],
     lastActivity: null,
     currentAffect: { emotion: "neutral", valence: 0.5 },
@@ -118,6 +122,10 @@ const dom = {
     streaming:      $("#streaming-indicator"),
     streamingText:  $(".streaming-text"),
     toastContainer: $("#toast-container"),
+    activityRail:   $("#activity-rail"),
+    activityList:   $("#activity-rail-list"),
+    activityEmpty:  $("#activity-rail-empty"),
+    activityStatus: $("#activity-rail-status"),
 
     // Sidebar
     connStatus:        $("#connection-status"),
@@ -175,6 +183,7 @@ function init() {
     setupInput();
     setupActionFormHandlers();
     setupKeyboardShortcuts();
+    renderActivityRail();
     connect();
 }
 
@@ -523,6 +532,7 @@ function handleInit(msg) {
 
 function handleResponse(msg) {
     const affect = msg.affect || "calm";
+    const reasoning = getCurrentReasoningSnapshot();
 
     if (state.streamingMsgId) {
         const el = document.getElementById(state.streamingMsgId);
@@ -530,25 +540,31 @@ function handleResponse(msg) {
             el.classList.remove("message-thinking");
             const bubble = el.querySelector(".message-bubble");
             if (bubble) {
-                bubble.innerHTML = formatMessageText(msg.text) +
-                    `<div class="message-meta">${formatTime()}</div>`;
+                bubble.innerHTML = renderAssistantBubbleContent(msg.text, { final: true, reasoning });
             }
         }
         state.streamingMsgId = null;
         state.streamBuffer = "";
         state.thinkingBuffer = "";
+        state.backReasoningBuffer = "";
         state.thinkingActive = false;
+        state._thinkingStartMs = null;
         showStreaming(false);
         updateAffect(affect, state.currentAffect.valence);
         scrollChatToBottom();
     } else {
         finishStreaming();
-        addAssistantMessage(msg.text);
+        addAssistantMessage(msg.text, { reasoning });
         updateAffect(affect, state.currentAffect.valence);
     }
 }
 
 function handleStreamChunk(msg) {
+    if (msg.chunk_type === "back_reasoning") {
+        handleActivityReasoningChunk(msg);
+        return;
+    }
+
     ensureStreamingMessage();
     const el = document.getElementById(state.streamingMsgId);
     if (!el) return;
@@ -558,7 +574,10 @@ function handleStreamChunk(msg) {
         state.thinkingBuffer += (msg.text || "");
         const bubble = el.querySelector(".message-bubble");
         if (bubble) {
-            bubble.innerHTML = `<em style="color:var(--text-tertiary)">${escapeHtml(state.thinkingBuffer)}</em>`;
+            bubble.innerHTML = renderAssistantBubbleContent(state.streamBuffer, {
+                final: false,
+                reasoning: getCurrentReasoningSnapshot(),
+            });
         }
         el.classList.add("message-thinking");
         showStreaming(true, DEFAULT_STREAMING_LABEL);
@@ -570,7 +589,10 @@ function handleStreamChunk(msg) {
         el.classList.remove("message-thinking");
         const bubble = el.querySelector(".message-bubble");
         if (bubble) {
-            bubble.innerHTML = formatMessageText(state.streamBuffer);
+            bubble.innerHTML = renderAssistantBubbleContent(state.streamBuffer, {
+                final: false,
+                reasoning: getCurrentReasoningSnapshot(),
+            });
         }
         scrollChatToBottom();
     }
@@ -585,6 +607,7 @@ function finishStreaming(removePlaceholder = false) {
         state.streamingMsgId = null;
         state.streamBuffer = "";
         state.thinkingBuffer = "";
+        state.backReasoningBuffer = "";
         state.thinkingActive = false;
         state._thinkingStartMs = null;
     }
@@ -616,6 +639,7 @@ function handleSystem(msg) {
 }
 
 function handleTaskFailed(msg) {
+    markActivityFailed(msg);
     // Back failed (e.g. exceeded iteration budget without submit_result, or
     // dispatcher rejected the final tool call). Front may never publish a
     // response.final, so we clear the spinner ourselves and surface a brief
@@ -854,7 +878,202 @@ const EXTERNAL_TOOLS = new Set([
     "execute_workflow",
 ]);
 
+const ACTIVITY_SOURCE_META = {
+    back: { label: "Back", title: "Back executor", tone: "blue" },
+    front: { label: "Front", title: "Front handoff", tone: "blue" },
+    planner: { label: "Planner", title: "Planner", tone: "purple" },
+    orchestrator: { label: "Orchestrator", title: "Orchestrator", tone: "green" },
+    fabric: { label: "Fabric", title: "Fabric", tone: "orange" },
+    agent: { label: "Agent", title: "Spawned agent", tone: "teal" },
+    tool: { label: "Tool", title: "Tool invocation", tone: "gray" },
+    kernel: { label: "Kernel", title: "Kernel work", tone: "gray" },
+};
+
+function normalizeActivitySource(source) {
+    const raw = String(source || "kernel").toLowerCase();
+    if (raw.includes("planner")) return "planner";
+    if (raw.includes("orchestrator")) return "orchestrator";
+    if (raw.includes("fabric")) return "fabric";
+    if (raw.includes("agent")) return "agent";
+    if (raw.includes("front")) return "front";
+    if (raw.includes("back")) return "back";
+    if (raw.includes("tool")) return "tool";
+    return "kernel";
+}
+
+function activityMeta(source) {
+    return ACTIVITY_SOURCE_META[normalizeActivitySource(source)] || ACTIVITY_SOURCE_META.kernel;
+}
+
+function getOrCreateActivityItem(key, seed = {}) {
+    const existing = state.activityByKey.get(key);
+    const now = Date.now();
+    if (existing) {
+        Object.assign(existing, seed, { updatedAt: now });
+        return existing;
+    }
+
+    const source = normalizeActivitySource(seed.source || "kernel");
+    const meta = activityMeta(source);
+    const item = {
+        id: `activity-${++state.activitySeq}`,
+        key,
+        source,
+        title: seed.title || meta.title,
+        status: seed.status || "running",
+        phase: seed.phase || "Starting",
+        reasoning: seed.reasoning || "",
+        events: seed.events || [],
+        startedAt: now,
+        updatedAt: now,
+    };
+    state.activityByKey.set(key, item);
+    state.activityItems.unshift(item);
+    if (state.activityItems.length > 10) {
+        const removed = state.activityItems.pop();
+        if (removed) state.activityByKey.delete(removed.key);
+    }
+    return item;
+}
+
+function activeActivityForSource(source) {
+    const normalized = normalizeActivitySource(source);
+    return state.activityItems.find((item) => item.source === normalized && item.status === "running") || null;
+}
+
+function handleActivityReasoningChunk(msg) {
+    const key = msg.trace_id ? `back:${msg.trace_id}` : `back:turn:${state.turn || "active"}`;
+    const item = getOrCreateActivityItem(key, {
+        source: "back",
+        title: "Back executor",
+        status: "running",
+        phase: "Reasoning",
+    });
+    item.reasoning += msg.text || "";
+    item.updatedAt = Date.now();
+    if (!item.events.some((event) => event.kind === "reasoning")) {
+        item.events.push({
+            kind: "reasoning",
+            label: "Reasoning stream opened",
+            status: "running",
+            at: item.updatedAt,
+        });
+    }
+    renderActivityRail();
+}
+
+function updateActivityForToolEvent(msg) {
+    const actor = normalizeActivitySource(msg.actor || "tool");
+    const toolName = msg.tool_name || "tool";
+    if (actor === "kernel" && !EXTERNAL_TOOLS.has(toolName)) return;
+    if (actor === "front" && !EXTERNAL_TOOLS.has(toolName)) return;
+
+    const item = activeActivityForSource(actor) || getOrCreateActivityItem(`${actor}:${state.turn || "active"}`, {
+        source: actor,
+        title: activityMeta(actor).title,
+        status: "running",
+        phase: "Tool activity",
+    });
+    const failed = msg.success === false || msg.phase === "failed";
+    const completed = msg.phase === "completed" || failed;
+    item.status = failed ? "failed" : item.status;
+    item.phase = failed
+        ? `${toolName} failed`
+        : completed
+            ? `${toolName} completed`
+            : `${toolName} running`;
+    if (completed && actor === "back" && toolName === "submit_result" && !failed) {
+        item.status = "done";
+        item.phase = "Result submitted";
+    }
+    item.events.push({
+        kind: "tool",
+        label: toolName,
+        status: failed ? "failed" : msg.phase || "started",
+        detail: msg.result_summary || msg.args_summary || "",
+        at: Date.now(),
+    });
+    item.updatedAt = Date.now();
+    renderActivityRail();
+}
+
+function markActivityFailed(msg) {
+    const item = activeActivityForSource("back");
+    if (!item) return;
+    item.status = "failed";
+    item.phase = msg.reason || "Failed";
+    item.events.push({
+        kind: "error",
+        label: "Task failed",
+        status: "failed",
+        detail: msg.error_message || msg.reason || "",
+        at: Date.now(),
+    });
+    item.updatedAt = Date.now();
+    renderActivityRail();
+}
+
+function renderActivityRail() {
+    if (!dom.activityList || !dom.activityEmpty || !dom.activityStatus) return;
+    const items = state.activityItems.slice().sort((a, b) => {
+        const ar = a.status === "running" ? 1 : 0;
+        const br = b.status === "running" ? 1 : 0;
+        if (ar !== br) return br - ar;
+        return b.updatedAt - a.updatedAt;
+    });
+    const activeCount = items.filter((item) => item.status === "running").length;
+    dom.activityStatus.textContent = activeCount ? `${activeCount} active` : "Idle";
+    dom.activityEmpty.classList.toggle("hidden", items.length > 0);
+    dom.activityList.innerHTML = items.map(renderActivityCard).join("");
+}
+
+function renderActivityCard(item) {
+    const meta = activityMeta(item.source);
+    const status = item.status || "running";
+    const reasoning = String(item.reasoning || "").trim();
+    const events = item.events.slice(-5).map(renderActivityEvent).join("");
+    const reasoningBlock = reasoning
+        ? `<details class="activity-reasoning"${status === "running" ? " open" : ""}>
+                <summary>Reasoning trace</summary>
+                <div class="activity-reasoning__body">${escapeHtml(item.reasoning)}</div>
+            </details>`
+        : "";
+    return `
+        <article class="activity-card activity-card--${escapeHtml(status)} activity-card--${escapeHtml(meta.tone)}">
+            <div class="activity-card__top">
+                <span class="activity-card__dot" aria-hidden="true"></span>
+                <div class="activity-card__headings">
+                    <div class="activity-card__title">${escapeHtml(item.title)}</div>
+                    <div class="activity-card__phase">${escapeHtml(item.phase)}</div>
+                </div>
+                <span class="activity-card__source">${escapeHtml(meta.label)}</span>
+            </div>
+            ${events ? `<div class="activity-card__events">${events}</div>` : ""}
+            ${reasoningBlock}
+            <div class="activity-card__meta">Updated ${escapeHtml(formatActivityAge(item.updatedAt))}</div>
+        </article>`;
+}
+
+function renderActivityEvent(event) {
+    const status = event.status || "started";
+    const detail = event.detail ? `<span class="activity-event__detail">${escapeHtml(event.detail)}</span>` : "";
+    return `
+        <div class="activity-event activity-event--${escapeHtml(status)}">
+            <span class="activity-event__status">${escapeHtml(status)}</span>
+            <span class="activity-event__label">${escapeHtml(event.label)}</span>
+            ${detail}
+        </div>`;
+}
+
+function formatActivityAge(updatedAt) {
+    const seconds = Math.max(0, Math.round((Date.now() - updatedAt) / 1000));
+    if (seconds < 3) return "now";
+    if (seconds < 60) return `${seconds}s ago`;
+    return `${Math.round(seconds / 60)}m ago`;
+}
+
 function handleToolEvent(msg) {
+    updateActivityForToolEvent(msg);
     addTimelineEntry({
         elapsed_ms: msg.duration_ms || 0,
         phase: "tool",
@@ -924,12 +1143,19 @@ function addMessageRow(kind, sender, text, opts = {}) {
         const labelTag = opts.label
             ? `<span style="background:rgba(37,99,235,0.1);color:var(--brand-blue);padding:1px 6px;border-radius:6px;font-size:10px;margin-left:4px">${opts.label}</span>`
             : "";
+        const body = opts.reasoning
+            ? renderAssistantBubbleContent(text, {
+                final: true,
+                includeMeta: false,
+                reasoning: opts.reasoning,
+            })
+            : formatMessageText(text);
         row.innerHTML = `
             <div class="message-avatar">
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="11" r="2"/><path d="M8 16h8"/></svg>
             </div>
             <div class="message-bubble">
-                ${formatMessageText(text)}
+                ${body}
                 <div class="message-meta">Concierge${labelTag} · ${formatTime()}</div>
             </div>`;
     }
@@ -961,9 +1187,93 @@ function ensureStreamingMessage() {
     state.streamingMsgId = "stream-" + Date.now();
     state.streamBuffer = "";
     state.thinkingBuffer = "";
+    state.backReasoningBuffer = "";
     state.thinkingActive = false;
     state._thinkingStartMs = Date.now();
     createStreamingMessage(state.streamingMsgId);
+}
+
+function renderReasoningTrace() {
+    return renderReasoningTraceBlock({ final: false });
+}
+
+function renderAssistantBubbleContent(text, opts = {}) {
+    const final = Boolean(opts.final);
+    const includeMeta = opts.includeMeta !== false;
+    const content = [];
+    const reasoning = renderReasoningTraceBlock({ final, reasoning: opts.reasoning });
+    if (reasoning) content.push(reasoning);
+
+    const responseText = String(text || "").trim();
+    if (responseText) {
+        content.push(`<div class="message-response-text">${formatMessageText(text)}</div>`);
+    } else if (!reasoning) {
+        content.push(`<em class="message-placeholder">Thinking...</em>`);
+    }
+
+    if (final && includeMeta) {
+        content.push(`<div class="message-meta">${formatTime()}</div>`);
+    }
+    return content.join("");
+}
+
+function renderReasoningTraceBlock(opts = {}) {
+    const final = Boolean(opts.final);
+    const snapshot = opts.reasoning || getCurrentReasoningSnapshot();
+    const frontRaw = String((snapshot && snapshot.front) || "");
+    const backRaw = String((snapshot && snapshot.back) || "");
+    const frontText = frontRaw.trim();
+    const backText = backRaw.trim();
+    if (!frontText && !backText) return "";
+
+    const sources = [];
+    const sections = [];
+    if (frontText) {
+        sources.push("Front");
+        sections.push(`
+            <section class="reasoning-trace__section">
+                <div class="reasoning-trace__section-title">Front reasoning</div>
+                <div class="reasoning-trace__body">${escapeHtml(frontRaw)}</div>
+            </section>`);
+    }
+    if (backText) {
+        sources.push("Back");
+        sections.push(`
+            <section class="reasoning-trace__section">
+                <div class="reasoning-trace__section-title">Back reasoning</div>
+                <div class="reasoning-trace__body">${escapeHtml(backRaw)}</div>
+            </section>`);
+    }
+
+    const openAttr = final ? "" : " open";
+    const label = final ? `Thought for ${_thinkingDuration(snapshot && snapshot.startMs)}` : "Thinking...";
+    const sourceLabel = sources.join(" + ");
+    const statusClass = final ? " reasoning-trace--done" : " reasoning-trace--active";
+
+    return `
+        <details class="reasoning-trace${statusClass}"${openAttr}>
+            <summary>
+                <span class="reasoning-trace__chevron" aria-hidden="true"></span>
+                <span class="reasoning-trace__label">${escapeHtml(label)}</span>
+                <span class="reasoning-trace__source">${escapeHtml(sourceLabel)}</span>
+            </summary>
+            <div class="reasoning-trace__content">${sections.join("")}</div>
+        </details>`;
+}
+
+function getCurrentReasoningSnapshot() {
+    return {
+        front: state.thinkingBuffer || "",
+        back: state.backReasoningBuffer || "",
+        startMs: state._thinkingStartMs,
+    };
+}
+
+function _thinkingDuration(startMs) {
+    if (!startMs) return "a moment";
+    const sec = Math.round((Date.now() - startMs) / 1000);
+    if (sec < 1) return "< 1s";
+    return `${sec}s`;
 }
 
 function scrollChatToBottom() {
@@ -1676,13 +1986,37 @@ const SETTINGS_KID_CAPABILITIES = [
 ];
 
 const calState = {
+    viewMode: "week",
     year: new Date().getFullYear(),
     month: new Date().getMonth(),
     selectedDate: _localDateIso(),
+    selectedEventKey: null,
     events: [],
     feeds: [],
     manifest: null,
+    loadedStart: "",
+    loadedEnd: "",
 };
+
+const CALENDAR_VIEW_MODES = ["month", "week", "day"];
+const CALENDAR_DAY_START_HOUR = 6;
+const CALENDAR_DAY_END_HOUR = 22;
+const CALENDAR_HOUR_HEIGHT = 56;
+const CALENDAR_SOURCE_COLORS = {
+    native: "#2563eb",
+    google: "#16a34a",
+    google_work: "#16a34a",
+    google_personal: "#22c55e",
+    outlook: "#7c3aed",
+    outlook_default: "#7c3aed",
+    microsoft: "#7c3aed",
+    teams: "#4f46e5",
+    classroom: "#d97706",
+    apple: "#4b5563",
+    manual_import: "#0891b2",
+    system_generated: "#be123c",
+};
+const CALENDAR_EVENT_PALETTE = ["#2563eb", "#16a34a", "#d97706", "#dc2626", "#7c3aed", "#0891b2", "#be123c"];
 
 async function loadAdapterView(viewId) {
     const adapterId = ADAPTER_BACKEND_NAME[viewId];
@@ -1864,7 +2198,7 @@ function _renderCalendarView(viewId, manifest, writeActions, listData) {
     const nextWeek = new Date(now);
     nextWeek.setDate(nextWeek.getDate() + 7);
     const upcoming = calState.events.filter((event) => event.start && new Date(event.start) >= now);
-    const todayCount = calState.events.filter((event) => (event.start || "").slice(0, 10) === todayIso).length;
+    const todayCount = calState.events.filter((event) => _calEventDateIso(event) === todayIso).length;
     const weekCount = upcoming.filter((event) => new Date(event.start) <= nextWeek).length;
 
     body.innerHTML = `
@@ -1876,90 +2210,686 @@ function _renderCalendarView(viewId, manifest, writeActions, listData) {
         <div class="cal-layout">
             <div class="cal-main">
                 <div class="cal-nav">
-                    <h3 class="cal-month-label" id="cal-month-label"></h3>
-                    <div class="cal-nav-controls">
-                        <button class="cal-nav-btn" id="cal-prev" aria-label="Previous month"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
-                        <button class="cal-today-btn" id="cal-today">Today</button>
-                        <button class="cal-nav-btn" id="cal-next" aria-label="Next month"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
+                    <div class="cal-nav-heading">
+                        <h3 class="cal-month-label" id="cal-month-label"></h3>
+                    </div>
+                    <div class="cal-nav-actions">
+                        <div class="cal-view-switch" role="tablist" aria-label="Calendar view">
+                            ${CALENDAR_VIEW_MODES.map((mode) => `
+                                <button class="cal-view-switch-btn${calState.viewMode === mode ? " cal-view-switch-btn--active" : ""}" type="button" role="tab" aria-selected="${calState.viewMode === mode ? "true" : "false"}" data-cal-view="${mode}">${_humanizeLabel(mode)}</button>
+                            `).join("")}
+                        </div>
+                        <div class="cal-nav-controls">
+                            <button class="cal-nav-btn" id="cal-prev" aria-label="Previous"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
+                            <button class="cal-today-btn" id="cal-today">Today</button>
+                            <button class="cal-nav-btn" id="cal-next" aria-label="Next"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
+                        </div>
                     </div>
                 </div>
-                <div class="cal-grid-header">
-                    <span>Sun</span><span>Mon</span><span>Tue</span>
-                    <span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span>
-                </div>
-                <div class="cal-grid" id="cal-grid"></div>
+                <div id="cal-main-surface"></div>
             </div>
             <aside class="cal-side">
+                <div id="cal-event-detail"></div>
                 <div id="cal-selected-day"></div>
+                <div id="cal-color-legend"></div>
                 <h3>Upcoming Events</h3>
                 <div id="cal-upcoming"></div>
                 ${calState.feeds.length ? `<div class="cal-feed-list"><h3>Feeds</h3><div id="cal-feeds"></div></div>` : ""}
             </aside>
         </div>`;
 
-    _calRenderMonth();
+    _calRenderMain();
+    _calRenderEventDetail();
     _calRenderSelectedDay();
+    _calRenderColorLegend();
     _calRenderUpcoming();
     _calRenderFeeds();
 
     body.querySelector("#cal-prev").addEventListener("click", () => {
-        calState.month--;
-        if (calState.month < 0) { calState.month = 11; calState.year--; }
-        _calRenderMonth();
+        _calNavigate(-1);
     });
     body.querySelector("#cal-next").addEventListener("click", () => {
-        calState.month++;
-        if (calState.month > 11) { calState.month = 0; calState.year++; }
-        _calRenderMonth();
+        _calNavigate(1);
     });
     body.querySelector("#cal-today").addEventListener("click", () => {
-        const now = new Date();
-        calState.year = now.getFullYear();
-        calState.month = now.getMonth();
-        _calRenderMonth();
+        _calSetSelectedDate(_localDateIso());
+        calState.selectedEventKey = null;
+        _calRenderAll();
+    });
+    body.querySelectorAll("[data-cal-view]").forEach((button) => {
+        button.addEventListener("click", () => {
+            calState.viewMode = button.dataset.calView || "week";
+            _calRefreshForCurrentRange();
+        });
     });
 }
 
-function _calRenderMonth() {
+function _calRenderAll() {
+    _calRenderMain();
+    _calRenderEventDetail();
+    _calRenderSelectedDay();
+    _calRenderColorLegend();
+    _calRenderUpcoming();
+}
+
+function _calRenderMain() {
     const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
     const label = document.getElementById("cal-month-label");
-    const grid = document.getElementById("cal-grid");
-    if (!label || !grid) return;
-    label.textContent = `${MONTHS[calState.month]} ${calState.year}`;
+    const surface = document.getElementById("cal-main-surface");
+    if (!label || !surface) return;
 
+    document.querySelectorAll("[data-cal-view]").forEach((button) => {
+        const active = button.dataset.calView === calState.viewMode;
+        button.classList.toggle("cal-view-switch-btn--active", active);
+        button.setAttribute("aria-selected", active ? "true" : "false");
+    });
+
+    if (calState.viewMode === "day") {
+        label.textContent = _calLongDateLabel(calState.selectedDate);
+        _calRenderDay(surface);
+        return;
+    }
+    if (calState.viewMode === "week") {
+        label.textContent = _calWeekLabel(calState.selectedDate);
+        _calRenderWeek(surface);
+        return;
+    }
+
+    label.textContent = `${MONTHS[calState.month]} ${calState.year}`;
+    _calRenderMonth(surface);
+}
+
+function _calRenderMonth(surface) {
     const today = new Date();
     const firstDay = new Date(calState.year, calState.month, 1).getDay();
     const daysInMonth = new Date(calState.year, calState.month + 1, 0).getDate();
 
     const evMap = {};
-    calState.events.forEach((ev) => {
-        const d = (ev.start || "").slice(0, 10);
-        if (d) (evMap[d] = evMap[d] || []).push(ev);
+    calState.events.forEach((event) => {
+        _calEventDateIsos(event).forEach((dateIso) => {
+            (evMap[dateIso] = evMap[dateIso] || []).push(event);
+        });
     });
 
     let html = "";
     for (let i = 0; i < firstDay; i++) html += `<div class="cal-cell cal-cell--empty"></div>`;
-    for (let d = 1; d <= daysInMonth; d++) {
-        const ds = `${calState.year}-${String(calState.month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-        const isToday = today.getFullYear() === calState.year && today.getMonth() === calState.month && today.getDate() === d;
-        const isSelected = calState.selectedDate === ds;
-        const evs = evMap[ds] || [];
-        const bars = evs.slice(0, 3).map((ev) =>
-            `<div class="cal-event-bar" style="--bar-color:${_memberColor(ev.created_by || "")}" title="${escapeHtml(ev.title || "")}"></div>`
+    for (let dayOfMonth = 1; dayOfMonth <= daysInMonth; dayOfMonth++) {
+        const dateIso = `${calState.year}-${String(calState.month + 1).padStart(2, "0")}-${String(dayOfMonth).padStart(2, "0")}`;
+        const isToday = today.getFullYear() === calState.year && today.getMonth() === calState.month && today.getDate() === dayOfMonth;
+        const isSelected = calState.selectedDate === dateIso;
+        const events = _calSortEvents(evMap[dateIso] || []);
+        const chips = events.slice(0, 3).map((event) =>
+            _calEventChip(event, "cal-event-chip--month", dateIso)
         ).join("");
-        const more = evs.length > 3 ? `<span class="cal-more-events">+${evs.length - 3} more</span>` : "";
+        const more = events.length > 3 ? `<button class="cal-more-events" type="button" data-cal-more-date="${dateIso}">+${events.length - 3} more</button>` : "";
         html += `
-            <button class="cal-cell${isToday ? " cal-cell--today" : ""}${isSelected ? " cal-cell--selected" : ""}" data-date="${ds}">
-                <span class="cal-day-num">${d}</span>
-                <div class="cal-event-bars">${bars}${more}</div>
-            </button>`;
+            <div class="cal-cell${isToday ? " cal-cell--today" : ""}${isSelected ? " cal-cell--selected" : ""}" data-date="${dateIso}">
+                <button class="cal-cell-date" type="button" data-date="${dateIso}" aria-label="${escapeHtml(_formatDateLabel(dateIso))}">
+                    <span class="cal-day-num">${dayOfMonth}</span>
+                </button>
+                <div class="cal-event-bars">${chips}${more}</div>
+            </div>`;
     }
-    grid.innerHTML = html;
-    grid.querySelectorAll(".cal-cell[data-date]").forEach((cell) => {
-        cell.addEventListener("click", () => {
-            calState.selectedDate = cell.dataset.date;
-            _calRenderMonth();
-            _calRenderSelectedDay();
+    surface.innerHTML = `
+        <div class="cal-grid-header">
+            <span>Sun</span><span>Mon</span><span>Tue</span>
+            <span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span>
+        </div>
+        <div class="cal-grid" id="cal-grid">${html}</div>`;
+    surface.querySelectorAll(".cal-cell[data-date]").forEach((cell) => {
+        cell.addEventListener("click", (clickEvent) => {
+            if (clickEvent.target.closest("[data-cal-event-key]")) return;
+            if (clickEvent.target.closest("[data-cal-more-date]")) return;
+            _calSetSelectedDate(cell.dataset.date);
+            calState.selectedEventKey = null;
+            _calRenderAll();
+        });
+    });
+    surface.querySelectorAll("[data-cal-more-date]").forEach((button) => {
+        button.addEventListener("click", (clickEvent) => {
+            clickEvent.stopPropagation();
+            _calSetSelectedDate(button.dataset.calMoreDate);
+            calState.selectedEventKey = null;
+            calState.viewMode = "day";
+            _calRefreshForCurrentRange();
+        });
+    });
+    _calWireEventClicks(surface);
+}
+
+function _calRenderWeek(surface) {
+    const weekStartIso = _calStartOfWeekIso(calState.selectedDate);
+    const dayIsos = Array.from({ length: 7 }, (_, index) => _calAddDays(weekStartIso, index));
+    const hourLabels = _calHourLabels();
+    surface.innerHTML = `
+        <div class="cal-week-shell" style="--cal-hour-height:${CALENDAR_HOUR_HEIGHT}px;--cal-schedule-height:${_calScheduleHeight()}px">
+            <div class="cal-week-head">
+                <div class="cal-time-gutter"></div>
+                ${dayIsos.map((dateIso) => _calWeekDayHeader(dateIso)).join("")}
+            </div>
+            <div class="cal-week-all-day">
+                <div class="cal-all-day-label">All-day</div>
+                ${dayIsos.map((dateIso) => _calAllDayLane(dateIso)).join("")}
+            </div>
+            <div class="cal-schedule-scroll">
+                <div class="cal-hour-gutter">
+                    ${hourLabels.map((labelText) => `<span>${escapeHtml(labelText)}</span>`).join("")}
+                </div>
+                <div class="cal-week-days">
+                    ${dayIsos.map((dateIso) => _calTimedDayColumn(dateIso, "week")).join("")}
+                </div>
+            </div>
+        </div>`;
+    _calWireDateButtons(surface);
+    _calWireEventClicks(surface);
+}
+
+function _calRenderDay(surface) {
+    const dateIso = calState.selectedDate;
+    const hourLabels = _calHourLabels();
+    surface.innerHTML = `
+        <div class="cal-day-shell" style="--cal-hour-height:${CALENDAR_HOUR_HEIGHT}px;--cal-schedule-height:${_calScheduleHeight()}px">
+            <div class="cal-day-focus-head">
+                <div>
+                    <p class="cal-side-kicker">${escapeHtml(_formatDateLabel(dateIso))}</p>
+                    <h4>${_calEventsOnDate(dateIso).length} events</h4>
+                </div>
+                ${_hasAction(calState.manifest || { actions: [] }, "create_event") ? `<button class="view-small-btn view-small-btn--primary" id="cal-add-main-day">Add event</button>` : ""}
+            </div>
+            <div class="cal-day-all-day">
+                <span class="cal-all-day-label">All-day</span>
+                <div>${_calAllDayEvents(dateIso).map((event) => _calEventChip(event, "cal-event-chip--all-day", dateIso)).join("") || `<span class="cal-empty-inline">None</span>`}</div>
+            </div>
+            <div class="cal-schedule-scroll cal-schedule-scroll--day">
+                <div class="cal-hour-gutter">
+                    ${hourLabels.map((labelText) => `<span>${escapeHtml(labelText)}</span>`).join("")}
+                </div>
+                <div class="cal-day-column-wrap">
+                    ${_calTimedDayColumn(dateIso, "day")}
+                </div>
+            </div>
+        </div>`;
+    const addButton = surface.querySelector("#cal-add-main-day");
+    if (addButton) {
+        addButton.addEventListener("click", () => _openAdapterAction("calendar", calState.manifest || { actions: [] }, "create_event", _defaultEventTimes(calState.selectedDate)));
+    }
+    _calWireEventClicks(surface);
+}
+
+async function _calNavigate(direction) {
+    if (calState.viewMode === "month") {
+        const nextMonth = new Date(calState.year, calState.month + direction, 1);
+        calState.year = nextMonth.getFullYear();
+        calState.month = nextMonth.getMonth();
+        calState.selectedDate = _calDateToIso(nextMonth);
+    } else {
+        const days = calState.viewMode === "week" ? 7 : 1;
+        _calSetSelectedDate(_calAddDays(calState.selectedDate, direction * days));
+    }
+    calState.selectedEventKey = null;
+    await _calRefreshForCurrentRange();
+}
+
+async function _calRefreshForCurrentRange() {
+    const manifest = calState.manifest || adapterCache.manifest.calendar || { actions: [] };
+    const action = (manifest.actions || []).find((item) => item.kind === "read" && item.name === "list_events");
+    if (!action) {
+        _calRenderAll();
+        return;
+    }
+    const range = _calListRangeParams();
+    if (calState.loadedStart === range.start && calState.loadedEnd === range.end) {
+        _calRenderAll();
+        return;
+    }
+    const previousEvents = calState.events;
+    try {
+        const eventData = await _callListAction("calendar", action, range);
+        if (Array.isArray(eventData?.events)) {
+            calState.events = eventData.events;
+            calState.loadedStart = range.start;
+            calState.loadedEnd = range.end;
+            adapterCache.listData.calendar = {
+                ...(adapterCache.listData.calendar || {}),
+                events: calState.events,
+                event_result: eventData,
+            };
+        }
+    } catch {
+        calState.events = previousEvents;
+    }
+    _calRenderAll();
+}
+
+function _calListRangeParams() {
+    const visible = _calVisibleRange();
+    const todayIso = _localDateIso();
+    const upcomingEndIso = _calAddDays(todayIso, 90);
+    const startDate = visible.start < todayIso ? visible.start : todayIso;
+    const endDate = visible.end > upcomingEndIso ? visible.end : upcomingEndIso;
+    return {
+        start: `${startDate}T00:00:00`,
+        end: `${endDate}T23:59:59`,
+        start_date: startDate,
+        end_date: endDate,
+    };
+}
+
+function _calVisibleRange() {
+    if (calState.viewMode === "month") {
+        const firstOfMonth = `${calState.year}-${String(calState.month + 1).padStart(2, "0")}-01`;
+        const start = _calStartOfWeekIso(firstOfMonth);
+        return { start, end: _calAddDays(start, 41) };
+    }
+    if (calState.viewMode === "week") {
+        const start = _calStartOfWeekIso(calState.selectedDate);
+        return { start, end: _calAddDays(start, 6) };
+    }
+    return { start: calState.selectedDate, end: calState.selectedDate };
+}
+
+function _calDateFromIso(dateIso) {
+    const parts = String(dateIso || "").split("-").map((part) => Number(part));
+    if (parts.length >= 3 && parts.every(Number.isFinite)) {
+        return new Date(parts[0], parts[1] - 1, parts[2]);
+    }
+    return new Date();
+}
+
+function _calDateToIso(date) {
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function _calSetSelectedDate(dateIso) {
+    const date = _calDateFromIso(dateIso);
+    calState.selectedDate = _calDateToIso(date);
+    calState.year = date.getFullYear();
+    calState.month = date.getMonth();
+}
+
+function _calAddDays(dateIso, days) {
+    const date = _calDateFromIso(dateIso);
+    date.setDate(date.getDate() + days);
+    return _calDateToIso(date);
+}
+
+function _calStartOfWeekIso(dateIso) {
+    const date = _calDateFromIso(dateIso);
+    date.setDate(date.getDate() - date.getDay());
+    return _calDateToIso(date);
+}
+
+function _calWeekLabel(dateIso) {
+    const startIso = _calStartOfWeekIso(dateIso);
+    const endIso = _calAddDays(startIso, 6);
+    const startDate = _calDateFromIso(startIso);
+    const endDate = _calDateFromIso(endIso);
+    const sameMonth = startDate.getMonth() === endDate.getMonth() && startDate.getFullYear() === endDate.getFullYear();
+    const startLabel = startDate.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    if (sameMonth) {
+        return `${startLabel} - ${endDate.getDate()}, ${endDate.getFullYear()}`;
+    }
+    const endLabel = endDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    return `${startLabel} - ${endLabel}`;
+}
+
+function _calLongDateLabel(dateIso) {
+    const date = _calDateFromIso(dateIso);
+    return date.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+}
+
+function _calEventKey(event) {
+    return _calEventId(event) || [event.start || "", event.end || "", event.title || "", event.actor || event.created_by || ""].join("|");
+}
+
+function _calEventId(event) {
+    return _idOf(event, "event_id");
+}
+
+function _calFindEvent(eventKey) {
+    return calState.events.find((event) => _calEventKey(event) === eventKey) || null;
+}
+
+function _calEventDateIso(event) {
+    const rawStart = String(event.start || "");
+    if (/^\d{4}-\d{2}-\d{2}$/.test(rawStart)) return rawStart;
+    const parts = _calDateTimeParts(rawStart);
+    if (!parts) return "";
+    return `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+}
+
+function _calEventsOnDate(dateIso) {
+    return _calSortEvents(calState.events.filter((event) => _calEventOverlapsDate(event, dateIso)));
+}
+
+function _calSortEvents(events) {
+    return [...events].sort((firstEvent, secondEvent) => String(firstEvent.start || "").localeCompare(String(secondEvent.start || "")));
+}
+
+function _calAllDayEvents(dateIso) {
+    return _calEventsOnDate(dateIso).filter((event) => event.all_day || _calIsAllDay(event));
+}
+
+function _calTimedEvents(dateIso) {
+    return _calEventsOnDate(dateIso).filter((event) => !event.all_day && !_calIsAllDay(event));
+}
+
+function _calEventEndDateIso(event) {
+    const rawEnd = String(event.end || event.start || "");
+    if (/^\d{4}-\d{2}-\d{2}$/.test(rawEnd)) return rawEnd;
+    const parts = _calDateTimeParts(rawEnd);
+    if (!parts) return _calEventDateIso(event);
+    return `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+}
+
+function _calEventOverlapsDate(event, dateIso) {
+    const startIso = _calEventDateIso(event);
+    const endIso = _calEventEndDateIso(event) || startIso;
+    if (!startIso) return false;
+    return dateIso >= startIso && dateIso <= endIso;
+}
+
+function _calEventDateIsos(event) {
+    const startIso = _calEventDateIso(event);
+    if (!startIso) return [];
+    const endIso = _calEventEndDateIso(event) || startIso;
+    const dates = [];
+    let cursor = startIso;
+    for (let guard = 0; guard < 370 && cursor <= endIso; guard += 1) {
+        dates.push(cursor);
+        cursor = _calAddDays(cursor, 1);
+    }
+    return dates;
+}
+
+function _calIsAllDay(event) {
+    const start = String(event.start || "");
+    const end = String(event.end || "");
+    return /^\d{4}-\d{2}-\d{2}$/.test(start) || (start.endsWith("T00:00:00") && end.endsWith("T00:00:00"));
+}
+
+function _calEventColor(event) {
+    const metadata = event.metadata && typeof event.metadata === "object" ? event.metadata : {};
+    const directColor = event.color || metadata.color || metadata.calendar_color;
+    if (typeof directColor === "string" && /^#[0-9a-f]{3,8}$/i.test(directColor.trim())) {
+        return directColor.trim();
+    }
+    const source = String(event.source || event.feed_source || "").toLowerCase();
+    if (CALENDAR_SOURCE_COLORS[source]) return CALENDAR_SOURCE_COLORS[source];
+    if (source.includes("google")) return CALENDAR_SOURCE_COLORS.google;
+    if (source.includes("outlook") || source.includes("microsoft")) return CALENDAR_SOURCE_COLORS.outlook;
+    if (source.includes("team")) return CALENDAR_SOURCE_COLORS.teams;
+    if (source.includes("classroom") || source.includes("school")) return CALENDAR_SOURCE_COLORS.classroom;
+    const owner = event.actor || event.created_by || (Array.isArray(event.attendees) ? event.attendees[0] : "");
+    const memberColor = _memberColor(owner);
+    if (memberColor !== "#9ca3af") return memberColor;
+    const key = `${event.source_label || ""}|${event.visibility || ""}|${event.title || ""}`;
+    let hash = 0;
+    for (const character of key) hash = ((hash << 5) - hash) + character.charCodeAt(0);
+    return CALENDAR_EVENT_PALETTE[Math.abs(hash) % CALENDAR_EVENT_PALETTE.length];
+}
+
+function _calEventColorLabel(event) {
+    if (event.source_label) return event.source_label;
+    if (event.source && event.source !== "native") return _humanizeLabel(event.source);
+    if (event.actor) return _humanizeLabel(event.actor);
+    if (Array.isArray(event.attendees) && event.attendees.length) return _humanizeLabel(event.attendees[0]);
+    return "Family";
+}
+
+function _calEventChip(event, extraClass = "", dateIso = "") {
+    const color = _calEventColor(event);
+    const eventKey = _calEventKey(event);
+    const title = event.title || "Untitled";
+    return `
+        <button class="cal-event-chip ${extraClass}" type="button" data-cal-event-key="${escapeHtml(eventKey)}"${dateIso ? ` data-cal-event-date="${escapeHtml(dateIso)}"` : ""} style="--ev-color:${color}" title="${escapeHtml(title)}">
+            ${escapeHtml(title)}
+        </button>`;
+}
+
+function _calWeekDayHeader(dateIso) {
+    const date = _calDateFromIso(dateIso);
+    const isToday = dateIso === _localDateIso();
+    const isSelected = dateIso === calState.selectedDate;
+    return `
+        <button class="cal-week-day-head${isToday ? " cal-week-day-head--today" : ""}${isSelected ? " cal-week-day-head--selected" : ""}" type="button" data-cal-date="${dateIso}">
+            <span>${date.toLocaleDateString("en-US", { weekday: "short" })}</span>
+            <strong>${date.getDate()}</strong>
+        </button>`;
+}
+
+function _calAllDayLane(dateIso) {
+    const events = _calAllDayEvents(dateIso);
+    return `
+        <div class="cal-all-day-lane${dateIso === calState.selectedDate ? " cal-all-day-lane--selected" : ""}">
+            ${events.length ? events.map((event) => _calEventChip(event, "cal-event-chip--all-day", dateIso)).join("") : `<span class="cal-empty-inline">None</span>`}
+        </div>`;
+}
+
+function _calTimedDayColumn(dateIso, density) {
+    const events = _calTimedEvents(dateIso);
+    const todayIso = _localDateIso();
+    return `
+        <div class="cal-timed-column cal-timed-column--${density}${dateIso === todayIso ? " cal-timed-column--today" : ""}${dateIso === calState.selectedDate ? " cal-timed-column--selected" : ""}" data-cal-date="${dateIso}">
+            ${events.map((event) => _calTimedEventBlock(event, density, dateIso)).join("")}
+        </div>`;
+}
+
+function _calTimedEventBlock(event, density, dateIso) {
+    const placement = _calTimedPlacement(event, dateIso);
+    const color = _calEventColor(event);
+    return `
+        <button class="cal-time-event cal-time-event--${density}" type="button" data-cal-event-key="${escapeHtml(_calEventKey(event))}" data-cal-event-date="${escapeHtml(dateIso)}" style="--event-color:${color};--event-top:${placement.top}px;--event-height:${placement.height}px">
+            <span class="cal-time-event-title">${escapeHtml(event.title || "Untitled")}</span>
+            <span class="cal-time-event-meta">${escapeHtml(_fmtEventTime(event.start, event.end, event.all_day))}</span>
+            ${event.location ? `<span class="cal-time-event-meta">${escapeHtml(event.location)}</span>` : ""}
+        </button>`;
+}
+
+function _calTimedPlacement(event, dateIso = "") {
+    const start = _calDateTimeParts(event.start || "");
+    const end = _calDateTimeParts(event.end || event.start || "");
+    const fallbackHeight = 44;
+    if (!start) return { top: 0, height: fallbackHeight };
+    const startIso = _calEventDateIso(event);
+    const endIso = _calEventEndDateIso(event) || startIso;
+    const startMinutes = dateIso && dateIso > startIso ? 0 : start.hour * 60 + start.minute;
+    const rawEndMinutes = end
+        ? (dateIso && dateIso < endIso ? 24 * 60 : end.hour * 60 + end.minute)
+        : startMinutes + 60;
+    const minimumEnd = Math.max(rawEndMinutes, startMinutes + 30);
+    const minMinutes = CALENDAR_DAY_START_HOUR * 60;
+    const maxMinutes = CALENDAR_DAY_END_HOUR * 60;
+    const clampedStart = Math.max(minMinutes, Math.min(startMinutes, maxMinutes));
+    const clampedEnd = Math.max(clampedStart + 30, Math.min(minimumEnd, maxMinutes));
+    return {
+        top: Math.max(0, ((clampedStart - minMinutes) / 60) * CALENDAR_HOUR_HEIGHT),
+        height: Math.max(32, ((clampedEnd - clampedStart) / 60) * CALENDAR_HOUR_HEIGHT),
+    };
+}
+
+function _calDateTimeParts(value) {
+    const date = new Date(value || "");
+    if (isNaN(date)) return null;
+    const timeZone = _displayTimeZone();
+    const options = {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hourCycle: "h23",
+    };
+    if (timeZone) options.timeZone = timeZone;
+    try {
+        const parts = new Intl.DateTimeFormat("en-US", options)
+            .formatToParts(date)
+            .reduce((acc, part) => {
+                acc[part.type] = part.value;
+                return acc;
+            }, {});
+        return {
+            year: Number(parts.year),
+            month: Number(parts.month),
+            day: Number(parts.day),
+            hour: Number(parts.hour || 0),
+            minute: Number(parts.minute || 0),
+        };
+    } catch {
+        return {
+            year: date.getFullYear(),
+            month: date.getMonth() + 1,
+            day: date.getDate(),
+            hour: date.getHours(),
+            minute: date.getMinutes(),
+        };
+    }
+}
+
+function _calHourLabels() {
+    const labels = [];
+    for (let hour = CALENDAR_DAY_START_HOUR; hour < CALENDAR_DAY_END_HOUR; hour++) {
+        labels.push(new Date(2026, 0, 1, hour, 0, 0).toLocaleTimeString("en-US", { hour: "numeric" }));
+    }
+    return labels;
+}
+
+function _calScheduleHeight() {
+    return (CALENDAR_DAY_END_HOUR - CALENDAR_DAY_START_HOUR) * CALENDAR_HOUR_HEIGHT;
+}
+
+function _calWireDateButtons(container) {
+    container.querySelectorAll("[data-cal-date]").forEach((button) => {
+        button.addEventListener("click", () => {
+            _calSetSelectedDate(button.dataset.calDate);
+            calState.selectedEventKey = null;
+            _calRenderAll();
+        });
+    });
+}
+
+function _calWireEventClicks(container) {
+    container.querySelectorAll("[data-cal-event-key]").forEach((eventNode) => {
+        eventNode.addEventListener("click", (clickEvent) => {
+            if (clickEvent.target.closest("[data-cal-action], [data-cal-detail-action]")) return;
+            clickEvent.stopPropagation();
+            _calOpenEvent(eventNode.dataset.calEventKey, eventNode.dataset.calEventDate || "");
+        });
+        eventNode.addEventListener("keydown", (keyEvent) => {
+            if (keyEvent.key === "Enter" || keyEvent.key === " ") {
+                keyEvent.preventDefault();
+                _calOpenEvent(eventNode.dataset.calEventKey, eventNode.dataset.calEventDate || "");
+            }
+        });
+    });
+}
+
+function _calOpenEvent(eventKey, dateIso = "") {
+    const event = _calFindEvent(eventKey);
+    if (!event) return;
+    calState.selectedEventKey = eventKey;
+    const selectedDateIso = dateIso || _calEventDateIso(event);
+    if (selectedDateIso) _calSetSelectedDate(selectedDateIso);
+    _calRenderAll();
+}
+
+function _calUpdateDefaults(event) {
+    return {
+        event_id: _calEventId(event),
+        title: event.title || "",
+        start: event.start || "",
+        end: event.end || "",
+        attendees: Array.isArray(event.attendees) ? event.attendees : [],
+        location: event.location || "",
+        notes: event.notes || "",
+        rrule: event.rrule || undefined,
+    };
+}
+
+function _calRenderColorLegend() {
+    const panel = document.getElementById("cal-color-legend");
+    if (!panel) return;
+    const entries = [];
+    const seen = new Set();
+    calState.events.forEach((event) => {
+        const label = _calEventColorLabel(event);
+        const color = _calEventColor(event);
+        const key = `${label}|${color}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        entries.push({ label, color });
+    });
+    if (!entries.length) {
+        panel.innerHTML = "";
+        return;
+    }
+    panel.innerHTML = `
+        <div class="cal-color-legend">
+            <h3>Colors</h3>
+            <div class="cal-color-legend-list">
+                ${entries.slice(0, 8).map((entry) => `
+                    <span class="cal-color-legend-item"><span class="cal-color-swatch" style="background:${entry.color}"></span>${escapeHtml(entry.label)}</span>
+                `).join("")}
+            </div>
+        </div>`;
+}
+
+function _calRenderEventDetail() {
+    const panel = document.getElementById("cal-event-detail");
+    if (!panel) return;
+    const event = calState.selectedEventKey ? _calFindEvent(calState.selectedEventKey) : null;
+    if (!event) {
+        panel.innerHTML = "";
+        return;
+    }
+    const manifest = calState.manifest || { actions: [] };
+    const eventId = _calEventId(event);
+    const canUpdate = _hasAction(manifest, "update_event") && eventId;
+    const canDelete = _hasAction(manifest, "delete_event") && eventId;
+    const canSetVisibility = _hasAction(manifest, "set_visibility") && eventId;
+    const color = _calEventColor(event);
+    const attendees = Array.isArray(event.attendees) ? event.attendees : [];
+    panel.innerHTML = `
+        <section class="cal-event-detail" style="--ev-color:${color}">
+            <header class="cal-event-detail-head">
+                <div>
+                    <p class="cal-side-kicker">${escapeHtml(_calEventColorLabel(event))}</p>
+                    <h3>${escapeHtml(event.title || "Untitled")}</h3>
+                </div>
+                <button class="cal-detail-close" type="button" id="cal-detail-close" aria-label="Close event details">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </header>
+            <div class="cal-event-detail-meta">
+                <span><strong>When</strong>${escapeHtml(_fmtEventTime(event.start, event.end, event.all_day))}</span>
+                ${event.location ? `<span><strong>Where</strong>${escapeHtml(event.location)}</span>` : ""}
+                ${attendees.length ? `<span><strong>With</strong>${escapeHtml(attendees.join(", "))}</span>` : ""}
+                ${event.visibility ? `<span><strong>Visibility</strong>${escapeHtml(_humanizeLabel(event.visibility))}</span>` : ""}
+                ${event.response ? `<span><strong>RSVP</strong>${escapeHtml(_humanizeLabel(event.response))}</span>` : ""}
+            </div>
+            ${event.notes ? `<p class="cal-event-detail-notes">${escapeHtml(event.notes)}</p>` : ""}
+            <div class="cal-event-detail-actions">
+                ${canUpdate ? `<button class="view-small-btn view-small-btn--primary" type="button" data-cal-detail-action="update_event">Edit</button>` : ""}
+                ${canSetVisibility ? `<button class="view-small-btn" type="button" data-cal-detail-action="set_visibility">Visibility</button>` : ""}
+                ${canDelete ? `<button class="view-action-btn view-action-btn--danger" type="button" data-cal-detail-action="delete_event">Remove</button>` : ""}
+            </div>
+        </section>`;
+
+    const close = panel.querySelector("#cal-detail-close");
+    if (close) close.addEventListener("click", () => {
+        calState.selectedEventKey = null;
+        _calRenderAll();
+    });
+    panel.querySelectorAll("[data-cal-detail-action]").forEach((button) => {
+        button.addEventListener("click", async () => {
+            const actionName = button.dataset.calDetailAction;
+            if (actionName === "update_event") {
+                _openAdapterAction("calendar", manifest, "update_event", _calUpdateDefaults(event));
+            } else if (actionName === "set_visibility") {
+                _openAdapterAction("calendar", manifest, "set_visibility", { event_id: eventId, visibility: event.visibility || "family" });
+            } else if (actionName === "delete_event") {
+                await _submitAdapterAction("calendar", "delete_event", { event_id: eventId });
+            }
         });
     });
 }
@@ -1968,9 +2898,7 @@ function _calRenderSelectedDay() {
     const panel = document.getElementById("cal-selected-day");
     if (!panel) return;
     const manifest = calState.manifest || { actions: [] };
-    const events = calState.events
-        .filter((event) => (event.start || "").slice(0, 10) === calState.selectedDate)
-        .sort((a, b) => String(a.start || "").localeCompare(String(b.start || "")));
+    const events = _calEventsOnDate(calState.selectedDate);
     panel.innerHTML = `
         <div class="cal-selected-head">
             <div>
@@ -1993,17 +2921,20 @@ function _calRenderSelectedDay() {
             await _submitAdapterAction("calendar", btn.dataset.calAction, { event_id: eventId });
         });
     });
+    _calWireEventClicks(panel);
 }
 
 function _renderCalendarEventRow(event, manifest) {
     const eventId = _idOf(event, "event_id");
     const canDelete = _hasAction(manifest, "delete_event") && eventId;
+    const color = _calEventColor(event);
     return `
-        <div class="cal-day-event-row">
-            <div class="cal-day-event-dot" style="background:${_memberColor(event.created_by || event.actor || "")}"></div>
+        <div class="cal-day-event-row" role="button" tabindex="0" data-cal-event-key="${escapeHtml(_calEventKey(event))}" style="--ev-color:${color}">
+            <div class="cal-day-event-dot" style="background:${color}"></div>
             <div class="cal-day-event-body">
                 <p class="cal-day-event-title">${escapeHtml(event.title || "Untitled")}</p>
                 <p class="cal-day-event-meta">${escapeHtml(_fmtEventTime(event.start, event.end, event.all_day))}${event.location ? ` · ${escapeHtml(event.location)}` : ""}</p>
+                <p class="cal-day-event-source">${escapeHtml(_calEventColorLabel(event))}</p>
             </div>
             ${canDelete ? `<button class="view-action-btn view-action-btn--danger" data-cal-action="delete_event" data-event-id="${escapeHtml(eventId)}">Remove</button>` : ""}
         </div>`;
@@ -2024,11 +2955,11 @@ function _calRenderUpcoming() {
     }
     const manifest = calState.manifest || { actions: [] };
     list.innerHTML = upcoming.map((ev) => {
-        const col = _memberColor(ev.created_by || "");
+        const col = _calEventColor(ev);
         const when = _fmtEventTime(ev.start, ev.end, ev.all_day);
         const eventId = _idOf(ev, "event_id");
         return `
-            <div class="cal-event-card" style="--ev-color:${col}">
+            <div class="cal-event-card" role="button" tabindex="0" data-cal-event-key="${escapeHtml(_calEventKey(ev))}" style="--ev-color:${col}">
                 <div class="cal-event-card-head">
                     <h4>${escapeHtml(ev.title || "Untitled")}</h4>
                     ${_hasAction(manifest, "delete_event") && eventId ? `<button class="view-action-btn view-action-btn--danger" data-cal-action="delete_event" data-event-id="${escapeHtml(eventId)}">Remove</button>` : ""}
@@ -2037,10 +2968,14 @@ function _calRenderUpcoming() {
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
                     ${escapeHtml(when)}
                 </div>
-                ${ev.created_by ? `
+                <div class="cal-event-meta">
+                    <span class="cal-event-source-dot" style="background:${col}"></span>
+                    ${escapeHtml(_calEventColorLabel(ev))}
+                </div>
+                ${ev.actor || ev.created_by ? `
                     <div class="cal-event-meta">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-                        ${escapeHtml(ev.created_by)}
+                        ${escapeHtml(ev.actor || ev.created_by)}
                     </div>` : ""}
             </div>`;
     }).join("");
@@ -2051,6 +2986,7 @@ function _calRenderUpcoming() {
             await _submitAdapterAction("calendar", btn.dataset.calAction, { event_id: eventId });
         });
     });
+    _calWireEventClicks(list);
 }
 
 function _calRenderFeeds() {
@@ -2071,11 +3007,13 @@ function _formatDateLabel(dateIso) {
 
 function _fmtEventTime(start, end, allDay) {
     if (allDay) return "All day";
+    const timeZone = _displayTimeZone();
+    const withTimeZone = (options) => timeZone ? { ...options, timeZone } : options;
     const fmt = (dt) => {
         const d = new Date(dt);
-        return isNaN(d) ? dt : d.toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+        return isNaN(d) ? dt : d.toLocaleString("en-US", withTimeZone({ weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }));
     };
-    return end ? `${fmt(start)} – ${new Date(end).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}` : fmt(start);
+    return end ? `${fmt(start)} – ${new Date(end).toLocaleTimeString("en-US", withTimeZone({ hour: "numeric", minute: "2-digit" }))}` : fmt(start);
 }
 
 // ----------------------------------------------------------------------------
@@ -3046,9 +3984,12 @@ async function _fetchAdapterData(adapterId, manifest) {
         const eventAction = readAction("list_events");
         const feedAction = readAction("list_feeds");
         const [eventData, feedData] = await Promise.all([
-            eventAction ? _callListAction(adapterId, eventAction) : null,
+            eventAction ? _callListAction(adapterId, eventAction, _calListRangeParams()) : null,
             feedAction ? _callListAction(adapterId, feedAction) : null,
         ]);
+        const range = _calListRangeParams();
+        calState.loadedStart = range.start;
+        calState.loadedEnd = range.end;
         return {
             success: true,
             events: Array.isArray(eventData?.events) ? eventData.events : [],
@@ -3129,14 +4070,23 @@ async function _fetchAdapterData(adapterId, manifest) {
     return _callListAction(adapterId, listAction);
 }
 
-async function _callListAction(adapterId, action) {
+async function _callListAction(adapterId, action, params = null) {
     let url = `/k1/tools/${adapterId}/${action.name}`;
-    if (adapterId === "calendar" && action.name === "list_events") {
-        const today = new Date();
-        const end = new Date(today);
-        end.setDate(end.getDate() + 60);
-        const fmt = (d) => _localDateIso(d);
-        url += `?start_date=${fmt(today)}&end_date=${fmt(end)}`;
+    const query = new URLSearchParams();
+    if (params && typeof params === "object") {
+        Object.entries(params).forEach(([key, value]) => {
+            if (value !== undefined && value !== null && value !== "") query.set(key, String(value));
+        });
+    } else if (adapterId === "calendar" && action.name === "list_events") {
+        const range = _calListRangeParams();
+        query.set("start", range.start);
+        query.set("end", range.end);
+        query.set("start_date", range.start_date);
+        query.set("end_date", range.end_date);
+    }
+    const queryString = query.toString();
+    if (queryString) {
+        url += `?${queryString}`;
     }
     try {
         const resp = await fetch(url, { headers: buildAppsHeaders() });

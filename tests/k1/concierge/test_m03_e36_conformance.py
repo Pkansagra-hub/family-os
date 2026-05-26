@@ -35,6 +35,7 @@ from k1.concierge.bus.topics import (
 from k1.concierge.llm.types import (
     ConciergeModelResponse,
     FinishReason,
+    ModelMessage,
     ToolCallResult,
     ToolSchema,
 )
@@ -53,6 +54,7 @@ def _make_envelope(
     topic: str = TOPIC_TASK_DISPATCH,
     payload: dict | None = None,
     envelope_id: int = 1,
+    session_id: str = "",
 ) -> Envelope:
     """Build a minimal Envelope for testing."""
     data = payload or {"task_id": "t1"}
@@ -62,6 +64,7 @@ def _make_envelope(
         payload_format=PayloadFormat.JSON,
         priority=Priority.INTERACTIVE,
         envelope_id=envelope_id,
+        session_id=session_id,
         parent_id=0,
     )
 
@@ -325,6 +328,7 @@ class TestFrontEmissionOrdering:
             topic="k1.session.user.input.v1",
             payload={"text": "hello there"},
             envelope_id=123,
+            session_id="web-test",
         )
 
         with patch.object(front_mod, "_PROMPT_DUMP_DIR", tmp_path):
@@ -337,15 +341,18 @@ class TestFrontEmissionOrdering:
                 all_tool_schemas=[],
             )
 
-        latest = tmp_path / "front_prompt_latest.json"
-        stamped = list(tmp_path.glob("front_prompt_env123_*.json"))
+        dump_dir = tmp_path / "web-test" / "front"
+        latest = dump_dir / "front_prompt_latest.json"
+        stamped = list(dump_dir.glob("front_prompt_env123_*.json"))
 
         assert result.status == "complete"
         assert latest.exists()
         assert len(stamped) == 1
 
         dump = json.loads(latest.read_text(encoding="utf-8"))
+        assert dump["actor"] == "front"
         assert dump["envelope_id"] == 123
+        assert dump["session_id"] == "web-test"
         assert dump["topic"] == "k1.session.user.input.v1"
         assert dump["mode"] == "standard"
         assert dump["messages"] == [{"role": "user", "content": "hello there"}]
@@ -367,6 +374,7 @@ class TestFrontEmissionOrdering:
             topic="k1.session.user.input.v1",
             payload={"text": "hello"},
             envelope_id=456,
+            session_id="web-test",
         )
 
         with patch.object(front_mod, "_PROMPT_DUMP_DIR", tmp_path):
@@ -380,7 +388,11 @@ class TestFrontEmissionOrdering:
                 trace_id="trace-front-tool-dump",
             )
 
-        dump = json.loads((tmp_path / "front_prompt_latest.json").read_text(encoding="utf-8"))
+        dump = json.loads(
+            (tmp_path / "web-test" / "front" / "front_prompt_latest.json").read_text(
+                encoding="utf-8"
+            )
+        )
         assert dump["tool_names"] == ["recall_memory"]
         assert dump["tools"] == [
             {
@@ -393,6 +405,47 @@ class TestFrontEmissionOrdering:
                 "side_effects": False,
             }
         ]
+
+    def test_back_runtime_prompt_dump_uses_session_back_subfolder(self, tmp_path: Path) -> None:
+        """Back prompt dumps include the executor prompt under session/back."""
+        import k1.concierge.actors.back as back_mod
+
+        env = _make_envelope(
+            topic="k1.orchestration.task.dispatch.v1",
+            payload={"task_id": "task-123"},
+            envelope_id=789,
+            session_id="web-test",
+        )
+        messages = [ModelMessage(role="user", content='{"task_id": "task-123"}')]
+        tools = [_make_tool_schema("discover_capabilities")]
+
+        with patch.object(back_mod, "_PROMPT_DUMP_DIR", tmp_path):
+            back_mod._write_runtime_prompt_dump(
+                envelope=env,
+                task_id="task-123",
+                scenario="task_execution",
+                tier="LOW",
+                trace_id="trace-back-dump",
+                safety_band="GREEN",
+                max_iterations=4,
+                system_prompt="back system prompt",
+                messages=messages,
+                tools=tools,
+            )
+
+        dump_dir = tmp_path / "web-test" / "back"
+        latest = dump_dir / "back_prompt_latest.json"
+        stamped = list(dump_dir.glob("back_prompt_tasktask-123_*.json"))
+
+        assert latest.exists()
+        assert len(stamped) == 1
+        dump = json.loads(latest.read_text(encoding="utf-8"))
+        assert dump["actor"] == "back"
+        assert dump["session_id"] == "web-test"
+        assert dump["task_id"] == "task-123"
+        assert dump["scenario"] == "task_execution"
+        assert dump["system_prompt"] == "back system prompt"
+        assert dump["tool_names"] == ["discover_capabilities"]
 
     def test_first_front_llm_call_dump_includes_hub_request(self, tmp_path: Path) -> None:
         """The first Front LLM dump captures the actual HubRequest payload."""
@@ -439,11 +492,13 @@ class TestFrontEmissionOrdering:
                 force_text=False,
             )
 
+        dump_dir = tmp_path / "web-test" / "front"
         dump = json.loads(
-            (tmp_path / "front_llm_first_call_latest.json").read_text(encoding="utf-8")
+            (dump_dir / "front_llm_first_call_latest.json").read_text(encoding="utf-8")
         )
         assert dump["actor"] == "front"
         assert dump["scenario"] == "standard"
+        assert dump["session_id"] == "web-test"
         assert dump["capability"] == "TOOL_CALL"
         assert dump["use_streaming"] is True
         assert dump["constraints"]["consumer_id"] == "concierge.front"
@@ -452,6 +507,61 @@ class TestFrontEmissionOrdering:
         assert dump["payload"]["tools"][0]["name"] == "dispatch_task"
         assert dump["payload"]["tool_choice"] == "auto"
         assert dump["provider_mapping_preview"]["tools"].endswith("function_declarations")
+        assert (dump_dir / "front_llm_request_latest.json").exists()
+
+    def test_back_llm_request_dump_uses_session_back_subfolder(self, tmp_path: Path) -> None:
+        """Back ReAct request dumps capture each executor iteration."""
+        import k1.concierge.react.loop as loop_mod
+        from k1.model_hub.types import (
+            CapabilityType,
+            HubRequest,
+            Message,
+            RequestConstraints,
+            ToolCallPayload,
+            ToolDefinition,
+        )
+
+        request = HubRequest(
+            capability=CapabilityType.TOOL_CALL,
+            payload=ToolCallPayload(
+                messages=[Message(role="user", content='{"task_id": "task-123"}')],
+                tools=[
+                    ToolDefinition(
+                        name="invoke_capability",
+                        description="Invoke capability",
+                        parameters={"type": "object"},
+                    )
+                ],
+                tool_choice="auto",
+                system_prompt="back system prompt",
+            ),
+            constraints=RequestConstraints(
+                max_tokens=1234,
+                temperature=1.0,
+                consumer_id="concierge.back",
+            ),
+            trace_id="back-test-trace",
+            session_id="web-test",
+        )
+
+        with patch.object(loop_mod, "_PROMPT_DUMP_DIR", tmp_path):
+            loop_mod._write_llm_request_dump(
+                actor="back",
+                scenario="task_execution",
+                iteration=1,
+                request=request,
+                use_streaming=False,
+                force_text=False,
+            )
+
+        dump_dir = tmp_path / "web-test" / "back"
+        dump = json.loads((dump_dir / "back_llm_request_latest.json").read_text(encoding="utf-8"))
+        assert dump["actor"] == "back"
+        assert dump["scenario"] == "task_execution"
+        assert dump["iteration"] == 1
+        assert dump["session_id"] == "web-test"
+        assert dump["constraints"]["consumer_id"] == "concierge.back"
+        assert dump["payload"]["tools"][0]["name"] == "invoke_capability"
 
 
 # =========================================================================

@@ -124,6 +124,7 @@ class TestFinishReason:
         assert FinishReason.LENGTH.value == "length"
         assert FinishReason.ERROR.value == "error"
         assert FinishReason.SAFETY.value == "safety"
+        assert FinishReason.MALFORMED_TOOL_CALL.value == "malformed_tool_call"
 
 
 # =====================================================================

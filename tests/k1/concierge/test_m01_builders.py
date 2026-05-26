@@ -32,6 +32,8 @@ from k1.concierge.bus.builders import (
     build_orchestration_delta,
     build_plan_ready,
     build_proactive_fill,
+    build_section_update_completed,
+    build_section_update_requested,
     build_state_updated,
     build_task_accepted,
     build_task_cancel,
@@ -54,7 +56,7 @@ class TestBuildersRegistry:
     """Verify BUILDERS dict covers all topics."""
 
     def test_registry_count(self) -> None:
-        assert len(BUILDERS) == 47
+        assert len(BUILDERS) == 49
 
     def test_registry_keys_match_all_topics(self) -> None:
         assert set(BUILDERS.keys()) == ALL_TOPICS
@@ -106,6 +108,16 @@ class TestBuilderOutput:
             (build_hil_request, "k1.hil.request.v1", Priority.INTERACTIVE),
             (build_plan_ready, "k1.planner.plan.ready.v1", Priority.INTERACTIVE),
             (build_weave_batch, "k1.internal.weave.batch.v1", Priority.INTERACTIVE),
+            (
+                build_section_update_requested,
+                "k1.internal.section_update.requested.v1",
+                Priority.INTERACTIVE,
+            ),
+            (
+                build_section_update_completed,
+                "k1.internal.section_update.completed.v1",
+                Priority.INTERACTIVE,
+            ),
             # BACKGROUND topics
             (build_state_updated, "k1.session.state.updated.v1", Priority.BACKGROUND),
             (build_affect_update, "k1.affect.update.v1", Priority.BACKGROUND),

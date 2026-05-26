@@ -48,6 +48,7 @@ from k1.concierge.actors.shared import parse_envelope_payload as _parse_payload
 from k1.concierge.actors.shared import safe_get_section as _safe_get_section
 from k1.concierge.bus.builders import (
     build_artifact_created,
+    build_response_stream,
     build_task_complete,
     build_task_failed,
     build_task_suspended,
@@ -73,6 +74,7 @@ from k1.concierge.react.checkpoint import ReActCheckpoint
 from k1.concierge.react.control import BackControlEvent
 from k1.concierge.react.history import build_chat_history_for_back
 from k1.concierge.react.loop import ReactResult, react_loop
+from k1.concierge.section_update.overlay import summarize_task_overlay
 from k1.concierge.tools.dispatcher import ToolDispatcher, create_back_dispatcher
 from k1.concierge.tools.schemas_back import BACK_TIER_ALLOWLISTS, BACK_TOOL_SCHEMAS
 from k1.hil.types import NeedsHumanRequest
@@ -173,8 +175,6 @@ async def _build_execution_grounding_block(task: dict[str, Any], grounding: Any 
             "spatial_context_id",
             "resolved_temporal_refs",
             "resolved_spatial_refs",
-            "requires_temporal_clarification",
-            "temporal_clarification_reasons",
         )
         if isinstance(task, dict) and task.get(key) is not None
     }
@@ -673,6 +673,7 @@ async def _resolve_needs_human_in_process(
     validator: LLMOutputValidator | None,
     control_queue: asyncio.Queue[BackControlEvent] | None,
     fsm_state: Any | None,
+    on_stream: Any | None = None,
 ) -> ReactResult:
     needs_human = getattr(hil_port, "needs_human", None) if hil_port is not None else None
     if not callable(needs_human):
@@ -759,6 +760,7 @@ async def _resolve_needs_human_in_process(
             trace_id=trace_id,
             scenario="task_execution_after_hil",
             validator=validator,
+            on_stream=on_stream,
             control_queue=control_queue,
         )
 
@@ -1027,6 +1029,16 @@ async def back_handler(
         effective_safety_band,
         len(snapshot["history_entries"]),
     )
+    overlay_summary = summarize_task_overlay(task)
+    if overlay_summary["present"]:
+        logger.info(
+            "back_handler: turn_state_overlay turn_id=%s durable=%s status=%s degraded=%s fields=%s",
+            overlay_summary["turn_id"],
+            overlay_summary["durable"],
+            overlay_summary["status"],
+            overlay_summary["degraded_reason"],
+            overlay_summary["fields_applied"],
+        )
 
     # 2. Build system prompt with task context + SS snapshot
     _back_cfg = get_config().actors.back
@@ -1120,6 +1132,11 @@ async def back_handler(
         cancel_token=cancel_token,
         fsm_state=fsm_state,
     )
+    on_stream = _make_back_reasoning_stream_callback(
+        bus=bus,
+        envelope=envelope,
+        trace_id=trace_id,
+    )
 
     # 6. Run ReAct loop (V2 Section 7, ITEM #14, ITEM #19)
     result = await react_loop(
@@ -1135,6 +1152,7 @@ async def back_handler(
         trace_id=trace_id,
         scenario="task_execution",
         validator=validator,
+        on_stream=on_stream,
         control_queue=control_queue,
     )
 
@@ -1157,6 +1175,7 @@ async def back_handler(
         validator=validator,
         control_queue=control_queue,
         fsm_state=fsm_state,
+        on_stream=on_stream,
     )
 
     # 7. Emit result to bus (Epic 7.3)
@@ -1377,6 +1396,16 @@ async def back_resume_handler(
         effective_safety_band,
         len(prior_messages),
     )
+    overlay_summary = summarize_task_overlay(original_task)
+    if overlay_summary["present"]:
+        logger.info(
+            "back_resume_handler: turn_state_overlay turn_id=%s durable=%s status=%s degraded=%s fields=%s",
+            overlay_summary["turn_id"],
+            overlay_summary["durable"],
+            overlay_summary["status"],
+            overlay_summary["degraded_reason"],
+            overlay_summary["fields_applied"],
+        )
 
     # 3. Build system prompt (same as original dispatch, fresh SS)
     _back_cfg = get_config().actors.back
@@ -1485,6 +1514,11 @@ async def back_resume_handler(
 
     # 8. Continue ReAct loop
     control_queue = _get_back_control_queue(fsm_state, task_id)
+    on_stream = _make_back_reasoning_stream_callback(
+        bus=bus,
+        envelope=envelope,
+        trace_id=trace_id,
+    )
     result = await react_loop(
         actor="back",
         system_prompt=system_prompt,
@@ -1498,6 +1532,7 @@ async def back_resume_handler(
         trace_id=trace_id,
         scenario="task_resume",
         validator=resume_validator,
+        on_stream=on_stream,
         control_queue=control_queue,
         completed_tool_call_ids=(
             set(react_checkpoint.completed_tool_call_ids) if react_checkpoint is not None else None
@@ -1873,6 +1908,36 @@ def emit_artifact_created(
 async def _noop_text(text: str) -> None:
     """Back never emits text to user -- no-op callback."""
     pass
+
+
+def _make_back_reasoning_stream_callback(
+    *,
+    bus: IBus,
+    envelope: Envelope,
+    trace_id: str,
+) -> Any:
+    chunk_index = 0
+
+    async def _on_stream(chunk: Any) -> None:
+        nonlocal chunk_index
+        if chunk.chunk_type != "thought_delta" or not chunk.thought_text:
+            return
+        env = build_response_stream(
+            payload={
+                "text": chunk.thought_text,
+                "chunk_type": "back_reasoning",
+                "chunk_index": chunk_index,
+                "is_final": False,
+                "trace_id": trace_id,
+                "actor": "back",
+            },
+            parent_id=envelope.envelope_id,
+        )
+        env = _correlate_envelope(env, envelope, trace_id)
+        bus.publish(env)
+        chunk_index += 1
+
+    return _on_stream
 
 
 def _extract_cancel_token(

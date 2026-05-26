@@ -7,7 +7,7 @@ Validates all 28 topic constants against the K1 TimingChain:
     - URGENT_TOPICS have the correct Priority mapping
     - Subscription groups are disjoint (no topic in both FRONT and BACK)
     - ALL_TOPICS = STRICT_TOPICS | RELAXED_TOPICS
-    - Count invariants: 28 total, 26 strict, 2 relaxed, 6 urgent
+    - Count invariants: total, strict, relaxed, urgent
 """
 
 from __future__ import annotations
@@ -34,10 +34,10 @@ class TestTopicCounts:
     """Verify set cardinalities match V2 Section 3."""
 
     def test_all_topics_count(self) -> None:
-        assert len(ALL_TOPICS) == 47
+        assert len(ALL_TOPICS) == 49
 
     def test_strict_count(self) -> None:
-        assert len(STRICT_TOPICS) == 37
+        assert len(STRICT_TOPICS) == 39
 
     def test_relaxed_count(self) -> None:
         assert len(RELAXED_TOPICS) == 10

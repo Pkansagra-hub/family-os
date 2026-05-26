@@ -841,14 +841,14 @@ Current vocabulary reality:
 | `beliefs_active` | `add_fact`, `update_confidence` | `pin_fact` / `unpin_fact` exist in `apply()` but fail `VALID_OPERATIONS`; keep out of V0 unless reconciled. |
 | `scoreboard` | `add_referent`, `push_question`, `pop_question`, `push_topic`, `add_commitment`, `fulfill_commitment`, `cancel_commitment` | `answer_question`, `set_salience`, `set_user_intent` exist in `apply()` but fail `VALID_OPERATIONS`. |
 | `clarifications` | `request`, `answer` | `cancel`, `expire`, `expire_old`, `set_blocking`, `clear_blocking`, `update_priority` exist in `apply()` but fail `VALID_OPERATIONS`. |
-| `narrative_active` | `create_thread`, `switch_to`, `pause_thread`, `resolve_thread`, `archive_thread`, `update_thread`, `record_turn` | No major guard/apply mismatch found; still reject shorthand `switch`, `resume`, `close`. |
+| `narrative_active` | `create_thread`, `switch_to`, `pause_thread`, `resolve_thread`, `archive_thread`, `update_thread` | `record_turn` is guard/apply-compatible but runtime-owned by turn recording; keep out of model-visible V0. Still reject shorthand `switch`, `resume`, `close`. |
 | `affective_now` | `update` | `update_emotion`, `update_dimensions`, `set_empathy_needed`, `set_celebration_appropriate` exist in `apply()` but fail `VALID_OPERATIONS`. |
 
 Acceptance:
 
 ```text
 Vocabulary registry is derived from the five LLM-writable sections only.
-Compiler rejects `control`, `task_state`, `task_artifacts`, `history_active`, `telemetry`, `meta`, `persona`, and warm/archive sections.
+Compiler rejects every non-LLM-writable SessionState section, including `control`, `temporal`, `spatial`, `grounding`, `task_state`, `task_artifacts`, `history_active`, `telemetry`, `meta`, `place_registry`, `persona`, and warm/archive sections.
 Every accepted operation is proven compatible with both guard preflight and section apply path.
 Rejected operations include section, operation, and reason.
 ```
@@ -1083,6 +1083,46 @@ Run:
 pytest tests/k1/concierge/section_update/test_plan_schema.py tests/k1/concierge/section_update/test_operation_vocabulary.py tests/k1/concierge/section_update/test_plan_compiler.py tests/k1/concierge/section_update/test_idempotency.py tests/k1/concierge/section_update/test_classifier_stub.py -v
 pytest tests/k1/sessionstate/test_guard.py -k "valid_operations or invalid_operation" -v
 pytest tests/k1/concierge/test_m04_e43_session_bundle.py -v
+```
+
+M1 implementation status, 2026-05-25:
+
+```text
+Status: M1.I1 through M1.I6 implemented and validated.
+Scope held: no Front prompt edits, no ReAct tool removal, no lifecycle/FSM wiring, no writer implementation edits.
+
+Added production package:
+   k1/concierge/section_update/__init__.py
+   k1/concierge/section_update/types.py
+   k1/concierge/section_update/vocabulary.py
+   k1/concierge/section_update/idempotency.py
+   k1/concierge/section_update/plan_compiler.py
+   k1/concierge/section_update/classifier.py
+   k1/concierge/section_update/prompt.py
+
+Added focused tests:
+   tests/k1/concierge/section_update/test_plan_schema.py
+   tests/k1/concierge/section_update/test_operation_vocabulary.py
+   tests/k1/concierge/section_update/test_plan_compiler.py
+   tests/k1/concierge/section_update/test_idempotency.py
+   tests/k1/concierge/section_update/test_classifier_stub.py
+
+Code-truth correction found during regression:
+   SessionState now has 19 budgeted sections, but Concierge config still had a 10-section system_owned_sections override from the older 15-section era.
+   Updated k1/concierge/config/loader.py and k1/concierge/config/defaults.yaml so all 14 non-LLM-writable sections are explicit system-owned sections.
+   Updated tests/k1/concierge/test_m04_e42_write_path.py to assert 14 system-owned sections and no coverage gaps.
+   Updated classifier FORBIDDEN_SECTIONS so every non-writable current SessionState section is forbidden to the classifier.
+
+Validation run:
+   python -m py_compile k1/concierge/section_update/*.py: pass
+   get_errors on touched M1/config/test files: no errors
+   pytest tests/k1/concierge/section_update/test_plan_schema.py tests/k1/concierge/section_update/test_operation_vocabulary.py tests/k1/concierge/section_update/test_plan_compiler.py tests/k1/concierge/section_update/test_idempotency.py tests/k1/concierge/section_update/test_classifier_stub.py -v: 34 passed
+   pytest tests/k1/sessionstate/test_guard.py -k "valid_operations or invalid_operation" -v: 33 passed, 79 deselected
+   pytest tests/k1/concierge/test_m04_e43_session_bundle.py tests/k1/concierge/test_m04_e42_write_path.py tests/k1/sessionstate/test_ports.py::TestBatchRequest -v: 55 passed
+   pytest tests/k1/sessionstate/test_public_types_057.py::TestNoDeepSSImports::test_no_deep_imports_in_production -v: 1 passed
+
+Residual blocker carried forward:
+   No public monotonic SessionState mutation epoch exists yet; M1 can reject known stale snapshot_version/source_epoch values supplied by lifecycle, but M2/M3 must solve the active epoch source before relying on robust stale-plan rejection.
 ```
 
 M1 blockers and risks:
@@ -1598,9 +1638,84 @@ MemoryWriter consumes turn.completed, so active ordering must be changed careful
 Front cognitive tools remain seated through M2 for rollback and shadow comparison.
 ```
 
+M2 implementation status, 2026-05-25:
+
+```text
+Status: M2.I1 through M2.I7 implemented and validated.
+Scope held: no Front cognitive tools removed. Back overlay support is bounded to explicit dispatch-critical turn context and is not merged into durable SessionState snapshots.
+
+Added package surface:
+   k1/concierge/section_update/input_builder.py
+   k1/concierge/section_update/events.py
+   k1/concierge/section_update/lifecycle.py
+   k1/concierge/section_update/apply.py
+   k1/concierge/section_update/overlay.py
+   k1/concierge/section_update/live_api.py
+
+Added controller coordination:
+   k1/concierge/fsm/controller.py set_section_update_classifier(...)
+   k1/concierge/fsm/controller.py register_turn_state_overlay(...)
+   Active mode runs the bounded classifier/apply/degrade boundary before turn.completed and before FrontLock drains.
+   Active mode records a closed boundary per turn_id so duplicate finalize paths do not retry the classifier or writer inside the same turn.
+   Malformed classifier/apply failures degrade to section_update.completed diagnostics before turn.completed instead of blocking turn completion.
+   Disabled/shadow modes preserve existing _finalize_turn ordering.
+   Classifier execution is bounded by timeout and writer apply remains on writer_port only.
+   turn.completed now carries a section_update summary for active applied/degraded boundaries before MemoryWriter consumes it.
+   Back dispatch preserves one explicit turn_state_overlay and can attach one registered overlay keyed by session/turn without changing the durable SessionState snapshot.
+   Live API final-turn records normalize into the same SectionUpdateInput contract; partial transcripts and deltas are ignored before classifier/writer entry.
+
+Added MemoryWriter coordination:
+   k1/memory_writer/events.py TurnCompletePayload.section_update
+   k1/memory_writer/pipeline/turn_dispatcher.py preserves section_update metadata during typed deserialization.
+   k1/memory_writer/pipeline/session_batch_dispatcher.py continues consuming k1.session.turn.completed.v1 after active section-update apply/degrade has closed.
+
+Added Back overlay observation:
+   k1/concierge/actors/back.py logs turn_state_overlay metadata at task start/resume while reading SessionState exactly once from the durable snapshot.
+
+Added focused tests:
+   tests/k1/concierge/section_update/test_turn_input_builder.py
+   tests/k1/concierge/section_update/test_classifier_turn_boundary.py
+   tests/k1/concierge/section_update/test_active_apply.py
+   tests/k1/concierge/section_update/test_turn_completed_coordination.py
+   tests/k1/concierge/section_update/test_memory_writer_ordering.py
+   tests/k1/concierge/section_update/test_dispatch_overlay.py
+   tests/k1/concierge/section_update/test_back_snapshot_gating.py
+   tests/k1/concierge/section_update/test_live_turn_complete_contract.py
+
+Bus boundary added:
+   TOPIC_SECTION_UPDATE_REQUESTED = k1.internal.section_update.requested.v1
+   TOPIC_SECTION_UPDATE_COMPLETED = k1.internal.section_update.completed.v1
+   Builders registered with interactive priority and covered by topic/builder registry tests.
+
+Validation run:
+   get_errors on touched M2 package/bus/test files: no errors
+   pytest tests/k1/concierge/section_update/test_turn_input_builder.py -v: 4 passed
+   pytest tests/k1/concierge/section_update/test_classifier_turn_boundary.py -v: 5 passed
+   pytest tests/k1/concierge/section_update/test_active_apply.py -v: 7 passed
+   pytest tests/k1/concierge/section_update/test_turn_completed_coordination.py -v: 6 passed
+   pytest tests/k1/concierge/test_m02_e23_response_final.py -v: 57 passed
+   pytest tests/k1/concierge/section_update/test_classifier_turn_boundary.py tests/k1/concierge/section_update/test_active_apply.py tests/k1/concierge/section_update/test_turn_completed_coordination.py -v: 18 passed
+   pytest tests/k1/concierge/section_update/test_plan_schema.py tests/k1/concierge/section_update/test_operation_vocabulary.py tests/k1/concierge/section_update/test_plan_compiler.py tests/k1/concierge/section_update/test_idempotency.py tests/k1/concierge/section_update/test_classifier_stub.py tests/k1/concierge/section_update/test_turn_input_builder.py tests/k1/concierge/section_update/test_classifier_turn_boundary.py tests/k1/concierge/section_update/test_active_apply.py tests/k1/concierge/section_update/test_turn_completed_coordination.py -v: 56 passed
+   pytest tests/k1/concierge/test_m04_e43_session_bundle.py -v: 20 passed
+   pytest tests/k1/concierge/test_m01_builders.py tests/k1/concierge/test_m01_topics.py -v: 106 passed
+   pytest tests/k1/concierge/section_update/test_memory_writer_ordering.py -v: 3 passed
+   pytest tests/k1/concierge/section_update/test_dispatch_overlay.py -v: 3 passed
+   pytest tests/k1/concierge/section_update/test_back_snapshot_gating.py -v: 3 passed
+   pytest tests/k1/concierge/section_update/test_live_turn_complete_contract.py -v: 4 passed
+   pytest tests/k1/concierge/section_update/test_memory_writer_ordering.py tests/k1/concierge/section_update/test_dispatch_overlay.py tests/k1/concierge/section_update/test_back_snapshot_gating.py tests/k1/concierge/section_update/test_live_turn_complete_contract.py -v: 13 passed
+   pytest tests/k1/memory_writer/test_turn_dispatcher.py tests/k1/memory_writer/test_session_batch_dispatcher.py -v: 36 passed
+   pytest tests/k1/concierge/section_update/test_turn_completed_coordination.py tests/k1/concierge/test_m02_e23_response_final.py -v: 63 passed
+   pytest tests/k1/concierge/section_update -v: 69 passed
+
+Next issue:
+   M3 shadow/active quality gates. Do not remove Front cognitive tools until M3 gates explicitly pass.
+```
+
 ### M3 Detailed Plan: Shadow Mode, Active Mode, And Quality Gates
 
 Epic: run `SectionUpdateClassifier` in batch-only shadow mode beside existing Front cognitive writes, prove semantic equivalence and safety with per-turn manifests, then enable active apply behind flags only after numeric quality gates clear.
+
+Execution correction for this pass: M3 quality proof stays in POC/live-kernel validation first. Do not land new M3 runtime wiring, production feature flags, or automatic classifier attachment in Concierge until the live POC gate report proves the thresholds below. Production code may keep the M0-M2 SectionUpdate contract and active-boundary scaffolding, but M3 proof artifacts belong in the live-kernel POC runner and its reports.
 
 M3 operating picture:
 
@@ -1632,17 +1747,65 @@ M3 drift guard:
 Do not treat provider success as mutation quality.
 Do not treat aggregate writer stats as semantic equivalence.
 Do not remove Front cognitive tools in M3.
-Do not allow active apply while the 16.7% baseline problem remains unresolved.
+Do not allow active apply until the latest gate report satisfies every threshold, including the 100-turn safe-shadow window.
 ```
 
 M3 non-negotiables from M0-M2:
 
 ```text
-Current gemini-2.5-flash-lite pass rate is 16.7%, so it is shadow-only until gates pass.
+Earlier gemini-2.5-flash-lite POC pass rate was 16.7%; do not cite that baseline as active proof.
 Batch plan remains the only production V0 shape.
 Parallel/by-section calls remain diagnostic and cannot drive active writes.
 Front cognitive tools remain seated through M3 for comparison and rollback.
 Active mode must obey M2 ordering: apply/degrade before turn.completed.
+```
+
+Latest live POC evidence snapshot, 2026-05-26:
+
+```text
+runner: scripts/m3_live_shadow_validation.py
+run_label: m3-closurefix-260526a
+base_url: http://127.0.0.1:8771
+output: data/m3_section_update_shadow_validation_report.json
+
+golden_pass_rate=1.0
+schema_validity=1.0
+guard_vocabulary_validity=1.0
+noop_precision=1.0
+mutation_precision=1.0
+critical_recall=1.0
+shadow_golden_operation_agreement=1.0
+dangerous_false_writes=0
+provider_failure_degradation_rate=0.0
+shadow_p95_ms=4487
+
+active_eligible=false
+failed_gates=consecutive_shadow_turns_without_dangerous_false_writes
+consecutive_shadow_turns_without_dangerous_false_writes=4/100
+```
+
+Quality conclusion: the corrected live POC now proves the four-turn golden mutation set, including turn-4 close acknowledgement no-op. It does not authorize production active mode; M3 remains blocked until the configured 100-turn safe-shadow window is met.
+
+POC harness corrections proven by this run:
+
+```text
+Classifier input uses per-turn pre-turn SessionState cognitive snapshots.
+Run labels stay in manifest metadata and never enter user-visible turn text or expected beliefs.
+Raw legacy Front session write payloads are redacted from classifier input; only non-authoritative tool-name telemetry remains.
+Golden expected SectionUpdatePlan fixtures are the primary oracle; legacy Front comparison is telemetry only.
+Writer-compatible add_fact payloads include data.confidence and data.source.
+Ordinary corrections reject duplicate/negative/confidence-demotion candidates.
+Conversational closure/acknowledgement candidates are fail-closed to no_op, not beliefs or narrative lifecycle writes.
+```
+
+100-turn corpus staging, 2026-05-26:
+
+```text
+Current sequence target: 40 no-op/forbidden/ambiguous, then 35 belief/definition/correction, then 15 scoreboard/clarification, then 10 narrative/affect.
+First tranche status: 40 new noop_* golden cases added to scripts/m3_section_update_golden_cases.json.
+Active runner config: scripts/m3_live_shadow_validation_quota_config.yaml now selects exactly those 40 noop_* cases with max_turns=40.
+Dry-run artifact: data/m3_section_update_shadow_validation_noop40_dry_run_report.json.
+Quality status: fixture/config/schema dry-run only; do not count this as live safe-shadow evidence until the 40-turn live kernel run is explicitly executed.
 ```
 
 #### M3.I1 Run Shadow Mode Beside Current Front Cognitive Tool Writes
@@ -1693,6 +1856,8 @@ Implementation notes:
 
 ```text
 Shadow mode runs after existing response finalization and current Front cognitive writes.
+Classifier input uses the past/pre-turn SessionState cognitive snapshot for that turn, not one final shared post-run snapshot.
+Live POC uniqueness must stay in manifest metadata; do not inject validation labels into user-visible turn text or expected beliefs.
 Shadow mode never calls writer_port.batch_mutations.
 Shadow mode records classifier plan, validation result, provider metadata, and comparison result.
 Provider failure, malformed output, no tool call, or timeout becomes diagnostic no-op.
@@ -2078,9 +2243,10 @@ pytest tests/k1/concierge/section_update/test_quality_gates.py -v
 M3 blockers and risks:
 
 ```text
-Current 16.7% Gemini 2.5 Flash Lite validation pass rate blocks active mode.
-4-9 second live model latency is acceptable for shadow diagnostics but unsafe for synchronous active without timeout.
-Existing writer summaries are aggregate; manifest work is required before quality claims are credible.
+Latest four-turn live POC no longer fails golden/schema/guard/no-op/mutation quality gates.
+Active remains blocked because only 4 consecutive shadow turns without dangerous false writes are proven; gate requires 100.
+1-5 second classifier latency in the latest POC is acceptable for shadow diagnostics but unsafe for synchronous active without the M2 timeout/degrade boundary.
+Legacy Front operation mismatch is expected on some turns and remains telemetry only; golden SectionUpdatePlan comparison is the primary oracle.
 Batch apply is not transactional, so M1 whole-plan validation remains mandatory before any M3 active attempt.
 M1 snapshot epoch/idempotency must be real before active stale rejection can be trusted.
 ```

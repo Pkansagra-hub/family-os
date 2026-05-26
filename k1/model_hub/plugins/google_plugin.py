@@ -139,7 +139,7 @@ def _dump_gemini_config_preview(request: NormalizedRequest) -> dict[str, Any]:
         tool_config = _dump_gemini_tool_config_preview(request.tool_choice)
         if tool_config is not None:
             config["tool_config"] = tool_config
-    if request.reasoning_effort:
+    if request.reasoning_effort and _supports_thinking_config(request.model_id):
         config["thinking_config"] = {
             "thinking_budget": _THINKING_BUDGET_MAP.get(request.reasoning_effort, 8192),
             "include_thoughts": True,
@@ -245,7 +245,7 @@ _FINISH_MAP: Dict[str, FinishReason] = {
     "BLOCKLIST": FinishReason.SAFETY,
     "PROHIBITED_CONTENT": FinishReason.SAFETY,
     "SPII": FinishReason.SAFETY,
-    "MALFORMED_FUNCTION_CALL": FinishReason.ERROR,
+    "MALFORMED_FUNCTION_CALL": FinishReason.MALFORMED_TOOL_CALL,
 }
 
 
@@ -265,6 +265,11 @@ _THINKING_BUDGET_MAP: Dict[str, int] = {
     "medium": 8192,
     "high": 24576,
 }
+
+
+def _supports_thinking_config(model_id: str) -> bool:
+    normalized = model_id.lower()
+    return "gemini-2.5" in normalized or "gemini-3" in normalized
 
 
 class GooglePlugin:
@@ -578,7 +583,7 @@ class GooglePlugin:
                 )
 
         # Thinking config
-        if request.reasoning_effort:
+        if request.reasoning_effort and _supports_thinking_config(request.model_id):
             budget = _THINKING_BUDGET_MAP.get(request.reasoning_effort, 8192)
             config_kwargs["thinking_config"] = types.ThinkingConfig(
                 thinking_budget=budget,

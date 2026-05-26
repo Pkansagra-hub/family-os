@@ -148,11 +148,18 @@ class TestPriority:
 
 class TestFinishReason:
     def test_member_count(self) -> None:
-        assert len(FinishReason) == 5
+        assert len(FinishReason) == 6
 
     def test_values(self) -> None:
         vals = {m.value for m in FinishReason}
-        assert vals == {"stop", "tool_calls", "length", "error", "safety"}
+        assert vals == {
+            "stop",
+            "tool_calls",
+            "length",
+            "error",
+            "safety",
+            "malformed_tool_call",
+        }
 
 
 class TestHealthStatus:
@@ -329,6 +336,7 @@ class TestRequestConstraints:
         assert c.timeout_ms == 30000
         assert c.priority == Priority.INTERACTIVE
         assert c.temperature == 0.7
+        assert c.reasoning_effort is None
 
     def test_frozen(self) -> None:
         c = RequestConstraints()
@@ -346,6 +354,13 @@ class TestRequestConstraints:
     def test_temperature_out_of_range(self) -> None:
         with pytest.raises(ValueError, match="temperature must be in"):
             RequestConstraints(temperature=2.5)
+
+    def test_reasoning_effort_validation(self) -> None:
+        assert RequestConstraints(reasoning_effort="low").reasoning_effort == "low"
+        assert RequestConstraints(reasoning_effort="medium").reasoning_effort == "medium"
+        assert RequestConstraints(reasoning_effort="high").reasoning_effort == "high"
+        with pytest.raises(ValueError, match="reasoning_effort must be"):
+            RequestConstraints(reasoning_effort="extreme")
 
 
 class TestHubRequest:
@@ -417,6 +432,7 @@ class TestHubChunk:
     def test_defaults(self) -> None:
         c = HubChunk()
         assert c.content == ""
+        assert c.thought == ""
         assert c.done is False
         assert c.metadata is None
         assert c.tool_calls is None

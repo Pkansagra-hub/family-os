@@ -90,17 +90,6 @@ Follow this mandatory sequence. Do not skip steps.
 
 {execution_grounding_block}
 
-TEMPORAL RESOLUTION POLICY:
-  If EXECUTION GROUNDING includes resolved_temporal_refs, treat them as the
-  authoritative resolution of temporal phrases in this dispatch. When a
-  required capability/tool parameter needs a date, time, or window and the
-  matching phrase is present there, copy the resolved window or instant
-  directly into the params. Do NOT call tool.execute.date_calc for phrases
-  already resolved in resolved_temporal_refs. Use date_calc only for new
-  arithmetic that is not already answered by the dispatch grounding.
-  If requires_temporal_clarification is true, do not guess the missing time;
-  submit_result(needs_human, clarification) with the listed reason.
-
 STEP 1 -- ORIENT:
   Read the task dispatch below: intents, params, reference_context.
   Read beliefs_summary and task_artifacts in session context.
@@ -461,10 +450,6 @@ def build_back_prompt(
     execution_grounding_block = _with_resolved_temporal_refs(
         execution_grounding_block,
         resolved_temporal_refs=resolved_temporal_refs,
-        requires_clarification=bool(task.get("requires_temporal_clarification")) if task else False,
-        clarification_reasons=(
-            task.get("temporal_clarification_reasons") if isinstance(task, dict) else None
-        ),
     )
 
     # Determine tier from task to generate available-tools note
@@ -535,24 +520,14 @@ def _with_resolved_temporal_refs(
     execution_grounding_block: str,
     *,
     resolved_temporal_refs: dict[str, Any] | None,
-    requires_clarification: bool,
-    clarification_reasons: dict[str, Any] | None,
 ) -> str:
     block = execution_grounding_block.strip()
-    if not resolved_temporal_refs and not requires_clarification:
+    if not resolved_temporal_refs:
         return block
     lines = block.splitlines() if block else ["== EXECUTION GROUNDING =="]
-    if resolved_temporal_refs:
-        lines.append("resolved_temporal_refs_typed:")
-        for raw_text, value in resolved_temporal_refs.items():
-            lines.append(f"- {raw_text}: {_render_temporal_ref(value)}")
-    if requires_clarification:
-        lines.append("requires_temporal_clarification: true")
-        if clarification_reasons:
-            lines.append(
-                "temporal_clarification_reasons: "
-                f"{json.dumps(clarification_reasons, sort_keys=True)}"
-            )
+    lines.append("resolved_temporal_refs_typed:")
+    for raw_text, value in resolved_temporal_refs.items():
+        lines.append(f"- {raw_text}: {_render_temporal_ref(value)}")
     return "\n".join(lines)
 
 
@@ -562,8 +537,7 @@ def _render_temporal_ref(value: Any) -> str:
     label = str(value.get("normalized_label") or value.get("raw_text") or "resolved")
     kind = str(value.get("resolution_kind") or "")
     if value.get("needs_clarification"):
-        reason = str(value.get("clarification_reason") or "ambiguous")
-        return f"{label} ({kind or 'ambiguous'}, needs_clarification={reason})"
+        return f"{label} ({kind or 'ambiguous'})"
     window = value.get("window")
     if isinstance(window, dict):
         compact = {

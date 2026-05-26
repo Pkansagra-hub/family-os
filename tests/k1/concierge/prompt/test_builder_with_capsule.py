@@ -12,6 +12,8 @@ The contract for this milestone:
 
 from __future__ import annotations
 
+from k1.concierge.config import reset_config
+
 # AffectBand is a small dataclass elsewhere in the prompt package.
 from k1.concierge.prompt.affect import AffectBand
 from k1.concierge.prompt.builder import DynamicPromptBuilder
@@ -128,3 +130,30 @@ def test_standard_prompt_drops_duplicate_active_member_when_capsule_present() ->
     assert out.system_prompt.count("== ACTIVE MEMBER") == 1
     assert "You are talking to: unknown" not in out.system_prompt
     assert "name=Alex" in out.system_prompt
+
+
+def test_builder_reads_iteration_budget_from_config(monkeypatch, tmp_path) -> None:
+    override = tmp_path / "config.yaml"
+    override.write_text(
+        "prompt:\n"
+        "  max_iterations:\n"
+        "    STANDARD: 2\n"
+        "  crisis_iterations:\n"
+        "    STANDARD: 1\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("K1_POC_CONFIG", str(override))
+    reset_config()
+    try:
+        standard = _build(mode=PromptMode.STANDARD)
+        crisis = DynamicPromptBuilder().build(
+            mode=PromptMode.STANDARD,
+            affect_band=AffectBand(band="crisis"),
+            history_messages=[],
+            all_tool_schemas=[],
+            scenario_data={},
+        )
+        assert standard.max_iterations == 2
+        assert crisis.max_iterations == 1
+    finally:
+        reset_config()

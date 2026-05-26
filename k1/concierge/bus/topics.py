@@ -117,6 +117,8 @@ TOPIC_PLAN_READY = "k1.planner.plan.ready.v1"
 # ---------------------------------------------------------------------------
 TOPIC_WEAVE_BATCH = "k1.internal.weave.batch.v1"
 TOPIC_DEAD_LETTER = "k1.internal.dead_letter.v1"
+TOPIC_SECTION_UPDATE_REQUESTED = "k1.internal.section_update.requested.v1"
+TOPIC_SECTION_UPDATE_COMPLETED = "k1.internal.section_update.completed.v1"
 
 # ---------------------------------------------------------------------------
 # BackPool topics (prefix: k1.backpool -> STRICT) -- M7 E7.1.4
@@ -206,6 +208,8 @@ ALL_TOPICS: frozenset[str] = frozenset(
         TOPIC_PLAN_READY,
         TOPIC_WEAVE_BATCH,
         TOPIC_DEAD_LETTER,
+        TOPIC_SECTION_UPDATE_REQUESTED,
+        TOPIC_SECTION_UPDATE_COMPLETED,
         TOPIC_BACKPOOL_WORKER_ACQUIRED,
         TOPIC_BACKPOOL_WORKER_RELEASED,
         TOPIC_TASK_LEASED,
@@ -406,6 +410,8 @@ __all__ = [
     "TOPIC_PLAN_READY",
     "TOPIC_WEAVE_BATCH",
     "TOPIC_DEAD_LETTER",
+    "TOPIC_SECTION_UPDATE_REQUESTED",
+    "TOPIC_SECTION_UPDATE_COMPLETED",
     "TOPIC_BACKPOOL_WORKER_ACQUIRED",
     "TOPIC_BACKPOOL_WORKER_RELEASED",
     "TOPIC_TASK_LEASED",

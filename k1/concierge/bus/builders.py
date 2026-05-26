@@ -83,6 +83,8 @@ from k1.concierge.bus.topics import (
     TOPIC_PLAN_READY,
     TOPIC_PROACTIVE_FILL,
     TOPIC_RESPONSE_STREAM,
+    TOPIC_SECTION_UPDATE_COMPLETED,
+    TOPIC_SECTION_UPDATE_REQUESTED,
     TOPIC_STATE_UPDATED,
     TOPIC_TASK_ACCEPTED,
     TOPIC_TASK_CANCEL,
@@ -418,6 +420,16 @@ def build_dead_letter(payload: dict[str, Any], parent_id: int = 0) -> Envelope:
     return _build(TOPIC_DEAD_LETTER, Priority.BACKGROUND, payload, parent_id)
 
 
+def build_section_update_requested(payload: dict[str, Any], parent_id: int = 0) -> Envelope:
+    """Section-update classifier boundary opened for a completed turn."""
+    return _build(TOPIC_SECTION_UPDATE_REQUESTED, Priority.INTERACTIVE, payload, parent_id)
+
+
+def build_section_update_completed(payload: dict[str, Any], parent_id: int = 0) -> Envelope:
+    """Section-update classifier boundary closed for a completed turn."""
+    return _build(TOPIC_SECTION_UPDATE_COMPLETED, Priority.INTERACTIVE, payload, parent_id)
+
+
 # ===================================================================
 # Relaxed topics
 # ===================================================================
@@ -615,6 +627,8 @@ BUILDERS: dict[str, Any] = {
     TOPIC_PLAN_READY: build_plan_ready,
     TOPIC_WEAVE_BATCH: build_weave_batch,
     TOPIC_DEAD_LETTER: build_dead_letter,
+    TOPIC_SECTION_UPDATE_REQUESTED: build_section_update_requested,
+    TOPIC_SECTION_UPDATE_COMPLETED: build_section_update_completed,
     TOPIC_AFFECT_UPDATE: build_affect_update,
     TOPIC_PROACTIVE_FILL: build_proactive_fill,
     TOPIC_INTENT_ARBITRATED: build_intent_arbitrated,
@@ -680,6 +694,8 @@ def get_builder_registry() -> dict[str, "BuilderEntry"]:
         TOPIC_HIL_RESPONSE: Priority.URGENT,
         TOPIC_PLAN_READY: Priority.INTERACTIVE,
         TOPIC_WEAVE_BATCH: Priority.INTERACTIVE,
+        TOPIC_SECTION_UPDATE_REQUESTED: Priority.INTERACTIVE,
+        TOPIC_SECTION_UPDATE_COMPLETED: Priority.INTERACTIVE,
         TOPIC_AFFECT_UPDATE: Priority.BACKGROUND,
         TOPIC_PROACTIVE_FILL: Priority.BACKGROUND,
         TOPIC_INTENT_ARBITRATED: Priority.INTERACTIVE,
@@ -756,6 +772,8 @@ __all__ = [
     # Internal
     "build_weave_batch",
     "build_dead_letter",
+    "build_section_update_requested",
+    "build_section_update_completed",
     # Relaxed
     "build_affect_update",
     "build_proactive_fill",

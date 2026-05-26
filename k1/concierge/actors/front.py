@@ -30,7 +30,6 @@ import re
 import time
 import uuid
 from dataclasses import replace
-from pathlib import Path
 from typing import Any
 
 from k1.bus.envelope import Envelope
@@ -67,6 +66,7 @@ from k1.concierge.prompt.mode import PromptMode, determine_mode
 from k1.concierge.react.loop import ReactResult, react_loop
 from k1.concierge.task.complexity import ComplexityTier, budget_for_tier
 from k1.concierge.tools.dispatcher import ToolDispatcher
+from k1.diagnostics.prompt_dumps import PROMPT_DUMP_ROOT, prompt_dump_dir
 from k1.hil.config import HILConfig
 from k1.hil.types import HILKind, HILPresentedEnvelope
 from k1.model_hub.ports import IModelHubPort
@@ -131,7 +131,7 @@ def _publish_hil_presented(
         logger.warning("front_handler: hil_presented publish failed", exc_info=True)
 
 
-_PROMPT_DUMP_DIR = Path(__file__).resolve().parents[3] / "data" / "prompt_dumps"
+_PROMPT_DUMP_DIR = PROMPT_DUMP_ROOT
 
 
 def _dump_tool_schema(tool: Any) -> dict[str, Any]:
@@ -202,14 +202,21 @@ def _write_runtime_prompt_dump(
 ) -> None:
     """Persist the exact Front prompt payload for postmortem debugging."""
     try:
-        _PROMPT_DUMP_DIR.mkdir(parents=True, exist_ok=True)
+        dump_dir = prompt_dump_dir(
+            _PROMPT_DUMP_DIR,
+            session_id=envelope.session_id,
+            actor="front",
+        )
+        dump_dir.mkdir(parents=True, exist_ok=True)
         timestamp_ms = int(time.time() * 1000)
         payload = {
             "timestamp_ms": timestamp_ms,
+            "actor": "front",
             "topic": envelope.topic,
             "envelope_id": envelope.envelope_id,
             "parent_id": envelope.parent_id,
             "trace_id": trace_id,
+            "session_id": envelope.session_id,
             "mode": mode.value,
             "domain": domain,
             "tier": tier,
@@ -228,8 +235,8 @@ def _write_runtime_prompt_dump(
             "system_prompt": context.system_prompt,
         }
         stem = f"front_prompt_env{envelope.envelope_id}_{timestamp_ms}"
-        stamped_path = _PROMPT_DUMP_DIR / f"{stem}.json"
-        latest_path = _PROMPT_DUMP_DIR / "front_prompt_latest.json"
+        stamped_path = dump_dir / f"{stem}.json"
+        latest_path = dump_dir / "front_prompt_latest.json"
         serialized = json.dumps(payload, ensure_ascii=False, indent=2)
         stamped_path.write_text(serialized, encoding="utf-8")
         latest_path.write_text(serialized, encoding="utf-8")
@@ -1003,11 +1010,6 @@ _GROUNDING_PROPAGATION_FIELDS = (
     "resolved_spatial_refs",
 )
 
-_TEMPORAL_CLARIFICATION_FIELDS = (
-    "requires_temporal_clarification",
-    "temporal_clarification_reasons",
-)
-
 
 def _sync_dispatch_reference_context(dispatch_payload: dict[str, Any]) -> None:
     reference_context = dict(dispatch_payload.get("reference_context") or {})
@@ -1018,94 +1020,10 @@ def _sync_dispatch_reference_context(dispatch_payload: dict[str, Any]) -> None:
             continue
         reference_context[key] = value
         grounding_context[key] = value
-    for key in _TEMPORAL_CLARIFICATION_FIELDS:
-        value = dispatch_payload.get(key)
-        if value is not None:
-            reference_context[key] = value
     if grounding_context:
         reference_context["grounding"] = grounding_context
     if reference_context:
         dispatch_payload["reference_context"] = reference_context
-
-
-def _resolved_temporal_refs_from_projection(
-    projection: Any,
-) -> tuple[dict[str, Any], dict[str, str]]:
-    from k1.temporal.serialization import resolution_to_dict
-
-    temporal_projection = getattr(projection, "temporal", projection)
-    resolutions = getattr(temporal_projection, "resolved_expressions", ()) or ()
-    refs: dict[str, Any] = {}
-    reasons: dict[str, str] = {}
-    for resolution in resolutions:
-        raw_text = str(getattr(resolution, "raw_text", "") or "").strip()
-        if not raw_text:
-            raw_text = str(getattr(resolution, "normalized_label", "") or "").strip()
-        if not raw_text:
-            continue
-        refs[raw_text] = resolution_to_dict(resolution)
-        if getattr(resolution, "needs_clarification", False):
-            reasons[raw_text] = str(
-                getattr(resolution, "clarification_reason", None) or "ambiguous"
-            )
-    return refs, reasons
-
-
-async def _resolve_temporal_refs_for_dispatch(
-    dispatch_payload: dict[str, Any],
-    *,
-    grounding: Any,
-    temporal: Any,
-    session_id: str | None,
-    turn_id: str,
-    trace_id: str,
-    device_id: str | None,
-    installation_id: str | None,
-) -> None:
-    from k1.temporal.service.expression_candidates import extract_from_dispatch
-
-    candidates = extract_from_dispatch(dispatch_payload)
-    if not candidates:
-        return
-
-    projection = None
-    if grounding is not None:
-        grounding_envelope = await grounding.refresh_turn(
-            session_id,
-            consumer="front",
-            turn_id=turn_id,
-            trace_id=trace_id,
-            candidates=candidates,
-            device_id=device_id,
-            installation_id=installation_id,
-        )
-        projection = await grounding.build_projection(grounding_envelope, consumer="front")
-        from k1.grounding.serialization import projection_to_dict
-        from k1.grounding.service.propagation import build_propagation_metadata
-
-        dispatch_payload.update(build_propagation_metadata(projection))
-        dispatch_payload["grounding"] = projection_to_dict(projection)
-    elif temporal is not None:
-        await temporal.refresh_turn(
-            session_id,
-            turn_id=turn_id,
-            trace_id=trace_id,
-            candidates=candidates,
-            device_id=device_id,
-            installation_id=installation_id,
-        )
-        projection = await temporal.build_projection(session_id, consumer="front")
-        dispatch_payload["temporal_anchor_id"] = projection.anchor.anchor_id
-    else:
-        return
-
-    refs, reasons = _resolved_temporal_refs_from_projection(projection)
-    if refs:
-        dispatch_payload["resolved_temporal_refs"] = refs
-    if reasons:
-        dispatch_payload["requires_temporal_clarification"] = True
-        dispatch_payload["temporal_clarification_reasons"] = reasons
-    _sync_dispatch_reference_context(dispatch_payload)
 
 
 def _get_fsm_state(ss: Any) -> str:
@@ -1674,6 +1592,7 @@ async def front_handler(
         on_text_response=_on_text_response,
         cancellation_check=_never_cancel,
         trace_id=trace_id,
+        session_id=envelope.session_id,
         scenario=mode.value,
         validator=validator,
         on_stream=_on_stream,
@@ -1755,19 +1674,6 @@ async def front_handler(
             _sync_dispatch_reference_context(dispatch_payload)
         device_id = str(envelope_payload.get("device_id") or "") or None
         installation_id = device_id
-        try:
-            await _resolve_temporal_refs_for_dispatch(
-                dispatch_payload,
-                grounding=grounding,
-                temporal=temporal,
-                session_id=envelope.session_id or None,
-                turn_id=str(envelope.envelope_id),
-                trace_id=trace_id,
-                device_id=device_id,
-                installation_id=installation_id,
-            )
-        except Exception:
-            logger.warning("front_handler: dispatch temporal resolution failed", exc_info=True)
         env = build_task_dispatch(
             payload=dispatch_payload,
             parent_id=parent_id,

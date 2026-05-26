@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
+
 from k1.temporal.ports import IRoutinePort
 from k1.temporal.service.ambiguity_resolver import ambiguous_resolution
 from k1.temporal.service.expression_candidates import (
@@ -26,6 +29,7 @@ from k1.temporal.service.temporal_tokens import (
     WeekWindowToken,
 )
 from k1.temporal.service.weekday_rules import resolve_weekday
+from k1.temporal.service.window_builder import day_window
 from k1.temporal.types import CandidateSpan, ResolvedTemporalExpression, TemporalAnchor
 
 
@@ -38,6 +42,9 @@ async def resolve_expression_candidate(
     """Resolve one typed candidate using catalog and deterministic rules."""
 
     value = ensure_candidate(candidate, locale=anchor.locale or "en-US")
+    iso_resolution = _resolve_iso_value(value.text, anchor)
+    if iso_resolution is not None:
+        return iso_resolution
     normalized = normalize_candidate_text(value.text)
     token = lookup_phrase(normalized)
     if token is None and routine_port is not None:
@@ -57,6 +64,53 @@ async def resolve_expression_candidate(
     if isinstance(token, RoutineToken):
         return await resolve_routine_window(value.text, token, anchor, routine_port)
     return ambiguous_resolution(value.text)
+
+
+def _resolve_iso_value(raw_text: str, anchor: TemporalAnchor) -> ResolvedTemporalExpression | None:
+    text = raw_text.strip()
+    if not text:
+        return None
+
+    if "T" not in text and " " not in text:
+        try:
+            parsed_date = date.fromisoformat(text)
+        except ValueError:
+            pass
+        else:
+            return ResolvedTemporalExpression(
+                raw_text,
+                parsed_date.isoformat(),
+                "window",
+                day_window(parsed_date.isoformat(), parsed_date, anchor.timezone),
+                None,
+                None,
+                1.0,
+                False,
+                None,
+            )
+
+    try:
+        parsed_datetime = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+    anchor_zone = ZoneInfo(anchor.timezone)
+    if parsed_datetime.tzinfo is None:
+        local_datetime = parsed_datetime.replace(tzinfo=anchor_zone)
+    else:
+        local_datetime = parsed_datetime.astimezone(anchor_zone)
+    instant_local = local_datetime.isoformat()
+    return ResolvedTemporalExpression(
+        raw_text,
+        instant_local,
+        "instant",
+        None,
+        instant_local,
+        None,
+        1.0,
+        False,
+        None,
+    )
 
 
 async def _routine_token_from_phrase(

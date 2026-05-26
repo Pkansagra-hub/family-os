@@ -20,7 +20,6 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 from k1.concierge.config import get_config
@@ -45,6 +44,11 @@ from k1.concierge.task.parallel_safety import classify_tool_batch
 from k1.concierge.tools.dispatcher import ToolDispatcher, hash_tool_arguments
 from k1.concierge.tools.recovery_contract import ask_human_recovery_from_tool_data
 from k1.concierge.tools.result_protocol import ToolResult
+from k1.diagnostics.prompt_dumps import (
+    PROMPT_DUMP_ROOT,
+    prompt_dump_dir,
+    prompt_dump_segment,
+)
 from k1.model_hub.ports import IModelHubPort
 from k1.model_hub.types import (
     CapabilityType,
@@ -74,7 +78,7 @@ from k1.model_hub.types import ToolDefinition as K1ToolDefinition
 
 logger = logging.getLogger(__name__)
 
-_PROMPT_DUMP_DIR = Path(__file__).resolve().parents[3] / "data" / "prompt_dumps"
+_PROMPT_DUMP_DIR = PROMPT_DUMP_ROOT
 
 
 def _dump_k1_message(message: K1Message) -> dict[str, Any]:
@@ -147,7 +151,19 @@ def _provider_mapping_preview(payload: Any) -> dict[str, Any]:
     return preview
 
 
-def _write_front_llm_first_call_dump(
+def _resolve_reasoning_effort(actor: str, override: str | None) -> str | None:
+    if override is None:
+        return None
+    if override != "auto":
+        return override
+    if actor == "back":
+        return "medium"
+    if actor == "front":
+        return "low"
+    return None
+
+
+def _write_llm_request_dump(
     *,
     actor: str,
     scenario: str,
@@ -156,11 +172,16 @@ def _write_front_llm_first_call_dump(
     use_streaming: bool,
     force_text: bool,
 ) -> None:
-    """Persist the exact first Front HubRequest before it reaches Model Hub."""
-    if actor != "front" or iteration != 0:
+    """Persist the exact HubRequest before it reaches Model Hub."""
+    if actor not in {"front", "back"}:
         return
     try:
-        _PROMPT_DUMP_DIR.mkdir(parents=True, exist_ok=True)
+        dump_dir = prompt_dump_dir(
+            _PROMPT_DUMP_DIR,
+            session_id=request.session_id,
+            actor=actor,
+        )
+        dump_dir.mkdir(parents=True, exist_ok=True)
         timestamp_ms = int(time.time() * 1000)
         payload = {
             "timestamp_ms": timestamp_ms,
@@ -180,24 +201,56 @@ def _write_front_llm_first_call_dump(
                 "temperature": request.constraints.temperature,
                 "provider_preference": request.constraints.provider_preference,
                 "consumer_id": request.constraints.consumer_id,
+                "reasoning_effort": request.constraints.reasoning_effort,
             },
             "payload": _dump_hub_payload(request.payload),
             "provider_mapping_preview": _provider_mapping_preview(request.payload),
         }
-        trace_slug = (request.trace_id or "front").replace("/", "_").replace("\\", "_")
-        stem = f"front_llm_first_call_{trace_slug}_{timestamp_ms}"
-        stamped_path = _PROMPT_DUMP_DIR / f"{stem}.json"
-        latest_path = _PROMPT_DUMP_DIR / "front_llm_first_call_latest.json"
+        trace_slug = prompt_dump_segment(request.trace_id or actor, default=actor)
+        stem = f"{actor}_llm_request_iter{iteration}_{trace_slug}_{timestamp_ms}"
+        stamped_path = dump_dir / f"{stem}.json"
+        latest_path = dump_dir / f"{actor}_llm_request_latest.json"
         serialized = json.dumps(payload, ensure_ascii=False, indent=2)
         stamped_path.write_text(serialized, encoding="utf-8")
         latest_path.write_text(serialized, encoding="utf-8")
+        if actor == "front" and iteration == 0:
+            first_stem = f"front_llm_first_call_{trace_slug}_{timestamp_ms}"
+            (dump_dir / f"{first_stem}.json").write_text(serialized, encoding="utf-8")
+            (dump_dir / "front_llm_first_call_latest.json").write_text(
+                serialized,
+                encoding="utf-8",
+            )
         logger.info(
-            "react_loop: first Front LLM request dump written file=%s latest=%s",
+            "react_loop: %s LLM request dump written iter=%d file=%s latest=%s",
+            actor,
+            iteration,
             stamped_path,
             latest_path,
         )
     except Exception:
-        logger.warning("react_loop: first Front LLM request dump failed", exc_info=True)
+        logger.warning("react_loop: LLM request dump failed", exc_info=True)
+
+
+def _write_front_llm_first_call_dump(
+    *,
+    actor: str,
+    scenario: str,
+    iteration: int,
+    request: HubRequest,
+    use_streaming: bool,
+    force_text: bool,
+) -> None:
+    """Compatibility wrapper for the original first-Front probe."""
+    if actor != "front" or iteration != 0:
+        return
+    _write_llm_request_dump(
+        actor=actor,
+        scenario=scenario,
+        iteration=iteration,
+        request=request,
+        use_streaming=use_streaming,
+        force_text=force_text,
+    )
 
 
 # =========================================================================
@@ -298,6 +351,8 @@ def _unwrap_chunk(hub_chunk: HubChunk) -> StreamChunk:
         tool_calls = hub_chunk.tool_calls or []
         if tool_calls:
             result: Any = ToolCallResultSet(text=hub_chunk.content, tool_calls=tool_calls)
+        elif hub_chunk.thought:
+            result = ReasonResult(text=hub_chunk.content, thinking=hub_chunk.thought)
         else:
             result = ChatResult(text=hub_chunk.content)
         metadata = hub_chunk.metadata
@@ -318,6 +373,9 @@ def _unwrap_chunk(hub_chunk: HubChunk) -> StreamChunk:
             )
         hub_resp = HubResponse(result=result, metadata=metadata)
         return StreamChunk(chunk_type="done", response=_unwrap_response(hub_resp))
+
+    if hub_chunk.thought:
+        return StreamChunk(chunk_type="thought_delta", thought_text=hub_chunk.thought)
 
     if hub_chunk.tool_calls:
         tc = hub_chunk.tool_calls[0]
@@ -953,6 +1011,18 @@ async def _streaming_generate(
     Falls back to model.execute() if stream_execute() is not available
     or raises an error.
     """
+
+    async def _execute_fallback() -> ConciergeModelResponse:
+        fallback_response = _unwrap_response(await model.execute(request))
+        if fallback_response.thought_text:
+            await on_stream(
+                StreamChunk(
+                    chunk_type="thought_delta",
+                    thought_text=fallback_response.thought_text,
+                )
+            )
+        return fallback_response
+
     try:
         response: ConciergeModelResponse | None = None
         async for hub_chunk in model.stream_execute(request):
@@ -964,16 +1034,16 @@ async def _streaming_generate(
 
         if response is None:
             logger.warning("stream_execute ended without done chunk, falling back")
-            return _unwrap_response(await model.execute(request))
+            return await _execute_fallback()
 
         return response
 
     except (NotImplementedError, AttributeError):
         logger.info("stream_execute not available, falling back to execute()")
-        return _unwrap_response(await model.execute(request))
+        return await _execute_fallback()
     except Exception as exc:
         logger.warning("stream_execute failed (%s), falling back to execute()", exc)
-        return _unwrap_response(await model.execute(request))
+        return await _execute_fallback()
 
 
 # =========================================================================
@@ -992,12 +1062,14 @@ async def react_loop(
     on_text_response: Callable[[str], Awaitable[None]],
     cancellation_check: Callable[[], Awaitable[bool]],
     trace_id: str = "",
+    session_id: str = "",
     scenario: str = "",
     validator: LLMOutputValidator | None = None,
     on_stream: Callable[[StreamChunk], Awaitable[None]] | None = None,
     control_queue: asyncio.Queue[BackControlEvent] | None = None,
     completed_tool_call_ids: set[str] | None = None,
     completed_tool_arg_keys: set[str] | None = None,
+    reasoning_effort: str | None = "auto",
 ) -> ReactResult:
     """Shared ReAct loop for both Front and Back actors.
 
@@ -1025,6 +1097,7 @@ async def react_loop(
             compatibility. front_handler calls it after task dispatches.
         cancellation_check: Check if task/turn is cancelled.
         trace_id: End-to-end trace ID for observability.
+        session_id: Session scope for prompt/request diagnostics.
         scenario: Mode/scenario label for observability.
 
     Returns:
@@ -1050,6 +1123,7 @@ async def react_loop(
     _loop_events: list[dict[str, Any]] = []
     _completed_tool_call_ids = set(completed_tool_call_ids or set())
     _completed_tool_arg_keys = set(completed_tool_arg_keys or set())
+    _request_reasoning_effort = _resolve_reasoning_effort(actor, reasoning_effort)
     _retryable_error_counts: dict[str, int] = {}
     _tool_name_counts: dict[str, int] = {}  # name-only spin guard (Front)
     _back_capability_spin_nudge_sent = False
@@ -1428,14 +1502,19 @@ async def react_loop(
             constraints=RequestConstraints(
                 max_tokens=65536,
                 consumer_id=f"concierge.{actor}",
+                reasoning_effort=_request_reasoning_effort,
             ),
             trace_id=trace_id or f"concierge-{actor}-{iteration}",
+            session_id=session_id,
         )
 
-        # ---- LLM CALL (streaming on all Front iterations when on_stream provided) ----
-        use_streaming = on_stream is not None and actor == "front" and not force_text
+        # ---- LLM CALL (streaming whenever a stream sink is provided) ----
+        # Front's final answer is usually force_text=True, so streaming must
+        # stay enabled for CHAT requests too; otherwise the user sees the
+        # reasoning and final text arrive as one lump.
+        use_streaming = on_stream is not None
 
-        _write_front_llm_first_call_dump(
+        _write_llm_request_dump(
             actor=actor,
             scenario=scenario,
             iteration=iteration,
@@ -1457,6 +1536,13 @@ async def react_loop(
                         timeout=_iter_timeout_s,
                     )
                 )
+                if response.thought_text and on_stream is not None:
+                    await on_stream(
+                        StreamChunk(
+                            chunk_type="thought_delta",
+                            thought_text=response.thought_text,
+                        )
+                    )
         except asyncio.TimeoutError:
             logger.error(
                 "react_loop: LLM call TIMED OUT on iter=%d actor=%s "
@@ -1577,16 +1663,24 @@ async def react_loop(
                 iteration,
             )
             if iteration < effective_max_iterations - 1:
+                if actor == "back":
+                    malformed_nudge = (
+                        "Your previous function call had invalid JSON and was rejected before "
+                        "execution. Retry the next appropriate tool call with valid JSON. If you "
+                        "were invoking capabilities, use the exact discovered capability names and "
+                        "simple JSON arguments. Do not call submit_result until the required "
+                        "capability work has been invoked or a tool result says human input is needed."
+                    )
+                else:
+                    malformed_nudge = (
+                        "Your previous function call had invalid JSON and was rejected before "
+                        "execution. Retry with a simpler valid JSON tool call, or respond directly "
+                        "if no tool is needed."
+                    )
                 messages.append(
                     ModelMessage(
                         role="user",
-                        content=(
-                            "Your function call had invalid JSON and was rejected. "
-                            "Call submit_result now. Keep the results array simple: "
-                            "use plain strings instead of nested objects. "
-                            "Summarize each web result as a single string like "
-                            "'Title - URL - Snippet'."
-                        ),
+                        content=malformed_nudge,
                     )
                 )
                 logger.info(

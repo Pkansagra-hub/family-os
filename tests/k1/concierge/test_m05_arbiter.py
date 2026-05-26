@@ -853,7 +853,7 @@ class TestEdgeCases:
             assert 0.0 <= result.confidence <= 1.0, f"confidence {result.confidence} for '{text}'"
 
     def test_all_topics_count_updated(self):
-        """ALL_TOPICS now has 30 topics (29 original + arbiter)."""
+        """ALL_TOPICS includes arbiter and later lifecycle topics."""
         from k1.concierge.bus.topics import ALL_TOPICS
 
-        assert len(ALL_TOPICS) == 47
+        assert len(ALL_TOPICS) == 49

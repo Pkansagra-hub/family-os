@@ -90,8 +90,6 @@ class TaskDispatch:
     spatial_context_id: str | None = None
     resolved_temporal_refs: dict[str, Any] | None = None
     resolved_spatial_refs: dict[str, Any] | None = None
-    requires_temporal_clarification: bool = False
-    temporal_clarification_reasons: dict[str, Any] | None = None
     grounding: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
@@ -157,10 +155,6 @@ class TaskDispatch:
             d["resolved_temporal_refs"] = self.resolved_temporal_refs
         if self.resolved_spatial_refs is not None:
             d["resolved_spatial_refs"] = self.resolved_spatial_refs
-        if self.requires_temporal_clarification:
-            d["requires_temporal_clarification"] = True
-        if self.temporal_clarification_reasons is not None:
-            d["temporal_clarification_reasons"] = self.temporal_clarification_reasons
         if self.grounding is not None:
             d["grounding"] = self.grounding
         return d
@@ -183,10 +177,6 @@ class TaskDispatch:
             spatial_context_id=data.get("spatial_context_id"),
             resolved_temporal_refs=data.get("resolved_temporal_refs"),
             resolved_spatial_refs=data.get("resolved_spatial_refs"),
-            requires_temporal_clarification=bool(
-                data.get("requires_temporal_clarification", False)
-            ),
-            temporal_clarification_reasons=data.get("temporal_clarification_reasons"),
             grounding=data.get("grounding"),
         )
 
@@ -202,20 +192,11 @@ class TaskDispatch:
             value = getattr(self, key)
             if value is not None:
                 metadata[key] = value
-        clarification_metadata: dict[str, Any] = {}
-        if self.requires_temporal_clarification:
-            clarification_metadata["requires_temporal_clarification"] = True
-        if self.temporal_clarification_reasons is not None:
-            clarification_metadata["temporal_clarification_reasons"] = (
-                self.temporal_clarification_reasons
-            )
-        if not metadata and not clarification_metadata:
+        if not metadata:
             return
         reference_context = dict(self.reference_context or {})
         reference_context.update(metadata)
-        reference_context.update(clarification_metadata)
-        if metadata:
-            reference_context["grounding"] = dict(metadata)
+        reference_context["grounding"] = dict(metadata)
         self.reference_context = reference_context
 
     @classmethod

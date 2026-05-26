@@ -120,6 +120,37 @@ async def test_list_events_window_filter(svc) -> None:
     assert titles == {"B"}
 
 
+async def test_list_events_window_filter_accepts_date_aliases_and_overlaps(svc) -> None:
+    service, _, _ = svc
+    await service.dispatch(
+        "create_event",
+        _evt_params(
+            title="Spans Window",
+            start="2026-05-31T22:00:00+00:00",
+            end="2026-06-01T02:00:00+00:00",
+        ),
+        make_ctx(),
+    )
+    await service.dispatch(
+        "create_event",
+        _evt_params(
+            title="Outside",
+            start="2026-07-15T10:00:00+00:00",
+            end="2026-07-15T11:00:00+00:00",
+        ),
+        make_ctx(),
+    )
+
+    out = await service.dispatch(
+        "list_events",
+        {"start_date": "2026-06-01", "end_date": "2026-06-30"},
+        make_ctx(),
+    )
+
+    titles = {r["title"] for r in out["events"]}
+    assert titles == {"Spans Window"}
+
+
 async def test_list_events_member_filter(svc) -> None:
     service, _, _ = svc
     await service.dispatch(

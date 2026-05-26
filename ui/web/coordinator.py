@@ -476,7 +476,7 @@ class UiCoordinator:
             k0_endpoint=k0_endpoint,
             enable_temporal=_env_flag("K1_ENABLE_TEMPORAL", default=True),
             enable_grounding=_env_flag("K1_ENABLE_GROUNDING", default=True),
-            enable_spatial=_env_flag("K1_ENABLE_SPATIAL", default=True),
+            enable_spatial=_env_flag("K1_ENABLE_SPATIAL"),
             # M13: self-model seeding is MANDATORY per product spec — the L1/L2
             # space-graph projection must be populated so downstream services
             # (composer, capsule builder, policy evaluator) see the family.
@@ -723,15 +723,14 @@ class UiCoordinator:
     def _wire_web_timeline_hooks(self) -> None:
         """Subscribe FSM/affect/tool topics; forward to the WebSocketRenderer."""
         from k1.bus import Envelope
-        from k1.concierge.bus.topics import TOPIC_TOOL_STATE_CHANGED  # E15.10
         from k1.concierge.bus.topics import (
             TOPIC_AFFECT_UPDATE,
             TOPIC_STATE_UPDATED,
             TOPIC_TASK_FAILED,
             TOPIC_TOOL_COMPLETED,
             TOPIC_TOOL_STARTED,
+            TOPIC_TOOL_STATE_CHANGED,  # E15.10
         )
-        from k1.hil.topics import TOPIC_HIL_PRESENTED as _TOPIC_HIL_PRESENTED
         from k1.hil.topics import TOPIC_HIL_REQUEST as _TOPIC_HIL_REQUEST
 
         renderer = self.renderer
@@ -815,25 +814,6 @@ class UiCoordinator:
                 logger.debug("HIL request web hook failed", exc_info=True)
 
         self._web_subscriptions.append(bus.subscribe(_TOPIC_HIL_REQUEST, _on_hil_request))
-
-        # GAP-HIL-009 -- broadcast presentation acks to the browser so the
-        # chat input can be marked as the active answer channel for the
-        # currently-open HIL request. The bus publish is performed by the
-        # Front actor when it has rendered the question text.
-        def _on_hil_presented(envelope: Envelope) -> None:
-            p = _safe_payload(envelope)
-            try:
-                logger.info(
-                    "WEB: hil_presented forwarded hil_request_id=%s kind=%s channel=%s",
-                    p.get("hil_request_id", ""),
-                    p.get("kind", ""),
-                    p.get("presentation_channel", ""),
-                )
-                renderer.send_hil_presented(p)
-            except Exception:
-                logger.debug("HIL presented web hook failed", exc_info=True)
-
-        self._web_subscriptions.append(bus.subscribe(_TOPIC_HIL_PRESENTED, _on_hil_presented))
 
         # Task failure: clear browser spinner so the user isn't stuck waiting
         # when Back fails and Front never publishes a response.final.
