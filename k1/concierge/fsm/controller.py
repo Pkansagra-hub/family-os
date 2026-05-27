@@ -567,10 +567,10 @@ class ConciergeController:
         self._write_elision_gate = WriteElisionGate()
         # OPP Pipeline: wires all 8 OPP primitives into lifecycle hooks
         self._opp_pipeline: Any | None = None
-        # M2.I4: SectionUpdateClassifier turn-boundary wiring. Disabled by
-        # default; active mode is an explicit controller dependency so the
-        # existing turn lifecycle remains unchanged until the classifier is
-        # attached by the runtime/factory.
+        # M4.I3: SectionUpdateClassifier normal ownership moved to the
+        # per-session background worker. The controller keeps only an
+        # explicit sync-overlay compatibility boundary for rare same-turn
+        # dispatch-critical cases.
         self._section_update_classifier: Any | None = None
         self._section_update_mode: str = "disabled"
         self._section_update_timeout_ms: int = 250
@@ -888,14 +888,24 @@ class ConciergeController:
         timeout_ms: int = 250,
         classifier_version: str = "section-update-v0",
     ) -> None:
-        """Attach the SectionUpdateClassifier lifecycle dependency.
+        """Attach the optional sync-overlay SectionUpdateClassifier dependency.
 
-        ``active`` is the only mode that gates ``turn.completed``. ``shadow``
-        and ``disabled`` preserve the existing finalize ordering for M2.I4.
+        ``background_apply``, ``shadow``, and ``degraded_noop`` are worker
+        modes and never gate controller turn completion. ``sync_overlay`` is
+        the explicit compatibility path for same-turn dispatch-critical apply.
+        Legacy ``active`` is accepted as an alias for ``sync_overlay``.
         """
 
-        normalized_mode = str(mode or "disabled").lower()
-        if normalized_mode not in {"disabled", "shadow", "active"}:
+        normalized_mode = str(mode or "disabled").strip().lower()
+        if normalized_mode == "active":
+            normalized_mode = "sync_overlay"
+        if normalized_mode not in {
+            "disabled",
+            "shadow",
+            "background_apply",
+            "degraded_noop",
+            "sync_overlay",
+        }:
             raise ValueError(f"unsupported section-update mode: {mode!r}")
         self._section_update_classifier = classifier
         self._section_update_mode = normalized_mode if classifier is not None else "disabled"
@@ -1438,33 +1448,38 @@ class ConciergeController:
 
     def _finalize_turn(self, envelope: Envelope) -> None:
         """Emit turn.completed and drain FrontLock queue. Always called together."""
-        self._run_active_section_update_boundary(envelope)
+        self._run_sync_section_update_overlay_boundary(envelope)
         self._emit_turn_completed(envelope)
         self._drain_front_lock_queue()
 
     def _run_active_section_update_boundary(self, envelope: Envelope) -> None:
-        """Close the active classifier/apply boundary before turn.completed.
+        """Backward-compatible alias for the explicit sync-overlay boundary."""
 
-        M2.I4 keeps disabled/shadow ordering unchanged. Active mode is a
-        bounded synchronous gate: request diagnostic, classifier result (or
-        degraded no-op), writer-port apply, completion diagnostic.
+        self._run_sync_section_update_overlay_boundary(envelope)
+
+    def _run_sync_section_update_overlay_boundary(self, envelope: Envelope) -> None:
+        """Close the explicit sync-overlay boundary before turn.completed.
+
+        Normal M4 section updates run in the background worker after
+        turn.completed. This path exists only for explicit same-turn overlay
+        use and must not be used by the normal integrated lane.
         """
 
-        if self._section_update_mode != "active" or self._section_update_classifier is None:
+        if self._section_update_mode != "sync_overlay" or self._section_update_classifier is None:
             return
 
         try:
             input_data = self._build_section_update_input(envelope)
         except Exception:
             logger.warning(
-                "FSM._run_active_section_update_boundary: failed to build input; "
+                "FSM._run_sync_section_update_overlay_boundary: failed to build input; "
                 "continuing turn completion",
                 exc_info=True,
             )
             return
         if input_data.turn_id in self._section_update_closed_turn_ids:
             logger.debug(
-                "FSM._run_active_section_update_boundary: already closed turn_id=%s",
+                "FSM._run_sync_section_update_overlay_boundary: already closed turn_id=%s",
                 input_data.turn_id,
             )
             return
@@ -1473,7 +1488,7 @@ class ConciergeController:
             build_section_update_requested(
                 build_section_update_requested_payload(
                     input_data,
-                    mode="active",
+                    mode="sync_overlay",
                     classifier_version=self._section_update_classifier_version,
                 ),
                 parent_id=envelope.envelope_id,
@@ -1533,16 +1548,16 @@ class ConciergeController:
                 diagnostics=apply_result.diagnostics,
                 elapsed_ms=classification.elapsed_ms,
             )
-        except Exception as exc:  # noqa: BLE001 - active boundary degrades before turn.completed.
+        except Exception as exc:  # noqa: BLE001 - sync overlay degrades before turn.completed.
             logger.warning(
-                "FSM._run_active_section_update_boundary: degraded after boundary failure",
+                "FSM._run_sync_section_update_overlay_boundary: degraded after boundary failure",
                 exc_info=True,
             )
             self._publish_section_update_completed(
                 envelope,
                 input_data,
                 status=SectionUpdateCompletionStatus.DEGRADED_NOOP,
-                diagnostics=[{"code": "active_boundary_failed", "message": str(exc)}],
+                diagnostics=[{"code": "sync_overlay_boundary_failed", "message": str(exc)}],
             )
 
     def _build_section_update_input(self, envelope: Envelope) -> SectionUpdateInput:
@@ -1561,6 +1576,7 @@ class ConciergeController:
             fsm_state=self._state.value if hasattr(self._state, "value") else str(self._state),
             constraints={
                 "mode": self._section_update_mode,
+                "classifier_mode": self._section_update_mode,
                 "timeout_ms": self._section_update_timeout_ms,
                 "classifier_version": self._section_update_classifier_version,
             },
@@ -1581,7 +1597,7 @@ class ConciergeController:
         payload = build_section_update_completed_payload(
             input_data,
             status=status,
-            mode="active",
+            mode=self._section_update_mode,
             classifier_version=self._section_update_classifier_version,
             plan=plan,
             compile_result=compile_result,
@@ -1590,7 +1606,7 @@ class ConciergeController:
             elapsed_ms=elapsed_ms,
         )
         self._section_update_completion_by_turn_id[input_data.turn_id] = {
-            "mode": payload.get("mode", "active"),
+            "mode": payload.get("mode", self._section_update_mode),
             "status": payload.get("status", ""),
             "plan_id": payload.get("plan_id", ""),
             "plan_idempotency_key": payload.get("plan_idempotency_key", ""),
@@ -4708,6 +4724,8 @@ class ConciergeController:
                 "assistant_response": assistant_response,
                 "timestamp_ms": int(time.time() * 1000),
                 "turn_number": self._turn_number,
+                "prompt_mode": "front_react",
+                "fsm_state": self._state.value if hasattr(self._state, "value") else str(self._state),
             }
             section_update_summary = self._section_update_completion_by_turn_id.get(turn_id)
             if section_update_summary:

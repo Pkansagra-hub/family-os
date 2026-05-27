@@ -43,6 +43,11 @@ from k1.concierge.adapters.ssm_state import SSMStateAdapter
 from k1.concierge.config.concierge import ConciergeConfig
 from k1.concierge.config.kernel import KernelConfig
 from k1.concierge.factory import ConciergeFactory, PortBundle
+from k1.concierge.section_update import (
+    DeterministicSectionUpdateClassifier,
+    SectionUpdateBackgroundWorker,
+    SectionUpdateWorkerConfig,
+)
 from k1.fabric.adapters.bridge_connection import BridgeConnectionAdapter
 from k1.fabric.adapters.delta_bus_prod import DeltaBusProdAdapter
 from k1.fabric.adapters.event_port_prod import EventPortProdAdapter
@@ -264,6 +269,11 @@ class KernelService:
         # shared Fabric. Closed during shutdown / cleanup.
         self._family_tools: Any | None = None
 
+        # M4: optional hidden per-session SectionUpdateBackgroundWorker.
+        # The worker is disabled by default in KernelConfig and receives an
+        # injected classifier before sessions are created in shadow/apply mode.
+        self._section_update_classifier: Any | None = None
+
         # P1.1: Shared routing reader (resolves session_id → SSM)
         self._session_routing_reader: SessionRoutingStateReader | None = None
 
@@ -296,6 +306,10 @@ class KernelService:
     def config(self) -> KernelConfig:
         """The kernel configuration."""
         return self._config
+
+    def set_section_update_classifier(self, classifier: Any | None) -> None:
+        """Inject the classifier used by future per-session background workers."""
+        self._section_update_classifier = classifier
 
     @property
     def async_bus(self) -> Any | None:
@@ -873,6 +887,31 @@ class KernelService:
         if session_count > 0:
             details["sessions"] = f"{session_count} active session(s)"
 
+        section_update_enabled = bool(
+            getattr(self._config, "enable_section_update_worker", False)
+        ) and str(getattr(self._config, "section_update_worker_mode", "off") or "off").strip().lower() not in {
+            "",
+            "off",
+            "disabled",
+            "none",
+        }
+        if section_update_enabled:
+            missing: list[str] = []
+            stopped: list[str] = []
+            for sid, session in self._sessions.items():
+                worker = getattr(session, "section_update_worker", None)
+                if worker is None:
+                    missing.append(sid)
+                elif not bool(getattr(worker, "is_running", False)):
+                    stopped.append(sid)
+            components["section_update_workers"] = not missing and not stopped
+            details["section_update_workers"] = (
+                f"active={session_count - len(missing) - len(stopped)} "
+                f"missing={len(missing)} stopped={len(stopped)}"
+            )
+        else:
+            components["section_update_workers"] = True
+
         healthy = all(components.values())
         return HealthStatus(
             healthy=healthy,
@@ -1047,6 +1086,27 @@ class KernelService:
                     session_id,
                     exc,
                 )
+
+        # Reverse P5.5: stop section-update worker before MemoryWriter so any
+        # queued background apply cannot call writer_port during teardown.
+        section_update_worker = getattr(session, "section_update_worker", None)
+        if section_update_worker is not None and hasattr(section_update_worker, "stop"):
+            try:
+                await asyncio.wait_for(
+                    asyncio.to_thread(
+                        section_update_worker.stop,
+                        timeout_s=_TEARDOWN_TIMEOUT,
+                    ),
+                    timeout=_TEARDOWN_TIMEOUT,
+                )
+            except Exception as exc:
+                errors.append(exc)
+                logger.warning(
+                    "destroy_session(%s): SectionUpdateBackgroundWorker stop failed: %s",
+                    session_id,
+                    exc,
+                )
+            self._log_lifecycle("P5_5_teardown_complete", f"session:{session_id}")
 
         # Reverse P5: Stop MemoryWriter
         try:
@@ -2867,6 +2927,59 @@ class KernelService:
             session_router.close()
             raise
 
+        section_update_worker: SectionUpdateBackgroundWorker | None = None
+        section_update_mode = str(
+            getattr(self._config, "section_update_worker_mode", "off") or "off"
+        ).strip().lower()
+        section_update_enabled = bool(
+            getattr(self._config, "enable_section_update_worker", False)
+        ) and section_update_mode not in {"", "off", "disabled", "none"}
+        if section_update_enabled:
+            try:
+                classifier = self._section_update_classifier
+                if classifier is None and section_update_mode == "offline_stub":
+                    classifier = DeterministicSectionUpdateClassifier()
+                section_update_worker = SectionUpdateBackgroundWorker(
+                    session_id=session_id,
+                    bus=session_bus,
+                    state_manager=ssm,
+                    writer_port=ss_writer,
+                    classifier=classifier,
+                    config=SectionUpdateWorkerConfig(
+                        mode=section_update_mode,
+                        timeout_ms=int(
+                            getattr(self._config, "section_update_worker_timeout_ms", 75_000)
+                            or 75_000
+                        ),
+                        queue_max=int(
+                            getattr(self._config, "section_update_worker_queue_max", 128) or 128
+                        ),
+                        classifier_version=str(
+                            getattr(
+                                self._config,
+                                "section_update_classifier_version",
+                                "section-update-v0",
+                            )
+                            or "section-update-v0"
+                        ),
+                        provider_id=str(
+                            getattr(self._config, "section_update_provider", "") or ""
+                        ),
+                        model_id=str(getattr(self._config, "section_update_model", "") or ""),
+                    ),
+                )
+                section_update_worker.start()
+                self._log_lifecycle("P5_5_complete", f"session:{session_id}")
+            except Exception:
+                if section_update_worker is not None:
+                    await asyncio.to_thread(section_update_worker.stop)
+                await session_memory_writer.stop()
+                await session_concierge.stop()
+                ssm.stop()
+                session_bus.close()
+                session_router.close()
+                raise
+
         session = SessionInstance(
             session_id=session_id,
             member_id=None,
@@ -2887,6 +3000,7 @@ class KernelService:
             consumer_task=session_concierge.consumer_task,
             dead_letter_consumer=session_concierge.dead_letter_consumer,
             created_at=datetime.now(timezone.utc),
+            section_update_worker=section_update_worker,
             front_ctx=session_concierge.front_ctx,
             back_ctx=session_concierge.back_ctx,
             ledger=session_concierge.ledger,

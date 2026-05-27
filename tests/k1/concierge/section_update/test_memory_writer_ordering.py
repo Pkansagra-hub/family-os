@@ -1,4 +1,4 @@
-"""M2.I5 MemoryWriter ordering against section-update turn completion."""
+"""M4.I3 MemoryWriter ordering against section-update turn completion."""
 
 from __future__ import annotations
 
@@ -114,7 +114,7 @@ def _captured_by_topic(bus, topic: str) -> list[Envelope]:
     return [item for item in bus.captured if item.topic == topic]
 
 
-def test_memory_writer_consumes_after_active_section_update_apply() -> None:
+def test_memory_writer_consumes_after_sync_overlay_section_update_apply() -> None:
     assert SessionBatchDispatcher.TOPIC == TOPIC_TURN_COMPLETED
     ctrl, bus = _controller()
     writer = _Writer()
@@ -124,7 +124,7 @@ def test_memory_writer_consumes_after_active_section_update_apply() -> None:
     ctrl._current_turn_assistant_response = "done"
     ctrl.set_section_update_classifier(
         _Classifier(),
-        mode="active",
+        mode="sync_overlay",
         timeout_ms=100,
         classifier_version="classifier-v1",
     )
@@ -145,22 +145,23 @@ def test_memory_writer_consumes_after_active_section_update_apply() -> None:
     assert typed_payload.section_update["mutation_count"] == 1
 
 
-def test_shadow_mode_memory_writer_ordering_remains_unchanged() -> None:
-    ctrl, bus = _controller()
-    writer = _Writer()
-    ctrl._ss = _SessionState(writer)
-    ctrl._turn_number = 1
-    ctrl._current_turn_assistant_response = "done"
-    ctrl.set_section_update_classifier(_Classifier(), mode="shadow", timeout_ms=100)
+def test_worker_owned_modes_memory_writer_ordering_remains_unchanged() -> None:
+    for mode in ("shadow", "background_apply", "degraded_noop"):
+        ctrl, bus = _controller()
+        writer = _Writer()
+        ctrl._ss = _SessionState(writer)
+        ctrl._turn_number = 1
+        ctrl._current_turn_assistant_response = "done"
+        ctrl.set_section_update_classifier(_Classifier(), mode=mode, timeout_ms=100)
 
-    ctrl._finalize_turn(_final_response_env())
+        ctrl._finalize_turn(_final_response_env())
 
-    assert writer.calls == []
-    typed_payload = TurnDispatcher._deserialize(
-        _payload(_captured_by_topic(bus, TOPIC_TURN_COMPLETED)[0])
-    )
-    assert typed_payload.section_update is None
-    assert [item.topic for item in bus.captured] == [TOPIC_TURN_COMPLETED]
+        assert writer.calls == []
+        typed_payload = TurnDispatcher._deserialize(
+            _payload(_captured_by_topic(bus, TOPIC_TURN_COMPLETED)[0])
+        )
+        assert typed_payload.section_update is None
+        assert [item.topic for item in bus.captured] == [TOPIC_TURN_COMPLETED]
 
 
 def test_classifier_timeout_does_not_block_memory_writer_consumption() -> None:
@@ -169,7 +170,7 @@ def test_classifier_timeout_does_not_block_memory_writer_consumption() -> None:
     ctrl._ss = _SessionState(writer)
     ctrl._turn_number = 2
     ctrl._current_turn_assistant_response = "done"
-    ctrl.set_section_update_classifier(_SlowClassifier(), mode="active", timeout_ms=1)
+    ctrl.set_section_update_classifier(_SlowClassifier(), mode="sync_overlay", timeout_ms=1)
 
     ctrl._finalize_turn(_final_response_env())
 

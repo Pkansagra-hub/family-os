@@ -215,6 +215,33 @@ async def test_list_reminders_recipient_filter(svc):
     assert res["reminders"][0]["recipient"] == "alice"
 
 
+async def test_create_reminder_normalizes_named_recipient(svc):
+    service, _, _ = svc
+    ctx = make_ctx(user_id="alex", role="guardian", band="GREEN")
+    create_res = await service.dispatch(
+        "create_reminder",
+        {"title": "Vitamins", "recipient": "Nana Liz", "trigger": _TIME_TRIGGER},
+        ctx,
+    )
+
+    out = await service.dispatch("get_reminder", {"reminder_id": create_res["reminder_id"]}, ctx)
+    assert out["reminder"]["recipient"] == "nana_liz"
+
+
+async def test_list_reminders_recipient_filter_accepts_display_name(svc):
+    service, _, _ = svc
+    ctx = make_ctx(user_id="alex", role="parent", band="GREEN")
+    await service.dispatch(
+        "create_reminder",
+        {"title": "Self reminder", "recipient": "alex", "trigger": _TIME_TRIGGER},
+        ctx,
+    )
+
+    res = await service.dispatch("list_reminders", {"recipient": "Alex"}, ctx)
+    assert res["count"] == 1
+    assert res["reminders"][0]["recipient"] == "alex"
+
+
 async def test_list_reminders_status_filter(svc):
     service, _, _ = svc
     ctx = make_ctx(user_id="u1", role="parent", band="AMBER")

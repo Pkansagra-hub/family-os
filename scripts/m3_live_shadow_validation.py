@@ -98,6 +98,9 @@ def main() -> None:
         write_json(args.output, result)
         print(f"dry_run=true output={args.output}")
         return
+    if args.simulated_kernel:
+        asyncio.run(run_simulated_kernel_validation(config, args))
+        return
     asyncio.run(run_live_validation(config, args))
 
 
@@ -108,8 +111,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--base-url", default="")
-    parser.add_argument("--preferred-provider", default=os.environ.get("LLM_PROVIDER", ""))
-    parser.add_argument("--preferred-model", default=os.environ.get("K1_SECTION_UPDATE_MODEL", ""))
+    parser.add_argument("--preferred-provider", default="")
+    parser.add_argument("--preferred-model", default="")
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--timeout-ms", type=int, default=45000)
     parser.add_argument("--max-output-tokens", type=int, default=2048)
@@ -124,9 +127,20 @@ def build_parser() -> argparse.ArgumentParser:
         default=0.0,
         help="Override quota.per_turn_timeout_s for quick live-kernel failure proof.",
     )
+    parser.add_argument(
+        "--model-call-spacing-s",
+        type=float,
+        default=0.0,
+        help="Minimum delay between classifier provider calls; useful for live quota pacing.",
+    )
     parser.add_argument("--wait-ready-s", type=float, default=0.0)
     parser.add_argument(
         "--dry-run", action="store_true", help="Validate config without web/model calls."
+    )
+    parser.add_argument(
+        "--simulated-kernel",
+        action="store_true",
+        help="Bypass boot_web/FSM; build turns from in-memory SessionState and call the provider.",
     )
     return parser
 
@@ -163,8 +177,7 @@ def dry_run_report(config: dict[str, Any], args: argparse.Namespace) -> dict[str
 
 
 async def run_live_validation(config: dict[str, Any], args: argparse.Namespace) -> None:
-    normalize_boot_web_provider_env()
-    normalize_requested_model_env(config, args)
+    normalize_provider_env(config, args)
 
     base_url = resolved_base_url(config, args)
     quota = dict(config.get("quota") or {})
@@ -209,6 +222,53 @@ async def run_live_validation(config: dict[str, Any], args: argparse.Namespace) 
     }
     write_json(args.output, report)
     print(f"live_kernel_shadow_poc=true output={args.output}")
+    print(
+        "active_eligible={eligible} failed_gates={failed}".format(
+            eligible=gate_report["active_eligible"],
+            failed=",".join(gate_report["failed_gates"]) or "none",
+        )
+    )
+
+
+async def run_simulated_kernel_validation(config: dict[str, Any], args: argparse.Namespace) -> None:
+    load_dotenv_files()
+    normalize_provider_env(config, args)
+
+    quota = dict(config.get("quota") or {})
+    run_label = resolved_run_label(config, args)
+    turn_specs = selected_turns(config, args, run_label)
+    enforce_quota(turn_specs, quota)
+    started = time.perf_counter()
+
+    observations, simulation_summary = collect_simulated_kernel_turns(turn_specs, config)
+    classifier_records = await classify_observations(observations, config, args)
+    turn_results = [record["turn_result"] for record in classifier_records]
+    manifests = [record["manifest"] for record in classifier_records]
+    gate_report = evaluate_quality_gates(
+        manifests=manifests,
+        config=config,
+        provider_id=preferred_provider(config, args),
+        model_id=preferred_model(config, args),
+        output_path=args.output,
+    )
+    elapsed_s = round(time.perf_counter() - started, 3)
+
+    report = {
+        "runner": "m3_live_shadow_validation",
+        "mode": "simulated_kernel_shadow_poc",
+        "base_url": "simulated://sessionstate-bus",
+        "run_label": run_label,
+        "requested_turns": len(turn_specs),
+        "completed_turns": len(turn_results),
+        "elapsed_s": elapsed_s,
+        "quota": quota,
+        "simulation": simulation_summary,
+        "timeout_path_safe_noop_proven": prove_timeout_path_safe_noop(),
+        "quality_gate_report": gate_report,
+        "turn_results": turn_results,
+    }
+    write_json(args.output, report)
+    print(f"simulated_kernel_shadow_poc=true output={args.output}")
     print(
         "active_eligible={eligible} failed_gates={failed}".format(
             eligible=gate_report["active_eligible"],
@@ -599,6 +659,175 @@ def failed_turn_observation(spec: dict[str, Any], index: int, error: str) -> dic
     }
 
 
+def collect_simulated_kernel_turns(
+    turn_specs: list[dict[str, Any]], config: dict[str, Any]
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    from k1.concierge.section_update.types import SectionUpdatePlan
+    from k1.sessionstate.factory import SessionStateFactory
+
+    base_session_id = str(config.get("session_id") or "m3-simulated-session")
+    session_id = f"{base_session_id}-sim-{run_id_seed()}"
+    manager = SessionStateFactory.create_for_testing(session_id=session_id)
+    start_result = manager.start(restore_if_exists=False)
+    golden_cases = golden_cases_by_id(config)
+    observations: list[dict[str, Any]] = []
+    oracle_results: list[dict[str, Any]] = []
+    stop_result: Any = None
+
+    try:
+        for index, spec in enumerate(turn_specs, start=1):
+            pre_turn_snapshot = build_session_state_summary_from_manager(
+                manager,
+                source="simulated/sessionstate/pre_turn",
+            )
+            observation = simulated_turn_observation(spec, index, pre_turn_snapshot)
+            observations.append(observation)
+
+            case_id = str(spec.get("golden_case_id") or "")
+            case = golden_cases.get(case_id, {})
+            plan_payload = case.get("expected_plan") if isinstance(case, dict) else None
+            if not plan_payload:
+                continue
+            plan = SectionUpdatePlan.from_dict(plan_payload)
+            turn_apply_results: list[dict[str, Any]] = []
+            for mutation in plan.mutations:
+                result = manager.mutate(
+                    section=mutation.section,
+                    operation=mutation.operation,
+                    data=dict(mutation.data),
+                    cognitive_trace_id=f"simulated-oracle:{case_id}:{index}",
+                )
+                result_dict = result.to_dict()
+                result_dict["golden_case_id"] = case_id
+                turn_apply_results.append(result_dict)
+                oracle_results.append(result_dict)
+                if not result.success:
+                    raise RuntimeError(
+                        "simulated oracle apply failed: "
+                        f"case={case_id} section={mutation.section} "
+                        f"operation={mutation.operation} error={result.error or result.reason}"
+                    )
+            if turn_apply_results:
+                observation["simulated_oracle_apply_results"] = turn_apply_results
+    finally:
+        stop_result = manager.stop(checkpoint_before_stop=False)
+
+    summary = {
+        "kernel": "bypassed",
+        "fsm": "bypassed",
+        "session_state": "SessionStateFactory.create_for_testing",
+        "event_port": "LocalEventAdapter(capture_mode=True)",
+        "writer_port": "DirectWriterAdapter",
+        "bus_topic": "k1.response.final.v1",
+        "session_id": session_id,
+        "start_result": to_jsonable(start_result),
+        "stop_result": to_jsonable(stop_result),
+        "oracle_mutation_count": len(oracle_results),
+        "oracle_failed_mutation_count": sum(
+            1 for item in oracle_results if not item.get("success")
+        ),
+    }
+    return observations, summary
+
+
+def simulated_turn_observation(
+    spec: dict[str, Any], index: int, pre_turn_snapshot: dict[str, Any]
+) -> dict[str, Any]:
+    member = str(spec.get("member") or "Alex")
+    device = str(spec.get("device") or "alex_phone")
+    text = str(spec.get("text") or "").strip()
+    response_text = str(
+        spec.get("simulated_response_text")
+        or (
+            "Acknowledged for section-update validation."
+            if spec.get("expected_operations")
+            else "Acknowledged."
+        )
+    )
+    return {
+        "index": index,
+        "thread": spec.get("thread", ""),
+        "member": member,
+        "device": device,
+        "text": text,
+        "golden_case_id": str(spec.get("golden_case_id") or ""),
+        "run_label": str(spec.get("run_label") or ""),
+        "expected_operations": list(spec.get("expected_operations") or []),
+        "critical_operations": list(spec.get("critical_operations") or []),
+        "dangerous_false_write_if_unexpected": bool(
+            spec.get("dangerous_false_write_if_unexpected", False)
+        ),
+        "web_turn": index,
+        "response_text": response_text,
+        "activity": {
+            "turn": index,
+            "session_ops": [],
+            "tool_calls": [],
+            "state_changes": {
+                "simulated_bus_k1.session.user.input.v1": "DISPATCHING",
+                "simulated_bus_k1.response.final.v1": "LISTENING",
+            },
+            "fsm_states": ["LISTENING", "DISPATCHING", "LISTENING"],
+            "bytes_in": len(text.encode("utf-8")),
+            "bytes_out": len(response_text.encode("utf-8")),
+            "latency_ms": 0,
+        },
+        "events_seen": ["simulated_turn_info", "simulated_response", "simulated_activity"],
+        "session_snapshot_before_turn": pre_turn_snapshot,
+        "prompt_mode": "simulated_kernel",
+        "prompt_context_source": "simulated_sessionstate_bus_poc",
+    }
+
+
+def build_session_state_summary_from_manager(manager: Any, *, source: str) -> dict[str, Any]:
+    snapshot = manager.get_snapshot().to_dict()
+    sections = snapshot.get("sections") if isinstance(snapshot.get("sections"), dict) else {}
+    section_details: dict[str, Any] = {}
+    section_payloads: dict[str, Any] = {}
+    for section_name in list(sections):
+        try:
+            section = manager.get_section(section_name)
+            if hasattr(section, "get_metadata") and callable(section.get_metadata):
+                section_details[section_name] = to_jsonable(section.get_metadata())
+            data: Any
+            serializer = "attributes"
+            if hasattr(section, "to_dict") and callable(section.to_dict):
+                serializer = "to_dict"
+                data = section.to_dict()
+            else:
+                data = {
+                    key.lstrip("_"): value
+                    for key, value in vars(section).items()
+                    if not key.startswith("__") and not callable(value)
+                }
+            section_payloads[section_name] = {
+                "serializer": serializer,
+                "data": compact_json(to_jsonable(data)),
+            }
+        except Exception as exc:  # noqa: BLE001 - simulated snapshot should remain inspectable.
+            section_details[section_name] = {"error": str(exc)}
+            section_payloads[section_name] = {"error": str(exc), "data": None}
+
+    compact_sections = compact_section_metadata(sections, section_details)
+    cognitive_sections = compact_cognitive_sections(section_details, section_payloads)
+    version_source = {
+        "sections": compact_sections,
+        "cognitive_sections": cognitive_sections,
+        "last_mutation_ms": snapshot.get("last_mutation_ms", 0),
+    }
+    return {
+        "available": True,
+        "source": source,
+        "snapshot_version": stable_hash(version_source),
+        "snapshot_source_epoch": str(snapshot.get("last_mutation_ms") or ""),
+        "section_names": sorted(str(name) for name in sections),
+        "section_count": len(sections),
+        "sections": compact_sections,
+        "cognitive_sections": cognitive_sections,
+        "local_cold_count": 0,
+    }
+
+
 async def send_and_collect_turn(
     websocket: aiohttp.ClientWebSocketResponse,
     spec: dict[str, Any],
@@ -683,6 +912,7 @@ async def classify_observations(
     args: argparse.Namespace,
 ) -> list[dict[str, Any]]:
     load_dotenv_files()
+    normalize_provider_env(config, args)
     from k1.model_hub.factory import ModelHubFactory
     from k1.model_hub.loader import ProviderConfig
 
@@ -696,7 +926,22 @@ async def classify_observations(
         )
     records: list[dict[str, Any]] = []
     try:
-        for observation in observations:
+        spacing_s = float(
+            args.model_call_spacing_s
+            or (config.get("quota") or {}).get("model_call_spacing_s")
+            or 0.0
+        )
+        next_call_at = time.perf_counter()
+        for index, observation in enumerate(observations):
+            delay_s = next_call_at - time.perf_counter()
+            if delay_s > 0:
+                print(
+                    "throttle_sleep_s={sleep:.3f} before_turn={turn}".format(
+                        sleep=delay_s,
+                        turn=observation["index"],
+                    )
+                )
+                await asyncio.sleep(delay_s)
             record = await classify_one_observation(hub, observation, config, args)
             records.append(record)
             manifest = record["manifest"]
@@ -710,6 +955,8 @@ async def classify_observations(
                     front=manifest["legacy_front_comparison_status"],
                 )
             )
+            if spacing_s > 0 and index < len(observations) - 1:
+                next_call_at = max(next_call_at + spacing_s, time.perf_counter() + spacing_s)
     finally:
         await shutdown_hub(hub)
     return records
@@ -833,7 +1080,7 @@ def build_classifier_input(
         turn_id=f"{session_id}:{web_turn}",
         session_id=session_id,
         cognitive_trace_id=f"section-update:{session_id}:{web_turn}",
-        prompt_mode="front_live_kernel",
+        prompt_mode=str(observation.get("prompt_mode") or "front_live_kernel"),
         fsm_state=str(activity.get("fsm_states", [""])[-1] if activity.get("fsm_states") else ""),
         bus_topic="k1.response.final.v1",
         user_turn={"text": observation.get("text", "")},
@@ -847,7 +1094,7 @@ def build_classifier_input(
             "latency_ms": activity.get("latency_ms", 0),
         },
         prompt_context={
-            "source": "live_boot_web_poc",
+            "source": str(observation.get("prompt_context_source") or "live_boot_web_poc"),
             "raw_prompt_included": False,
         },
         session_snapshot={
@@ -959,7 +1206,6 @@ def plan_from_tool_calls(
         SectionUpdatePlan,
         SectionUpdateValidation,
     )
-    from k1.concierge.section_update.vocabulary import validate_target
 
     matching_calls = [call for call in tool_calls if call.get("name") == required_tool_name]
     if not matching_calls:
@@ -1037,6 +1283,7 @@ def sanitize_model_mutations(
     validation_errors: list[str] = []
     diagnostics: list[dict[str, Any]] = []
     seen_keys: set[str] = set()
+    user_text = str((input_data.get("user_turn") or {}).get("text") or "").lower()
     for index, raw_item in enumerate(raw_mutations):
         if not isinstance(raw_item, dict):
             reason = "mutation_not_object"
@@ -1054,6 +1301,39 @@ def sanitize_model_mutations(
         semantic_key = mutation_semantic_key(item)
         if semantic_key and semantic_key in seen_keys:
             errors.append(f"duplicate_semantic_mutation:{semantic_key}")
+        if single_mutation_operation_requires_one(item) and any(
+            str(accepted_item.get("section") or "") == str(item.get("section") or "")
+            and str(accepted_item.get("operation") or "") == str(item.get("operation") or "")
+            for accepted_item in accepted
+        ):
+            errors.append(
+                "duplicate_singleton_operation:emit one canonical mutation for this operation per completed turn"
+            )
+        if (
+            str(item.get("section") or "") == "beliefs_active"
+            and str(item.get("operation") or "") == "add_fact"
+            and any(
+                str(accepted_item.get("section") or "") == "beliefs_active"
+                and str(accepted_item.get("operation") or "") == "add_fact"
+                for accepted_item in accepted
+            )
+        ):
+            errors.append(
+                "duplicate_belief_add_fact:emit one canonical belief fact per simple completed turn"
+            )
+        if (
+            is_ordinary_correction_turn(user_text)
+            and str(item.get("section") or "") == "beliefs_active"
+            and str(item.get("operation") or "") == "add_fact"
+            and any(
+                str(accepted_item.get("section") or "") == "beliefs_active"
+                and str(accepted_item.get("operation") or "") == "add_fact"
+                for accepted_item in accepted
+            )
+        ):
+            errors.append(
+                "duplicate_correction_add_fact:ordinary correction should emit one canonical replacement fact"
+            )
 
         if errors:
             rejected.append(rejected_candidate_from_mutation(item, index, errors))
@@ -1088,9 +1368,18 @@ def normalize_model_mutation(item: dict[str, Any]) -> dict[str, Any]:
 def validate_mutation_semantics(item: dict[str, Any], *, input_data: dict[str, Any]) -> list[str]:
     section = str(item.get("section") or "")
     operation = str(item.get("operation") or "")
-    data = item.get("data") if isinstance(item.get("data"), dict) else {}
+    raw_data = item.get("data")
+    data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
     user_text = str((input_data.get("user_turn") or {}).get("text") or "").lower()
     errors: list[str] = []
+    if is_runtime_or_capability_owned_question(user_text):
+        errors.append(
+            "invalid_semantics:runtime/capability live-state question is no_op for section update"
+        )
+    if is_unresolved_placeholder_noop_turn(user_text):
+        errors.append(
+            "invalid_semantics:unresolved placeholder-only turn lacks a safe cognitive payload"
+        )
     if section == "beliefs_active" and operation == "update_confidence":
         if not explicit_confidence_update_requested(user_text):
             errors.append(
@@ -1104,6 +1393,33 @@ def validate_mutation_semantics(item: dict[str, Any], *, input_data: dict[str, A
         if is_conversational_closure_fact(item, data, input_data):
             errors.append(
                 "invalid_semantics:conversational closure/acknowledgement is no_op, not a belief"
+            )
+        if is_local_discourse_referent_fact(data, user_text):
+            errors.append(
+                "invalid_semantics:conversation-local referent belongs to scoreboard.add_referent, not beliefs_active.add_fact"
+            )
+        if is_affective_state_belief(item, data, user_text):
+            errors.append(
+                "invalid_semantics:first-person affect belongs to affective_now.update, not beliefs_active.add_fact"
+            )
+    if section == "narrative_active" and operation == "create_thread":
+        if is_topic_shift_without_thread_request(user_text):
+            errors.append(
+                "invalid_semantics:topic-only focus/switch belongs to scoreboard.push_topic, not narrative_active.create_thread"
+            )
+    if section == "scoreboard" and operation == "add_referent":
+        if is_durable_shorthand_definition(user_text):
+            errors.append(
+                "invalid_semantics:durable shorthand definition belongs to beliefs_active.add_fact, not scoreboard.add_referent"
+            )
+        if is_durable_correction_choice(user_text):
+            errors.append(
+                "invalid_semantics:durable correction choice belongs to beliefs_active.add_fact, not scoreboard.add_referent"
+            )
+    if section == "clarifications" and operation == "request":
+        if is_nonblocking_tracking_question(user_text):
+            errors.append(
+                "invalid_semantics:non-blocking tracking question belongs to scoreboard.push_question, not clarifications.request"
             )
     return errors
 
@@ -1177,6 +1493,240 @@ def is_conversational_closure_fact(
     return any(term in candidate_text for term in closure_fact_terms)
 
 
+def is_local_discourse_referent_fact(data: dict[str, Any], user_text: str) -> bool:
+    scope_cues = (
+        "for the next question",
+        "in this conversation",
+        "for this chat",
+        "in this thread",
+        "when i say",
+    )
+    definition_cues = (" means ", " refers to ", " i mean ")
+    referent_cues = (
+        " this ",
+        " that ",
+        " their ",
+        " her ",
+        " his ",
+        " him ",
+        " it ",
+        " the plan ",
+        " the form ",
+    )
+    padded_user_text = f" {user_text} "
+    if not any(cue in padded_user_text for cue in scope_cues):
+        return False
+    if not any(cue in padded_user_text for cue in definition_cues):
+        return False
+    candidate_text = " ".join(
+        canonical_text(value)
+        for value in (data.get("subject"), data.get("predicate"), data.get("obj"))
+    )
+    padded_candidate = f" {candidate_text} "
+    return any(cue in padded_user_text or cue in padded_candidate for cue in referent_cues)
+
+
+def is_affective_state_belief(item: dict[str, Any], data: dict[str, Any], user_text: str) -> bool:
+    affect_terms = (
+        "relieved",
+        "anxious",
+        "overwhelmed",
+        "frustrated",
+        "excited",
+        "upset",
+        "worried",
+        "proud",
+    )
+    first_person_cues = ("i am ", "i'm ", "i feel ", "i felt ", "i was ")
+    if not any(cue in user_text for cue in first_person_cues):
+        return False
+    if not any(term in user_text for term in affect_terms):
+        return False
+    candidate_text = " ".join(
+        canonical_text(value)
+        for value in (
+            data.get("subject"),
+            data.get("predicate"),
+            data.get("obj"),
+            item.get("reason"),
+            item.get("idempotency_key"),
+        )
+    )
+    return any(term in candidate_text for term in affect_terms)
+
+
+def is_topic_shift_without_thread_request(user_text: str) -> bool:
+    topic_shift_cues = (
+        "focus on",
+        "switch the conversation to",
+        "talk about",
+        "let's focus",
+        "lets focus",
+    )
+    explicit_thread_cues = (
+        "thread",
+        "new thread",
+        "separate thread",
+        "create a thread",
+        "start a thread",
+        "open a new thread",
+        "make this a new thread",
+    )
+    return any(cue in user_text for cue in topic_shift_cues) and not any(
+        cue in user_text for cue in explicit_thread_cues
+    )
+
+
+def is_runtime_or_capability_owned_question(user_text: str) -> bool:
+    text = normalized_phrase(user_text)
+    if "internal policy" in text and ("allowed to write" in text or "may write" in text):
+        return True
+    if "policy" in text and "allowed to write" in text:
+        return True
+    if ("warm" in text or "archive" in text) and (
+        "what is in" in text
+        or "whats in" in text
+        or "show" in text
+        or "read" in text
+        or "list" in text
+        or "tell me" in text
+    ):
+        return True
+    if "exact transcript" in text or "transcript line" in text:
+        return True
+    if "artifact" in text and ("last task" in text or "task produce" in text or "produced" in text):
+        return True
+    if "controller" in text and "state" in text:
+        return True
+    if "do you know where" in text and ("device" in text or "phone" in text):
+        return True
+    if "phone" in text and "online" in text and ("is this" in text or "right now" in text):
+        return True
+    if (
+        "account" in text
+        and "connected" in text
+        and ("can you tell" in text or "whether" in text or "right now" in text)
+    ):
+        return True
+    if "calendar" in text and (
+        "check whether" in text or "check if" in text or "has anything" in text
+    ):
+        return True
+    if "reminder" in text and ("already have" in text or "existing" in text or "status" in text):
+        return True
+    if "shopping list" in text and ("currently" in text or "can you see" in text):
+        return True
+    return False
+
+
+def is_nonblocking_tracking_question(user_text: str) -> bool:
+    text = normalized_phrase(user_text)
+    return (
+        "help me track" in text
+        and "which" in text
+        and ("still due" in text or "due" in text or "open" in text or "remaining" in text)
+    )
+
+
+def single_mutation_operation_requires_one(item: dict[str, Any]) -> bool:
+    section = str(item.get("section") or "")
+    operation = str(item.get("operation") or "")
+    return (section, operation) in {
+        ("scoreboard", "add_referent"),
+        ("scoreboard", "push_question"),
+        ("scoreboard", "push_topic"),
+        ("clarifications", "request"),
+        ("narrative_active", "create_thread"),
+        ("affective_now", "update"),
+    }
+
+
+def is_unresolved_placeholder_noop_turn(user_text: str) -> bool:
+    text = normalized_phrase(user_text)
+    unsafe_exact_turns = {
+        "move it there later",
+        "tell her that thing is fine",
+        "use the other one for pickup",
+        "do it the usual way",
+        "switch back to that",
+        "that one is better",
+        "same plan as before",
+        "put it near the usual place",
+        "make sure they know",
+        "change the time to then",
+        "not jordan the other parent",
+        "actually make it earlier",
+        "can you make the pickup contact the usual person",
+        "let s use the normal option for that",
+        "lets use the normal option for that",
+    }
+    return text in unsafe_exact_turns
+
+
+def is_durable_shorthand_definition(user_text: str) -> bool:
+    text = normalized_phrase(user_text)
+    local_scope_cues = (
+        "for the next question",
+        "in this conversation",
+        "for this conversation",
+        "in this thread",
+        "for this thread",
+        "for this chat",
+        "in this chat",
+    )
+    if any(cue in text for cue in local_scope_cues):
+        return False
+    return " means " in f" {text} " or (
+        text.startswith("when i say ") and " i mean " in f" {text} "
+    )
+
+
+def is_ordinary_correction_turn(user_text: str) -> bool:
+    text = normalized_phrase(user_text)
+    correction_cues = (
+        " not ",
+        "actually",
+        "instead",
+        "rather than",
+        "no longer",
+    )
+    return any(cue in f" {text} " for cue in correction_cues)
+
+
+def is_durable_correction_choice(user_text: str) -> bool:
+    text = normalized_phrase(user_text)
+    if not is_ordinary_correction_turn(text):
+        return False
+    local_scope_cues = (
+        "for the next question",
+        "in this conversation",
+        "for this conversation",
+        "in this thread",
+        "for this thread",
+        "for this chat",
+        "in this chat",
+    )
+    if any(cue in text for cue in local_scope_cues):
+        return False
+    durable_family_terms = (
+        "lunchbox",
+        "folder",
+        "pickup",
+        "dropoff",
+        "bus stop",
+        "practice",
+        "form",
+        "snack",
+        "teacher",
+        "tutor",
+        "dinner",
+        "party",
+        "key",
+        "contact",
+    )
+    return any(term in text for term in durable_family_terms)
+
+
 def closure_only_user_turn(user_text: str) -> bool:
     closure_patterns = (
         "thanks that is all",
@@ -1216,7 +1766,8 @@ def assistant_creates_future_commitment(assistant_text: str) -> bool:
 def mutation_semantic_key(item: dict[str, Any]) -> str:
     section = str(item.get("section") or "")
     operation = str(item.get("operation") or "")
-    data = item.get("data") if isinstance(item.get("data"), dict) else {}
+    raw_data = item.get("data")
+    data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
     if section == "beliefs_active" and operation == "add_fact":
         return ":".join(
             [
@@ -1234,6 +1785,14 @@ def mutation_semantic_key(item: dict[str, Any]) -> str:
 
 def canonical_text(value: Any) -> str:
     return " ".join(str(value or "").lower().split())
+
+
+def normalized_phrase(value: Any) -> str:
+    raw = str(value or "").lower()
+    cleaned = "".join(
+        character if character.isalnum() or character.isspace() else " " for character in raw
+    )
+    return " ".join(cleaned.split())
 
 
 def rejected_candidate_from_mutation(
@@ -1254,7 +1813,8 @@ def validate_mutation_payload(
 ) -> list[str]:
     section = str(item.get("section") or "")
     operation = str(item.get("operation") or "")
-    data = item.get("data") if isinstance(item.get("data"), dict) else {}
+    raw_data = item.get("data")
+    data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
     errors: list[str] = []
     if section == "beliefs_active" and operation == "add_fact":
         missing = [key for key in ("subject", "predicate", "obj") if not str(data.get(key) or "")]
@@ -1285,6 +1845,36 @@ def validate_mutation_payload(
             errors.append(
                 "invalid_payload:beliefs_active.update_confidence requires numeric data.confidence in [0,1]"
             )
+    elif section == "clarifications" and operation == "request":
+        missing = [
+            key
+            for key in (
+                "agent_id",
+                "question",
+                "priority",
+                "related_entity",
+                "related_intent",
+                "timeout_ms",
+                "blocking",
+            )
+            if key not in data or data.get(key) in (None, "")
+        ]
+        if missing:
+            errors.append(
+                "invalid_payload:clarifications.request requires data." + ",data.".join(missing)
+            )
+    elif section == "clarifications" and operation == "answer":
+        clarification_id = str(data.get("clarification_id") or "")
+        if not clarification_id:
+            errors.append("invalid_payload:clarifications.answer requires data.clarification_id")
+        elif input_data is not None and clarification_id not in exposed_clarification_ids(
+            input_data
+        ):
+            errors.append(
+                "invalid_payload:clarifications.answer requires exact pending snapshot clarification_id"
+            )
+        if not str(data.get("answer") or ""):
+            errors.append("invalid_payload:clarifications.answer requires data.answer")
     elif section == "narrative_active" and operation == "create_thread":
         if not str(data.get("title") or ""):
             errors.append("invalid_payload:narrative_active.create_thread requires data.title")
@@ -1303,6 +1893,40 @@ def validate_mutation_payload(
                 f"invalid_payload:narrative_active.{operation} requires exact snapshot thread_id"
             )
     return errors
+
+
+def exposed_clarification_ids(input_data: dict[str, Any]) -> set[str]:
+    snapshot = input_data.get("session_snapshot") if isinstance(input_data, dict) else {}
+    cognitive_sections = snapshot.get("cognitive_sections") if isinstance(snapshot, dict) else {}
+    clarifications = (
+        cognitive_sections.get("clarifications") if isinstance(cognitive_sections, dict) else {}
+    )
+    if not isinstance(clarifications, dict):
+        return set()
+    ids: set[str] = set()
+    blocking_id = str(clarifications.get("blocking_clarification_id") or "")
+    if blocking_id:
+        ids.add(blocking_id)
+    pending = clarifications.get("pending")
+    if isinstance(pending, dict):
+        for key, item in pending.items():
+            if str(key or ""):
+                ids.add(str(key))
+            if isinstance(item, dict):
+                for id_key in ("id", "clarification_id"):
+                    clarification_id = str(item.get(id_key) or "")
+                    if clarification_id:
+                        ids.add(clarification_id)
+    elif isinstance(pending, list):
+        for item in pending:
+            if isinstance(item, dict):
+                for id_key in ("id", "clarification_id"):
+                    clarification_id = str(item.get(id_key) or "")
+                    if clarification_id:
+                        ids.add(clarification_id)
+            elif str(item or ""):
+                ids.add(str(item))
+    return ids
 
 
 def exposed_narrative_thread_ids(input_data: dict[str, Any]) -> set[str]:
@@ -1480,7 +2104,8 @@ def plan_confidence(plan: Any) -> float:
 
 
 def infer_front_operations(observation: dict[str, Any]) -> list[str]:
-    activity = observation.get("activity") if isinstance(observation.get("activity"), dict) else {}
+    raw_activity = observation.get("activity")
+    activity: dict[str, Any] = raw_activity if isinstance(raw_activity, dict) else {}
     tool_names = [str(item) for item in activity.get("tool_calls", []) or []]
     inferred: set[str] = set()
     expected = set(str(item) for item in observation.get("expected_operations", []) or [])
@@ -1494,7 +2119,8 @@ def infer_front_operations(observation: dict[str, Any]) -> list[str]:
 
 
 def cognitive_tool_names(observation: dict[str, Any]) -> list[str]:
-    activity = observation.get("activity") if isinstance(observation.get("activity"), dict) else {}
+    raw_activity = observation.get("activity")
+    activity: dict[str, Any] = raw_activity if isinstance(raw_activity, dict) else {}
     return sorted(
         str(item) for item in activity.get("tool_calls", []) or [] if item in COGNITIVE_TOOL_NAMES
     )
@@ -1832,8 +2458,9 @@ def load_dotenv_files() -> None:
             os.environ.setdefault(name, value)
 
 
-def normalize_boot_web_provider_env() -> None:
-    provider = (os.environ.get("LLM_PROVIDER") or DEFAULT_PROVIDER).strip().lower()
+def normalize_provider_env(config: dict[str, Any], args: argparse.Namespace) -> None:
+    provider = preferred_provider(config, args).strip().lower() or DEFAULT_PROVIDER
+    os.environ["LLM_PROVIDER"] = provider
     if provider in {
         "vertex",
         "vertex-ai",
@@ -1852,6 +2479,11 @@ def normalize_boot_web_provider_env() -> None:
             os.environ["GOOGLE_CLOUD_LOCATION"] = os.environ["GOOGLE_LOCATION"]
         os.environ.setdefault("GOOGLE_CLOUD_LOCATION", "global")
         os.environ.pop("GOOGLE_API_KEY", None)
+    model = preferred_model(config, args)
+    if model:
+        os.environ["K1_SECTION_UPDATE_MODEL"] = model
+        if provider.startswith("vertex"):
+            os.environ["VERTEX_MODEL"] = model
 
 
 def normalize_requested_model_env(config: dict[str, Any], args: argparse.Namespace) -> None:

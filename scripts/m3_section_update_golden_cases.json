@@ -2585,6 +2585,968 @@
         ],
         "rejected_candidates": []
       }
+    },
+    {
+      "id": "scoreboard_referent_this_form_field_trip",
+      "live_turn": {
+        "thread": "active discourse referents",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "For the next question, this form means the field trip permission slip.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": ["scoreboard.add_referent"],
+      "expected_plan": {
+        "plan_id": "golden:scoreboard_referent_this_form_field_trip",
+        "turn_id": "golden:scoreboard:001",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "scoreboard",
+            "operation": "add_referent",
+            "data": {
+              "text": "this form",
+              "entity_id": "field_trip_permission_slip",
+              "entity_type": "form",
+              "salience": 0.9
+            },
+            "confidence": 1.0,
+            "reason": "User established an active discourse referent for the next question.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:scoreboard_referent_this_form_field_trip:add_referent",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "scoreboard_referent_that_bottle_blue",
+      "live_turn": {
+        "thread": "active discourse referents",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "When I say that bottle in this thread, I mean the blue water bottle on the counter.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": ["scoreboard.add_referent"],
+      "expected_plan": {
+        "plan_id": "golden:scoreboard_referent_that_bottle_blue",
+        "turn_id": "golden:scoreboard:002",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "scoreboard",
+            "operation": "add_referent",
+            "data": {
+              "text": "that bottle",
+              "entity_id": "blue_water_bottle_on_counter",
+              "entity_type": "item",
+              "salience": 0.9
+            },
+            "confidence": 1.0,
+            "reason": "User established an active discourse referent for this thread.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:scoreboard_referent_that_bottle_blue:add_referent",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "scoreboard_referent_their_teacher_ms_chen",
+      "live_turn": {
+        "thread": "active discourse referents",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "In this conversation, their teacher refers to Ms. Chen.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": ["scoreboard.add_referent"],
+      "expected_plan": {
+        "plan_id": "golden:scoreboard_referent_their_teacher_ms_chen",
+        "turn_id": "golden:scoreboard:003",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "scoreboard",
+            "operation": "add_referent",
+            "data": {
+              "text": "their teacher",
+              "entity_id": "ms_chen",
+              "entity_type": "person",
+              "salience": 0.85
+            },
+            "confidence": 1.0,
+            "reason": "User established an active person referent for this conversation.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:scoreboard_referent_their_teacher_ms_chen:add_referent",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "scoreboard_question_pickup_plan_tradeoff",
+      "live_turn": {
+        "thread": "active question tracking",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Help me figure out whether the early pickup or late pickup is less disruptive.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": ["scoreboard.push_question"],
+      "expected_plan": {
+        "plan_id": "golden:scoreboard_question_pickup_plan_tradeoff",
+        "turn_id": "golden:scoreboard:004",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "scoreboard",
+            "operation": "push_question",
+            "data": {
+              "text": "Which pickup plan is less disruptive: early pickup or late pickup?",
+              "asked_by": "user",
+              "priority": 2
+            },
+            "confidence": 1.0,
+            "reason": "User opened an active decision question for the conversation.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:scoreboard_question_pickup_plan_tradeoff:push_question",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "scoreboard_question_which_forms_due",
+      "live_turn": {
+        "thread": "active question tracking",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Can you help me track which school forms are still due?",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": ["scoreboard.push_question"],
+      "expected_plan": {
+        "plan_id": "golden:scoreboard_question_which_forms_due",
+        "turn_id": "golden:scoreboard:005",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "scoreboard",
+            "operation": "push_question",
+            "data": {
+              "text": "Which school forms are still due?",
+              "asked_by": "user",
+              "priority": 2
+            },
+            "confidence": 1.0,
+            "reason": "User opened an active tracking question.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:scoreboard_question_which_forms_due:push_question",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "scoreboard_topic_weekend_packing",
+      "live_turn": {
+        "thread": "active topic tracking",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Let's focus on weekend packing for a minute.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": ["scoreboard.push_topic"],
+      "expected_plan": {
+        "plan_id": "golden:scoreboard_topic_weekend_packing",
+        "turn_id": "golden:scoreboard:006",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "scoreboard",
+            "operation": "push_topic",
+            "data": {
+              "name": "weekend packing",
+              "salience": 0.85,
+              "is_primary": true
+            },
+            "confidence": 1.0,
+            "reason": "User explicitly shifted the active topic.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:scoreboard_topic_weekend_packing:push_topic",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "scoreboard_topic_school_conference",
+      "live_turn": {
+        "thread": "active topic tracking",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Switch the conversation to the school conference plan.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": ["scoreboard.push_topic"],
+      "expected_plan": {
+        "plan_id": "golden:scoreboard_topic_school_conference",
+        "turn_id": "golden:scoreboard:007",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "scoreboard",
+            "operation": "push_topic",
+            "data": {
+              "name": "school conference plan",
+              "salience": 0.9,
+              "is_primary": true
+            },
+            "confidence": 1.0,
+            "reason": "User explicitly switched the active conversational topic.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:scoreboard_topic_school_conference:push_topic",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "scoreboard_referent_that_plan_saturday_carpool",
+      "live_turn": {
+        "thread": "active discourse referents",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "For this chat, that plan means the Saturday carpool swap.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": ["scoreboard.add_referent"],
+      "expected_plan": {
+        "plan_id": "golden:scoreboard_referent_that_plan_saturday_carpool",
+        "turn_id": "golden:scoreboard:008",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "scoreboard",
+            "operation": "add_referent",
+            "data": {
+              "text": "that plan",
+              "entity_id": "saturday_carpool_swap",
+              "entity_type": "plan",
+              "salience": 0.9
+            },
+            "confidence": 1.0,
+            "reason": "User established an active plan referent for this chat.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:scoreboard_referent_that_plan_saturday_carpool:add_referent",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "clarification_request_which_emma_pickup",
+      "live_turn": {
+        "thread": "clarification tracking",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Can you set up pickup for Emma after practice?",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": ["clarifications.request"],
+      "expected_plan": {
+        "plan_id": "golden:clarification_request_which_emma_pickup",
+        "turn_id": "golden:clarification:001",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "clarifications",
+            "operation": "request",
+            "data": {
+              "agent_id": "front",
+              "question": "Which Emma pickup should be arranged, and from which practice location?",
+              "priority": 2,
+              "related_entity": "Emma pickup",
+              "related_intent": "arrange_pickup",
+              "timeout_ms": 0,
+              "blocking": true
+            },
+            "confidence": 1.0,
+            "reason": "The completed turn needs a tracked clarification before the pickup request is actionable.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:clarification_request_which_emma_pickup:request",
+            "commit_class": "prompt_critical"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "clarification_request_which_doctor_appointment",
+      "live_turn": {
+        "thread": "clarification tracking",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Schedule the doctor appointment after school.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": ["clarifications.request"],
+      "expected_plan": {
+        "plan_id": "golden:clarification_request_which_doctor_appointment",
+        "turn_id": "golden:clarification:002",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "clarifications",
+            "operation": "request",
+            "data": {
+              "agent_id": "front",
+              "question": "Which doctor appointment should be scheduled after school?",
+              "priority": 2,
+              "related_entity": "doctor appointment",
+              "related_intent": "schedule_appointment",
+              "timeout_ms": 0,
+              "blocking": true
+            },
+            "confidence": 1.0,
+            "reason": "The user request is underspecified and requires a tracked clarification.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:clarification_request_which_doctor_appointment:request",
+            "commit_class": "prompt_critical"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "clarification_request_dinner_headcount",
+      "live_turn": {
+        "thread": "clarification tracking",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Order dinner for everyone tonight.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": ["clarifications.request"],
+      "expected_plan": {
+        "plan_id": "golden:clarification_request_dinner_headcount",
+        "turn_id": "golden:clarification:003",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "clarifications",
+            "operation": "request",
+            "data": {
+              "agent_id": "front",
+              "question": "Who is included in everyone for dinner tonight?",
+              "priority": 2,
+              "related_entity": "dinner order",
+              "related_intent": "order_dinner",
+              "timeout_ms": 0,
+              "blocking": true
+            },
+            "confidence": 1.0,
+            "reason": "The dinner request requires a headcount clarification.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:clarification_request_dinner_headcount:request",
+            "commit_class": "prompt_critical"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "clarification_request_uniform_color",
+      "live_turn": {
+        "thread": "clarification tracking",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Pack the uniform for tomorrow.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": ["clarifications.request"],
+      "expected_plan": {
+        "plan_id": "golden:clarification_request_uniform_color",
+        "turn_id": "golden:clarification:004",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "clarifications",
+            "operation": "request",
+            "data": {
+              "agent_id": "front",
+              "question": "Which uniform should be packed for tomorrow?",
+              "priority": 1,
+              "related_entity": "uniform",
+              "related_intent": "pack_item",
+              "timeout_ms": 0,
+              "blocking": true
+            },
+            "confidence": 1.0,
+            "reason": "The requested uniform is ambiguous and needs clarification.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:clarification_request_uniform_color:request",
+            "commit_class": "prompt_critical"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "clarification_request_which_calendar_event",
+      "live_turn": {
+        "thread": "clarification tracking",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Move the calendar event to Friday.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": ["clarifications.request"],
+      "expected_plan": {
+        "plan_id": "golden:clarification_request_which_calendar_event",
+        "turn_id": "golden:clarification:005",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "clarifications",
+            "operation": "request",
+            "data": {
+              "agent_id": "front",
+              "question": "Which calendar event should move to Friday?",
+              "priority": 2,
+              "related_entity": "calendar event",
+              "related_intent": "reschedule_event",
+              "timeout_ms": 0,
+              "blocking": true
+            },
+            "confidence": 1.0,
+            "reason": "The calendar event is underspecified and requires clarification.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:clarification_request_which_calendar_event:request",
+            "commit_class": "prompt_critical"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "clarification_request_dropoff_location",
+      "live_turn": {
+        "thread": "clarification tracking",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Drop him off at the usual place after tutoring.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": ["clarifications.request"],
+      "expected_plan": {
+        "plan_id": "golden:clarification_request_dropoff_location",
+        "turn_id": "golden:clarification:006",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "clarifications",
+            "operation": "request",
+            "data": {
+              "agent_id": "front",
+              "question": "Who should be dropped off, and what is the usual place after tutoring?",
+              "priority": 2,
+              "related_entity": "dropoff",
+              "related_intent": "arrange_dropoff",
+              "timeout_ms": 0,
+              "blocking": true
+            },
+            "confidence": 1.0,
+            "reason": "The dropoff actor and location are underspecified.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:clarification_request_dropoff_location:request",
+            "commit_class": "prompt_critical"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "clarification_request_reminder_time",
+      "live_turn": {
+        "thread": "clarification tracking",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Remind me about the forms later.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": ["clarifications.request"],
+      "expected_plan": {
+        "plan_id": "golden:clarification_request_reminder_time",
+        "turn_id": "golden:clarification:007",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "clarifications",
+            "operation": "request",
+            "data": {
+              "agent_id": "front",
+              "question": "When should the reminder about the forms happen?",
+              "priority": 1,
+              "related_entity": "forms reminder",
+              "related_intent": "set_reminder",
+              "timeout_ms": 0,
+              "blocking": true
+            },
+            "confidence": 1.0,
+            "reason": "The reminder request lacks a concrete time.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:clarification_request_reminder_time:request",
+            "commit_class": "prompt_critical"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "narrative_create_birthday_planning",
+      "live_turn": {
+        "thread": "narrative thread lifecycle",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Let's start a thread for planning Max's birthday party.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": ["narrative_active.create_thread"],
+      "expected_plan": {
+        "plan_id": "golden:narrative_create_birthday_planning",
+        "turn_id": "golden:narrative:001",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "narrative_active",
+            "operation": "create_thread",
+            "data": {
+              "title": "Max birthday party planning",
+              "goal": "Plan Max's birthday party",
+              "related_entities": ["Max", "birthday party"],
+              "related_intents": ["planning"],
+              "auto_switch": true
+            },
+            "confidence": 1.0,
+            "reason": "User explicitly requested a new named planning thread.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:narrative_create_birthday_planning:create_thread",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "narrative_create_camp_registration",
+      "live_turn": {
+        "thread": "narrative thread lifecycle",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Open a new thread for summer camp registration decisions.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": ["narrative_active.create_thread"],
+      "expected_plan": {
+        "plan_id": "golden:narrative_create_camp_registration",
+        "turn_id": "golden:narrative:002",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "narrative_active",
+            "operation": "create_thread",
+            "data": {
+              "title": "summer camp registration decisions",
+              "goal": "Track summer camp registration choices",
+              "related_entities": ["summer camp"],
+              "related_intents": ["registration", "decision"],
+              "auto_switch": true
+            },
+            "confidence": 1.0,
+            "reason": "User explicitly requested a new named decision thread.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:narrative_create_camp_registration:create_thread",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "narrative_create_school_transition",
+      "live_turn": {
+        "thread": "narrative thread lifecycle",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Make this a new thread about Lena's middle school transition.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": ["narrative_active.create_thread"],
+      "expected_plan": {
+        "plan_id": "golden:narrative_create_school_transition",
+        "turn_id": "golden:narrative:003",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "narrative_active",
+            "operation": "create_thread",
+            "data": {
+              "title": "Lena middle school transition",
+              "goal": "Track Lena's middle school transition planning",
+              "related_entities": ["Lena", "middle school"],
+              "related_intents": ["transition_planning"],
+              "auto_switch": true
+            },
+            "confidence": 1.0,
+            "reason": "User explicitly requested a new named thread.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:narrative_create_school_transition:create_thread",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "narrative_create_weekend_trip",
+      "live_turn": {
+        "thread": "narrative thread lifecycle",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Start a separate thread for the weekend trip logistics.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": ["narrative_active.create_thread"],
+      "expected_plan": {
+        "plan_id": "golden:narrative_create_weekend_trip",
+        "turn_id": "golden:narrative:004",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "narrative_active",
+            "operation": "create_thread",
+            "data": {
+              "title": "weekend trip logistics",
+              "goal": "Track weekend trip logistics",
+              "related_entities": ["weekend trip"],
+              "related_intents": ["logistics"],
+              "auto_switch": true
+            },
+            "confidence": 1.0,
+            "reason": "User explicitly requested a separate named logistics thread.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:narrative_create_weekend_trip:create_thread",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "narrative_create_chore_reset",
+      "live_turn": {
+        "thread": "narrative thread lifecycle",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "Create a thread for resetting the chore routine.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": ["narrative_active.create_thread"],
+      "expected_plan": {
+        "plan_id": "golden:narrative_create_chore_reset",
+        "turn_id": "golden:narrative:005",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "narrative_active",
+            "operation": "create_thread",
+            "data": {
+              "title": "chore routine reset",
+              "goal": "Reset the family chore routine",
+              "related_entities": ["chores"],
+              "related_intents": ["routine_reset"],
+              "auto_switch": true
+            },
+            "confidence": 1.0,
+            "reason": "User explicitly requested a named thread for a routine reset.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:narrative_create_chore_reset:create_thread",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "affect_frustrated_permission_slips",
+      "live_turn": {
+        "thread": "affective state tracking",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "I am really frustrated with these permission slips right now.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": ["affective_now.update"],
+      "expected_plan": {
+        "plan_id": "golden:affect_frustrated_permission_slips",
+        "turn_id": "golden:affect:001",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "affective_now",
+            "operation": "update",
+            "data": {
+              "emotion": "frustrated",
+              "intensity": 0.85,
+              "valence": -0.65,
+              "arousal": 0.75,
+              "dominance": 0.35,
+              "confidence": 0.9,
+              "source": "user_explicit"
+            },
+            "confidence": 0.9,
+            "reason": "User explicitly expressed strong frustration that should affect the next turn's tone.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:affect_frustrated_permission_slips:update",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "affect_relieved_pickup_covered",
+      "live_turn": {
+        "thread": "affective state tracking",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "I am relieved pickup is covered now.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": ["affective_now.update"],
+      "expected_plan": {
+        "plan_id": "golden:affect_relieved_pickup_covered",
+        "turn_id": "golden:affect:002",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "affective_now",
+            "operation": "update",
+            "data": {
+              "emotion": "relieved",
+              "intensity": 0.75,
+              "valence": 0.55,
+              "arousal": 0.35,
+              "dominance": 0.6,
+              "confidence": 0.9,
+              "source": "user_explicit"
+            },
+            "confidence": 0.9,
+            "reason": "User explicitly expressed relief that should shape the next response.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:affect_relieved_pickup_covered:update",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "affect_excited_recital_news",
+      "live_turn": {
+        "thread": "affective state tracking",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "I am excited about the recital news.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": ["affective_now.update"],
+      "expected_plan": {
+        "plan_id": "golden:affect_excited_recital_news",
+        "turn_id": "golden:affect:003",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "affective_now",
+            "operation": "update",
+            "data": {
+              "emotion": "excited",
+              "intensity": 0.8,
+              "valence": 0.75,
+              "arousal": 0.8,
+              "dominance": 0.65,
+              "confidence": 0.9,
+              "source": "user_explicit"
+            },
+            "confidence": 0.9,
+            "reason": "User explicitly expressed excitement that should affect next-turn tone.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:affect_excited_recital_news:update",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "affect_anxious_schedule_conflict",
+      "live_turn": {
+        "thread": "affective state tracking",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "I am anxious about the schedule conflict tomorrow.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": ["affective_now.update"],
+      "expected_plan": {
+        "plan_id": "golden:affect_anxious_schedule_conflict",
+        "turn_id": "golden:affect:004",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "affective_now",
+            "operation": "update",
+            "data": {
+              "emotion": "anxious",
+              "intensity": 0.8,
+              "valence": -0.55,
+              "arousal": 0.7,
+              "dominance": 0.35,
+              "confidence": 0.9,
+              "source": "user_explicit"
+            },
+            "confidence": 0.9,
+            "reason": "User explicitly expressed anxiety about a near-term conflict.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:affect_anxious_schedule_conflict:update",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
+    },
+    {
+      "id": "affect_overwhelmed_week_prep",
+      "live_turn": {
+        "thread": "affective state tracking",
+        "member": "Alex",
+        "device": "alex_phone",
+        "text": "I feel overwhelmed trying to prep for this whole week.",
+        "dangerous_false_write_if_unexpected": true
+      },
+      "critical_operations": ["affective_now.update"],
+      "expected_plan": {
+        "plan_id": "golden:affect_overwhelmed_week_prep",
+        "turn_id": "golden:affect:005",
+        "session_id": "golden-m3-poc",
+        "snapshot_version": "golden-snapshot",
+        "classifier_version": "section-update-v0",
+        "apply_timing": "shadow_only",
+        "mutations": [
+          {
+            "section": "affective_now",
+            "operation": "update",
+            "data": {
+              "emotion": "overwhelmed",
+              "intensity": 0.85,
+              "valence": -0.6,
+              "arousal": 0.65,
+              "dominance": 0.25,
+              "confidence": 0.9,
+              "source": "user_explicit"
+            },
+            "confidence": 0.9,
+            "reason": "User explicitly expressed overwhelm that should affect the next response.",
+            "source": "classifier:section_update",
+            "idempotency_key": "golden:affect_overwhelmed_week_prep:update",
+            "commit_class": "next_turn_continuity"
+          }
+        ],
+        "rejected_candidates": []
+      }
     }
   ]
 }

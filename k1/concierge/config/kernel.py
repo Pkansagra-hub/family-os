@@ -80,6 +80,15 @@ class KernelConfig:
     enable_dead_letter_consumer: bool = True
     seed_memories: list[dict[str, Any]] = field(default_factory=list)
     delta_batch_window_ms: int = 500
+    # M4: hidden background SessionState maintenance after turn completion.
+    # Default off until the M5 tracker and cutover gate promote shadow/apply.
+    enable_section_update_worker: bool = False
+    section_update_worker_mode: str = "off"  # off | shadow | degraded_noop | background_apply
+    section_update_worker_timeout_ms: int = 75_000
+    section_update_worker_queue_max: int = 128
+    section_update_classifier_version: str = "section-update-v0"
+    section_update_provider: str = "vertex"
+    section_update_model: str = "gemini-2.5-flash-lite"
     dead_letter_enabled: bool = True
     poll_interval_s: float = 0.05
     dedup_cache_size: int = 4096

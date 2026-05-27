@@ -8,8 +8,8 @@ session_id: web-live-m3-poc
 golden_cases_path: scripts/m3_section_update_golden_cases.json
 
 quota:
-  max_turns: 75
-  max_model_calls: 75
+  max_turns: 100
+  max_model_calls: 100
   max_total_runtime_s: 7200
   per_turn_timeout_s: 75
   stop_on_turn_failure: true
@@ -107,3 +107,28 @@ turns:
   - golden_case_id: correction_key_location_drawer_not_hook
   - golden_case_id: correction_party_saturday_not_sunday
   - golden_case_id: correction_lunchbox_red_not_yellow
+  - golden_case_id: scoreboard_referent_this_form_field_trip
+  - golden_case_id: scoreboard_referent_that_bottle_blue
+  - golden_case_id: scoreboard_referent_their_teacher_ms_chen
+  - golden_case_id: scoreboard_question_pickup_plan_tradeoff
+  - golden_case_id: scoreboard_question_which_forms_due
+  - golden_case_id: scoreboard_topic_weekend_packing
+  - golden_case_id: scoreboard_topic_school_conference
+  - golden_case_id: scoreboard_referent_that_plan_saturday_carpool
+  - golden_case_id: clarification_request_which_emma_pickup
+  - golden_case_id: clarification_request_which_doctor_appointment
+  - golden_case_id: clarification_request_dinner_headcount
+  - golden_case_id: clarification_request_uniform_color
+  - golden_case_id: clarification_request_which_calendar_event
+  - golden_case_id: clarification_request_dropoff_location
+  - golden_case_id: clarification_request_reminder_time
+  - golden_case_id: narrative_create_birthday_planning
+  - golden_case_id: narrative_create_camp_registration
+  - golden_case_id: narrative_create_school_transition
+  - golden_case_id: narrative_create_weekend_trip
+  - golden_case_id: narrative_create_chore_reset
+  - golden_case_id: affect_frustrated_permission_slips
+  - golden_case_id: affect_relieved_pickup_covered
+  - golden_case_id: affect_excited_recital_news
+  - golden_case_id: affect_anxious_schedule_conflict
+  - golden_case_id: affect_overwhelmed_week_prep

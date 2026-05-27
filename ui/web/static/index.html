@@ -3,15 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <meta name="theme-color" content="#f9fafb">
+    <meta name="theme-color" content="#f7f9fc">
     <meta name="color-scheme" content="light">
     <title>Family Hub -- FamilyOS</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/styles.css?v=16">
+    <link rel="stylesheet" href="/static/styles.css?v=63">
     <style>
-        html { background: #f9fafb; color: #111827; }
+        html { background: #f8fafc; color: #111827; }
     </style>
 </head>
 <body>
@@ -23,8 +23,13 @@
          ============================================================ -->
     <aside id="sidebar" class="sidebar" role="navigation" aria-label="Main navigation">
         <div class="sidebar-brand">
-            <h1>Family Hub</h1>
-            <p>Coordinate together</p>
+            <div class="sidebar-brand-lockup">
+                <span class="sidebar-brand-mark" aria-hidden="true">FH</span>
+                <div>
+                    <h1>Family Hub</h1>
+                    <p>Coordinate together</p>
+                </div>
+            </div>
         </div>
 
         <nav id="nav-primary" class="nav-list" role="tablist">
@@ -106,81 +111,127 @@
 
         <!-- ===== HOME / DASHBOARD ===== -->
         <section id="view-home" class="view view--active">
-            <div class="view-container">
-                <header class="page-header">
-                    <h2>Welcome back, <span id="welcome-name">Alex</span>!</h2>
-                    <p>Here's what's happening with your family today</p>
+            <div class="view-container view-container--home app-page-shell app-density--calm">
+                <header class="page-header page-header--home app-page-head">
+                    <div class="app-page-head__copy">
+                        <p class="app-page-head__kicker">Family cockpit</p>
+                        <h2>Welcome back, <span id="welcome-name">Alex</span>!</h2>
+                        <p>Today, priorities, and the next useful move in one calm view.</p>
+                    </div>
                 </header>
 
-                <!-- Quick stats -->
-                <div class="stats-grid" id="home-stats">
-                    <div class="stat-card stat-card--clickable" data-target="tasks">
-                        <div class="stat-icon stat-icon--blue">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
-                        </div>
-                        <svg class="stat-trend" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
-                        <p class="stat-value" id="stat-tasks">--</p>
-                        <p class="stat-label">Tasks Due Today</p>
-                    </div>
-                    <div class="stat-card stat-card--clickable" data-target="calendar">
-                        <div class="stat-icon stat-icon--purple">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-                        </div>
-                        <svg class="stat-trend" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
-                        <p class="stat-value" id="stat-events">--</p>
-                        <p class="stat-label">Upcoming Events</p>
-                    </div>
-                    <div class="stat-card stat-card--clickable" data-target="reminders">
-                        <div class="stat-icon stat-icon--green">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-                        </div>
-                        <svg class="stat-trend" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
-                        <p class="stat-value" id="stat-reminders">--</p>
-                        <p class="stat-label">Active Reminders</p>
-                    </div>
-                    <div class="stat-card stat-card--clickable" data-target="chores">
-                        <div class="stat-icon stat-icon--orange">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18M6 7v14h12V7M9 7V4h6v3"/></svg>
-                        </div>
-                        <svg class="stat-trend" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
-                        <p class="stat-value" id="stat-chores">--</p>
-                        <p class="stat-label">Active Chores</p>
-                    </div>
-                </div>
+                <div class="home-golden-grid app-workspace">
+                    <div class="home-main-stack">
+                        <section class="app-focus-card home-primary-card home-today-card" aria-labelledby="home-today-heading">
+                            <div class="app-focus-card__head home-today-head">
+                                <div>
+                                    <p class="home-section-kicker">Today at a glance</p>
+                                    <h3 id="home-today-heading">Family flow</h3>
+                                    <p id="home-today-detail">Gathering the day.</p>
+                                </div>
+                                <button class="view-small-btn view-small-btn--primary" type="button" data-target="chat" data-chat-suggestion="Give me a calm plan for today using our tasks, calendar, reminders, and chores.">Plan today</button>
+                            </div>
+                            <div class="home-today-summary">
+                                <strong id="home-today-title">Loading today</strong>
+                                <span id="home-today-meta">Checking family status.</span>
+                            </div>
+                            <div class="home-signal-row" aria-label="Today signals">
+                                <button class="home-signal app-summary-card" type="button" data-target="tasks">
+                                    <small>Due tasks</small>
+                                    <strong id="home-signal-tasks">--</strong>
+                                    <span>Open for today</span>
+                                </button>
+                                <button class="home-signal app-summary-card" type="button" data-target="calendar">
+                                    <small>Calendar</small>
+                                    <strong id="home-signal-events">--</strong>
+                                    <span>Events today</span>
+                                </button>
+                                <button class="home-signal app-summary-card" type="button" data-target="reminders">
+                                    <small>Nudges</small>
+                                    <strong id="home-signal-nudges">--</strong>
+                                    <span>Need a look</span>
+                                </button>
+                            </div>
+                        </section>
 
-                <!-- Recent activity -->
-                <div class="card">
-                    <div class="card-header">
-                        <h3>Recent Activity</h3>
-                        <button class="card-action" data-target="timeline">View timeline →</button>
-                    </div>
-                    <div id="home-activity" class="activity-list">
-                        <p class="muted-empty">Activity will appear as the family hub becomes active.</p>
-                    </div>
-                </div>
+                        <details class="home-status-disclosure app-advanced-section">
+                            <summary><span>Show more family status</span><small id="home-status-summary">Full stats when needed</small></summary>
+                            <div class="app-advanced-section__body stats-grid stats-grid--expanded" id="home-stats">
+                                <button class="stat-card stat-card--clickable" type="button" data-target="tasks">
+                                    <div class="stat-icon stat-icon--blue">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+                                    </div>
+                                    <p class="stat-value" id="stat-tasks">--</p>
+                                    <p class="stat-label">Open Tasks</p>
+                                </button>
+                                <button class="stat-card stat-card--clickable" type="button" data-target="calendar">
+                                    <div class="stat-icon stat-icon--purple">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                                    </div>
+                                    <p class="stat-value" id="stat-events">--</p>
+                                    <p class="stat-label">Next 14 Days</p>
+                                </button>
+                                <button class="stat-card stat-card--clickable" type="button" data-target="reminders">
+                                    <div class="stat-icon stat-icon--green">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+                                    </div>
+                                    <p class="stat-value" id="stat-reminders">--</p>
+                                    <p class="stat-label">Active Reminders</p>
+                                </button>
+                                <button class="stat-card stat-card--clickable" type="button" data-target="chores">
+                                    <div class="stat-icon stat-icon--orange">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18M6 7v14h12V7M9 7V4h6v3"/></svg>
+                                    </div>
+                                    <p class="stat-value" id="stat-chores">--</p>
+                                    <p class="stat-label">Pending Chores</p>
+                                </button>
+                            </div>
+                        </details>
 
-                <!-- Quick actions -->
-                <div class="card">
-                    <div class="card-header">
-                        <h3>Quick Actions</h3>
+                        <section class="app-focus-card home-activity-card" aria-labelledby="home-activity-heading">
+                            <div class="app-focus-card__head">
+                                <div>
+                                    <p class="home-section-kicker">Latest movement</p>
+                                    <h3 id="home-activity-heading">Recent Activity</h3>
+                                </div>
+                                <button class="card-action" type="button" data-target="timeline">View timeline</button>
+                            </div>
+                            <div id="home-activity" class="activity-list activity-list--single">
+                                <p class="muted-empty">Family activity will appear as people update the apps.</p>
+                            </div>
+                        </section>
                     </div>
-                    <div class="quick-actions-grid">
-                        <button class="quick-action" data-target="chat">
-                            <svg class="qa-icon qa-icon--blue" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
-                            <p class="qa-title">Ask Assistant</p>
-                            <p class="qa-desc">Get help with anything</p>
-                        </button>
-                        <button class="quick-action" data-target="tasks">
-                            <svg class="qa-icon qa-icon--purple" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
-                            <p class="qa-title">Add Task</p>
-                            <p class="qa-desc">Create a new task</p>
-                        </button>
-                        <button class="quick-action" data-target="calendar">
-                            <svg class="qa-icon qa-icon--green" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-                            <p class="qa-title">Schedule Event</p>
-                            <p class="qa-desc">Add to calendar</p>
-                        </button>
-                    </div>
+
+                    <aside class="app-support-rail home-secondary-card" aria-labelledby="home-actions-heading">
+                        <div class="app-support-rail__head">
+                            <div>
+                                <p class="home-section-kicker">Next moves</p>
+                                <h3 id="home-actions-heading">Quick Actions</h3>
+                            </div>
+                        </div>
+                        <div class="quick-actions-grid">
+                            <button class="quick-action quick-action--primary" type="button" data-target="chat" data-chat-suggestion="Give me a calm plan for today using our tasks, calendar, reminders, and chores.">
+                                <svg class="qa-icon qa-icon--blue" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></svg>
+                                <p class="qa-title">Plan today</p>
+                                <p class="qa-desc">Turn the day into a clear path</p>
+                            </button>
+                            <button class="quick-action" type="button" data-app-action="tasks:create_task">
+                                <svg class="qa-icon qa-icon--purple" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+                                <p class="qa-title">Add task</p>
+                                <p class="qa-desc">Assign the next step</p>
+                            </button>
+                            <button class="quick-action" type="button" data-app-action="calendar:create_event">
+                                <svg class="qa-icon qa-icon--green" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                                <p class="qa-title">Schedule</p>
+                                <p class="qa-desc">Protect the time</p>
+                            </button>
+                            <button class="quick-action" type="button" data-target="chat" data-chat-suggestion="Help me sort the family flow and pick the next useful action.">
+                                <svg class="qa-icon qa-icon--teal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+                                <p class="qa-title">Ask Concierge</p>
+                                <p class="qa-desc">Talk through the next move</p>
+                            </button>
+                        </div>
+                    </aside>
                 </div>
             </div>
         </section>
@@ -189,12 +240,21 @@
         <section id="view-chat" class="view view--chat">
             <header class="chat-header">
                 <div class="chat-header-left">
-                    <div class="chat-avatar">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="11" r="2"/><path d="M8 16h8"/><line x1="12" y1="3" x2="12" y2="6"/></svg>
+                    <div class="chat-avatar chat-avatar--persona" aria-hidden="true">
+                        <span>C</span>
                     </div>
-                    <div>
-                        <h2>Family Assistant</h2>
-                        <p>
+                    <div class="chat-title-block">
+                        <p class="chat-kicker">Family concierge</p>
+                        <h2>Concierge</h2>
+                        <p id="chat-member-line" class="chat-member-line">Here with Alex</p>
+                    </div>
+                </div>
+                <details class="chat-system-details">
+                    <summary>
+                        <span class="chat-system-dot" aria-hidden="true"></span>
+                        <span>Behind the scenes</span>
+                    </summary>
+                    <div class="chat-system-badges">
                             <span id="fsm-badge" class="fsm-badge" title="System State">
                                 <span class="fsm-dot" aria-hidden="true"></span>
                                 <span id="fsm-state">INITIALIZING</span>
@@ -205,12 +265,35 @@
                                 <span class="affect-bar"><span id="affect-fill" class="affect-fill" style="width:50%"></span></span>
                             </span>
                             <span id="turn-badge" class="turn-badge">Turn 0</span>
-                        </p>
                     </div>
-                </div>
+                </details>
             </header>
 
             <div id="chat-area" class="chat-area" role="log" aria-live="polite">
+                <section id="chat-welcome" class="chat-welcome" aria-label="Conversation start">
+                    <div class="chat-welcome__presence" aria-hidden="true"><span></span><strong>Ready when you are</strong></div>
+                    <div class="chat-welcome__copy">
+                        <h3 id="chat-welcome-title">Hi, Alex.</h3>
+                        <p id="chat-welcome-note">Tell me the outcome. I can help shape the plan, reminders, and next steps.</p>
+                    </div>
+                    <div class="chat-starter-panel">
+                        <div class="chat-starter-panel__head">
+                            <span>Start with an outcome</span>
+                            <small>Two good doors</small>
+                        </div>
+                        <div class="chat-suggestion-grid chat-suggestion-grid--primary">
+                            <button type="button" class="chat-suggestion chat-suggestion--primary" data-chat-suggestion="Give me a calm overview of today for the family and tell me what needs attention first."><span>Review today</span> <small>What needs the first look?</small></button>
+                            <button type="button" class="chat-suggestion chat-suggestion--primary" data-chat-suggestion="Help me plan the evening around our calendar, chores, and dinner."><span>Plan evening</span> <small>Calendar, chores, dinner</small></button>
+                        </div>
+                        <details class="chat-more-ideas">
+                            <summary><span>More ideas</span><small>2</small></summary>
+                            <div class="chat-suggestion-grid chat-suggestion-grid--secondary">
+                                <button type="button" class="chat-suggestion" data-chat-suggestion="Create a reminder for Riley about homework."><span>Set a reminder</span> <small>Keep Riley on track</small></button>
+                                <button type="button" class="chat-suggestion" data-chat-suggestion="Build a grocery list for dinner tonight."><span>Dinner list</span> <small>Turn meals into groceries</small></button>
+                            </div>
+                        </details>
+                    </div>
+                </section>
                 <div id="messages" class="messages"></div>
                 <div id="streaming-indicator" class="streaming-indicator hidden" aria-live="assertive">
                     <div class="typing-dots" aria-hidden="true"><span></span><span></span><span></span></div>
@@ -222,7 +305,7 @@
             <form id="input-form" class="chat-input-bar" autocomplete="off">
                 <div class="chat-input-inner">
                     <span id="input-member-tag" class="input-member-tag">Alex</span>
-                    <input id="message-input" type="text" placeholder="Ask me anything..." autocomplete="off" spellcheck="true" disabled aria-label="Type a message"/>
+                    <input id="message-input" type="text" placeholder="Tell me what needs sorting." autocomplete="off" spellcheck="true" disabled aria-label="Type a message"/>
                     <button type="submit" id="send-btn" disabled aria-label="Send message">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
                         <span>Send</span>
@@ -237,7 +320,7 @@
                 <header class="page-header page-header--with-action">
                     <div>
                         <h2>Family Calendar</h2>
-                        <p>Coordinate everyone's schedule</p>
+                        <p>See what needs a decision, then open the full scheduler when timing matters</p>
                     </div>
                     <button class="btn-primary" data-app-action="calendar:create_event">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
@@ -253,8 +336,8 @@
             <div class="view-container">
                 <header class="page-header page-header--with-action">
                     <div>
-                        <h2>Task Manager</h2>
-                        <p>Assign and track family tasks</p>
+                        <h2>Tasks</h2>
+                        <p>See the next useful move, then open the full workbench when needed</p>
                     </div>
                     <button class="btn-primary" data-app-action="tasks:create_task">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
@@ -271,11 +354,11 @@
                 <header class="page-header page-header--with-action">
                     <div>
                         <h2>Shopping</h2>
-                        <p>Groceries, clothes, household needs, and parent-approved requests</p>
+                        <p>Keep the active list clear, with approvals and aisles one move away</p>
                     </div>
                     <button class="btn-primary" data-app-action="shopping:add_item">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                        Add Item
+                        Add Quickly
                     </button>
                 </header>
                 <div id="view-shopping-body" class="view-body"></div>
@@ -288,7 +371,7 @@
                 <header class="page-header page-header--with-action">
                     <div>
                         <h2>Reminders</h2>
-                        <p>Stay on top of every nudge</p>
+                        <p>See what needs a nudge now, then open deeper timing when needed</p>
                     </div>
                     <button class="btn-primary" data-app-action="reminders:create_reminder">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
@@ -305,11 +388,11 @@
                 <header class="page-header page-header--with-action">
                     <div>
                         <h2>Chores</h2>
-                        <p>Recurring household responsibilities</p>
+                        <p>See today's household rhythm, then open the full board when needed</p>
                     </div>
                     <button class="btn-primary" data-app-action="chores:create_template">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                        New Template
+                        New Chore
                     </button>
                 </header>
                 <div id="view-chores-body" class="view-body"></div>
@@ -321,7 +404,7 @@
             <div class="view-container">
                 <header class="page-header">
                     <h2>Family Settings</h2>
-                    <p>Privacy, kid permissions, and family feature controls</p>
+                    <p>A parent-first safety overview with privacy and permission controls</p>
                 </header>
                 <div id="view-settings-body" class="view-body"></div>
             </div>
@@ -423,19 +506,28 @@
 
     </main>
 
-    <aside id="activity-rail" class="activity-rail" aria-label="Kernel activity">
-        <header class="activity-rail__header">
-            <div>
-                <p class="activity-rail__kicker">Kernel activity</p>
-                <h2>Working Now</h2>
-            </div>
+    <aside id="activity-rail" class="activity-rail activity-rail--collapsed" aria-label="Behind the scenes activity">
+        <button id="activity-rail-toggle" class="activity-rail__toggle" type="button" aria-controls="activity-rail-panel" aria-expanded="false">
+            <span class="activity-rail__toggle-dot" aria-hidden="true"></span>
+            <span class="activity-rail__toggle-text">Background</span>
             <span id="activity-rail-status" class="activity-rail__status">Idle</span>
-        </header>
-        <div id="activity-rail-empty" class="activity-rail__empty">
-            <strong>No background work yet</strong>
-            <span>Back, Planner, Orchestrator, Fabric, and spawned agents will appear here while they work.</span>
+        </button>
+        <div id="activity-rail-panel" class="activity-rail__panel">
+            <header class="activity-rail__header">
+                <div>
+                    <p class="activity-rail__kicker">Behind the scenes</p>
+                    <h2>Working Now</h2>
+                </div>
+                <button id="activity-rail-close" class="activity-rail__close" type="button" aria-label="Collapse behind the scenes activity">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+                </button>
+            </header>
+            <div id="activity-rail-empty" class="activity-rail__empty">
+                <strong>No background work right now</strong>
+                <span>When I need extra context or helper work, I will keep the details here.</span>
+            </div>
+            <div id="activity-rail-list" class="activity-rail__list"></div>
         </div>
-        <div id="activity-rail-list" class="activity-rail__list"></div>
     </aside>
 </div>
 
@@ -474,6 +566,6 @@
     <div id="member-list"></div>
 </div>
 
-    <script src="/static/app.js?v=16"></script>
+    <script src="/static/app.js?v=63"></script>
 </body>
 </html>

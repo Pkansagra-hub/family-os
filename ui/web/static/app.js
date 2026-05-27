@@ -28,10 +28,13 @@ const state = {
     thinkingBuffer: "",
     backReasoningBuffer: "",
     thinkingActive: false,
+    streamingLabel: "",
     _thinkingStartMs: null,
+    _chatWelcomeHideTimer: null,
     activityItems: [],
     activityByKey: new Map(),
     activitySeq: 0,
+    activityRailExpanded: false,
     timelineEntries: [],
     lastActivity: null,
     currentAffect: { emotion: "neutral", valence: 0.5 },
@@ -39,7 +42,28 @@ const state = {
     currentView: "home",
     memberDropdownOpen: false,
     tasksSelectedListId: null,
+    tasksSelectedTaskKey: null,
+    tasksViewMode: "list",
+    tasksFilter: "now",
+    tasksSearchQuery: "",
     shoppingSelectedListId: null,
+    shoppingSelectedItemKey: null,
+    shoppingViewMode: "list",
+    shoppingFilter: "needed",
+    shoppingSearchQuery: "",
+    remindersSelectedRecipient: null,
+    remindersSelectedKey: null,
+    remindersViewMode: "timeline",
+    remindersFilter: "active",
+    remindersSearchQuery: "",
+    choresSelectedAssignee: "__all__",
+    choresSelectedKey: null,
+    choresViewMode: "today",
+    choresFilter: "pending",
+    choresSearchQuery: "",
+    settingsViewMode: "overview",
+    settingsSearchQuery: "",
+    settingsAdvancedOpen: false,
     sessionStateSelectedSection: null,
     browserLocationFix: null,
     browserLocationPermission: "unknown",
@@ -50,7 +74,7 @@ const state = {
     browserLocationLastAttemptMs: 0,
 };
 
-const DEFAULT_STREAMING_LABEL = "Concierge is thinking...";
+const DEFAULT_STREAMING_LABEL = "Understanding request...";
 const BROWSER_LOCATION_TARGET_ACCURACY_M = 1;
 const BROWSER_LOCATION_WATCH_TIMEOUT_MS = 12000;
 const BROWSER_LOCATION_REFRESH_INTERVAL_MS = 60000;
@@ -75,13 +99,13 @@ const STREAMING_TOOL_LABELS = {
 const MEMBERS = {
     "Alex":     { color: "#6366f1", initials: "A", role: "Parent",      key: "alex"   },
     "Jordan":   { color: "#ec4899", initials: "J", role: "Parent",      key: "jordan" },
-    "Riley":    { color: "#f59e0b", initials: "R", role: "Child",       key: "riley"  },
+    "Riley":    { color: "#0d9488", initials: "R", role: "Child",       key: "riley"  },
     "Nana Liz": { color: "#14b8a6", initials: "N", role: "Grandparent", key: "nana"   },
 };
 
 const AFFECT_MAP = {
     calm:       { emoji: "😌", color: "#3b82f6" },
-    warm:       { emoji: "😊", color: "#f59e0b" },
+    warm:       { emoji: "😊", color: "#ec4899" },
     anxious:    { emoji: "😰", color: "#a855f7" },
     urgent:     { emoji: "⚠️", color: "#ef4444" },
     playful:    { emoji: "😎", color: "#10b981" },
@@ -108,7 +132,13 @@ const $$ = (s) => Array.from(document.querySelectorAll(s));
 
 const dom = {
     // Chat
+    chatArea:       $("#chat-area"),
     messages:       $("#messages"),
+    chatWelcome:    $("#chat-welcome"),
+    chatSystemDetails: $(".chat-system-details"),
+    chatMemberLine: $("#chat-member-line"),
+    chatWelcomeTitle: $("#chat-welcome-title"),
+    chatWelcomeNote:  $("#chat-welcome-note"),
     input:          $("#message-input"),
     sendBtn:        $("#send-btn"),
     form:           $("#input-form"),
@@ -123,6 +153,8 @@ const dom = {
     streamingText:  $(".streaming-text"),
     toastContainer: $("#toast-container"),
     activityRail:   $("#activity-rail"),
+    activityToggle: $("#activity-rail-toggle"),
+    activityClose:  $("#activity-rail-close"),
     activityList:   $("#activity-rail-list"),
     activityEmpty:  $("#activity-rail-empty"),
     activityStatus: $("#activity-rail-status"),
@@ -144,6 +176,13 @@ const dom = {
     statReminders: $("#stat-reminders"),
     statChores:    $("#stat-chores"),
     homeActivity:  $("#home-activity"),
+    homeTodayTitle:   $("#home-today-title"),
+    homeTodayDetail:  $("#home-today-detail"),
+    homeTodayMeta:    $("#home-today-meta"),
+    homeStatusSummary: $("#home-status-summary"),
+    homeSignalTasks:  $("#home-signal-tasks"),
+    homeSignalEvents: $("#home-signal-events"),
+    homeSignalNudges: $("#home-signal-nudges"),
 
     // View bodies
     viewBody: {
@@ -183,11 +222,132 @@ function init() {
     setupInput();
     setupActionFormHandlers();
     setupKeyboardShortcuts();
+    setupProgressiveDisclosure();
+    setupActivityRail();
     renderActivityRail();
+    setChatWelcomeVisible();
     connect();
 }
 
 document.addEventListener("DOMContentLoaded", init);
+
+function setupActivityRail() {
+    if (!dom.activityRail || !dom.activityToggle) return;
+    const saved = window.localStorage?.getItem("familyos.activityRailExpanded");
+    setActivityRailExpanded(saved === "true" && hasRunningActivity(), { persist: false });
+
+    dom.activityToggle.addEventListener("click", () => {
+        setActivityRailExpanded(!state.activityRailExpanded);
+    });
+    dom.activityClose?.addEventListener("click", () => {
+        setActivityRailExpanded(false);
+        dom.activityToggle?.focus();
+    });
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && state.activityRailExpanded) {
+            setActivityRailExpanded(false);
+        }
+    });
+}
+
+function setActivityRailExpanded(expanded, options = {}) {
+    state.activityRailExpanded = Boolean(expanded);
+    dom.activityRail?.classList.toggle("activity-rail--expanded", state.activityRailExpanded);
+    dom.activityRail?.classList.toggle("activity-rail--collapsed", !state.activityRailExpanded);
+    dom.activityToggle?.setAttribute("aria-expanded", state.activityRailExpanded ? "true" : "false");
+    if (options.persist !== false) {
+        window.localStorage?.setItem("familyos.activityRailExpanded", state.activityRailExpanded ? "true" : "false");
+    }
+}
+
+function hasRunningActivity() {
+    return state.activityItems.some((item) => item.status === "running");
+}
+
+function setupProgressiveDisclosure() {
+    document.addEventListener("click", (event) => {
+        const drawerOpen = event.target.closest("[data-app-drawer-open]");
+        if (drawerOpen) {
+            event.preventDefault();
+            openAppDetailDrawer(drawerOpen.dataset.appDrawerOpen);
+            return;
+        }
+
+        const drawerClose = event.target.closest("[data-app-drawer-close], .app-detail-drawer__close, .app-detail-drawer-backdrop");
+        if (drawerClose) {
+            event.preventDefault();
+            const target = drawerClose.dataset.appDrawerClose || drawerClose.dataset.appDrawerBackdrop || null;
+            if (target) closeAppDetailDrawer(resolveAppDisclosureTarget(target, ".app-detail-drawer"));
+            else closeAppDetailDrawer(drawerClose.closest(".app-detail-drawer"));
+            return;
+        }
+
+        const filterToggle = event.target.closest("[data-app-filter-toggle]");
+        if (filterToggle) {
+            event.preventDefault();
+            toggleAppFilterRow(filterToggle);
+        }
+    });
+
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") closeAllAppDetailDrawers();
+    });
+}
+
+function resolveAppDisclosureTarget(targetRef, fallbackSelector) {
+    if (!targetRef) return null;
+    if (targetRef instanceof Element) return targetRef;
+    const ref = String(targetRef).trim();
+    if (!ref) return null;
+    if (ref.startsWith("#") || ref.startsWith(".")) {
+        try { return document.querySelector(ref); } catch { return null; }
+    }
+    return document.getElementById(ref)
+        || $$(fallbackSelector).find((node) => node.dataset.appDrawer === ref || node.dataset.appDisclosure === ref)
+        || null;
+}
+
+function openAppDetailDrawer(targetRef) {
+    const drawer = resolveAppDisclosureTarget(targetRef, ".app-detail-drawer");
+    if (!drawer) return;
+    drawer.classList.add("app-detail-drawer--open");
+    drawer.setAttribute("aria-hidden", "false");
+    const key = drawer.id || drawer.dataset.appDrawer || drawer.dataset.appDisclosure || String(targetRef || "");
+    toggleAppDrawerBackdrops(key, true);
+    const focusTarget = drawer.querySelector("[data-autofocus], button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])");
+    focusTarget?.focus?.({ preventScroll: true });
+}
+
+function closeAppDetailDrawer(drawer) {
+    if (!drawer) return;
+    drawer.classList.remove("app-detail-drawer--open");
+    drawer.setAttribute("aria-hidden", "true");
+    const key = drawer.id || drawer.dataset.appDrawer || drawer.dataset.appDisclosure || "";
+    toggleAppDrawerBackdrops(key, false);
+}
+
+function closeAllAppDetailDrawers() {
+    $$(".app-detail-drawer--open, .app-detail-drawer[aria-hidden='false']").forEach(closeAppDetailDrawer);
+}
+
+function toggleAppDrawerBackdrops(key, open) {
+    if (!key) return;
+    $$(`[data-app-drawer-backdrop]`).forEach((backdrop) => {
+        if (backdrop.dataset.appDrawerBackdrop !== key) return;
+        backdrop.classList.toggle("app-detail-drawer-backdrop--open", open);
+        backdrop.setAttribute("aria-hidden", open ? "false" : "true");
+    });
+}
+
+function toggleAppFilterRow(button) {
+    const target = resolveAppDisclosureTarget(button.dataset.appFilterToggle, ".app-filter-row")
+        || button.closest(".app-filter-shell")?.querySelector(".app-filter-row");
+    if (!target) return;
+    const expanded = target.classList.toggle("app-filter-row--expanded");
+    target.classList.toggle("app-filter-row--collapsed", !expanded);
+    target.setAttribute("aria-expanded", expanded ? "true" : "false");
+    button.setAttribute("aria-expanded", expanded ? "true" : "false");
+}
 
 // ============================================================================
 // View navigation
@@ -219,7 +379,10 @@ function navigateTo(viewId) {
 
     // View-specific loaders
     if (viewId === "home")          loadHomeDashboard();
-    else if (viewId === "chat")     dom.input && dom.input.focus();
+    else if (viewId === "chat") {
+        dom.input && dom.input.focus();
+        if (!hasRunningActivity()) setActivityRailExpanded(false, { persist: false });
+    }
     else if (viewId === "timeline") {/* live-updated */}
     else if (viewId === "dashboard") {/* live-updated */}
     else if (viewId === "sessionstate") fetchSessionState();
@@ -267,14 +430,97 @@ async function loadHomeDashboard() {
     const shoppingLists = Array.isArray(shoppingListData?.lists) ? shoppingListData.lists : _extractItems(shoppingListData);
     const shoppingItems = Array.isArray(shoppingItemData?.items) ? shoppingItemData.items : _extractItems(shoppingItemData);
 
-    dom.statTasks     && (dom.statTasks.textContent     = taskData     ? tasks.length     : "—");
-    dom.statEvents    && (dom.statEvents.textContent    = eventData    ? events.length    : "—");
-    dom.statReminders && (dom.statReminders.textContent = reminderData ? reminders.length : "—");
-    dom.statChores    && (dom.statChores.textContent    = choreData    ? chores.length    : "—");
+    const activeTasks = tasks.filter(_taskIsActive);
+    const dueTasks = activeTasks.filter((task) => _taskIsOverdue(task) || _taskIsDueToday(task));
+    const eventsToday = events.filter((event) => _calEventOverlapsDate(event, todayIso));
+    const activeReminders = reminders.filter(_reminderIsActive);
+    const remindersToNotice = activeReminders.filter((reminder) => _reminderNeedsAttention(reminder) || _reminderIsOverdue(reminder) || _reminderIsDueToday(reminder));
+    const pendingChores = chores.filter((chore) => _choreStatus(chore) === "pending");
+    const choresDueNow = pendingChores.filter(_choreIsDueNow);
+    const shoppingNeeded = shoppingItems.filter(_shoppingIsNeeded);
+    const nudgeCount = remindersToNotice.length + choresDueNow.length;
+
+    dom.statTasks     && (dom.statTasks.textContent     = taskData     ? activeTasks.length       : "—");
+    dom.statEvents    && (dom.statEvents.textContent    = eventData    ? events.length            : "—");
+    dom.statReminders && (dom.statReminders.textContent = reminderData ? activeReminders.length  : "—");
+    dom.statChores    && (dom.statChores.textContent    = choreData    ? pendingChores.length    : "—");
+    dom.homeSignalTasks  && (dom.homeSignalTasks.textContent  = taskData ? dueTasks.length : "—");
+    dom.homeSignalEvents && (dom.homeSignalEvents.textContent = eventData ? eventsToday.length : "—");
+    dom.homeSignalNudges && (dom.homeSignalNudges.textContent = (reminderData || choreData) ? nudgeCount : "—");
+    _renderHomeTodayGlance({
+        activeTasks,
+        dueTasks,
+        events,
+        eventsToday,
+        activeReminders,
+        remindersToNotice,
+        pendingChores,
+        choresDueNow,
+        shoppingNeeded,
+        loaded: { taskData, eventData, reminderData, choreData, shoppingItemData },
+    });
 
     if (dom.homeActivity) {
-        _renderHomeActivity(_buildHomeActivityFeed({ tasks, events, reminders, chores, shoppingLists, shoppingItems }).slice(0, 6));
+        _renderHomeActivity(_buildHomeActivityFeed({ tasks, events, reminders, chores, shoppingLists, shoppingItems }).slice(0, 1));
     }
+}
+
+function _renderHomeTodayGlance(metrics) {
+    const {
+        activeTasks,
+        dueTasks,
+        events,
+        eventsToday,
+        activeReminders,
+        remindersToNotice,
+        pendingChores,
+        choresDueNow,
+        shoppingNeeded,
+        loaded,
+    } = metrics;
+    const attentionCount = dueTasks.length + remindersToNotice.length + choresDueNow.length;
+    const todayCount = attentionCount + eventsToday.length;
+    const hasLoadedCore = loaded.taskData || loaded.eventData || loaded.reminderData || loaded.choreData;
+    const title = !hasLoadedCore
+        ? "Family status is unavailable"
+        : attentionCount > 0
+            ? `${attentionCount} ${attentionCount === 1 ? "thing needs" : "things need"} attention`
+            : todayCount > 0
+                ? `${todayCount} ${todayCount === 1 ? "thing is" : "things are"} in motion today`
+                : "Today looks open";
+    const detailParts = [
+        eventsToday.length ? _countPhrase(eventsToday.length, "calendar event") : "",
+        dueTasks.length ? _countPhrase(dueTasks.length, "due task") : "",
+        remindersToNotice.length ? _countPhrase(remindersToNotice.length, "reminder") : "",
+        choresDueNow.length ? _countPhrase(choresDueNow.length, "chore") : "",
+    ].filter(Boolean);
+    const detail = !hasLoadedCore
+        ? "Open the apps for full detail."
+        : detailParts.length
+            ? `${detailParts.join(", ")} need the first look.`
+            : "No due tasks, reminders, or chores are calling for attention.";
+    const meta = [
+        _countPhrase(activeTasks.length, "open task"),
+        _countPhrase(events.length, "event", "events"),
+        _countPhrase(activeReminders.length, "active reminder"),
+        _countPhrase(pendingChores.length, "pending chore"),
+    ].join(" · ");
+    const status = [
+        _countPhrase(activeTasks.length, "task"),
+        _countPhrase(events.length, "calendar item"),
+        _countPhrase(activeReminders.length, "reminder"),
+        _countPhrase(pendingChores.length, "chore"),
+        shoppingNeeded.length ? _countPhrase(shoppingNeeded.length, "shopping item") : "",
+    ].filter(Boolean).join(" · ");
+
+    if (dom.homeTodayTitle) dom.homeTodayTitle.textContent = title;
+    if (dom.homeTodayDetail) dom.homeTodayDetail.textContent = detail;
+    if (dom.homeTodayMeta) dom.homeTodayMeta.textContent = meta;
+    if (dom.homeStatusSummary) dom.homeStatusSummary.textContent = status || "Full stats when needed";
+}
+
+function _countPhrase(count, singular, plural = `${singular}s`) {
+    return `${count} ${count === 1 ? singular : plural}`;
 }
 
 function _renderHomeActivity(items) {
@@ -427,8 +673,18 @@ function _relativeTimeAgo(isoStr) {
 
 function _reminderTriggerLabel(trigger) {
     if (!trigger || typeof trigger !== "object") return "";
-    if (trigger.fire_at) return _relativeDate(trigger.fire_at);
-    if (trigger.kind) return _humanizeLabel(trigger.kind);
+    const kind = trigger.kind || (trigger.fire_at ? "time" : "");
+    if (kind === "time" && trigger.fire_at) return _relativeDate(trigger.fire_at);
+    if (kind === "location_enter" || kind === "location_leave") {
+        const place = trigger.location?.name || trigger.location?.label || "location";
+        return `${kind === "location_enter" ? "Arrive at" : "Leave"} ${place}`;
+    }
+    if (kind === "event_offset") {
+        const offset = Number(trigger.offset_minutes || 0);
+        if (offset === 0) return "At event time";
+        return `${Math.abs(offset)}m ${offset < 0 ? "before" : "after"} event`;
+    }
+    if (kind) return _humanizeLabel(kind);
     return "";
 }
 
@@ -537,9 +793,10 @@ function handleResponse(msg) {
     if (state.streamingMsgId) {
         const el = document.getElementById(state.streamingMsgId);
         if (el) {
-            el.classList.remove("message-thinking");
+            el.classList.remove("message-thinking", "message-working");
             const bubble = el.querySelector(".message-bubble");
             if (bubble) {
+                bubble.classList.remove("message-bubble--work");
                 bubble.innerHTML = renderAssistantBubbleContent(msg.text, { final: true, reasoning });
             }
         }
@@ -548,6 +805,7 @@ function handleResponse(msg) {
         state.thinkingBuffer = "";
         state.backReasoningBuffer = "";
         state.thinkingActive = false;
+        state.streamingLabel = "";
         state._thinkingStartMs = null;
         showStreaming(false);
         updateAffect(affect, state.currentAffect.valence);
@@ -572,23 +830,18 @@ function handleStreamChunk(msg) {
     if (msg.chunk_type === "thinking") {
         state.thinkingActive = true;
         state.thinkingBuffer += (msg.text || "");
-        const bubble = el.querySelector(".message-bubble");
-        if (bubble) {
-            bubble.innerHTML = renderAssistantBubbleContent(state.streamBuffer, {
-                final: false,
-                reasoning: getCurrentReasoningSnapshot(),
-            });
-        }
-        el.classList.add("message-thinking");
+        updateStreamingWorkCard(state.streamingLabel || DEFAULT_STREAMING_LABEL);
+        el.classList.add("message-thinking", "message-working");
         showStreaming(true, DEFAULT_STREAMING_LABEL);
         return;
     }
 
     if (msg.chunk_type === "text") {
         state.streamBuffer += (msg.text || "");
-        el.classList.remove("message-thinking");
+        el.classList.remove("message-thinking", "message-working");
         const bubble = el.querySelector(".message-bubble");
         if (bubble) {
+            bubble.classList.remove("message-bubble--work");
             bubble.innerHTML = renderAssistantBubbleContent(state.streamBuffer, {
                 final: false,
                 reasoning: getCurrentReasoningSnapshot(),
@@ -609,6 +862,7 @@ function finishStreaming(removePlaceholder = false) {
         state.thinkingBuffer = "";
         state.backReasoningBuffer = "";
         state.thinkingActive = false;
+        state.streamingLabel = "";
         state._thinkingStartMs = null;
     }
     showStreaming(false);
@@ -769,10 +1023,10 @@ function handleHilRequest(msg) {
     row.className = "message-row message-row--system";
     row.style.cssText = "padding: 8px 0;";
     row.innerHTML = `
-        <div class="message-avatar" style="background:var(--amber,#f59e0b);color:#fff">
+        <div class="message-avatar" style="background:var(--color-rose,#e11d48);color:#fff">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
         </div>
-        <div class="message-bubble" style="border:1.5px solid var(--amber,#f59e0b);background:var(--surface-elevated,#fff);padding:12px 14px;">
+        <div class="message-bubble" style="border:1.5px solid var(--color-rose,#e11d48);background:var(--surface-elevated,#fff);padding:12px 14px;">
             ${cardInner}
         </div>`;
 
@@ -792,7 +1046,7 @@ function handleHilRequest(msg) {
         "pointer-events:auto",
     ].join(";");
     overlay.innerHTML = `
-        <div style="border:2px solid var(--amber,#f59e0b);background:var(--surface-elevated,#fff);border-radius:16px;padding:14px 16px;box-shadow:0 18px 40px rgba(15,23,42,0.22);">
+        <div style="border:2px solid var(--color-rose,#e11d48);background:var(--surface-elevated,#fff);border-radius:16px;padding:14px 16px;box-shadow:0 18px 40px rgba(15,23,42,0.22);">
             ${_buildHilCardInner(overlayId, title, body, approveLabel, denyLabel)}
         </div>`;
     document.body.appendChild(overlay);
@@ -879,14 +1133,14 @@ const EXTERNAL_TOOLS = new Set([
 ]);
 
 const ACTIVITY_SOURCE_META = {
-    back: { label: "Back", title: "Back executor", tone: "blue" },
-    front: { label: "Front", title: "Front handoff", tone: "blue" },
+    back: { label: "Background", title: "Background reasoning", tone: "blue" },
+    front: { label: "Reply", title: "Response planning", tone: "blue" },
     planner: { label: "Planner", title: "Planner", tone: "purple" },
     orchestrator: { label: "Orchestrator", title: "Orchestrator", tone: "green" },
-    fabric: { label: "Fabric", title: "Fabric", tone: "orange" },
-    agent: { label: "Agent", title: "Spawned agent", tone: "teal" },
+    fabric: { label: "Fabric", title: "Fabric", tone: "purple" },
+    agent: { label: "Helper", title: "Helper agent", tone: "teal" },
     tool: { label: "Tool", title: "Tool invocation", tone: "gray" },
-    kernel: { label: "Kernel", title: "Kernel work", tone: "gray" },
+    kernel: { label: "System", title: "System work", tone: "gray" },
 };
 
 function normalizeActivitySource(source) {
@@ -942,10 +1196,11 @@ function activeActivityForSource(source) {
 }
 
 function handleActivityReasoningChunk(msg) {
+    state.backReasoningBuffer += msg.text || "";
     const key = msg.trace_id ? `back:${msg.trace_id}` : `back:turn:${state.turn || "active"}`;
     const item = getOrCreateActivityItem(key, {
         source: "back",
-        title: "Back executor",
+        title: "Background reasoning",
         status: "running",
         phase: "Reasoning",
     });
@@ -960,6 +1215,7 @@ function handleActivityReasoningChunk(msg) {
         });
     }
     renderActivityRail();
+    updateStreamingWorkCard(state.streamingLabel || "Checking tools...");
 }
 
 function updateActivityForToolEvent(msg) {
@@ -995,6 +1251,7 @@ function updateActivityForToolEvent(msg) {
     });
     item.updatedAt = Date.now();
     renderActivityRail();
+    updateStreamingWorkCard(state.streamingLabel || "Checking tools...");
 }
 
 function markActivityFailed(msg) {
@@ -1023,8 +1280,10 @@ function renderActivityRail() {
     });
     const activeCount = items.filter((item) => item.status === "running").length;
     dom.activityStatus.textContent = activeCount ? `${activeCount} active` : "Idle";
+    dom.activityRail?.classList.toggle("activity-rail--has-active", activeCount > 0);
     dom.activityEmpty.classList.toggle("hidden", items.length > 0);
     dom.activityList.innerHTML = items.map(renderActivityCard).join("");
+    updateChatSystemDisclosureState();
 }
 
 function renderActivityCard(item) {
@@ -1151,9 +1410,7 @@ function addMessageRow(kind, sender, text, opts = {}) {
             })
             : formatMessageText(text);
         row.innerHTML = `
-            <div class="message-avatar">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="11" r="2"/><path d="M8 16h8"/></svg>
-            </div>
+            <div class="message-avatar message-avatar--concierge">C</div>
             <div class="message-bubble">
                 ${body}
                 <div class="message-meta">Concierge${labelTag} · ${formatTime()}</div>
@@ -1161,6 +1418,7 @@ function addMessageRow(kind, sender, text, opts = {}) {
     }
 
     dom.messages.appendChild(row);
+    setChatWelcomeVisible();
     scrollChatToBottom();
     return id;
 }
@@ -1171,14 +1429,13 @@ function addSystemMessage(text)      { return addMessageRow("system", "System", 
 
 function createStreamingMessage(id) {
     const row = document.createElement("div");
-    row.className = "message-row message-row--assistant message-thinking";
+    row.className = "message-row message-row--assistant message-thinking message-working";
     row.id = id;
     row.innerHTML = `
-        <div class="message-avatar">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="11" r="2"/><path d="M8 16h8"/></svg>
-        </div>
-        <div class="message-bubble"><em style="color:var(--text-tertiary)">Thinking...</em></div>`;
+        <div class="message-avatar message-avatar--concierge">C</div>
+        <div class="message-bubble message-bubble--work">${renderConciergeWorkCard(DEFAULT_STREAMING_LABEL)}</div>`;
     dom.messages.appendChild(row);
+    setChatWelcomeVisible();
     scrollChatToBottom();
 }
 
@@ -1189,8 +1446,122 @@ function ensureStreamingMessage() {
     state.thinkingBuffer = "";
     state.backReasoningBuffer = "";
     state.thinkingActive = false;
+    state.streamingLabel = DEFAULT_STREAMING_LABEL;
     state._thinkingStartMs = Date.now();
     createStreamingMessage(state.streamingMsgId);
+}
+
+function updateStreamingWorkCard(label = DEFAULT_STREAMING_LABEL) {
+    if (!state.streamingMsgId || String(state.streamBuffer || "").trim()) return;
+    const el = document.getElementById(state.streamingMsgId);
+    if (!el) return;
+    const bubble = el.querySelector(".message-bubble");
+    if (!bubble) return;
+    el.classList.add("message-working", "message-thinking");
+    bubble.classList.add("message-bubble--work");
+    bubble.innerHTML = renderConciergeWorkCard(label, { reasoning: getCurrentReasoningSnapshot() });
+    scrollChatToBottom();
+}
+
+function renderConciergeWorkCard(label = DEFAULT_STREAMING_LABEL, opts = {}) {
+    const phase = _conciergeWorkPhase(label);
+    const chips = _conciergeWorkChips(label);
+    const trace = renderConciergeWorkTrace(opts.reasoning || getCurrentReasoningSnapshot());
+    return `
+        <section class="concierge-work-card" role="status" aria-live="polite">
+            <div class="concierge-work-head">
+                <span class="concierge-work-orb" aria-hidden="true"><span></span></span>
+                <div class="concierge-work-title">
+                    <strong>I'm on it</strong>
+                    <span>${escapeHtml(phase.detail)}</span>
+                </div>
+                <span class="concierge-work-live">Working</span>
+            </div>
+            <div class="concierge-work-rail" aria-hidden="true"><span></span></div>
+            <div class="concierge-work-phase">
+                <span class="concierge-work-phase-label">Now</span>
+                <strong>${escapeHtml(phase.title)}</strong>
+            </div>
+            <div class="concierge-work-steps" aria-label="Work progress">
+                <span class="concierge-work-step concierge-work-step--done">Listen</span>
+                <span class="concierge-work-step concierge-work-step--active">Check</span>
+                <span class="concierge-work-step">Reply</span>
+            </div>
+            ${chips.length ? `<div class="concierge-work-chips">${chips.map((chip) => `<span class="concierge-work-chip concierge-work-chip--${escapeHtml(chip.tone)}">${escapeHtml(chip.label)}</span>`).join("")}</div>` : ""}
+            ${trace}
+        </section>`;
+}
+
+function renderConciergeWorkTrace(snapshot = {}) {
+    const frontText = String(snapshot.front || "").trim();
+    const backText = String(snapshot.back || "").trim();
+    if (!frontText && !backText) return "";
+    const sections = [];
+    if (frontText) {
+        sections.push(`<section><strong>Reply</strong><pre>${escapeHtml(snapshot.front || "")}</pre></section>`);
+    }
+    if (backText) {
+        sections.push(`<section><strong>Background</strong><pre>${escapeHtml(snapshot.back || "")}</pre></section>`);
+    }
+    return `
+        <details class="concierge-work-trace">
+            <summary><span>Reasoning notes</span><span>${frontText && backText ? "Reply + context" : frontText ? "Reply" : "Context"}</span></summary>
+            <div class="concierge-work-trace-body">${sections.join("")}</div>
+        </details>`;
+}
+
+function _conciergeWorkPhase(label = DEFAULT_STREAMING_LABEL) {
+    const raw = String(label || DEFAULT_STREAMING_LABEL).replace(/\.{3,}$/g, "").trim();
+    const lower = raw.toLowerCase();
+    if (lower.includes("draft") || lower.includes("reply")) {
+        return { title: "Writing response", detail: raw || "Preparing answer" };
+    }
+    if (lower.includes("memory") || lower.includes("context") || lower.includes("summar")) {
+        return { title: "Checking context", detail: raw };
+    }
+    if (lower.includes("clarif")) {
+        return { title: "Clarifying intent", detail: raw };
+    }
+    if (lower.includes("task") || lower.includes("tool") || lower.includes("starting")) {
+        return { title: "Coordinating tools", detail: raw };
+    }
+    if (state.thinkingActive || String(state.thinkingBuffer || "").trim()) {
+        return { title: "Reasoning through it", detail: raw };
+    }
+    return { title: "Understanding request", detail: raw };
+}
+
+function _conciergeWorkChips(label = DEFAULT_STREAMING_LABEL) {
+    const chips = new Map();
+    const add = (labelText, tone = "brand") => chips.set(labelText, { label: labelText, tone });
+    const lower = String(label || "").toLowerCase();
+    add("Context", "system");
+    if (lower.includes("memory") || lower.includes("context") || lower.includes("belief")) add("Memory", "purple");
+    if (lower.includes("task") || lower.includes("tool") || lower.includes("dispatch")) add("Tools", "teal");
+    if (lower.includes("reply") || lower.includes("draft")) add("Reply", "brand");
+    state.activityItems
+        .filter((item) => item.status === "running")
+        .slice(0, 3)
+        .forEach((item) => {
+            const chip = _conciergeActivityChip(item.source);
+            add(chip.label, chip.tone || "system");
+        });
+    return Array.from(chips.values()).slice(0, 4);
+}
+
+function _conciergeActivityChip(source) {
+    const normalized = normalizeActivitySource(source);
+    const map = {
+        back: { label: "Background", tone: "blue" },
+        front: { label: "Reply", tone: "brand" },
+        planner: { label: "Planning", tone: "purple" },
+        orchestrator: { label: "Coordinating", tone: "green" },
+        fabric: { label: "Context", tone: "purple" },
+        agent: { label: "Helper", tone: "teal" },
+        tool: { label: "Tools", tone: "teal" },
+        kernel: { label: "System", tone: "gray" },
+    };
+    return map[normalized] || map.kernel;
 }
 
 function renderReasoningTrace() {
@@ -1202,14 +1573,17 @@ function renderAssistantBubbleContent(text, opts = {}) {
     const includeMeta = opts.includeMeta !== false;
     const content = [];
     const reasoning = renderReasoningTraceBlock({ final, reasoning: opts.reasoning });
-    if (reasoning) content.push(reasoning);
 
     const responseText = String(text || "").trim();
     if (responseText) {
         content.push(`<div class="message-response-text">${formatMessageText(text)}</div>`);
+        if (!final && reasoning) content.push(reasoning);
     } else if (!reasoning) {
         content.push(`<em class="message-placeholder">Thinking...</em>`);
+    } else {
+        content.push(reasoning);
     }
+    if (final && reasoning) content.push(reasoning);
 
     if (final && includeMeta) {
         content.push(`<div class="message-meta">${formatTime()}</div>`);
@@ -1232,7 +1606,7 @@ function renderReasoningTraceBlock(opts = {}) {
         sources.push("Front");
         sections.push(`
             <section class="reasoning-trace__section">
-                <div class="reasoning-trace__section-title">Front reasoning</div>
+                <div class="reasoning-trace__section-title">${final ? "Reply reasoning" : "Front reasoning"}</div>
                 <div class="reasoning-trace__body">${escapeHtml(frontRaw)}</div>
             </section>`);
     }
@@ -1240,14 +1614,16 @@ function renderReasoningTraceBlock(opts = {}) {
         sources.push("Back");
         sections.push(`
             <section class="reasoning-trace__section">
-                <div class="reasoning-trace__section-title">Back reasoning</div>
+                <div class="reasoning-trace__section-title">${final ? "Background reasoning" : "Back reasoning"}</div>
                 <div class="reasoning-trace__body">${escapeHtml(backRaw)}</div>
             </section>`);
     }
 
     const openAttr = final ? "" : " open";
-    const label = final ? `Thought for ${_thinkingDuration(snapshot && snapshot.startMs)}` : "Thinking...";
-    const sourceLabel = sources.join(" + ");
+    const label = final ? "Behind the scenes" : "Working through it";
+    const sourceLabel = final
+        ? (frontText && backText ? "Reply + context" : frontText ? "Reply" : "Context")
+        : sources.join(" + ");
     const statusClass = final ? " reasoning-trace--done" : " reasoning-trace--active";
 
     return `
@@ -1282,6 +1658,37 @@ function scrollChatToBottom() {
         const area = dom.messages.parentElement;
         if (area) area.scrollTop = area.scrollHeight;
     });
+}
+
+function setChatWelcomeVisible() {
+    if (!dom.chatWelcome || !dom.messages) return;
+    const hasConversation = dom.messages.children.length > 0 || Boolean(state.streamingMsgId);
+    dom.chatArea?.classList.toggle("chat-area--has-conversation", hasConversation);
+    updateChatSystemDisclosureState();
+
+    if (hasConversation) {
+        if (state._chatWelcomeHideTimer) window.clearTimeout(state._chatWelcomeHideTimer);
+        dom.chatWelcome.classList.add("chat-welcome--leaving");
+        dom.chatWelcome.setAttribute("aria-hidden", "true");
+        state._chatWelcomeHideTimer = window.setTimeout(() => {
+            dom.chatWelcome?.classList.add("hidden");
+            state._chatWelcomeHideTimer = null;
+        }, 220);
+        return;
+    }
+
+    if (state._chatWelcomeHideTimer) {
+        window.clearTimeout(state._chatWelcomeHideTimer);
+        state._chatWelcomeHideTimer = null;
+    }
+    dom.chatWelcome.classList.remove("hidden");
+    dom.chatWelcome.setAttribute("aria-hidden", "false");
+    requestAnimationFrame(() => dom.chatWelcome?.classList.remove("chat-welcome--leaving"));
+}
+
+function updateChatSystemDisclosureState() {
+    const active = Boolean(state.streamingMsgId) || hasRunningActivity();
+    dom.chatSystemDetails?.classList.toggle("chat-system-details--active", active);
 }
 
 // ============================================================================
@@ -1366,6 +1773,9 @@ function renderActiveMember() {
         dom.inputTag.style.background = `${meta.color}1a`;
         dom.inputTag.style.color = meta.color;
     }
+    if (dom.chatMemberLine) dom.chatMemberLine.textContent = `Here with ${state.member}`;
+    if (dom.chatWelcomeTitle) dom.chatWelcomeTitle.textContent = `Hi, ${state.member}.`;
+    if (dom.chatWelcomeNote) dom.chatWelcomeNote.textContent = "Tell me the outcome. I can help shape the plan, reminders, and next steps.";
     if (dom.welcomeName) dom.welcomeName.textContent = state.member;
     // Mark dropdown selection
     dom.memberDropdown && dom.memberDropdown.querySelectorAll(".member-dropdown-item").forEach((el) => {
@@ -1478,9 +1888,14 @@ function showToast(title, text, duration = 5000) {
 // ============================================================================
 
 function showStreaming(visible, label = DEFAULT_STREAMING_LABEL) {
-    if (!dom.streaming) return;
-    dom.streaming.classList.toggle("hidden", !visible);
-    if (dom.streamingText) dom.streamingText.textContent = label;
+    state.streamingLabel = visible ? (label || DEFAULT_STREAMING_LABEL) : "";
+    if (dom.streaming) {
+        dom.streaming.classList.add("hidden");
+        dom.streaming.setAttribute("aria-hidden", "true");
+    }
+    if (dom.streamingText) dom.streamingText.textContent = state.streamingLabel || DEFAULT_STREAMING_LABEL;
+    if (visible) updateStreamingWorkCard(state.streamingLabel);
+    updateChatSystemDisclosureState();
 }
 
 // ============================================================================
@@ -1499,6 +1914,16 @@ function setupInput() {
             sendMessage().catch((err) => console.error("sendMessage failed:", err));
         }
     });
+    $$("[data-chat-suggestion]").forEach((button) => {
+        button.addEventListener("click", () => applyChatSuggestion(button.dataset.chatSuggestion || ""));
+    });
+}
+
+function applyChatSuggestion(text) {
+    if (!dom.input || !text) return;
+    dom.input.value = text;
+    dom.input.focus();
+    $$(".chat-more-ideas[open]").forEach((details) => details.removeAttribute("open"));
 }
 
 async function sendMessage() {
@@ -1986,11 +2411,12 @@ const SETTINGS_KID_CAPABILITIES = [
 ];
 
 const calState = {
-    viewMode: "week",
+    viewMode: "focus",
     year: new Date().getFullYear(),
     month: new Date().getMonth(),
     selectedDate: _localDateIso(),
     selectedEventKey: null,
+    detailMode: null,
     events: [],
     feeds: [],
     manifest: null,
@@ -1998,7 +2424,8 @@ const calState = {
     loadedEnd: "",
 };
 
-const CALENDAR_VIEW_MODES = ["month", "week", "day"];
+const CALENDAR_VIEW_MODES = ["focus", "month", "week", "day"];
+const CALENDAR_VIEW_LABELS = { focus: "Today & next", month: "Month", week: "Week", day: "Day" };
 const CALENDAR_DAY_START_HOUR = 6;
 const CALENDAR_DAY_END_HOUR = 22;
 const CALENDAR_HOUR_HEIGHT = 56;
@@ -2011,12 +2438,52 @@ const CALENDAR_SOURCE_COLORS = {
     outlook_default: "#7c3aed",
     microsoft: "#7c3aed",
     teams: "#4f46e5",
-    classroom: "#d97706",
+    classroom: "#0d9488",
     apple: "#4b5563",
     manual_import: "#0891b2",
     system_generated: "#be123c",
 };
-const CALENDAR_EVENT_PALETTE = ["#2563eb", "#16a34a", "#d97706", "#dc2626", "#7c3aed", "#0891b2", "#be123c"];
+const CALENDAR_EVENT_PALETTE = ["#2563eb", "#16a34a", "#0d9488", "#dc2626", "#7c3aed", "#0891b2", "#be123c"];
+const TASK_VIEW_MODES = ["list", "board", "focus"];
+const TASK_PRIORITY_ORDER = { high: 0, medium: 1, low: 2 };
+const TASK_STATUS_ORDER = { open: 0, in_progress: 1, done: 2, cancelled: 3 };
+const REMINDER_VIEW_MODES = ["timeline", "board", "focus"];
+const REMINDER_STATUS_ORDER = { fired: 0, scheduled: 1, snoozed: 2, dismissed: 3 };
+const SHOPPING_VIEW_MODES = ["list", "aisles", "approval"];
+const SHOPPING_CATEGORY_ORDER = ["groceries", "pharmacy", "household", "school", "clothes", "pets", "gifts", "other"];
+const SHOPPING_CATEGORY_COLORS = {
+    groceries: "#16a34a",
+    pharmacy: "#dc2626",
+    household: "#2563eb",
+    school: "#7c3aed",
+    clothes: "#ec4899",
+    pets: "#0891b2",
+    gifts: "#be123c",
+    other: "#6b7280",
+};
+const SHOPPING_QUICK_ITEMS = {
+    groceries: ["Milk", "Bread", "Eggs", "Fruit"],
+    pharmacy: ["Allergy meds", "Bandages", "Vitamins", "Thermometer"],
+    household: ["Paper towels", "Laundry soap", "Dish tabs", "Trash bags"],
+    school: ["Notebook", "Pencils", "Glue sticks", "Lunch bags"],
+    clothes: ["Socks", "Shoes", "Rain jacket", "Uniform"],
+    gifts: ["Card", "Wrapping paper", "Candles", "Flowers"],
+    other: ["Milk", "Bread", "Medicine", "Paper towels"],
+};
+const CHORE_VIEW_MODES = ["today", "board", "list", "rewards"];
+const CHORE_STATUS_ORDER = { pending: 0, done: 1, skipped: 2 };
+const CHORE_STATUS_META = {
+    pending: { label: "Pending", color: "#2563eb" },
+    done: { label: "Done", color: "#16a34a" },
+    skipped: { label: "Skipped", color: "#64748b" },
+};
+const SETTINGS_VIEW_MODES = ["overview", "privacy", "kids", "sensitive", "features"];
+const SETTINGS_BAND_COLORS = {
+    family: "#2563eb",
+    adults: "#7c3aed",
+    named: "#0891b2",
+    private: "#dc2626",
+};
 
 async function loadAdapterView(viewId) {
     const adapterId = ADAPTER_BACKEND_NAME[viewId];
@@ -2090,11 +2557,16 @@ function setupHeaderActionButtons() {
                 } catch {/* */}
             }
             const action = ((adapterCache.manifest[adapterId] || {}).actions || []).find((a) => a.name === actionName);
-            if (adapterId === "shopping" && actionName === "add_item" && !state.shoppingSelectedListId) {
+            const shoppingLists = adapterCache.listData.shopping?.lists || [];
+            const shoppingItems = adapterCache.listData.shopping?.items || [];
+            const shoppingDefaults = adapterId === "shopping" && actionName === "add_item"
+                ? _shoppingAddDefaults(shoppingLists, shoppingItems)
+                : {};
+            if (adapterId === "shopping" && actionName === "add_item" && !shoppingDefaults.list_id) {
                 showToast("Shopping", "Create or select a list before adding an item.");
                 return;
             }
-            if (action) showActionForm(adapterId, action, _actionDefaults(adapterId, actionName));
+            if (action) showActionForm(adapterId, action, adapterId === "shopping" && actionName === "add_item" ? shoppingDefaults : _actionDefaults(adapterId, actionName));
             else showToast("Action unavailable", `${actionName} not found in ${adapterId}`);
         });
     });
@@ -2114,12 +2586,18 @@ function _actionDefaults(adapterId, actionName) {
     if (adapterId === "tasks" && actionName === "create_list") {
         return { color: "#2563eb" };
     }
-    if (adapterId === "shopping" && actionName === "add_item" && state.shoppingSelectedListId) {
-        return { list_id: state.shoppingSelectedListId };
+    if (adapterId === "shopping" && actionName === "add_item") {
+        const lists = adapterCache.listData.shopping?.lists || [];
+        const items = adapterCache.listData.shopping?.items || [];
+        const defaults = _shoppingAddDefaults(lists, items);
+        if (defaults.list_id) return defaults;
     }
     if (adapterId === "reminders" && actionName === "create_reminder") {
+        const selectedRecipient = state.remindersSelectedRecipient && state.remindersSelectedRecipient !== "__all__"
+            ? _reminderCanonicalMemberId(state.remindersSelectedRecipient)
+            : _currentMemberActorId();
         return {
-            recipient: _currentMemberActorId(),
+            recipient: selectedRecipient,
             trigger: { kind: "time", fire_at: _isoMinutesFromNow(60) },
             visibility: "family",
         };
@@ -2193,30 +2671,19 @@ function _renderCalendarView(viewId, manifest, writeActions, listData) {
     calState.manifest = manifest;
     const body = dom.viewBody[viewId];
 
-    const now = new Date();
-    const todayIso = _localDateIso(now);
-    const nextWeek = new Date(now);
-    nextWeek.setDate(nextWeek.getDate() + 7);
-    const upcoming = calState.events.filter((event) => event.start && new Date(event.start) >= now);
-    const todayCount = calState.events.filter((event) => _calEventDateIso(event) === todayIso).length;
-    const weekCount = upcoming.filter((event) => new Date(event.start) <= nextWeek).length;
-
     body.innerHTML = `
-        <div class="cal-stats">
-            <div class="cal-stat"><p class="cal-stat-label">Upcoming</p><p class="cal-stat-value">${upcoming.length}</p></div>
-            <div class="cal-stat"><p class="cal-stat-label">Today</p><p class="cal-stat-value cal-stat-value--blue">${todayCount}</p></div>
-            <div class="cal-stat"><p class="cal-stat-label">Next 7 Days</p><p class="cal-stat-value cal-stat-value--green">${weekCount}</p></div>
-        </div>
-        <div class="cal-layout">
-            <div class="cal-main">
+        <div class="cal-shell app-page-shell app-density--calm">
+            <div class="cal-layout app-workspace">
+                <div class="cal-main app-focus-card">
                 <div class="cal-nav">
                     <div class="cal-nav-heading">
                         <h3 class="cal-month-label" id="cal-month-label"></h3>
+                        <p class="cal-mode-hint" id="cal-mode-hint"></p>
                     </div>
                     <div class="cal-nav-actions">
                         <div class="cal-view-switch" role="tablist" aria-label="Calendar view">
                             ${CALENDAR_VIEW_MODES.map((mode) => `
-                                <button class="cal-view-switch-btn${calState.viewMode === mode ? " cal-view-switch-btn--active" : ""}" type="button" role="tab" aria-selected="${calState.viewMode === mode ? "true" : "false"}" data-cal-view="${mode}">${_humanizeLabel(mode)}</button>
+                                <button class="cal-view-switch-btn${calState.viewMode === mode ? " cal-view-switch-btn--active" : ""}" type="button" role="tab" aria-selected="${calState.viewMode === mode ? "true" : "false"}" data-cal-view="${mode}">${CALENDAR_VIEW_LABELS[mode] || _humanizeLabel(mode)}</button>
                             `).join("")}
                         </div>
                         <div class="cal-nav-controls">
@@ -2228,21 +2695,22 @@ function _renderCalendarView(viewId, manifest, writeActions, listData) {
                 </div>
                 <div id="cal-main-surface"></div>
             </div>
-            <aside class="cal-side">
-                <div id="cal-event-detail"></div>
-                <div id="cal-selected-day"></div>
+            <aside class="cal-side app-support-rail">
+                <div id="cal-side-panel"></div>
                 <div id="cal-color-legend"></div>
-                <h3>Upcoming Events</h3>
-                <div id="cal-upcoming"></div>
                 ${calState.feeds.length ? `<div class="cal-feed-list"><h3>Feeds</h3><div id="cal-feeds"></div></div>` : ""}
+            </aside>
+            </div>
+            <div class="app-detail-drawer-backdrop" data-app-drawer-backdrop="cal-detail-drawer" aria-hidden="true"></div>
+            <aside class="app-detail-drawer app-detail-drawer--overlay cal-detail-drawer" id="cal-detail-drawer" data-app-drawer="cal-detail-drawer" aria-hidden="true" aria-label="Calendar detail">
+                <div id="cal-detail-drawer-body"></div>
             </aside>
         </div>`;
 
     _calRenderMain();
     _calRenderEventDetail();
-    _calRenderSelectedDay();
+    _calRenderSidePanel();
     _calRenderColorLegend();
-    _calRenderUpcoming();
     _calRenderFeeds();
 
     body.querySelector("#cal-prev").addEventListener("click", () => {
@@ -2254,11 +2722,14 @@ function _renderCalendarView(viewId, manifest, writeActions, listData) {
     body.querySelector("#cal-today").addEventListener("click", () => {
         _calSetSelectedDate(_localDateIso());
         calState.selectedEventKey = null;
+        calState.detailMode = null;
+        calState.viewMode = "focus";
         _calRenderAll();
     });
     body.querySelectorAll("[data-cal-view]").forEach((button) => {
         button.addEventListener("click", () => {
-            calState.viewMode = button.dataset.calView || "week";
+            calState.viewMode = button.dataset.calView || "focus";
+            calState.detailMode = null;
             _calRefreshForCurrentRange();
         });
     });
@@ -2267,14 +2738,14 @@ function _renderCalendarView(viewId, manifest, writeActions, listData) {
 function _calRenderAll() {
     _calRenderMain();
     _calRenderEventDetail();
-    _calRenderSelectedDay();
+    _calRenderSidePanel();
     _calRenderColorLegend();
-    _calRenderUpcoming();
 }
 
 function _calRenderMain() {
     const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
     const label = document.getElementById("cal-month-label");
+    const hint = document.getElementById("cal-mode-hint");
     const surface = document.getElementById("cal-main-surface");
     if (!label || !surface) return;
 
@@ -2284,19 +2755,296 @@ function _calRenderMain() {
         button.setAttribute("aria-selected", active ? "true" : "false");
     });
 
+    if (calState.viewMode === "focus") {
+        label.textContent = "Today and next";
+        if (hint) hint.textContent = _formatDateLabel(calState.selectedDate);
+        _calRenderFocus(surface);
+        return;
+    }
     if (calState.viewMode === "day") {
         label.textContent = _calLongDateLabel(calState.selectedDate);
+        if (hint) hint.textContent = "Detailed day grid";
         _calRenderDay(surface);
         return;
     }
     if (calState.viewMode === "week") {
         label.textContent = _calWeekLabel(calState.selectedDate);
+        if (hint) hint.textContent = "Full week grid";
         _calRenderWeek(surface);
         return;
     }
 
     label.textContent = `${MONTHS[calState.month]} ${calState.year}`;
+    if (hint) hint.textContent = "Month overview";
     _calRenderMonth(surface);
+}
+
+function _calRenderFocus(surface) {
+    const manifest = calState.manifest || { actions: [] };
+    const metrics = _calOverviewMetrics();
+    const nextEvent = metrics.nextEvent;
+    const nextColor = nextEvent ? _calEventColor(nextEvent) : "#2563eb";
+    const nextDateIso = nextEvent ? _calEventDateIso(nextEvent) : calState.selectedDate;
+    const nextDate = _calDateFromIso(nextDateIso);
+    const todayPreview = metrics.selectedDayEvents.slice(0, 4);
+    const upcomingBlocks = metrics.weekEvents.slice(0, 6);
+
+    surface.innerHTML = `
+        <div class="cal-focus-surface">
+            <div class="cal-focus-stage">
+                <section class="cal-focus-hero${nextEvent ? "" : " cal-focus-hero--empty"}" style="--ev-color:${nextColor}">
+                    <div class="cal-focus-hero-top">
+                        <p class="cal-side-kicker">Up next</p>
+                        <div class="cal-focus-date-token" aria-hidden="true">
+                            <span>${nextDate.toLocaleDateString("en-US", { weekday: "short" })}</span>
+                            <strong>${nextDate.getDate()}</strong>
+                            <small>${nextDate.toLocaleDateString("en-US", { month: "short" })}</small>
+                        </div>
+                    </div>
+                    <div class="cal-focus-hero-copy">
+                        <h4>${escapeHtml(nextEvent?.title || "Open family time")}</h4>
+                        <p>${escapeHtml(nextEvent ? _fmtEventTime(nextEvent.start, nextEvent.end, nextEvent.all_day) : "The next stretch is clear. Add anything the family needs to coordinate.")}</p>
+                        <div class="cal-focus-pill-row">
+                            <span class="cal-focus-pill">${escapeHtml(nextEvent ? _calEventDurationLabel(nextEvent) : "Clear")}</span>
+                            <span class="cal-focus-pill cal-focus-pill--source">${escapeHtml(nextEvent ? _calEventColorLabel(nextEvent) : "Family")}</span>
+                            ${nextEvent?.location ? `<span class="cal-focus-pill cal-focus-pill--location">${escapeHtml(nextEvent.location)}</span>` : ""}
+                        </div>
+                    </div>
+                    <div class="cal-focus-hero-actions">
+                        ${nextEvent ? `<button class="view-small-btn view-small-btn--primary" type="button" data-cal-event-key="${escapeHtml(_calEventKey(nextEvent))}" data-cal-event-date="${escapeHtml(nextDateIso)}">Details</button>` : ""}
+                        ${_hasAction(manifest, "create_event") ? `<button class="view-small-btn" type="button" id="cal-add-focus">Add event</button>` : ""}
+                    </div>
+                </section>
+                <section class="cal-focus-panel cal-focus-panel--decisions cal-focus-panel--feature">
+                    <header class="cal-focus-panel-head">
+                        <div>
+                            <p class="cal-side-kicker">Needs a decision</p>
+                            <h4>${metrics.conflicts.length ? `${metrics.conflicts.length} overlap${metrics.conflicts.length === 1 ? "" : "s"}` : "Schedule is calm"}</h4>
+                        </div>
+                    </header>
+                    <div class="cal-decision-list">
+                        ${metrics.conflicts.length ? metrics.conflicts.slice(0, 3).map((conflict) => _calConflictRow(conflict)).join("") : `
+                            <div class="cal-decision-empty">
+                                <strong>No overlaps in the next week</strong>
+                                <span>Month, Week, and Day stay ready when you need the full scheduler.</span>
+                            </div>`}
+                    </div>
+                </section>
+            </div>
+            <div class="cal-focus-lower">
+                <section class="cal-focus-panel cal-focus-panel--today">
+                    <header class="cal-focus-panel-head">
+                        <div>
+                            <p class="cal-side-kicker">Today</p>
+                            <h4>${escapeHtml(_formatDateLabel(calState.selectedDate))}</h4>
+                        </div>
+                        <button class="view-small-btn" type="button" data-cal-day-open="${escapeHtml(calState.selectedDate)}">Open day</button>
+                    </header>
+                    <div class="cal-focus-list">
+                        ${todayPreview.length ? todayPreview.map((event) => _calFocusEventRow(event, calState.selectedDate)).join("") : `<div class="cal-quiet-state">No events on this day.</div>`}
+                        ${metrics.selectedDayEvents.length > todayPreview.length ? `<button class="cal-subtle-link" type="button" data-cal-day-open="${escapeHtml(calState.selectedDate)}">View ${metrics.selectedDayEvents.length - todayPreview.length} more</button>` : ""}
+                    </div>
+                </section>
+                <section class="cal-focus-panel cal-family-blocks">
+                    <header class="cal-focus-panel-head">
+                        <div>
+                            <p class="cal-side-kicker">Coming up</p>
+                            <h4>Family blocks</h4>
+                        </div>
+                        <button class="view-small-btn view-small-btn--primary" type="button" data-cal-show-week>Show full week grid</button>
+                    </header>
+                    <div class="cal-block-list">
+                        ${upcomingBlocks.length ? upcomingBlocks.map((event) => _calFocusEventRow(event, _calEventDateIso(event), "cal-focus-event-row--block")).join("") : `<div class="cal-quiet-state">Nothing scheduled in the next seven days.</div>`}
+                    </div>
+                </section>
+            </div>
+        </div>`;
+
+    const addButton = surface.querySelector("#cal-add-focus");
+    if (addButton) {
+        addButton.addEventListener("click", () => _openAdapterAction("calendar", manifest, "create_event", _defaultEventTimes(calState.selectedDate)));
+    }
+    _calWireDayOpen(surface);
+    _calWireShowWeek(surface);
+    _calWireEventClicks(surface);
+}
+
+function _calOverviewMetrics() {
+    const selectedDate = calState.selectedDate || _localDateIso();
+    const selectedDayEvents = _calEventsOnDate(selectedDate);
+    const weekEnd = _calAddDays(selectedDate, 6);
+    const weekEvents = _calSortEvents(calState.events.filter((event) => {
+        const eventDate = _calEventDateIso(event);
+        return eventDate && eventDate >= selectedDate && eventDate <= weekEnd;
+    }));
+    const futureEvents = weekEvents.filter((event) => _calEventIsUpcomingOrOngoing(event, selectedDate));
+    const currentEvent = selectedDayEvents.find((event) => _calEventIsOngoing(event)) || null;
+    return {
+        selectedDate,
+        selectedDayEvents,
+        weekEvents,
+        nextEvent: currentEvent || futureEvents[0] || weekEvents[0] || null,
+        conflicts: _calFindConflicts(selectedDate, weekEnd),
+    };
+}
+
+function _calEventIsUpcomingOrOngoing(event, fallbackDateIso = "") {
+    const now = new Date();
+    const endMs = _calEventEndMs(event);
+    const startMs = _calEventStartMs(event);
+    if (Number.isFinite(endMs) && endMs >= now.getTime()) return true;
+    if (Number.isFinite(startMs) && startMs >= now.getTime()) return true;
+    const eventDate = _calEventDateIso(event);
+    const todayIso = _localDateIso(now);
+    return Boolean(fallbackDateIso && eventDate > todayIso && eventDate >= fallbackDateIso);
+}
+
+function _calEventIsOngoing(event) {
+    const nowMs = Date.now();
+    const startMs = _calEventStartMs(event);
+    const endMs = _calEventEndMs(event);
+    return Number.isFinite(startMs) && Number.isFinite(endMs) && startMs <= nowMs && endMs >= nowMs;
+}
+
+function _calEventStartMs(event) {
+    const date = new Date(event.start || "");
+    return isNaN(date) ? NaN : date.getTime();
+}
+
+function _calEventEndMs(event) {
+    const date = new Date(event.end || event.start || "");
+    if (isNaN(date)) return NaN;
+    const startMs = _calEventStartMs(event);
+    return Number.isFinite(startMs) && date.getTime() <= startMs ? startMs + 30 * 60 * 1000 : date.getTime();
+}
+
+function _calEventDurationLabel(event) {
+    if (event.all_day || _calIsAllDay(event)) return "All day";
+    const startMs = _calEventStartMs(event);
+    const endMs = _calEventEndMs(event);
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return "Scheduled";
+    const minutes = Math.round((endMs - startMs) / 60000);
+    if (minutes < 60) return `${minutes} min`;
+    const hours = Math.floor(minutes / 60);
+    const remaining = minutes % 60;
+    return remaining ? `${hours}h ${remaining}m` : `${hours}h`;
+}
+
+function _calFindConflicts(startIso, endIso) {
+    const conflicts = [];
+    for (let cursor = startIso, guard = 0; guard < 31 && cursor <= endIso; guard += 1, cursor = _calAddDays(cursor, 1)) {
+        const timedEvents = _calTimedEvents(cursor).filter((event) => Number.isFinite(_calEventStartMs(event)));
+        const sorted = _calSortEvents(timedEvents);
+        const active = [];
+        sorted.forEach((current) => {
+            const currentStart = _calEventStartMs(current);
+            for (let index = active.length - 1; index >= 0; index -= 1) {
+                if (_calEventEndMs(active[index]) <= currentStart) active.splice(index, 1);
+            }
+            active.forEach((previous) => {
+                conflicts.push({ dateIso: cursor, first: previous, second: current });
+            });
+            active.push(current);
+        });
+        if (conflicts.length >= 12) {
+            return conflicts.slice(0, 12);
+        }
+    }
+    return conflicts;
+}
+
+function _calFocusEventRow(event, dateIso = "", extraClass = "") {
+    const color = _calEventColor(event);
+    const eventDate = dateIso || _calEventDateIso(event);
+    return `
+        <button class="cal-focus-event-row ${extraClass}" type="button" data-cal-event-key="${escapeHtml(_calEventKey(event))}" data-cal-event-date="${escapeHtml(eventDate)}" style="--ev-color:${color}">
+            <span class="cal-focus-event-mark"></span>
+            <span class="cal-focus-event-copy">
+                <strong>${escapeHtml(event.title || "Untitled")}</strong>
+                <span>${escapeHtml(_calCompactEventLine(event, eventDate))}</span>
+            </span>
+        </button>`;
+}
+
+function _calConflictRow(conflict) {
+    return `
+        <button class="cal-conflict-row" type="button" data-cal-day-open="${escapeHtml(conflict.dateIso)}">
+            <span class="cal-conflict-badge">Overlap</span>
+            <span class="cal-conflict-copy">
+                <strong>${escapeHtml(_formatDateLabel(conflict.dateIso))}</strong>
+                <span>${escapeHtml(conflict.first.title || "Untitled")} + ${escapeHtml(conflict.second.title || "Untitled")}</span>
+            </span>
+        </button>`;
+}
+
+function _calCompactEventLine(event, eventDate = "") {
+    const dateLabel = eventDate && eventDate !== calState.selectedDate ? `${_formatDateLabel(eventDate)} · ` : "";
+    const timeLabel = _fmtEventTimeShort(event.start, event.end, event.all_day);
+    const location = event.location ? ` · ${event.location}` : "";
+    return `${dateLabel}${timeLabel}${location}`;
+}
+
+function _calRenderSidePanel() {
+    const panel = document.getElementById("cal-side-panel");
+    if (!panel) return;
+    const metrics = _calOverviewMetrics();
+    const dayButtons = Array.from({ length: 7 }, (_, index) => {
+        const dateIso = _calAddDays(metrics.selectedDate, index);
+        const date = _calDateFromIso(dateIso);
+        const events = _calEventsOnDate(dateIso);
+        return `
+            <button class="cal-week-peek-day${dateIso === metrics.selectedDate ? " cal-week-peek-day--selected" : ""}${dateIso === _localDateIso() ? " cal-week-peek-day--today" : ""}" type="button" data-cal-day-open="${escapeHtml(dateIso)}">
+                <span>${date.toLocaleDateString("en-US", { weekday: "short" })}</span>
+                <strong>${date.getDate()}</strong>
+                <small>${events.length}</small>
+            </button>`;
+    }).join("");
+    panel.innerHTML = `
+        <section class="cal-side-card">
+            <div class="cal-side-card-head">
+                <div>
+                    <p class="cal-side-kicker">Week rhythm</p>
+                    <h3>Pick a day</h3>
+                </div>
+                <button class="cal-subtle-link" type="button" data-cal-view-side="focus">Reset</button>
+            </div>
+            <div class="cal-week-peek">${dayButtons}</div>
+        </section>
+        <section class="cal-side-card cal-side-card--quiet">
+            <p class="cal-side-kicker">Power scheduler</p>
+            <h3>${CALENDAR_VIEW_LABELS[calState.viewMode] || _humanizeLabel(calState.viewMode)}</h3>
+            <p>${calState.viewMode === "focus" ? "Use the full week grid when timing and overlaps matter." : "You are in a dense planning mode. Event and day details still open in the drawer."}</p>
+            <div class="cal-side-actions">
+                <button class="view-small-btn view-small-btn--primary" type="button" data-cal-show-week>Show full week grid</button>
+                <button class="view-small-btn" type="button" data-cal-view-side="month">Month</button>
+            </div>
+        </section>`;
+    _calWireDayOpen(panel);
+    _calWireShowWeek(panel);
+    panel.querySelectorAll("[data-cal-view-side]").forEach((button) => {
+        button.addEventListener("click", () => {
+            calState.viewMode = button.dataset.calViewSide || "focus";
+            calState.detailMode = null;
+            _calRefreshForCurrentRange();
+        });
+    });
+}
+
+function _calWireDayOpen(container) {
+    container.querySelectorAll("[data-cal-day-open]").forEach((button) => {
+        button.addEventListener("click", () => _calOpenDay(button.dataset.calDayOpen));
+    });
+}
+
+function _calWireShowWeek(container) {
+    container.querySelectorAll("[data-cal-show-week]").forEach((button) => {
+        button.addEventListener("click", () => {
+            calState.viewMode = "week";
+            calState.detailMode = null;
+            if (typeof closeAppDetailDrawer === "function") closeAppDetailDrawer(resolveAppDisclosureTarget("cal-detail-drawer", ".app-detail-drawer"));
+            _calRefreshForCurrentRange();
+        });
+    });
 }
 
 function _calRenderMonth(surface) {
@@ -2340,18 +3088,13 @@ function _calRenderMonth(surface) {
         cell.addEventListener("click", (clickEvent) => {
             if (clickEvent.target.closest("[data-cal-event-key]")) return;
             if (clickEvent.target.closest("[data-cal-more-date]")) return;
-            _calSetSelectedDate(cell.dataset.date);
-            calState.selectedEventKey = null;
-            _calRenderAll();
+            _calOpenDay(cell.dataset.date);
         });
     });
     surface.querySelectorAll("[data-cal-more-date]").forEach((button) => {
         button.addEventListener("click", (clickEvent) => {
             clickEvent.stopPropagation();
-            _calSetSelectedDate(button.dataset.calMoreDate);
-            calState.selectedEventKey = null;
-            calState.viewMode = "day";
-            _calRefreshForCurrentRange();
+            _calOpenDay(button.dataset.calMoreDate);
         });
     });
     _calWireEventClicks(surface);
@@ -2427,6 +3170,7 @@ async function _calNavigate(direction) {
         _calSetSelectedDate(_calAddDays(calState.selectedDate, direction * days));
     }
     calState.selectedEventKey = null;
+    calState.detailMode = null;
     await _calRefreshForCurrentRange();
 }
 
@@ -2484,6 +3228,9 @@ function _calVisibleRange() {
     if (calState.viewMode === "week") {
         const start = _calStartOfWeekIso(calState.selectedDate);
         return { start, end: _calAddDays(start, 6) };
+    }
+    if (calState.viewMode === "focus") {
+        return { start: calState.selectedDate, end: _calAddDays(calState.selectedDate, 6) };
     }
     return { start: calState.selectedDate, end: calState.selectedDate };
 }
@@ -2630,11 +3377,17 @@ function _calEventColor(event) {
 }
 
 function _calEventColorLabel(event) {
-    if (event.source_label) return event.source_label;
-    if (event.source && event.source !== "native") return _humanizeLabel(event.source);
-    if (event.actor) return _humanizeLabel(event.actor);
-    if (Array.isArray(event.attendees) && event.attendees.length) return _humanizeLabel(event.attendees[0]);
+    if (event.source_label) return _calReadableLabel(event.source_label);
+    if (event.source && event.source !== "native") return _calReadableLabel(event.source);
+    if (event.actor) return _calReadableLabel(event.actor);
+    if (Array.isArray(event.attendees) && event.attendees.length) return _calReadableLabel(event.attendees[0]);
     return "Family";
+}
+
+function _calReadableLabel(value) {
+    const label = String(value || "").replace(/[._-]+/g, " ").replace(/\s+/g, " ").trim();
+    if (/^(concierge|system|kernel|adapter)\b/i.test(label) || /\b(back|backend|generated)\b/i.test(label)) return "Family";
+    return label ? _humanizeLabel(label) : "Family";
 }
 
 function _calEventChip(event, extraClass = "", dateIso = "") {
@@ -2668,22 +3421,76 @@ function _calAllDayLane(dateIso) {
 
 function _calTimedDayColumn(dateIso, density) {
     const events = _calTimedEvents(dateIso);
+    const layouts = _calTimedEventLayouts(events, dateIso);
     const todayIso = _localDateIso();
     return `
         <div class="cal-timed-column cal-timed-column--${density}${dateIso === todayIso ? " cal-timed-column--today" : ""}${dateIso === calState.selectedDate ? " cal-timed-column--selected" : ""}" data-cal-date="${dateIso}">
-            ${events.map((event) => _calTimedEventBlock(event, density, dateIso)).join("")}
+            ${layouts.map((layout) => _calTimedEventBlock(layout.event, density, dateIso, layout)).join("")}
         </div>`;
 }
 
-function _calTimedEventBlock(event, density, dateIso) {
-    const placement = _calTimedPlacement(event, dateIso);
+function _calTimedEventBlock(event, density, dateIso, layout = null) {
+    const placement = layout?.placement || _calTimedPlacement(event, dateIso);
     const color = _calEventColor(event);
+    const compactClass = placement.height < 40 ? " cal-time-event--compact" : "";
+    const laneCount = Math.max(1, Number(layout?.laneCount || 1));
+    const laneIndex = Math.max(0, Number(layout?.laneIndex || 0));
+    const laneClass = laneCount > 1 ? " cal-time-event--overlap" : "";
+    const denseClass = laneCount >= 3 ? " cal-time-event--dense-overlap" : "";
+    const leftPct = (laneIndex / laneCount) * 100;
+    const widthPct = 100 / laneCount;
+    const widthInset = laneCount === 1 ? 8 : 6;
     return `
-        <button class="cal-time-event cal-time-event--${density}" type="button" data-cal-event-key="${escapeHtml(_calEventKey(event))}" data-cal-event-date="${escapeHtml(dateIso)}" style="--event-color:${color};--event-top:${placement.top}px;--event-height:${placement.height}px">
+        <button class="cal-time-event cal-time-event--${density}${compactClass}${laneClass}${denseClass}" type="button" data-cal-event-key="${escapeHtml(_calEventKey(event))}" data-cal-event-date="${escapeHtml(dateIso)}" style="--event-color:${color};--event-top:${placement.top}px;--event-height:${placement.height}px;--event-left:calc(${leftPct}% + 4px);--event-width:calc(${widthPct}% - ${widthInset}px)" title="${escapeHtml(event.title || "Untitled")}">
             <span class="cal-time-event-title">${escapeHtml(event.title || "Untitled")}</span>
-            <span class="cal-time-event-meta">${escapeHtml(_fmtEventTime(event.start, event.end, event.all_day))}</span>
+            <span class="cal-time-event-meta">${escapeHtml(_fmtEventTimeShort(event.start, event.end, event.all_day))}</span>
             ${event.location ? `<span class="cal-time-event-meta">${escapeHtml(event.location)}</span>` : ""}
         </button>`;
+}
+
+function _calTimedEventLayouts(events, dateIso) {
+    const positioned = _calSortEvents(events).map((event, index) => {
+        const placement = _calTimedPlacement(event, dateIso);
+        return {
+            event,
+            placement,
+            originalIndex: index,
+            top: placement.top,
+            bottom: placement.top + placement.height,
+            laneIndex: 0,
+            laneCount: 1,
+        };
+    }).sort((first, second) => first.top - second.top || first.bottom - second.bottom || first.originalIndex - second.originalIndex);
+
+    const assignCluster = (cluster) => {
+        const laneEnds = [];
+        cluster.forEach((item) => {
+            let lane = laneEnds.findIndex((end) => end <= item.top + 0.1);
+            if (lane === -1) {
+                lane = laneEnds.length;
+                laneEnds.push(0);
+            }
+            item.laneIndex = lane;
+            laneEnds[lane] = item.bottom;
+        });
+        cluster.forEach((item) => {
+            item.laneCount = Math.max(1, laneEnds.length);
+        });
+    };
+
+    let cluster = [];
+    let clusterEnd = -Infinity;
+    positioned.forEach((item) => {
+        if (cluster.length && item.top >= clusterEnd) {
+            assignCluster(cluster);
+            cluster = [];
+            clusterEnd = -Infinity;
+        }
+        cluster.push(item);
+        clusterEnd = Math.max(clusterEnd, item.bottom);
+    });
+    if (cluster.length) assignCluster(cluster);
+    return positioned.sort((first, second) => first.top - second.top || first.laneIndex - second.laneIndex || first.originalIndex - second.originalIndex);
 }
 
 function _calTimedPlacement(event, dateIso = "") {
@@ -2760,11 +3567,7 @@ function _calScheduleHeight() {
 
 function _calWireDateButtons(container) {
     container.querySelectorAll("[data-cal-date]").forEach((button) => {
-        button.addEventListener("click", () => {
-            _calSetSelectedDate(button.dataset.calDate);
-            calState.selectedEventKey = null;
-            _calRenderAll();
-        });
+        button.addEventListener("click", () => _calOpenDay(button.dataset.calDate));
     });
 }
 
@@ -2788,9 +3591,36 @@ function _calOpenEvent(eventKey, dateIso = "") {
     const event = _calFindEvent(eventKey);
     if (!event) return;
     calState.selectedEventKey = eventKey;
+    calState.detailMode = "event";
     const selectedDateIso = dateIso || _calEventDateIso(event);
     if (selectedDateIso) _calSetSelectedDate(selectedDateIso);
     _calRenderAll();
+    _calOpenDetailDrawer();
+}
+
+function _calOpenDay(dateIso) {
+    if (!dateIso) return;
+    _calSetSelectedDate(dateIso);
+    calState.selectedEventKey = null;
+    calState.detailMode = "day";
+    _calRenderAll();
+    _calOpenDetailDrawer();
+}
+
+function _calOpenDetailDrawer() {
+    if (typeof openAppDetailDrawer === "function") {
+        openAppDetailDrawer("cal-detail-drawer");
+    }
+}
+
+function _calCloseDetailDrawer() {
+    calState.detailMode = null;
+    calState.selectedEventKey = null;
+    if (typeof closeAppDetailDrawer === "function") {
+        closeAppDetailDrawer(resolveAppDisclosureTarget("cal-detail-drawer", ".app-detail-drawer"));
+    }
+    _calRenderMain();
+    _calRenderSidePanel();
 }
 
 function _calUpdateDefaults(event) {
@@ -2824,22 +3654,38 @@ function _calRenderColorLegend() {
         return;
     }
     panel.innerHTML = `
-        <div class="cal-color-legend">
-            <h3>Colors</h3>
+        <details class="cal-color-legend app-advanced-section">
+            <summary>
+                <span>Color key</span>
+                <small>${entries.length} source${entries.length === 1 ? "" : "s"}</small>
+            </summary>
             <div class="cal-color-legend-list">
                 ${entries.slice(0, 8).map((entry) => `
                     <span class="cal-color-legend-item"><span class="cal-color-swatch" style="background:${entry.color}"></span>${escapeHtml(entry.label)}</span>
                 `).join("")}
             </div>
-        </div>`;
+        </details>`;
 }
 
 function _calRenderEventDetail() {
-    const panel = document.getElementById("cal-event-detail");
+    const panel = document.getElementById("cal-detail-drawer-body");
     if (!panel) return;
+    if (calState.detailMode === "day") {
+        _calRenderDayDetail(panel);
+        return;
+    }
     const event = calState.selectedEventKey ? _calFindEvent(calState.selectedEventKey) : null;
     if (!event) {
-        panel.innerHTML = "";
+        panel.innerHTML = `
+            <header class="app-detail-drawer__head">
+                <div>
+                    <p class="app-detail-drawer__eyebrow">Calendar</p>
+                    <h3 class="app-detail-drawer__title">Details</h3>
+                </div>
+                <button class="app-detail-drawer__close" type="button" data-cal-detail-close aria-label="Close calendar detail"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+            </header>`;
+        const close = panel.querySelector("[data-cal-detail-close]");
+        if (close) close.addEventListener("click", _calCloseDetailDrawer);
         return;
     }
     const manifest = calState.manifest || { actions: [] };
@@ -2850,15 +3696,13 @@ function _calRenderEventDetail() {
     const color = _calEventColor(event);
     const attendees = Array.isArray(event.attendees) ? event.attendees : [];
     panel.innerHTML = `
-        <section class="cal-event-detail" style="--ev-color:${color}">
-            <header class="cal-event-detail-head">
+        <section class="cal-event-detail cal-event-detail--drawer" style="--ev-color:${color}">
+            <header class="app-detail-drawer__head cal-event-detail-head">
                 <div>
-                    <p class="cal-side-kicker">${escapeHtml(_calEventColorLabel(event))}</p>
-                    <h3>${escapeHtml(event.title || "Untitled")}</h3>
+                    <p class="app-detail-drawer__eyebrow">${escapeHtml(_calEventColorLabel(event))}</p>
+                    <h3 class="app-detail-drawer__title">${escapeHtml(event.title || "Untitled")}</h3>
                 </div>
-                <button class="cal-detail-close" type="button" id="cal-detail-close" aria-label="Close event details">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                </button>
+                <button class="app-detail-drawer__close" type="button" data-cal-detail-close aria-label="Close event details"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
             </header>
             <div class="cal-event-detail-meta">
                 <span><strong>When</strong>${escapeHtml(_fmtEventTime(event.start, event.end, event.all_day))}</span>
@@ -2875,11 +3719,8 @@ function _calRenderEventDetail() {
             </div>
         </section>`;
 
-    const close = panel.querySelector("#cal-detail-close");
-    if (close) close.addEventListener("click", () => {
-        calState.selectedEventKey = null;
-        _calRenderAll();
-    });
+    const close = panel.querySelector("[data-cal-detail-close]");
+    if (close) close.addEventListener("click", _calCloseDetailDrawer);
     panel.querySelectorAll("[data-cal-detail-action]").forEach((button) => {
         button.addEventListener("click", async () => {
             const actionName = button.dataset.calDetailAction;
@@ -2894,6 +3735,54 @@ function _calRenderEventDetail() {
     });
 }
 
+function _calRenderDayDetail(panel) {
+    const manifest = calState.manifest || { actions: [] };
+    const events = _calEventsOnDate(calState.selectedDate);
+    panel.innerHTML = `
+        <section class="cal-event-detail cal-day-detail--drawer">
+            <header class="app-detail-drawer__head cal-event-detail-head">
+                <div>
+                    <p class="app-detail-drawer__eyebrow">Selected day</p>
+                    <h3 class="app-detail-drawer__title">${escapeHtml(_formatDateLabel(calState.selectedDate))}</h3>
+                    <span class="cal-selected-count">${events.length} ${events.length === 1 ? "event" : "events"}</span>
+                </div>
+                <button class="app-detail-drawer__close" type="button" data-cal-detail-close aria-label="Close day details"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+            </header>
+            <div class="cal-event-detail-actions cal-event-detail-actions--top">
+                ${_hasAction(manifest, "create_event") ? `<button class="view-small-btn view-small-btn--primary" type="button" id="cal-add-selected">Add event</button>` : ""}
+                <button class="view-small-btn" type="button" data-cal-show-day>Open day grid</button>
+                <button class="view-small-btn" type="button" data-cal-show-week>Show week grid</button>
+            </div>
+            <div class="cal-day-events cal-day-events--drawer">
+                ${events.length === 0 ? `<p class="muted-empty">No events on this day.</p>` : events.map((event) => _renderCalendarEventRow(event, manifest, calState.selectedDate)).join("")}
+            </div>
+        </section>`;
+    const close = panel.querySelector("[data-cal-detail-close]");
+    if (close) close.addEventListener("click", _calCloseDetailDrawer);
+    const add = panel.querySelector("#cal-add-selected");
+    if (add) {
+        add.addEventListener("click", () => _openAdapterAction("calendar", manifest, "create_event", _defaultEventTimes(calState.selectedDate)));
+    }
+    const showDay = panel.querySelector("[data-cal-show-day]");
+    if (showDay) {
+        showDay.addEventListener("click", () => {
+            calState.viewMode = "day";
+            calState.detailMode = null;
+            closeAppDetailDrawer(resolveAppDisclosureTarget("cal-detail-drawer", ".app-detail-drawer"));
+            _calRefreshForCurrentRange();
+        });
+    }
+    _calWireShowWeek(panel);
+    panel.querySelectorAll("[data-cal-action]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+            const eventId = btn.dataset.eventId;
+            if (!eventId) return;
+            await _submitAdapterAction("calendar", btn.dataset.calAction, { event_id: eventId });
+        });
+    });
+    _calWireEventClicks(panel);
+}
+
 function _calRenderSelectedDay() {
     const panel = document.getElementById("cal-selected-day");
     if (!panel) return;
@@ -2904,6 +3793,7 @@ function _calRenderSelectedDay() {
             <div>
                 <p class="cal-side-kicker">Selected Day</p>
                 <h3>${escapeHtml(_formatDateLabel(calState.selectedDate))}</h3>
+                <span class="cal-selected-count">${events.length} ${events.length === 1 ? "event" : "events"}</span>
             </div>
             ${_hasAction(manifest, "create_event") ? `<button class="view-small-btn view-small-btn--primary" id="cal-add-selected">Add</button>` : ""}
         </div>
@@ -2924,12 +3814,12 @@ function _calRenderSelectedDay() {
     _calWireEventClicks(panel);
 }
 
-function _renderCalendarEventRow(event, manifest) {
+function _renderCalendarEventRow(event, manifest, dateIso = "") {
     const eventId = _idOf(event, "event_id");
     const canDelete = _hasAction(manifest, "delete_event") && eventId;
     const color = _calEventColor(event);
     return `
-        <div class="cal-day-event-row" role="button" tabindex="0" data-cal-event-key="${escapeHtml(_calEventKey(event))}" style="--ev-color:${color}">
+        <div class="cal-day-event-row" role="button" tabindex="0" data-cal-event-key="${escapeHtml(_calEventKey(event))}"${dateIso ? ` data-cal-event-date="${escapeHtml(dateIso)}"` : ""} style="--ev-color:${color}">
             <div class="cal-day-event-dot" style="background:${color}"></div>
             <div class="cal-day-event-body">
                 <p class="cal-day-event-title">${escapeHtml(event.title || "Untitled")}</p>
@@ -3016,6 +3906,20 @@ function _fmtEventTime(start, end, allDay) {
     return end ? `${fmt(start)} – ${new Date(end).toLocaleTimeString("en-US", withTimeZone({ hour: "numeric", minute: "2-digit" }))}` : fmt(start);
 }
 
+function _fmtEventTimeShort(start, end, allDay) {
+    if (allDay) return "All day";
+    const timeZone = _displayTimeZone();
+    const withTimeZone = (options) => timeZone ? { ...options, timeZone } : options;
+    const fmt = (dt) => {
+        const d = new Date(dt);
+        return isNaN(d) ? "" : d.toLocaleTimeString("en-US", withTimeZone({ hour: "numeric", minute: "2-digit" }));
+    };
+    const startLabel = fmt(start);
+    const endLabel = end ? fmt(end) : "";
+    if (!startLabel) return _fmtEventTime(start, end, allDay);
+    return endLabel ? `${startLabel} - ${endLabel}` : startLabel;
+}
+
 // ----------------------------------------------------------------------------
 // Tasks view
 // ----------------------------------------------------------------------------
@@ -3024,112 +3928,207 @@ function _renderTasksView(viewId, manifest, writeActions, listData) {
     const items = Array.isArray(listData?.tasks) ? listData.tasks : _extractItems(listData);
     const lists = Array.isArray(listData?.lists) ? listData.lists : [];
     const body = dom.viewBody[viewId];
+    const actions = new Set((manifest.actions || []).map((action) => action.name));
+    const currentMember = _currentMemberActorId();
 
-    if (state.tasksSelectedListId && !lists.some((list) => list.id === state.tasksSelectedListId)) {
+    if (state.tasksSelectedListId && state.tasksSelectedListId !== "__no_list__" && !lists.some((list) => list.id === state.tasksSelectedListId)) {
         state.tasksSelectedListId = null;
     }
-    const selectedListId = state.tasksSelectedListId || "__all__";
-    const scopedItems = selectedListId === "__all__" ? items : items.filter((task) => (task.list_id || "") === selectedListId);
+    if (state.tasksSelectedListId === "__no_list__" && !items.some((task) => !task.list_id)) {
+        state.tasksSelectedListId = null;
+    }
+    if (state.tasksSelectedTaskKey && !items.some((task) => _taskKey(task) === state.tasksSelectedTaskKey)) {
+        state.tasksSelectedTaskKey = null;
+    }
+    if (!TASK_VIEW_MODES.includes(state.tasksViewMode)) state.tasksViewMode = "list";
+    if (!state.tasksFilter) state.tasksFilter = "now";
 
-    const active = scopedItems.filter((t) => t.status !== "done" && t.status !== "cancelled");
-    const completed = scopedItems.filter((t) => t.status === "done");
-    const high = active.filter((t) => t.priority === "high").length;
-    const dueToday = active.filter((t) => t.due_at && _relativeDate(t.due_at) === "Today").length;
-    const actions = new Set((manifest.actions || []).map((action) => action.name));
+    const selectedListId = state.tasksSelectedListId || "__all__";
+    const scopedItems = _taskScopeByList(items, selectedListId);
+    const active = scopedItems.filter(_taskIsActive);
+    const completed = scopedItems.filter((task) => task.status === "done");
+    const visibleItems = _taskSortTasks(_taskApplyFilters(scopedItems, state.tasksFilter, state.tasksSearchQuery, currentMember, lists));
+    const selectedTask = state.tasksSelectedTaskKey ? items.find((task) => _taskKey(task) === state.tasksSelectedTaskKey) : null;
+    const overdue = active.filter(_taskIsOverdue);
+    const dueToday = active.filter(_taskIsDueToday);
+    const decision = active.filter((task) => _taskNeedsDecision(task, currentMember));
+    const nowTasks = _taskNowTasks(scopedItems, currentMember);
+    const nextTask = nowTasks[0] || _taskSortTasks(active)[0] || null;
+    const high = active.filter((task) => task.priority === "high");
+    const filterOptions = _taskFilterOptions(scopedItems, currentMember);
+    const primaryFilters = [
+        { key: "today", label: "Today", count: dueToday.length, hint: "Due before the day ends" },
+        { key: "overdue", label: "Overdue", count: overdue.length, hint: "Needs a reset" },
+        { key: "decision", label: "Needs decision", count: decision.length, hint: "Assign, reprioritize, or clear" },
+    ];
+    const secondaryFilters = filterOptions.filter((filter) => !["now", "today", "overdue", "decision"].includes(filter.key));
 
     const listCount = (listId) => listId === "__all__"
-        ? items.filter((task) => task.status !== "done" && task.status !== "cancelled").length
-        : items.filter((task) => (task.list_id || "") === listId && task.status !== "done" && task.status !== "cancelled").length;
+        ? items.length
+        : _taskScopeByList(items, listId).length;
 
     const renderListButton = (list) => {
         const listId = list.id || "";
         const activeList = listId === selectedListId;
+        const color = _taskListColor(list, listId);
         return `
             <button class="task-list-tab${activeList ? " task-list-tab--active" : ""}" data-task-list-id="${escapeHtml(listId)}">
+                <span class="task-list-swatch" style="background:${color}"></span>
                 <span class="task-list-name">${escapeHtml(list.name || "Untitled list")}</span>
                 <span class="task-list-count">${listCount(listId)}</span>
             </button>`;
     };
 
-    const renderRow = (t, done) => {
-        const pri = t.priority || "normal";
-        const due = t.due_at ? _relativeDate(t.due_at) : null;
-        const assignee = t.assigned_to || "";
-        const taskId = _idOf(t, "task_id");
-        const canComplete = actions.has("complete_task") && taskId && !done;
-        const canReopen = actions.has("reopen_task") && taskId && done;
-        const canDelete = actions.has("delete_task") && taskId;
-        return `
-            <div class="task-row${done ? " task-row--done" : ""}">
-                <button class="task-checkbox${done ? " task-checkbox--checked" : ""}" data-task-action="${done ? "reopen_task" : "complete_task"}" data-task-id="${escapeHtml(taskId)}" ${canComplete || canReopen ? "" : "disabled"} aria-label="${done ? "Reopen" : "Complete"} ${escapeHtml(t.title || "task")}">
-                    ${done ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>` : ""}
-                </button>
-                <div class="task-body">
-                    <p class="task-title">${escapeHtml(t.title || "Untitled")}</p>
-                    <div class="task-meta">
-                        ${assignee ? `<span class="task-meta-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>${escapeHtml(assignee)}</span>` : ""}
-                        ${due ? `<span class="task-meta-item"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>${escapeHtml(due)}</span>` : ""}
-                        ${t.list_id ? `<span class="task-meta-item">${escapeHtml(_taskListName(lists, t.list_id))}</span>` : ""}
-                    </div>
-                </div>
-                ${pri && pri !== "normal" ? `<span class="task-priority task-priority--${pri}">${pri}</span>` : ""}
-                <div class="task-actions">
-                    ${done && canReopen ? `<button class="view-action-btn" data-task-action="reopen_task" data-task-id="${escapeHtml(taskId)}">Reopen</button>` : ""}
-                    ${canDelete ? `<button class="view-action-btn view-action-btn--danger" data-task-action="delete_task" data-task-id="${escapeHtml(taskId)}">Remove</button>` : ""}
-                </div>
-            </div>`;
-    };
-
     body.innerHTML = `
-        <div class="task-stats">
-            <div class="task-stat"><p class="task-stat-label">Active Tasks</p><p class="task-stat-value">${active.length}</p></div>
-            <div class="task-stat"><p class="task-stat-label">Completed</p><p class="task-stat-value task-stat-value--green">${completed.length}</p></div>
-            <div class="task-stat"><p class="task-stat-label">High Priority</p><p class="task-stat-value task-stat-value--red">${high}</p></div>
-            <div class="task-stat"><p class="task-stat-label">Due Today</p><p class="task-stat-value task-stat-value--blue">${dueToday}</p></div>
-        </div>
-
-        <div class="task-layout">
-            <aside class="task-lists">
-                <div class="task-lists-header">
-                    <h3>Lists</h3>
-                    ${actions.has("create_list") ? `<button class="view-small-btn" data-app-action="tasks:create_list">New</button>` : ""}
-                </div>
-                <div class="task-list-tabs">
-                    <button class="task-list-tab${selectedListId === "__all__" ? " task-list-tab--active" : ""}" data-task-list-id="__all__">
-                        <span class="task-list-name">All tasks</span>
-                        <span class="task-list-count">${listCount("__all__")}</span>
-                    </button>
-                    ${lists.map(renderListButton).join("")}
-                </div>
-            </aside>
-            <section class="task-panel">
-                <div class="task-panel-header">
-                    <div>
-                        <h3>${escapeHtml(selectedListId === "__all__" ? "Active Tasks" : _taskListName(lists, selectedListId))}</h3>
-                        <p>${active.length} open · ${completed.length} done</p>
+        <div class="task-shell app-page-shell app-density--calm">
+            <div class="task-workbench app-workspace${selectedTask ? "" : " app-workspace--single task-workbench--single"}">
+                <section class="task-main app-focus-card">
+                    <div class="task-focus-stage">
+                        <section class="task-next-hero${nextTask ? "" : " task-next-hero--empty"}" style="--task-accent:${nextTask ? _taskAccent(nextTask, lists) : "var(--brand-blue)"}">
+                            <div>
+                                <p class="task-side-kicker">Next best move</p>
+                                <h3>${escapeHtml(nextTask?.title || "Nothing urgent right now")}</h3>
+                                <p>${escapeHtml(nextTask ? _taskDueLabel(nextTask, true) : `${completed.length} completed task${completed.length === 1 ? "" : "s"} are tucked away. Add the next real move when it appears.`)}</p>
+                                <div class="task-hero-pills">
+                                    <span>${escapeHtml(nextTask ? _taskFocusReason(nextTask, currentMember) : "Clear")}</span>
+                                    <span>${escapeHtml(nextTask ? _taskListName(lists, nextTask.list_id) : _taskSelectedListLabel(lists, selectedListId))}</span>
+                                    ${nextTask?.assigned_to ? `<span>${escapeHtml(_actorDisplay(nextTask.assigned_to).name)}</span>` : ""}
+                                </div>
+                            </div>
+                            <div class="task-next-hero-actions">
+                                ${nextTask ? `<button class="view-small-btn view-small-btn--primary" type="button" data-task-key="${escapeHtml(_taskKey(nextTask))}">Details</button>` : ""}
+                                ${actions.has("create_task") ? `<button class="view-small-btn" type="button" data-app-action="tasks:create_task">Add task</button>` : ""}
+                            </div>
+                        </section>
+                        <section class="task-now-panel">
+                            <header>
+                                <p class="task-side-kicker">Today, overdue, decisions</p>
+                                <h3>${nowTasks.length ? `${nowTasks.length} to consider` : "All clear"}</h3>
+                            </header>
+                            <div class="task-signal-grid">
+                                ${primaryFilters.map((filter) => `
+                                    <button class="task-signal-card${state.tasksFilter === filter.key ? " task-signal-card--active" : ""}" type="button" data-task-filter="${filter.key}">
+                                        <span>${escapeHtml(filter.label)}</span>
+                                        <strong>${filter.count}</strong>
+                                        <small>${escapeHtml(filter.hint)}</small>
+                                    </button>
+                                `).join("")}
+                            </div>
+                        </section>
                     </div>
-                    ${actions.has("create_task") ? `<button class="view-small-btn view-small-btn--primary" data-app-action="tasks:create_task">Add task</button>` : ""}
-                </div>
-                <div class="task-section task-section--flat">
-                    ${active.length === 0
-                        ? `<p class="muted-empty">All caught up.</p>`
-                        : active.map((t) => renderRow(t, false)).join("")}
-                </div>
 
-                ${completed.length > 0 ? `
-                <div class="task-section task-section--flat">
-                    <h3>Completed</h3>
-                    ${completed.map((t) => renderRow(t, true)).join("")}
-                </div>` : ""}
-            </section>
+                    <div class="task-toolbar task-toolbar--m4">
+                        <div>
+                            <p class="task-side-kicker">Task queue</p>
+                            <h3>${escapeHtml(_taskSelectedListLabel(lists, selectedListId))}</h3>
+                            <p>${visibleItems.length} shown · ${active.length} open · ${completed.length} done</p>
+                        </div>
+                        <div class="task-toolbar-actions">
+                            <details class="task-list-menu">
+                                <summary>
+                                    <span class="task-list-swatch${selectedListId === "__all__" ? " task-list-swatch--all" : selectedListId === "__no_list__" ? " task-list-swatch--none" : ""}" style="${selectedListId !== "__all__" && selectedListId !== "__no_list__" ? `background:${_taskListColorById(lists, selectedListId)}` : ""}"></span>
+                                    <span>${escapeHtml(_taskSelectedListLabel(lists, selectedListId))}</span>
+                                    <strong>${listCount(selectedListId)}</strong>
+                                </summary>
+                                <div class="task-list-menu__panel">
+                                    <div class="task-lists-header">
+                                        <h3>Lists</h3>
+                                        ${actions.has("create_list") ? `<button class="view-small-btn" data-app-action="tasks:create_list">New</button>` : ""}
+                                    </div>
+                                    <div class="task-list-tabs">
+                                        <button class="task-list-tab${selectedListId === "__all__" ? " task-list-tab--active" : ""}" data-task-list-id="__all__">
+                                            <span class="task-list-swatch task-list-swatch--all"></span>
+                                            <span class="task-list-name">All tasks</span>
+                                            <span class="task-list-count">${listCount("__all__")}</span>
+                                        </button>
+                                        ${lists.map(renderListButton).join("")}
+                                        ${items.some((task) => !task.list_id) ? `
+                                        <button class="task-list-tab${selectedListId === "__no_list__" ? " task-list-tab--active" : ""}" data-task-list-id="__no_list__">
+                                            <span class="task-list-swatch task-list-swatch--none"></span>
+                                            <span class="task-list-name">Unlisted</span>
+                                            <span class="task-list-count">${listCount("__no_list__")}</span>
+                                        </button>` : ""}
+                                    </div>
+                                </div>
+                            </details>
+                            <div class="task-view-switch" role="tablist" aria-label="Task view">
+                                ${TASK_VIEW_MODES.map((mode) => `
+                                    <button class="task-view-switch-btn${state.tasksViewMode === mode ? " task-view-switch-btn--active" : ""}" type="button" role="tab" aria-selected="${state.tasksViewMode === mode ? "true" : "false"}" data-task-view="${mode}">${escapeHtml(_humanizeLabel(mode))}</button>
+                                `).join("")}
+                            </div>
+                            ${actions.has("create_task") ? `<button class="view-small-btn view-small-btn--primary" data-app-action="tasks:create_task">Add task</button>` : ""}
+                        </div>
+                    </div>
+
+                    <div class="task-filter-summary">
+                        <button class="task-now-chip${state.tasksFilter === "now" ? " task-now-chip--active" : ""}" type="button" data-task-filter="now">
+                            <span>Now queue</span><strong>${nowTasks.length}</strong>
+                        </button>
+                        <details class="task-more-filters app-advanced-section">
+                            <summary><span>More filters</span><small>${escapeHtml(_taskFilterLabel(filterOptions, state.tasksFilter))}</small></summary>
+                            <div class="app-advanced-section__body">
+                                <div class="task-filter-row" role="tablist" aria-label="Task filter">
+                                    ${secondaryFilters.map((filter) => `
+                                        <button class="task-filter-chip${state.tasksFilter === filter.key ? " task-filter-chip--active" : ""}" type="button" data-task-filter="${filter.key}">
+                                            <span>${escapeHtml(filter.label)}</span><strong>${filter.count}</strong>
+                                        </button>
+                                    `).join("")}
+                                </div>
+                                <label class="task-search-wrap">
+                                    <span>Search</span>
+                                    <input class="task-search" type="search" data-task-search value="${escapeHtml(state.tasksSearchQuery || "")}" placeholder="Title, person, list">
+                                </label>
+                            </div>
+                        </details>
+                    </div>
+
+                    ${_renderTaskSurface(visibleItems, scopedItems, lists, manifest, currentMember)}
+                </section>
+                ${selectedTask ? `
+                    <aside class="task-inspector app-detail-drawer" id="task-inspector">
+                        <button class="app-detail-drawer__close task-detail-close" type="button" data-task-close-detail aria-label="Close task details">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                        </button>
+                        ${_renderTaskDetail(selectedTask, lists, manifest, currentMember, scopedItems)}
+                    </aside>` : ""}
+            </div>
         </div>`;
 
     body.querySelectorAll("[data-task-list-id]").forEach((btn) => {
         btn.addEventListener("click", () => {
             state.tasksSelectedListId = btn.dataset.taskListId === "__all__" ? null : btn.dataset.taskListId;
+            state.tasksSelectedTaskKey = null;
             _renderAdapterBody(viewId, "tasks", manifest, writeActions, listData);
         });
     });
+    body.querySelectorAll("[data-task-view]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+            state.tasksViewMode = btn.dataset.taskView || "list";
+            _renderAdapterBody(viewId, "tasks", manifest, writeActions, listData);
+        });
+    });
+    body.querySelectorAll("[data-task-filter]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+            state.tasksFilter = btn.dataset.taskFilter || "open";
+            _renderAdapterBody(viewId, "tasks", manifest, writeActions, listData);
+        });
+    });
+    const searchInput = body.querySelector("[data-task-search]");
+    if (searchInput) {
+        searchInput.addEventListener("input", () => {
+            state.tasksSearchQuery = searchInput.value;
+            const cursor = searchInput.selectionStart || state.tasksSearchQuery.length;
+            window.clearTimeout(state._tasksSearchTimer);
+            state._tasksSearchTimer = window.setTimeout(() => {
+                _renderAdapterBody(viewId, "tasks", manifest, writeActions, listData);
+                const nextInput = dom.viewBody[viewId]?.querySelector("[data-task-search]");
+                if (nextInput) {
+                    nextInput.focus();
+                    nextInput.setSelectionRange(cursor, cursor);
+                }
+            }, 120);
+        });
+    }
     body.querySelectorAll("[data-task-action]").forEach((btn) => {
         btn.addEventListener("click", async () => {
             const taskId = btn.dataset.taskId;
@@ -3138,10 +4137,464 @@ function _renderTasksView(viewId, manifest, writeActions, listData) {
             await _submitAdapterAction("tasks", actionName, { task_id: taskId });
         });
     });
+    body.querySelectorAll("[data-task-detail-action]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+            const task = items.find((item) => _taskKey(item) === btn.dataset.taskKey);
+            if (!task) return;
+            const taskId = _taskId(task);
+            const actionName = btn.dataset.taskDetailAction;
+            if (actionName === "update_task") {
+                _openAdapterAction("tasks", manifest, "update_task", _taskUpdateDefaults(task));
+            } else if (actionName === "reassign_task") {
+                _openAdapterAction("tasks", manifest, "reassign_task", { task_id: taskId, new_assignee: task.assigned_to || currentMember });
+            } else if (actionName === "complete_task" || actionName === "reopen_task" || actionName === "delete_task") {
+                await _submitAdapterAction("tasks", actionName, { task_id: taskId });
+            }
+        });
+    });
+    body.querySelectorAll("[data-task-reassign]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+            const taskId = btn.dataset.taskId;
+            const newAssignee = btn.dataset.taskAssignee;
+            if (!taskId || !newAssignee || btn.disabled) return;
+            await _submitAdapterAction("tasks", "reassign_task", { task_id: taskId, new_assignee: newAssignee });
+        });
+    });
+    body.querySelectorAll("[data-task-close-detail]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+            state.tasksSelectedTaskKey = null;
+            _renderAdapterBody(viewId, "tasks", manifest, writeActions, listData);
+        });
+    });
+    body.querySelectorAll("[data-task-key]").forEach((node) => {
+        node.addEventListener("click", (event) => {
+            if (event.target.closest("[data-task-action], [data-task-detail-action], [data-task-reassign]")) return;
+            state.tasksSelectedTaskKey = node.dataset.taskKey;
+            _renderAdapterBody(viewId, "tasks", manifest, writeActions, listData);
+        });
+        node.addEventListener("keydown", (event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            if (event.target.closest("[data-task-action], [data-task-detail-action], [data-task-reassign]")) return;
+            event.preventDefault();
+            state.tasksSelectedTaskKey = node.dataset.taskKey;
+            _renderAdapterBody(viewId, "tasks", manifest, writeActions, listData);
+        });
+    });
+}
+
+function _renderTaskSurface(tasks, scopedItems, lists, manifest, currentMember) {
+    if (state.tasksViewMode === "board") return _renderTaskBoard(tasks, lists, manifest);
+    if (state.tasksViewMode === "focus") return _renderTaskFocus(tasks, scopedItems, lists, manifest, currentMember);
+    return _renderTaskList(tasks, lists, manifest);
+}
+
+function _renderTaskList(tasks, lists, manifest) {
+    if (!tasks.length) return `<div class="task-empty">${escapeHtml(_taskEmptyMessage())}</div>`;
+    const groups = _taskGroupTasks(tasks);
+    return `
+        <div class="task-list-surface">
+            ${groups.map((group) => `
+                <section class="task-group">
+                    <header class="task-group-head"><h4>${escapeHtml(group.label)}</h4><span>${group.tasks.length}</span></header>
+                    <div class="task-rows">
+                        ${group.tasks.map((task) => _renderTaskRow(task, lists, manifest)).join("")}
+                    </div>
+                </section>
+            `).join("")}
+        </div>`;
+}
+
+function _renderTaskBoard(tasks, lists, manifest) {
+    const columns = [
+        { key: "open", label: "Open" },
+        { key: "in_progress", label: "In Progress" },
+        { key: "done", label: "Done" },
+        { key: "cancelled", label: "Cancelled" },
+    ];
+    return `
+        <div class="task-board">
+            ${columns.map((column) => {
+                const columnTasks = tasks.filter((task) => (task.status || "open") === column.key);
+                return `
+                    <section class="task-board-column task-board-column--${column.key}">
+                        <header><h4>${escapeHtml(column.label)}</h4><span>${columnTasks.length}</span></header>
+                        <div class="task-board-stack">
+                            ${columnTasks.length ? columnTasks.map((task) => _renderTaskRow(task, lists, manifest, { compact: true })).join("") : `<p class="task-column-empty">Empty</p>`}
+                        </div>
+                    </section>`;
+            }).join("")}
+        </div>`;
+}
+
+function _renderTaskFocus(tasks, scopedItems, lists, manifest, currentMember) {
+    const sorted = _taskSortTasks(tasks.filter(_taskIsActive));
+    const lanes = [
+        { label: "Due Now", tasks: sorted.filter((task) => _taskIsOverdue(task) || _taskIsDueToday(task)).slice(0, 6) },
+        { label: "High Priority", tasks: sorted.filter((task) => task.priority === "high" && !_taskIsDueToday(task) && !_taskIsOverdue(task)).slice(0, 6) },
+        { label: "Mine", tasks: sorted.filter((task) => task.assigned_to === currentMember).slice(0, 6) },
+        { label: "Unassigned", tasks: sorted.filter((task) => !task.assigned_to).slice(0, 6) },
+    ];
+    const allEmpty = lanes.every((lane) => lane.tasks.length === 0);
+    if (allEmpty && scopedItems.some((task) => task.status === "done")) {
+        return `<div class="task-empty">No active focus work in this scope.</div>`;
+    }
+    if (allEmpty) return `<div class="task-empty">No focus tasks yet.</div>`;
+    return `
+        <div class="task-focus-grid">
+            ${lanes.map((lane) => `
+                <section class="task-focus-lane">
+                    <header><h4>${escapeHtml(lane.label)}</h4><span>${lane.tasks.length}</span></header>
+                    ${lane.tasks.length ? lane.tasks.map((task) => _renderTaskRow(task, lists, manifest, { compact: true })).join("") : `<p class="task-column-empty">Clear</p>`}
+                </section>
+            `).join("")}
+        </div>`;
+}
+
+function _renderTaskRow(task, lists, manifest, options = {}) {
+    const taskId = _taskId(task);
+    const taskKey = _taskKey(task);
+    const done = task.status === "done";
+    const cancelled = task.status === "cancelled";
+    const selected = state.tasksSelectedTaskKey === taskKey;
+    const canComplete = _hasAction(manifest, "complete_task") && taskId && !done && !cancelled;
+    const canReopen = _hasAction(manifest, "reopen_task") && taskId && (done || cancelled);
+    const canDelete = _hasAction(manifest, "delete_task") && taskId;
+    const accent = _taskAccent(task, lists);
+    const dueClass = _taskDueClass(task);
+    const assignee = task.assigned_to ? _actorDisplay(task.assigned_to) : null;
+    return `
+        <div class="task-row task-row--${escapeHtml(dueClass)}${done ? " task-row--done" : ""}${cancelled ? " task-row--cancelled" : ""}${selected ? " task-row--selected" : ""}${options.compact ? " task-row--compact" : ""}" role="button" tabindex="0" data-task-key="${escapeHtml(taskKey)}" style="--task-accent:${accent}">
+            <button class="task-checkbox${done ? " task-checkbox--checked" : ""}" data-task-action="${done || cancelled ? "reopen_task" : "complete_task"}" data-task-id="${escapeHtml(taskId)}" ${canComplete || canReopen ? "" : "disabled"} aria-label="${done || cancelled ? "Reopen" : "Complete"} ${escapeHtml(task.title || "task")}">
+                ${done ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>` : ""}
+            </button>
+            <div class="task-body">
+                <div class="task-title-line">
+                    <p class="task-title">${escapeHtml(task.title || "Untitled")}</p>
+                    ${_taskStatusPill(task)}
+                </div>
+                <div class="task-meta">
+                    <span class="task-meta-item task-meta-item--${dueClass}">${escapeHtml(_taskDueLabel(task))}</span>
+                    ${assignee ? `<span class="task-meta-item"><span class="task-avatar" style="background:${assignee.color}">${escapeHtml(assignee.initials)}</span>${escapeHtml(assignee.name)}</span>` : `<span class="task-meta-item">Unassigned</span>`}
+                    <span class="task-meta-item"><span class="task-list-dot" style="background:${_taskListColorById(lists, task.list_id)}"></span>${escapeHtml(_taskListName(lists, task.list_id))}</span>
+                </div>
+            </div>
+            <span class="task-priority task-priority--${escapeHtml(task.priority || "medium")}">${escapeHtml(task.priority || "medium")}</span>
+            <div class="task-actions">
+                ${canReopen ? `<button class="view-action-btn" data-task-action="reopen_task" data-task-id="${escapeHtml(taskId)}">Reopen</button>` : ""}
+                ${canDelete ? `<button class="view-action-btn view-action-btn--danger" data-task-action="delete_task" data-task-id="${escapeHtml(taskId)}">Remove</button>` : ""}
+            </div>
+        </div>`;
+}
+
+function _renderTaskDetail(task, lists, manifest, currentMember, scopedItems) {
+    if (!task) {
+        const focus = scopedItems.filter(_taskIsActive).filter((item) => _taskIsOverdue(item) || _taskIsDueToday(item) || item.priority === "high");
+        return `
+            <section class="task-detail task-detail--empty">
+                <p class="task-side-kicker">Task details</p>
+                <h3>No task selected</h3>
+                <div class="task-detail-mini-stats">
+                    <span><strong>${focus.length}</strong> focus</span>
+                    <span><strong>${scopedItems.filter(_taskIsActive).length}</strong> open</span>
+                </div>
+            </section>`;
+    }
+    const taskId = _taskId(task);
+    const taskKey = _taskKey(task);
+    const canComplete = _hasAction(manifest, "complete_task") && taskId && !_taskIsDone(task) && task.status !== "cancelled";
+    const canReopen = _hasAction(manifest, "reopen_task") && taskId && (task.status === "done" || task.status === "cancelled");
+    const canUpdate = _hasAction(manifest, "update_task") && taskId;
+    const canReassign = _hasAction(manifest, "reassign_task") && taskId;
+    const canDelete = _hasAction(manifest, "delete_task") && taskId;
+    const accent = _taskAccent(task, lists);
+    const assignee = task.assigned_to ? _actorDisplay(task.assigned_to) : null;
+    const creator = _actorDisplay(task.actor || "system");
+    return `
+        <section class="task-detail" style="--task-accent:${accent}">
+            <header class="task-detail-head">
+                <div>
+                    <p class="task-side-kicker">${escapeHtml(_taskListName(lists, task.list_id))}</p>
+                    <h3>${escapeHtml(task.title || "Untitled")}</h3>
+                </div>
+                ${_taskStatusPill(task)}
+            </header>
+            <div class="task-detail-meta">
+                <span><strong>Due</strong>${escapeHtml(_taskDueLabel(task, true))}</span>
+                <span><strong>Priority</strong>${escapeHtml(_humanizeLabel(task.priority || "medium"))}</span>
+                <span><strong>Assigned</strong>${escapeHtml(assignee?.name || "Unassigned")}</span>
+                <span><strong>Created By</strong>${escapeHtml(creator.name)}</span>
+                ${task.linked_event_id ? `<span><strong>Calendar Link</strong>${escapeHtml(task.linked_event_id)}</span>` : ""}
+                ${task.visibility ? `<span><strong>Visibility</strong>${escapeHtml(_humanizeLabel(task.visibility))}</span>` : ""}
+            </div>
+            ${canReassign ? `
+                <div class="task-assignee-strip">
+                    ${_taskMembers().map((member) => `
+                        <button class="task-assignee-chip${task.assigned_to === member.id ? " task-assignee-chip--active" : ""}" type="button" data-task-reassign data-task-id="${escapeHtml(taskId)}" data-task-assignee="${escapeHtml(member.id)}" ${task.assigned_to === member.id ? "disabled" : ""}>
+                            <span style="background:${member.color}">${escapeHtml(member.initials)}</span>${escapeHtml(member.name)}
+                        </button>
+                    `).join("")}
+                </div>` : ""}
+            <div class="task-detail-actions">
+                ${canComplete ? `<button class="view-small-btn view-small-btn--primary" type="button" data-task-detail-action="complete_task" data-task-key="${escapeHtml(taskKey)}">Mark done</button>` : ""}
+                ${canReopen ? `<button class="view-small-btn view-small-btn--primary" type="button" data-task-detail-action="reopen_task" data-task-key="${escapeHtml(taskKey)}">Reopen</button>` : ""}
+                ${canUpdate ? `<button class="view-small-btn" type="button" data-task-detail-action="update_task" data-task-key="${escapeHtml(taskKey)}">Edit</button>` : ""}
+                ${canReassign ? `<button class="view-small-btn" type="button" data-task-detail-action="reassign_task" data-task-key="${escapeHtml(taskKey)}">Reassign</button>` : ""}
+                ${canDelete ? `<button class="view-action-btn view-action-btn--danger" type="button" data-task-detail-action="delete_task" data-task-key="${escapeHtml(taskKey)}">Remove</button>` : ""}
+            </div>
+        </section>`;
+}
+
+function _taskScopeByList(tasks, selectedListId) {
+    if (selectedListId === "__all__") return tasks;
+    if (selectedListId === "__no_list__") return tasks.filter((task) => !task.list_id);
+    return tasks.filter((task) => (task.list_id || "") === selectedListId);
+}
+
+function _taskApplyFilters(tasks, filter, query, currentMember, lists) {
+    const normalizedQuery = String(query || "").trim().toLowerCase();
+    return tasks.filter((task) => {
+        if (filter === "now" && !_taskNowTasks(tasks, currentMember).some((item) => _taskKey(item) === _taskKey(task))) return false;
+        if (filter === "open" && !_taskIsActive(task)) return false;
+        if (filter === "today" && (!_taskIsActive(task) || !_taskIsDueToday(task))) return false;
+        if (filter === "overdue" && (!_taskIsActive(task) || !_taskIsOverdue(task))) return false;
+        if (filter === "decision" && !_taskNeedsDecision(task, currentMember)) return false;
+        if (filter === "high" && (!_taskIsActive(task) || task.priority !== "high")) return false;
+        if (filter === "mine" && (!_taskIsActive(task) || task.assigned_to !== currentMember)) return false;
+        if (filter === "done" && task.status !== "done") return false;
+        if (!normalizedQuery) return true;
+        const haystack = [
+            task.title,
+            task.assigned_to,
+            _actorDisplay(task.assigned_to).name,
+            task.priority,
+            task.status,
+            _taskListName(lists, task.list_id),
+        ].join(" ").toLowerCase();
+        return haystack.includes(normalizedQuery);
+    });
+}
+
+function _taskFilterOptions(tasks, currentMember) {
+    const active = tasks.filter(_taskIsActive);
+    return [
+        { key: "now", label: "Now", count: _taskNowTasks(tasks, currentMember).length },
+        { key: "today", label: "Today", count: active.filter(_taskIsDueToday).length },
+        { key: "overdue", label: "Overdue", count: active.filter(_taskIsOverdue).length },
+        { key: "decision", label: "Needs decision", count: active.filter((task) => _taskNeedsDecision(task, currentMember)).length },
+        { key: "open", label: "Open", count: active.length },
+        { key: "high", label: "High", count: active.filter((task) => task.priority === "high").length },
+        { key: "mine", label: "Mine", count: active.filter((task) => task.assigned_to === currentMember).length },
+        { key: "done", label: "Done", count: tasks.filter((task) => task.status === "done").length },
+        { key: "all", label: "All", count: tasks.length },
+    ];
+}
+
+function _taskNowTasks(tasks, currentMember) {
+    return _taskSortTasks(tasks.filter((task) => _taskIsActive(task) && (
+        _taskIsDueToday(task) || _taskIsOverdue(task) || _taskNeedsDecision(task, currentMember)
+    )));
+}
+
+function _taskNeedsDecision(task, currentMember) {
+    if (!_taskIsActive(task)) return false;
+    return _taskIsOverdue(task)
+        || task.priority === "high"
+        || !task.assigned_to
+        || (task.assigned_to === currentMember && !task.due_at);
+}
+
+function _taskFocusReason(task, currentMember) {
+    const reasons = [];
+    if (_taskIsOverdue(task)) reasons.push("Overdue");
+    else if (_taskIsDueToday(task)) reasons.push("Today");
+    if (task.priority === "high") reasons.push("High priority");
+    if (!task.assigned_to) reasons.push("Unassigned");
+    else if (task.assigned_to === currentMember) reasons.push("Yours");
+    return reasons.slice(0, 2).join(" · ") || _humanizeLabel(task.status || "open");
+}
+
+function _taskFilterLabel(filterOptions, selectedFilter) {
+    return filterOptions.find((filter) => filter.key === selectedFilter)?.label || "Now";
+}
+
+function _taskEmptyMessage() {
+    if (state.tasksFilter === "now") return "No tasks need attention right now.";
+    if (state.tasksFilter === "today") return "Nothing is due today.";
+    if (state.tasksFilter === "overdue") return "No overdue tasks.";
+    if (state.tasksFilter === "decision") return "No tasks need a decision.";
+    if (state.tasksFilter === "done") return "No completed tasks in this scope yet.";
+    if (state.tasksSearchQuery) return "No tasks match that search.";
+    return "No tasks in this view.";
+}
+
+function _taskGroupTasks(tasks) {
+    const order = ["overdue", "today", "week", "later", "none", "done", "cancelled"];
+    const labels = {
+        overdue: "Overdue",
+        today: "Today",
+        week: "Next 7 Days",
+        later: "Later",
+        none: "No Deadline",
+        done: "Completed",
+        cancelled: "Cancelled",
+    };
+    const groups = new Map(order.map((key) => [key, []]));
+    tasks.forEach((task) => groups.get(_taskBucket(task)).push(task));
+    return order.map((key) => ({ key, label: labels[key], tasks: groups.get(key) })).filter((group) => group.tasks.length);
+}
+
+function _taskBucket(task) {
+    if (task.status === "done") return "done";
+    if (task.status === "cancelled") return "cancelled";
+    if (!task.due_at) return "none";
+    if (_taskIsOverdue(task)) return "overdue";
+    if (_taskIsDueToday(task)) return "today";
+    const dueIso = _taskDueDateIso(task);
+    const weekEnd = _calAddDays(_localDateIso(), 7);
+    return dueIso && dueIso <= weekEnd ? "week" : "later";
+}
+
+function _taskSortTasks(tasks) {
+    return [...tasks].sort((first, second) => {
+        const firstStatus = TASK_STATUS_ORDER[first.status || "open"] ?? 9;
+        const secondStatus = TASK_STATUS_ORDER[second.status || "open"] ?? 9;
+        if (firstStatus !== secondStatus) return firstStatus - secondStatus;
+        const firstPriority = TASK_PRIORITY_ORDER[first.priority || "medium"] ?? 9;
+        const secondPriority = TASK_PRIORITY_ORDER[second.priority || "medium"] ?? 9;
+        if (firstPriority !== secondPriority) return firstPriority - secondPriority;
+        const firstDue = _taskDueMs(first);
+        const secondDue = _taskDueMs(second);
+        if (firstDue !== secondDue) return firstDue - secondDue;
+        return String(first.created_at || "").localeCompare(String(second.created_at || ""));
+    });
+}
+
+function _taskId(task) {
+    return _idOf(task, "task_id");
+}
+
+function _taskKey(task) {
+    return _taskId(task) || [task.title || "", task.created_at || "", task.assigned_to || ""].join("|");
+}
+
+function _taskIsActive(task) {
+    return task.status !== "done" && task.status !== "cancelled";
+}
+
+function _taskIsDone(task) {
+    return task.status === "done";
+}
+
+function _taskDueMs(task) {
+    if (!task.due_at) return Number.POSITIVE_INFINITY;
+    const ms = new Date(task.due_at).getTime();
+    return Number.isNaN(ms) ? Number.POSITIVE_INFINITY : ms;
+}
+
+function _taskDueDateIso(task) {
+    if (!task.due_at) return "";
+    const parts = _calDateTimeParts(task.due_at);
+    if (!parts) return "";
+    return `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+}
+
+function _taskIsDueToday(task) {
+    return Boolean(task.due_at && _taskDueDateIso(task) === _localDateIso());
+}
+
+function _taskIsOverdue(task) {
+    if (!_taskIsActive(task) || !task.due_at) return false;
+    const ms = new Date(task.due_at).getTime();
+    return Number.isFinite(ms) && ms < Date.now();
+}
+
+function _taskDueClass(task) {
+    if (!task.due_at) return "none";
+    if (_taskIsOverdue(task)) return "overdue";
+    if (_taskIsDueToday(task)) return "today";
+    return "future";
+}
+
+function _taskDueLabel(task, includeExact = false) {
+    if (!task.due_at) return "No deadline";
+    const date = new Date(task.due_at);
+    if (Number.isNaN(date.getTime())) return String(task.due_at);
+    const timeZone = _displayTimeZone();
+    const withTimeZone = (options) => timeZone ? { ...options, timeZone } : options;
+    const relative = _relativeDate(task.due_at);
+    const time = date.toLocaleTimeString("en-US", withTimeZone({ hour: "numeric", minute: "2-digit" }));
+    if (!includeExact) return `${relative} ${time}`;
+    const full = date.toLocaleDateString("en-US", withTimeZone({ weekday: "long", month: "long", day: "numeric", year: "numeric" }));
+    return `${full} at ${time}`;
+}
+
+function _taskStatusPill(task) {
+    const status = task.status || "open";
+    return `<span class="task-status task-status--${escapeHtml(status)}">${escapeHtml(_humanizeLabel(status))}</span>`;
 }
 
 function _taskListName(lists, listId) {
-    return (lists || []).find((list) => list.id === listId)?.name || "No list";
+    if (!listId) return "Unlisted";
+    return (lists || []).find((list) => list.id === listId)?.name || "Missing list";
+}
+
+function _taskSelectedListLabel(lists, selectedListId) {
+    if (selectedListId === "__all__") return "All Tasks";
+    if (selectedListId === "__no_list__") return "Unlisted Tasks";
+    return _taskListName(lists, selectedListId);
+}
+
+function _taskListColorById(lists, listId) {
+    const list = (lists || []).find((item) => item.id === listId) || null;
+    return _taskListColor(list, listId || "unlisted");
+}
+
+function _taskListColor(list, fallbackKey = "") {
+    const color = list?.color;
+    if (typeof color === "string" && /^#[0-9a-f]{3,8}$/i.test(color.trim())) return color.trim();
+    const key = String(fallbackKey || list?.name || "task");
+    let hash = 0;
+    for (const character of key) hash = ((hash << 5) - hash) + character.charCodeAt(0);
+    const palette = ["#2563eb", "#16a34a", "#0d9488", "#dc2626", "#7c3aed", "#0891b2", "#be123c"];
+    return palette[Math.abs(hash) % palette.length];
+}
+
+function _taskAccent(task, lists) {
+    if (task.list_id) return _taskListColorById(lists, task.list_id);
+    if (task.assigned_to) {
+        const memberColor = _actorDisplay(task.assigned_to).color || _memberColor(task.assigned_to);
+        if (memberColor && memberColor !== "#9ca3af") return memberColor;
+    }
+    if (task.priority === "high") return "#dc2626";
+    if (task.priority === "low") return "#16a34a";
+    return "#0891b2";
+}
+
+function _taskUpdateDefaults(task) {
+    return {
+        task_id: _taskId(task),
+        expected_version: task.version,
+        title: task.title || "",
+        due_at: task.due_at || "",
+        priority: task.priority || "medium",
+        list_id: task.list_id || "",
+        linked_event_id: task.linked_event_id || "",
+    };
+}
+
+function _taskMembers() {
+    const members = state.family?.members?.length ? state.family.members : _defaultFamily();
+    return members.map((member) => {
+        const name = member.name || member.actor_id || "Member";
+        const id = member.actor_id || name.toLowerCase().replace(/\s+/g, "_");
+        const display = _actorDisplay(id);
+        return {
+            id,
+            name: display.name || name,
+            initials: display.initials || _initials(name),
+            color: display.color || _memberColor(id),
+        };
+    });
 }
 
 // ----------------------------------------------------------------------------
@@ -3153,121 +4606,659 @@ function _renderShoppingView(viewId, manifest, writeActions, listData) {
     const lists = Array.isArray(listData?.lists) ? listData.lists : [];
     const items = Array.isArray(listData?.items) ? listData.items : [];
     const actions = new Set((manifest.actions || []).map((action) => action.name));
+    const currentMember = _currentMemberActorId();
 
-    if (lists.length > 0 && !lists.some((list) => list.id === state.shoppingSelectedListId)) {
-        state.shoppingSelectedListId = lists[0].id;
+    if (state.shoppingSelectedListId && state.shoppingSelectedListId !== "__all__" && !lists.some((list) => list.id === state.shoppingSelectedListId)) {
+        state.shoppingSelectedListId = null;
     }
-    if (lists.length === 0) state.shoppingSelectedListId = null;
+    if (!state.shoppingSelectedListId) {
+        const defaultListId = _shoppingDefaultListId(lists, items);
+        if (defaultListId) state.shoppingSelectedListId = defaultListId;
+    }
+    if (state.shoppingSelectedItemKey && !items.some((item) => _shoppingItemKey(item) === state.shoppingSelectedItemKey)) {
+        state.shoppingSelectedItemKey = null;
+    }
+    if (!SHOPPING_VIEW_MODES.includes(state.shoppingViewMode)) state.shoppingViewMode = "list";
+    if (!state.shoppingFilter) state.shoppingFilter = "needed";
 
-    const selectedList = lists.find((list) => list.id === state.shoppingSelectedListId) || lists[0] || null;
-    if (selectedList) state.shoppingSelectedListId = selectedList.id;
-
-    const selectedItems = selectedList
-        ? items.filter((item) => item.list_id === selectedList.id)
-        : items;
-    const visibleItems = selectedItems.filter((item) => item.approval_status !== "rejected");
-    const needed = visibleItems.filter((item) => item.status !== "checked");
-    const checked = visibleItems.filter((item) => item.status === "checked");
-    const pending = visibleItems.filter((item) => item.approval_status === "pending_parent_approval");
-
-    const listCount = (listId) => items.filter((item) => item.list_id === listId && item.status !== "checked" && item.approval_status !== "rejected").length;
+    const selectedListId = state.shoppingSelectedListId || "__all__";
+    const selectedList = selectedListId === "__all__" ? null : lists.find((list) => list.id === selectedListId) || null;
+    const scopedItems = _shoppingScopeByList(items, selectedListId);
+    const visibleItems = _shoppingSortItems(_shoppingApplyFilters(scopedItems, state.shoppingFilter, state.shoppingSearchQuery, currentMember, lists));
+    const selectedItem = state.shoppingSelectedItemKey ? items.find((item) => _shoppingItemKey(item) === state.shoppingSelectedItemKey) : null;
+    const needed = scopedItems.filter(_shoppingIsNeeded);
+    const checked = scopedItems.filter((item) => item.status === "checked");
+    const pending = scopedItems.filter((item) => item.approval_status === "pending_parent_approval");
+    const rejected = scopedItems.filter((item) => item.approval_status === "rejected");
+    const high = needed.filter((item) => item.priority === "high");
+    const mine = needed.filter((item) => item.requested_by === currentMember);
+    const filterOptions = _shoppingFilterOptions(scopedItems, currentMember);
+    const selectedListLabel = _shoppingSelectedListLabel(lists, selectedListId);
+    const selectedColor = selectedList ? _shoppingCategoryColor(selectedList.category) : "var(--brand-blue)";
+    const sortedNeeded = _shoppingSortItems(needed);
+    const nextItem = sortedNeeded[0] || null;
+    const quickItems = _shoppingQuickItems(selectedList);
     const hasAction = (name) => actions.has(name);
+    const addDefaults = _shoppingAddDefaults(lists, items, selectedListId, selectedList);
+
+    const listItems = (listId) => listId === "__all__" ? items : items.filter((item) => item.list_id === listId);
 
     const renderListButton = (list) => {
-        const active = list.id === state.shoppingSelectedListId;
-        const count = listCount(list.id);
+        const listId = list.id || "";
+        const active = listId === selectedListId;
+        const scoped = listItems(listId);
+        const count = scoped.length;
+        const neededCount = scoped.filter(_shoppingIsNeeded).length;
+        const color = _shoppingCategoryColor(list.category);
         return `
-            <button class="shopping-list-tab${active ? " shopping-list-tab--active" : ""}" data-shopping-list-id="${escapeHtml(list.id || "")}">
+            <button class="shopping-list-tab${active ? " shopping-list-tab--active" : ""}" data-shopping-list-id="${escapeHtml(listId)}" style="--shopping-accent:${color}">
+                <span class="shopping-list-swatch" style="background:${color}"></span>
                 <span class="shopping-list-tab-name">${escapeHtml(list.name || "Untitled list")}</span>
-                <span class="shopping-list-tab-meta">${escapeHtml(_humanizeLabel(list.category || "other"))}</span>
+                <span class="shopping-list-tab-meta">${escapeHtml(_humanizeLabel(list.category || "other"))} - ${neededCount} needed</span>
                 <span class="shopping-list-tab-count">${count}</span>
             </button>`;
     };
 
-    const renderItem = (item) => {
-        const checkedOff = item.status === "checked";
-        const pendingApproval = item.approval_status === "pending_parent_approval";
-        const quantity = [item.quantity, item.unit].filter(Boolean).join(" ");
-        const priority = item.priority || "medium";
-        const canCheck = hasAction("check_off_item") && !checkedOff && !pendingApproval;
-        const canApprove = hasAction("approve_item") && pendingApproval;
-        const canDelete = hasAction("delete_item");
-        return `
-            <div class="shopping-row${checkedOff ? " shopping-row--checked" : ""}${pendingApproval ? " shopping-row--pending" : ""}">
-                <button class="shopping-check${checkedOff ? " shopping-check--checked" : ""}" data-shopping-action="check_off_item" data-item-id="${escapeHtml(item.id || "")}" ${canCheck ? "" : "disabled"} aria-label="Check off ${escapeHtml(item.name || "item")}">
-                    ${checkedOff ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>` : ""}
-                </button>
-                <div class="shopping-item-body">
-                    <p class="shopping-item-title">${quantity ? `<span>${escapeHtml(quantity)}</span>` : ""}${escapeHtml(item.name || "Untitled item")}</p>
-                    <div class="shopping-item-meta">
-                        ${item.category ? `<span>${escapeHtml(_humanizeLabel(item.category))}</span>` : ""}
-                        ${item.requested_by ? `<span>Requested by ${escapeHtml(item.requested_by)}</span>` : ""}
-                        ${item.notes ? `<span>${escapeHtml(item.notes)}</span>` : ""}
-                    </div>
-                </div>
-                <div class="shopping-badges">
-                    ${pendingApproval ? `<span class="shopping-badge shopping-badge--pending">pending approval</span>` : ""}
-                    ${checkedOff ? `<span class="shopping-badge shopping-badge--checked">checked</span>` : ""}
-                    ${priority !== "medium" ? `<span class="shopping-badge shopping-badge--${escapeHtml(priority)}">${escapeHtml(priority)}</span>` : ""}
-                </div>
-                <div class="shopping-actions">
-                    ${canApprove ? `<button class="shopping-action-btn" data-shopping-action="approve_item" data-item-id="${escapeHtml(item.id || "")}">Approve</button>` : ""}
-                    ${canDelete ? `<button class="shopping-action-btn shopping-action-btn--danger" data-shopping-action="delete_item" data-item-id="${escapeHtml(item.id || "")}" aria-label="Remove ${escapeHtml(item.name || "item")}">Remove</button>` : ""}
-                </div>
-            </div>`;
-    };
+    const signalCards = [
+        { key: "needed", label: "Needed", count: needed.length, note: needed.length ? "Ready to buy" : "List is clear" },
+        ...(pending.length ? [{ key: "pending", label: "Approvals", count: pending.length, note: "Needs a parent" }] : []),
+        ...(high.length ? [{ key: "high", label: "High priority", count: high.length, note: "Do first" }] : []),
+        ...(mine.length ? [{ key: "mine", label: "Mine", count: mine.length, note: "Requested by you" }] : []),
+        ...(rejected.length ? [{ key: "rejected", label: "Rejected", count: rejected.length, note: "Review later" }] : []),
+    ];
+    const heroTitle = nextItem
+        ? `Pick up ${nextItem.name || "the next item"}`
+        : `${selectedListLabel} is clear`;
+    const heroCopy = nextItem
+        ? `${selectedListLabel} has ${_countPhrase(needed.length, "open item")}${pending.length ? ` and ${_countPhrase(pending.length, "approval")}` : ""}.`
+        : scopedItems.length ? `${selectedListLabel} has no open shopping items.` : `${selectedListLabel} is ready for the next item.`;
+    const itemDetailPill = nextItem ? (_shoppingQuantityLabel(nextItem) || `${_humanizeLabel(nextItem.priority || "medium")} priority`) : _countPhrase(scopedItems.length, "item");
+    const heroPills = [
+        selectedListLabel,
+        itemDetailPill,
+        pending.length ? `${pending.length} approval${pending.length === 1 ? "" : "s"}` : "No approvals waiting",
+    ].filter(Boolean);
+    const selectedListMeta = selectedList
+        ? `${escapeHtml(_humanizeLabel(selectedList.category || "other"))} - ${needed.length} needed`
+        : `${needed.length} needed across lists`;
 
     body.innerHTML = `
-        <div class="shopping-stats">
-            <div class="shopping-stat"><p class="shopping-stat-label">Lists</p><p class="shopping-stat-value">${lists.length}</p></div>
-            <div class="shopping-stat"><p class="shopping-stat-label">Needed</p><p class="shopping-stat-value shopping-stat-value--blue">${needed.length}</p></div>
-            <div class="shopping-stat"><p class="shopping-stat-label">Pending</p><p class="shopping-stat-value shopping-stat-value--orange">${pending.length}</p></div>
-        </div>
-        <div class="shopping-layout">
-            <aside class="shopping-lists">
-                <div class="shopping-lists-header">
-                    <h3>Lists</h3>
-                    ${hasAction("create_list") ? `<button class="shopping-small-btn" data-app-action="shopping:create_list">New</button>` : ""}
-                </div>
-                <div class="shopping-list-tabs">
-                    ${lists.length === 0 ? `<p class="muted-empty">No shopping lists yet.</p>` : lists.map(renderListButton).join("")}
-                </div>
-            </aside>
-            <section class="shopping-panel">
-                <div class="shopping-panel-header">
+        <div class="shopping-shell">
+            <div class="shopping-stage">
+                <article class="shopping-hero${nextItem ? "" : " shopping-hero--empty"}" style="--shopping-accent:${selectedColor}">
                     <div>
-                        <h3>${escapeHtml(selectedList?.name || "Shopping")}</h3>
-                        ${selectedList?.category ? `<p>${escapeHtml(_humanizeLabel(selectedList.category))}</p>` : ""}
+                        <p class="shopping-side-kicker">Active list</p>
+                        <h3>${escapeHtml(heroTitle)}</h3>
+                        <p>${escapeHtml(heroCopy)}</p>
+                        <div class="shopping-hero-pills">
+                            ${heroPills.map((pill) => `<span>${escapeHtml(pill)}</span>`).join("")}
+                        </div>
                     </div>
-                    ${selectedList && hasAction("add_item") ? `<button class="shopping-small-btn shopping-small-btn--primary" data-app-action="shopping:add_item">Add item</button>` : ""}
-                </div>
-                <div class="shopping-items">
-                    ${selectedList == null
-                        ? `<div class="view-empty">Create a shopping list to start tracking items.</div>`
-                        : visibleItems.length === 0
-                            ? `<div class="view-empty">No items in this list yet.</div>`
-                            : `
-                                ${needed.length ? `<div class="shopping-section-label">Needed</div>${needed.map(renderItem).join("")}` : ""}
-                                ${checked.length ? `<div class="shopping-section-label">Checked off</div>${checked.map(renderItem).join("")}` : ""}
-                            `}
-                </div>
-            </section>
+                    ${hasAction("add_item") ? `
+                        <form class="shopping-quick-add" data-shopping-quick-form>
+                            <label>
+                                <span>Add quickly</span>
+                                <input type="text" data-shopping-quick-input placeholder="Milk, medicine, paper towels" autocomplete="off">
+                            </label>
+                            <button class="shopping-small-btn shopping-small-btn--primary" type="submit" ${addDefaults.list_id ? "" : "disabled"}>Add</button>
+                        </form>
+                        <div class="shopping-quick-chips" aria-label="Common shopping items">
+                            ${quickItems.map((name) => `<button type="button" data-shopping-quick-name="${escapeHtml(name)}">${escapeHtml(name)}</button>`).join("")}
+                        </div>
+                    ` : ""}
+                    <div class="shopping-hero-actions">
+                        ${hasAction("add_item") ? `<button class="shopping-small-btn shopping-small-btn--primary" type="button" data-shopping-add-item ${addDefaults.list_id ? "" : "disabled"}>Add item</button>` : ""}
+                        ${nextItem && _hasAction(manifest, "check_off_item") && _shoppingItemId(nextItem) && nextItem.approval_status === "approved" ? `<button class="shopping-small-btn" type="button" data-shopping-action="check_off_item" data-item-id="${escapeHtml(_shoppingItemId(nextItem))}">Check off</button>` : ""}
+                    </div>
+                </article>
+                <aside class="shopping-signal-panel">
+                    <div class="shopping-signal-head">
+                        <p class="shopping-side-kicker">Signals</p>
+                        <strong>${escapeHtml(selectedListLabel)}</strong>
+                    </div>
+                    <div class="shopping-signal-grid">
+                        ${signalCards.map((signal) => `
+                            <button class="shopping-signal-card${state.shoppingFilter === signal.key ? " shopping-signal-card--active" : ""}" type="button" data-shopping-filter="${escapeHtml(signal.key)}">
+                                <span>${escapeHtml(signal.label)}</span>
+                                <strong>${signal.count}</strong>
+                                <small>${escapeHtml(signal.note)}</small>
+                            </button>
+                        `).join("")}
+                    </div>
+                    <div class="shopping-mode-card">
+                        <span>Mode</span>
+                        <div class="shopping-view-switch" role="tablist" aria-label="Shopping view">
+                            ${SHOPPING_VIEW_MODES.map((mode) => `
+                                <button class="shopping-view-switch-btn${state.shoppingViewMode === mode ? " shopping-view-switch-btn--active" : ""}" type="button" role="tab" aria-selected="${state.shoppingViewMode === mode ? "true" : "false"}" data-shopping-view="${mode}">${escapeHtml(_humanizeLabel(mode))}</button>
+                            `).join("")}
+                        </div>
+                    </div>
+                </aside>
+            </div>
+            <div class="shopping-workspace${selectedItem ? " shopping-workspace--with-detail" : " shopping-workspace--single"}">
+                <section class="shopping-main shopping-main--m5">
+                    <div class="shopping-toolbar shopping-toolbar--m5">
+                        <div>
+                            <h3>${escapeHtml(selectedListLabel)}</h3>
+                            <p>${visibleItems.length} shown - ${needed.length} needed${checked.length ? ` - ${checked.length} checked` : ""}</p>
+                        </div>
+                        <div class="shopping-toolbar-actions">
+                            <details class="shopping-list-menu">
+                                <summary style="--shopping-accent:${selectedColor}">
+                                    <span class="shopping-list-swatch" style="background:${selectedColor}"></span>
+                                    <span>${escapeHtml(selectedListLabel)}</span>
+                                    <strong>${needed.length}</strong>
+                                </summary>
+                                <div class="shopping-list-menu__panel">
+                                    <div class="shopping-lists-header">
+                                        <div><h3>Lists</h3><p>${selectedListMeta}</p></div>
+                                        ${hasAction("create_list") ? `<button class="shopping-small-btn" data-app-action="shopping:create_list">New</button>` : ""}
+                                    </div>
+                                    <div class="shopping-list-tabs">
+                                        <button class="shopping-list-tab${selectedListId === "__all__" ? " shopping-list-tab--active" : ""}" data-shopping-list-id="__all__" style="--shopping-accent:var(--brand-blue)">
+                                            <span class="shopping-list-swatch shopping-list-swatch--all"></span>
+                                            <span class="shopping-list-tab-name">All shopping</span>
+                                            <span class="shopping-list-tab-meta">${items.filter(_shoppingIsNeeded).length} needed across lists</span>
+                                            <span class="shopping-list-tab-count">${items.length}</span>
+                                        </button>
+                                        ${lists.length === 0 ? `<p class="muted-empty">No shopping lists yet.</p>` : lists.map(renderListButton).join("")}
+                                    </div>
+                                </div>
+                            </details>
+                            ${hasAction("add_item") ? `<button class="shopping-small-btn shopping-small-btn--primary" type="button" data-shopping-add-item ${addDefaults.list_id ? "" : "disabled"}>Add quickly</button>` : ""}
+                        </div>
+                    </div>
+                    <div class="shopping-filter-summary">
+                        <button class="shopping-now-chip${state.shoppingFilter === "needed" ? " shopping-now-chip--active" : ""}" type="button" data-shopping-filter="needed">
+                            <span>Needed</span><strong>${needed.length}</strong>
+                        </button>
+                        <details class="app-advanced-section shopping-more-filters">
+                            <summary><span>More filters</span><span>${escapeHtml(_humanizeLabel(state.shoppingFilter || "needed"))}</span></summary>
+                            <div class="app-advanced-section__body">
+                                <div class="app-filter-row" role="tablist" aria-label="Shopping filter">
+                                    ${filterOptions.map((filter) => `
+                                        <button class="app-filter-chip${state.shoppingFilter === filter.key ? " app-filter-chip--active" : ""}" type="button" data-shopping-filter="${escapeHtml(filter.key)}">
+                                            <span>${escapeHtml(filter.label)}</span><strong>${filter.count}</strong>
+                                        </button>
+                                    `).join("")}
+                                </div>
+                                <label class="shopping-search-wrap">
+                                    <span>Search</span>
+                                    <input class="shopping-search" type="search" data-shopping-search value="${escapeHtml(state.shoppingSearchQuery || "")}" placeholder="Item, list, note">
+                                </label>
+                            </div>
+                        </details>
+                    </div>
+                    ${_renderShoppingSurface(visibleItems, scopedItems, lists, manifest)}
+                </section>
+                ${selectedItem ? `<aside class="shopping-inspector shopping-detail-rail" id="shopping-inspector">
+                    <button class="app-detail-drawer__close shopping-detail-close" type="button" data-shopping-close-detail aria-label="Close item details">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
+                    ${_renderShoppingDetail(selectedItem, lists, manifest, currentMember, scopedItems)}
+                </aside>` : ""}
+            </div>
         </div>`;
+
+    const openAddItem = (name = "") => {
+        const defaults = _shoppingAddDefaults(lists, items, selectedListId, selectedList);
+        if (!defaults.list_id) {
+            showToast("Shopping", "Create or select a list before adding an item.");
+            return;
+        }
+        _openAdapterAction("shopping", manifest, "add_item", { ...defaults, name: String(name || "").trim() });
+    };
 
     body.querySelectorAll("[data-shopping-list-id]").forEach((btn) => {
         btn.addEventListener("click", () => {
-            state.shoppingSelectedListId = btn.dataset.shoppingListId;
+            state.shoppingSelectedListId = btn.dataset.shoppingListId === "__all__" ? "__all__" : btn.dataset.shoppingListId;
+            state.shoppingSelectedItemKey = null;
             _renderAdapterBody(viewId, "shopping", manifest, writeActions, listData);
         });
     });
-    body.querySelectorAll("[data-shopping-action]").forEach((btn) => {
-        btn.addEventListener("click", async () => {
-            const itemId = btn.dataset.itemId;
-            const actionName = btn.dataset.shoppingAction;
-            if (!itemId || !actionName || btn.disabled) return;
-            await _submitAdapterAction("shopping", actionName, { item_id: itemId });
+    body.querySelectorAll("[data-shopping-view]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+            state.shoppingViewMode = btn.dataset.shoppingView || "list";
+            _renderAdapterBody(viewId, "shopping", manifest, writeActions, listData);
         });
     });
+    body.querySelectorAll("[data-shopping-filter]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+            state.shoppingFilter = btn.dataset.shoppingFilter || "needed";
+            _renderAdapterBody(viewId, "shopping", manifest, writeActions, listData);
+        });
+    });
+    body.querySelectorAll("[data-shopping-add-item]").forEach((btn) => {
+        btn.addEventListener("click", () => openAddItem());
+    });
+    const quickForm = body.querySelector("[data-shopping-quick-form]");
+    if (quickForm) {
+        quickForm.addEventListener("submit", (event) => {
+            event.preventDefault();
+            const input = quickForm.querySelector("[data-shopping-quick-input]");
+            const name = String(input?.value || "").trim();
+            if (!name) {
+                input?.focus();
+                return;
+            }
+            openAddItem(name);
+        });
+    }
+    body.querySelectorAll("[data-shopping-quick-name]").forEach((btn) => {
+        btn.addEventListener("click", () => openAddItem(btn.dataset.shoppingQuickName || ""));
+    });
+    const searchInput = body.querySelector("[data-shopping-search]");
+    if (searchInput) {
+        searchInput.addEventListener("input", () => {
+            state.shoppingSearchQuery = searchInput.value;
+            const cursor = searchInput.selectionStart || state.shoppingSearchQuery.length;
+            window.clearTimeout(state._shoppingSearchTimer);
+            state._shoppingSearchTimer = window.setTimeout(() => {
+                _renderAdapterBody(viewId, "shopping", manifest, writeActions, listData);
+                const nextInput = dom.viewBody[viewId]?.querySelector("[data-shopping-search]");
+                if (nextInput) {
+                    nextInput.focus();
+                    nextInput.setSelectionRange(cursor, cursor);
+                }
+            }, 120);
+        });
+    }
+    const submitShoppingAction = async (btn) => {
+        const itemId = btn.dataset.itemId;
+        const actionName = btn.dataset.shoppingAction || btn.dataset.shoppingDetailAction;
+        if (!itemId || !actionName || btn.disabled) return;
+        await _submitAdapterAction("shopping", actionName, { item_id: itemId });
+    };
+    body.querySelectorAll("[data-shopping-action]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+            await submitShoppingAction(btn);
+        });
+    });
+    body.querySelectorAll("[data-shopping-detail-action]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+            const item = items.find((candidate) => _shoppingItemKey(candidate) === btn.dataset.shoppingItemKey);
+            if (!item) return;
+            const itemId = _shoppingItemId(item);
+            const actionName = btn.dataset.shoppingDetailAction;
+            if (actionName === "update_item") {
+                _openAdapterAction("shopping", manifest, "update_item", _shoppingUpdateDefaults(item));
+            } else if (actionName === "approve_item" || actionName === "reject_item" || actionName === "check_off_item" || actionName === "delete_item") {
+                btn.dataset.itemId = itemId;
+                await submitShoppingAction(btn);
+            }
+        });
+    });
+    body.querySelectorAll("[data-shopping-item-key]").forEach((node) => {
+        node.addEventListener("click", (event) => {
+            if (event.target.closest("[data-shopping-action], [data-shopping-detail-action]")) return;
+            state.shoppingSelectedItemKey = node.dataset.shoppingItemKey;
+            _renderAdapterBody(viewId, "shopping", manifest, writeActions, listData);
+        });
+        node.addEventListener("keydown", (event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            if (event.target.closest("[data-shopping-action], [data-shopping-detail-action]")) return;
+            event.preventDefault();
+            state.shoppingSelectedItemKey = node.dataset.shoppingItemKey;
+            _renderAdapterBody(viewId, "shopping", manifest, writeActions, listData);
+        });
+    });
+    body.querySelectorAll("[data-shopping-close-detail]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+            state.shoppingSelectedItemKey = null;
+            _renderAdapterBody(viewId, "shopping", manifest, writeActions, listData);
+        });
+    });
+}
+
+function _renderShoppingSurface(items, scopedItems, lists, manifest) {
+    if (state.shoppingViewMode === "aisles") return _renderShoppingAisles(items, lists, manifest);
+    if (state.shoppingViewMode === "approval") return _renderShoppingApproval(items, scopedItems, lists, manifest);
+    return _renderShoppingList(items, lists, manifest);
+}
+
+function _renderShoppingList(items, lists, manifest) {
+    if (!items.length) return `<div class="shopping-empty">${escapeHtml(_shoppingEmptyCopy(state.shoppingFilter))}</div>`;
+    const groups = _shoppingGroupItems(items);
+    return `
+        <div class="shopping-list-surface">
+            ${groups.map((group) => `
+                <section class="shopping-group">
+                    <header class="shopping-group-head"><h4>${escapeHtml(group.label)}</h4><span>${group.items.length}</span></header>
+                    <div class="shopping-items">
+                        ${group.items.map((item) => _renderShoppingRow(item, lists, manifest)).join("")}
+                    </div>
+                </section>
+            `).join("")}
+        </div>`;
+}
+
+function _renderShoppingAisles(items, lists, manifest) {
+    const groups = _shoppingCategoryGroups(items);
+    if (!groups.length) return `<div class="shopping-empty">No aisle items match this view.</div>`;
+    return `
+        <div class="shopping-aisle-grid">
+            ${groups.map((group) => `
+                <section class="shopping-aisle" style="--shopping-accent:${_shoppingCategoryColor(group.key)}">
+                    <header><h4>${escapeHtml(group.label)}</h4><span>${group.items.length}</span></header>
+                    ${group.items.map((item) => _renderShoppingRow(item, lists, manifest, { compact: true })).join("")}
+                </section>
+            `).join("")}
+        </div>`;
+}
+
+function _renderShoppingApproval(items, scopedItems, lists, manifest) {
+    const pending = _shoppingSortItems(scopedItems.filter((item) => item.approval_status === "pending_parent_approval"));
+    const rejected = _shoppingSortItems(scopedItems.filter((item) => item.approval_status === "rejected"));
+    const approved = _shoppingSortItems(scopedItems.filter((item) => item.approval_status === "approved" && item.status !== "checked")).slice(0, 8);
+    return `
+        <div class="shopping-approval-grid">
+            <section class="shopping-approval-lane shopping-approval-lane--pending">
+                <header><h4>Pending Approval</h4><span>${pending.length}</span></header>
+                ${pending.length ? pending.map((item) => _renderShoppingRow(item, lists, manifest, { compact: true })).join("") : `<p class="shopping-column-empty">Clear</p>`}
+            </section>
+            <section class="shopping-approval-lane shopping-approval-lane--approved">
+                <header><h4>Ready To Buy</h4><span>${approved.length}</span></header>
+                ${approved.length ? approved.map((item) => _renderShoppingRow(item, lists, manifest, { compact: true })).join("") : `<p class="shopping-column-empty">Nothing waiting</p>`}
+            </section>
+            <section class="shopping-approval-lane shopping-approval-lane--rejected">
+                <header><h4>Rejected</h4><span>${rejected.length}</span></header>
+                ${rejected.length ? rejected.map((item) => _renderShoppingRow(item, lists, manifest, { compact: true })).join("") : `<p class="shopping-column-empty">None</p>`}
+            </section>
+        </div>`;
+}
+
+function _renderShoppingRow(item, lists, manifest, options = {}) {
+    const itemId = _shoppingItemId(item);
+    const itemKey = _shoppingItemKey(item);
+    const checkedOff = item.status === "checked";
+    const pendingApproval = item.approval_status === "pending_parent_approval";
+    const rejected = item.approval_status === "rejected";
+    const selected = state.shoppingSelectedItemKey === itemKey;
+    const quantity = _shoppingQuantityLabel(item);
+    const requester = item.requested_by ? _shoppingRequesterDisplay(item.requested_by) : null;
+    const canCheck = _hasAction(manifest, "check_off_item") && itemId && !checkedOff && item.approval_status === "approved";
+    const canApprove = _hasAction(manifest, "approve_item") && itemId && item.approval_status !== "approved";
+    const canReject = _hasAction(manifest, "reject_item") && itemId && pendingApproval;
+    const canUpdate = _hasAction(manifest, "update_item") && itemId && !checkedOff;
+    const canDelete = _hasAction(manifest, "delete_item") && itemId;
+    return `
+        <div class="shopping-row${checkedOff ? " shopping-row--checked" : ""}${pendingApproval ? " shopping-row--pending" : ""}${rejected ? " shopping-row--rejected" : ""}${selected ? " shopping-row--selected" : ""}${options.compact ? " shopping-row--compact" : ""}" role="button" tabindex="0" data-shopping-item-key="${escapeHtml(itemKey)}" style="--shopping-accent:${_shoppingItemAccent(item)}">
+            <button class="shopping-check${checkedOff ? " shopping-check--checked" : ""}" data-shopping-action="check_off_item" data-item-id="${escapeHtml(itemId)}" ${canCheck ? "" : "disabled"} aria-label="Check off ${escapeHtml(item.name || "item")}">
+                ${checkedOff ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>` : ""}
+            </button>
+            <div class="shopping-item-body">
+                <div class="shopping-item-title-line">
+                    <p class="shopping-item-title">${quantity ? `<span>${escapeHtml(quantity)}</span>` : ""}${escapeHtml(item.name || "Untitled item")}</p>
+                    ${_shoppingStatusPill(item)}
+                </div>
+                <div class="shopping-item-meta">
+                    <span><span class="shopping-list-dot" style="background:${_shoppingItemAccent(item)}"></span>${escapeHtml(_humanizeLabel(item.category || "other"))}</span>
+                    <span>${escapeHtml(_shoppingListName(lists, item.list_id))}</span>
+                    ${requester ? `<span><span class="shopping-avatar" style="background:${requester.color}">${escapeHtml(requester.initials)}</span>${escapeHtml(requester.name)}</span>` : ""}
+                    ${item.notes ? `<span class="shopping-note-preview">${escapeHtml(String(item.notes).slice(0, 70))}${String(item.notes).length > 70 ? "..." : ""}</span>` : ""}
+                </div>
+            </div>
+            <span class="shopping-priority shopping-priority--${escapeHtml(item.priority || "medium")}">${escapeHtml(item.priority || "medium")}</span>
+            <div class="shopping-actions">
+                ${canApprove ? `<button class="shopping-action-btn" data-shopping-action="approve_item" data-item-id="${escapeHtml(itemId)}">Approve</button>` : ""}
+                ${canReject ? `<button class="shopping-action-btn" data-shopping-action="reject_item" data-item-id="${escapeHtml(itemId)}">Reject</button>` : ""}
+                ${canUpdate ? `<button class="shopping-action-btn" data-shopping-detail-action="update_item" data-shopping-item-key="${escapeHtml(itemKey)}">Edit</button>` : ""}
+                ${canDelete ? `<button class="shopping-action-btn shopping-action-btn--danger" data-shopping-action="delete_item" data-item-id="${escapeHtml(itemId)}">Remove</button>` : ""}
+            </div>
+        </div>`;
+}
+
+function _renderShoppingDetail(item, lists, manifest, currentMember, scopedItems) {
+    if (!item) {
+        const needed = scopedItems.filter(_shoppingIsNeeded);
+        const pending = scopedItems.filter((candidate) => candidate.approval_status === "pending_parent_approval");
+        return `
+            <section class="shopping-detail shopping-detail--empty">
+                <p class="shopping-side-kicker">Item details</p>
+                <h3>No item selected</h3>
+                <div class="shopping-detail-mini-stats">
+                    <span><strong>${needed.length}</strong> needed</span>
+                    <span><strong>${pending.length}</strong> pending</span>
+                </div>
+            </section>`;
+    }
+    const itemId = _shoppingItemId(item);
+    const itemKey = _shoppingItemKey(item);
+    const requester = item.requested_by ? _shoppingRequesterDisplay(item.requested_by) : null;
+    const canCheck = _hasAction(manifest, "check_off_item") && itemId && item.status !== "checked" && item.approval_status === "approved";
+    const canApprove = _hasAction(manifest, "approve_item") && itemId && item.approval_status !== "approved";
+    const canReject = _hasAction(manifest, "reject_item") && itemId && item.approval_status === "pending_parent_approval";
+    const canUpdate = _hasAction(manifest, "update_item") && itemId && item.status !== "checked";
+    const canDelete = _hasAction(manifest, "delete_item") && itemId;
+    return `
+        <section class="shopping-detail" style="--shopping-accent:${_shoppingItemAccent(item)}">
+            <header class="shopping-detail-head">
+                <div>
+                    <p class="shopping-side-kicker">${escapeHtml(_shoppingListName(lists, item.list_id))}</p>
+                    <h3>${escapeHtml(item.name || "Untitled item")}</h3>
+                </div>
+                ${_shoppingStatusPill(item)}
+            </header>
+            <div class="shopping-detail-meta">
+                <span><strong>Quantity</strong>${escapeHtml(_shoppingQuantityLabel(item) || "As needed")}</span>
+                <span><strong>Category</strong>${escapeHtml(_humanizeLabel(item.category || "other"))}</span>
+                <span><strong>Priority</strong>${escapeHtml(_humanizeLabel(item.priority || "medium"))}</span>
+                <span><strong>Requested By</strong>${escapeHtml(requester?.name || item.requested_by || "Family")}</span>
+                <span><strong>Approval</strong>${escapeHtml(_humanizeLabel(item.approval_status || "approved"))}</span>
+                ${item.checked_at ? `<span><strong>Checked</strong>${escapeHtml(_relativeTimeAgo(item.checked_at))}</span>` : ""}
+                ${item.rejection_reason ? `<span><strong>Rejection</strong>${escapeHtml(item.rejection_reason)}</span>` : ""}
+            </div>
+            ${item.notes ? `<p class="shopping-detail-notes">${escapeHtml(item.notes)}</p>` : ""}
+            <div class="shopping-detail-actions">
+                ${canCheck ? `<button class="shopping-small-btn shopping-small-btn--primary" type="button" data-shopping-detail-action="check_off_item" data-shopping-item-key="${escapeHtml(itemKey)}">Check off</button>` : ""}
+                ${canApprove ? `<button class="shopping-small-btn shopping-small-btn--primary" type="button" data-shopping-detail-action="approve_item" data-shopping-item-key="${escapeHtml(itemKey)}">Approve</button>` : ""}
+                ${canReject ? `<button class="shopping-small-btn" type="button" data-shopping-detail-action="reject_item" data-shopping-item-key="${escapeHtml(itemKey)}">Reject</button>` : ""}
+                ${canUpdate ? `<button class="shopping-small-btn" type="button" data-shopping-detail-action="update_item" data-shopping-item-key="${escapeHtml(itemKey)}">Edit</button>` : ""}
+                ${canDelete ? `<button class="shopping-action-btn shopping-action-btn--danger" type="button" data-shopping-detail-action="delete_item" data-shopping-item-key="${escapeHtml(itemKey)}">Remove</button>` : ""}
+            </div>
+        </section>`;
+}
+
+function _shoppingScopeByList(items, selectedListId) {
+    if (selectedListId === "__all__") return items;
+    return items.filter((item) => item.list_id === selectedListId);
+}
+
+function _shoppingDefaultListId(lists, items) {
+    if (!lists.length) return "";
+    const neededByList = new Map(lists.map((list) => [list.id, 0]));
+    items.forEach((item) => {
+        if (!_shoppingIsNeeded(item) || !neededByList.has(item.list_id)) return;
+        neededByList.set(item.list_id, neededByList.get(item.list_id) + 1);
+    });
+    const activeList = [...lists].sort((first, second) => {
+        const firstCount = neededByList.get(first.id) || 0;
+        const secondCount = neededByList.get(second.id) || 0;
+        if (firstCount !== secondCount) return secondCount - firstCount;
+        return String(first.name || "").localeCompare(String(second.name || ""));
+    })[0];
+    return activeList?.id || lists[0]?.id || "";
+}
+
+function _shoppingAddDefaults(lists, items, selectedListId = state.shoppingSelectedListId, selectedList = null) {
+    const explicitListId = selectedListId && selectedListId !== "__all__" ? selectedListId : "";
+    const defaultListId = explicitListId || (lists.length === 1 ? lists[0].id : _shoppingDefaultListId(lists, items));
+    const defaultList = selectedList || lists.find((list) => list.id === defaultListId) || null;
+    return {
+        ...(defaultListId ? { list_id: defaultListId } : {}),
+        requested_by: _currentMemberActorId(),
+        category: defaultList?.category || "groceries",
+        priority: "medium",
+    };
+}
+
+function _shoppingQuickItems(selectedList) {
+    const category = selectedList?.category || "other";
+    return SHOPPING_QUICK_ITEMS[category] || SHOPPING_QUICK_ITEMS.other;
+}
+
+function _shoppingRequesterDisplay(actorId) {
+    const raw = String(actorId || "").toLowerCase();
+    if (/concierge|system|kernel|adapter/.test(raw)) return { name: "Family", initials: "F", color: "#2563eb" };
+    return _actorDisplay(actorId);
+}
+
+function _shoppingEmptyCopy(filter) {
+    if (filter === "needed") return "Nothing needed on this list.";
+    if (filter === "pending") return "No approvals waiting.";
+    if (filter === "high") return "No high-priority items.";
+    if (filter === "mine") return "Nothing requested by you here.";
+    if (filter === "checked") return "Nothing checked off in this view.";
+    if (filter === "rejected") return "No rejected items in this view.";
+    return "No shopping items match this view.";
+}
+
+function _shoppingApplyFilters(items, filter, query, currentMember, lists) {
+    const normalizedQuery = String(query || "").trim().toLowerCase();
+    return items.filter((item) => {
+        if (filter === "needed" && !_shoppingIsNeeded(item)) return false;
+        if (filter === "pending" && item.approval_status !== "pending_parent_approval") return false;
+        if (filter === "high" && (!_shoppingIsNeeded(item) || item.priority !== "high")) return false;
+        if (filter === "mine" && (!_shoppingIsNeeded(item) || item.requested_by !== currentMember)) return false;
+        if (filter === "checked" && item.status !== "checked") return false;
+        if (filter === "rejected" && item.approval_status !== "rejected") return false;
+        if (!normalizedQuery) return true;
+        const requester = _actorDisplay(item.requested_by);
+        const haystack = [
+            item.name,
+            item.quantity,
+            item.unit,
+            item.category,
+            item.notes,
+            item.priority,
+            item.status,
+            item.approval_status,
+            item.requested_by,
+            requester.name,
+            _shoppingListName(lists, item.list_id),
+        ].join(" ").toLowerCase();
+        return haystack.includes(normalizedQuery);
+    });
+}
+
+function _shoppingFilterOptions(items, currentMember) {
+    const needed = items.filter(_shoppingIsNeeded);
+    return [
+        { key: "needed", label: "Needed", count: needed.length },
+        { key: "pending", label: "Pending", count: items.filter((item) => item.approval_status === "pending_parent_approval").length },
+        { key: "high", label: "High", count: needed.filter((item) => item.priority === "high").length },
+        { key: "mine", label: "Mine", count: needed.filter((item) => item.requested_by === currentMember).length },
+        { key: "checked", label: "Checked", count: items.filter((item) => item.status === "checked").length },
+        { key: "rejected", label: "Rejected", count: items.filter((item) => item.approval_status === "rejected").length },
+        { key: "all", label: "All", count: items.length },
+    ];
+}
+
+function _shoppingGroupItems(items) {
+    const order = ["pending", "high", "needed", "checked", "rejected"];
+    const labels = {
+        pending: "Needs Approval",
+        high: "High Priority",
+        needed: "Needed",
+        checked: "Checked Off",
+        rejected: "Rejected",
+    };
+    const groups = new Map(order.map((key) => [key, []]));
+    items.forEach((item) => groups.get(_shoppingBucket(item)).push(item));
+    return order.map((key) => ({ key, label: labels[key], items: groups.get(key) })).filter((group) => group.items.length);
+}
+
+function _shoppingBucket(item) {
+    if (item.approval_status === "pending_parent_approval") return "pending";
+    if (item.approval_status === "rejected") return "rejected";
+    if (item.status === "checked") return "checked";
+    if (item.priority === "high") return "high";
+    return "needed";
+}
+
+function _shoppingCategoryGroups(items) {
+    const groups = new Map(SHOPPING_CATEGORY_ORDER.map((category) => [category, []]));
+    items.forEach((item) => {
+        const category = SHOPPING_CATEGORY_ORDER.includes(item.category) ? item.category : "other";
+        groups.get(category).push(item);
+    });
+    return SHOPPING_CATEGORY_ORDER.map((key) => ({ key, label: _humanizeLabel(key), items: groups.get(key) })).filter((group) => group.items.length);
+}
+
+function _shoppingSortItems(items) {
+    const priorityOrder = { high: 0, medium: 1, low: 2 };
+    const statusOrder = { pending_parent_approval: 0, approved: 1, rejected: 3 };
+    return [...items].sort((first, second) => {
+        const firstApproval = statusOrder[first.approval_status || "approved"] ?? 9;
+        const secondApproval = statusOrder[second.approval_status || "approved"] ?? 9;
+        if (firstApproval !== secondApproval) return firstApproval - secondApproval;
+        const firstChecked = first.status === "checked" ? 1 : 0;
+        const secondChecked = second.status === "checked" ? 1 : 0;
+        if (firstChecked !== secondChecked) return firstChecked - secondChecked;
+        const firstPriority = priorityOrder[first.priority || "medium"] ?? 9;
+        const secondPriority = priorityOrder[second.priority || "medium"] ?? 9;
+        if (firstPriority !== secondPriority) return firstPriority - secondPriority;
+        const firstCategory = SHOPPING_CATEGORY_ORDER.indexOf(first.category || "other");
+        const secondCategory = SHOPPING_CATEGORY_ORDER.indexOf(second.category || "other");
+        if (firstCategory !== secondCategory) return firstCategory - secondCategory;
+        return String(first.name || "").localeCompare(String(second.name || ""));
+    });
+}
+
+function _shoppingItemId(item) {
+    return _idOf(item, "item_id");
+}
+
+function _shoppingItemKey(item) {
+    return _shoppingItemId(item) || [item.name || "", item.created_at || "", item.list_id || ""].join("|");
+}
+
+function _shoppingIsNeeded(item) {
+    return item.status !== "checked" && item.approval_status !== "rejected";
+}
+
+function _shoppingQuantityLabel(item) {
+    return [item.quantity, item.unit].filter(Boolean).join(" ").trim();
+}
+
+function _shoppingListName(lists, listId) {
+    if (!listId) return "No list";
+    return (lists || []).find((list) => list.id === listId)?.name || "Missing list";
+}
+
+function _shoppingSelectedListLabel(lists, selectedListId) {
+    if (selectedListId === "__all__") return "All Shopping";
+    return _shoppingListName(lists, selectedListId);
+}
+
+function _shoppingCategoryColor(category) {
+    return SHOPPING_CATEGORY_COLORS[category || "other"] || SHOPPING_CATEGORY_COLORS.other;
+}
+
+function _shoppingItemAccent(item) {
+    if (item.approval_status === "pending_parent_approval") return "#0891b2";
+    if (item.approval_status === "rejected") return "#9ca3af";
+    if (item.status === "checked") return "#16a34a";
+    return _shoppingCategoryColor(item.category);
+}
+
+function _shoppingStatusPill(item) {
+    if (item.approval_status === "pending_parent_approval") return `<span class="shopping-status shopping-status--pending">Pending</span>`;
+    if (item.approval_status === "rejected") return `<span class="shopping-status shopping-status--rejected">Rejected</span>`;
+    if (item.status === "checked") return `<span class="shopping-status shopping-status--checked">Checked</span>`;
+    return "";
+}
+
+function _shoppingUpdateDefaults(item) {
+    return {
+        item_id: _shoppingItemId(item),
+        name: item.name || "",
+        quantity: item.quantity || "",
+        unit: item.unit || "",
+        category: item.category || "groceries",
+        notes: item.notes || "",
+        priority: item.priority || "medium",
+    };
 }
 
 // ----------------------------------------------------------------------------
@@ -3275,73 +5266,762 @@ function _renderShoppingView(viewId, manifest, writeActions, listData) {
 // ----------------------------------------------------------------------------
 
 function _renderRemindersView(viewId, manifest, writeActions, listData) {
-    const items = _extractItems(listData);
+    const items = _reminderSortReminders(_extractItems(listData));
     const body = dom.viewBody[viewId];
     const actions = new Set((manifest.actions || []).map((action) => action.name));
+    const currentMember = _currentMemberActorId();
 
-    const order = { scheduled: 0, snoozed: 1, fired: 2, dismissed: 3 };
-    const sorted = [...items].sort((a, b) => {
-        const oa = order[a.status] ?? 9, ob = order[b.status] ?? 9;
-        if (oa !== ob) return oa - ob;
-        return ((a.trigger?.fire_at || a.fire_at || "")).localeCompare(b.trigger?.fire_at || b.fire_at || "");
-    });
+    if (!REMINDER_VIEW_MODES.includes(state.remindersViewMode)) state.remindersViewMode = "timeline";
+    if (!state.remindersFilter) state.remindersFilter = "active";
 
-    const scheduled = sorted.filter((r) => r.status === "scheduled" || r.status === "snoozed");
-    const fired = sorted.filter((r) => r.status === "fired");
-    const dueToday = scheduled.filter((r) => {
-        const fireAt = r.trigger?.fire_at || r.fire_at || r.snoozed_until;
-        return fireAt && _relativeDate(fireAt) === "Today";
-    }).length;
+    if (state.remindersSelectedRecipient) {
+        state.remindersSelectedRecipient = _reminderCanonicalMemberId(state.remindersSelectedRecipient);
+    }
+    const validRecipients = new Set(["__all__", ..._reminderMembers().map((member) => member.id), ...items.map((item) => _reminderRecipientCanonical(item)).filter(Boolean)]);
+    if (state.remindersSelectedRecipient && !validRecipients.has(state.remindersSelectedRecipient)) {
+        state.remindersSelectedRecipient = null;
+    }
+    if (state.remindersSelectedKey && !items.some((reminder) => _reminderKey(reminder) === state.remindersSelectedKey)) {
+        state.remindersSelectedKey = null;
+    }
+
+    const selectedRecipient = state.remindersSelectedRecipient || "__all__";
+    const scopedItems = _reminderScopeByRecipient(items, selectedRecipient);
+    const active = scopedItems.filter(_reminderIsActive);
+    const visibleItems = _reminderSortReminders(_reminderApplyFilters(scopedItems, state.remindersFilter, state.remindersSearchQuery, currentMember));
+    const selectedReminder = state.remindersSelectedKey ? items.find((reminder) => _reminderKey(reminder) === state.remindersSelectedKey) : null;
+    const attention = scopedItems.filter(_reminderNeedsAttention);
+    const dueNow = active.filter((reminder) => _reminderNeedsAttention(reminder) || _reminderIsOverdue(reminder));
+    const dueToday = active.filter((reminder) => _reminderIsDueToday(reminder) && !dueNow.includes(reminder));
+    const later = active.filter((reminder) => !dueNow.includes(reminder) && !dueToday.includes(reminder));
+    const overdue = active.filter(_reminderIsOverdue);
+    const snoozed = scopedItems.filter((reminder) => reminder.status === "snoozed");
+    const dismissed = scopedItems.filter((reminder) => reminder.status === "dismissed");
+    const filterOptions = _reminderFilterOptions(scopedItems, currentMember);
+    const recipientOptions = _reminderRecipientOptions(items, currentMember);
+    const selectedRecipientOption = recipientOptions.find((recipient) => recipient.id === selectedRecipient) || recipientOptions[0] || { id: "__all__", label: "All reminders", initials: "All", color: "#2563eb", count: scopedItems.length, activeCount: active.length };
+    const nextReminder = dueNow[0] || dueToday[0] || later[0] || null;
+    const heroTitle = dueNow.length
+        ? `${dueNow.length} nudge${dueNow.length === 1 ? "" : "s"} need a reset`
+        : nextReminder ? nextReminder.title || "Next reminder" : "No active nudges";
+    const heroCopy = dueNow.length
+        ? `${_countPhrase(overdue.length, "overdue reminder")}${attention.length ? ` and ${_countPhrase(attention.length, "active alert")}` : ""} are asking for a decision.`
+        : nextReminder ? `${_reminderDueLabel(nextReminder, true)} for ${_reminderSelectedRecipientLabel(selectedRecipient).replace("'s Reminders", "")}.` : "The nudge lane is clear for this scope.";
+    const heroPills = [
+        _reminderSelectedRecipientLabel(selectedRecipient),
+        nextReminder ? _reminderDueLabel(nextReminder) : `${active.length} active`,
+        dismissed.length ? `${dismissed.length} dismissed tucked away` : "History tucked away",
+    ];
+    const signalCards = [
+        { key: "now", label: "Due now", count: dueNow.length, hint: dueNow.length ? "Needs a reset" : "Clear" },
+        { key: "today", label: "Today", count: dueToday.length, hint: dueToday.length ? "Before the day ends" : "No time pressure" },
+        { key: "later", label: "Later", count: later.length, hint: later.length ? "Already scheduled" : "Nothing waiting" },
+    ];
+    const secondaryFilters = filterOptions.filter((filter) => !["active", "now", "today", "later"].includes(filter.key));
 
     body.innerHTML = `
-        <div class="reminder-stats">
-            <div class="reminder-stat"><p class="reminder-stat-label">Scheduled</p><p class="reminder-stat-value">${scheduled.length}</p></div>
-            <div class="reminder-stat"><p class="reminder-stat-label">Due Today</p><p class="reminder-stat-value reminder-stat-value--blue">${dueToday}</p></div>
-            <div class="reminder-stat"><p class="reminder-stat-label">Needs Attention</p><p class="reminder-stat-value reminder-stat-value--orange">${fired.length}</p></div>
-        </div>
-        <div class="reminder-list">
-            ${sorted.length === 0 ? `<div class="view-empty">No reminders yet. Add one above.</div>` : sorted.map((r) => {
-                const fireAt = r.trigger?.fire_at || r.fire_at;
-                const kind = r.trigger?.kind || "time";
-                const timeStr = fireAt ? _fmtReminderTime(fireAt) : "";
-                const status = r.status || "scheduled";
-                const muted = status === "fired" || status === "dismissed";
-                const reminderId = _idOf(r, "reminder_id");
-                const canDismiss = actions.has("dismiss_reminder") && reminderId && (status === "fired" || status === "snoozed");
-                const canSnooze = actions.has("snooze_reminder") && reminderId && (status === "fired" || status === "snoozed");
-                const canDelete = actions.has("delete_reminder") && reminderId;
-                return `
-                    <div class="reminder-row${muted ? " reminder-row--muted" : ""}">
-                        <div class="reminder-icon">${_reminderKindIcon(kind)}</div>
-                        <div class="reminder-body">
-                            <p class="reminder-title">${escapeHtml(r.title || "Reminder")}</p>
-                            <div class="reminder-meta">
-                                ${timeStr ? `<span class="reminder-time">${escapeHtml(timeStr)}</span>` : ""}
-                                ${r.recipient ? `<span class="reminder-recipient" style="--member-color:${_memberColor(r.recipient)};background:${_memberColor(r.recipient)}">${escapeHtml(r.recipient)}</span>` : ""}
-                                ${r.message ? `<span style="color:var(--text-tertiary)">${escapeHtml(String(r.message).slice(0, 60))}${r.message.length > 60 ? "…" : ""}</span>` : ""}
+        <div class="reminder-shell">
+            <div class="reminder-stage">
+                <article class="reminder-hero${nextReminder ? "" : " reminder-hero--empty"}" style="--reminder-accent:${nextReminder ? _reminderAccent(nextReminder) : "var(--brand-blue)"}">
+                    <div>
+                        <p class="reminder-side-kicker">Nudge lane</p>
+                        <h3>${escapeHtml(heroTitle)}</h3>
+                        <p>${escapeHtml(heroCopy)}</p>
+                        <div class="reminder-hero-pills">
+                            ${heroPills.map((pill) => `<span>${escapeHtml(pill)}</span>`).join("")}
+                        </div>
+                    </div>
+                    <div class="reminder-hero-actions">
+                        ${nextReminder ? `<button class="view-small-btn view-small-btn--primary" type="button" data-reminder-key="${escapeHtml(_reminderKey(nextReminder))}">Details</button>` : ""}
+                        ${actions.has("create_reminder") ? `<button class="view-small-btn" data-app-action="reminders:create_reminder">Add reminder</button>` : ""}
+                    </div>
+                </article>
+                <aside class="reminder-signal-panel">
+                    <div class="reminder-signal-head">
+                        <p class="reminder-side-kicker">Due now, today, later</p>
+                        <strong>${active.length ? `${active.length} active nudges` : "All clear"}</strong>
+                    </div>
+                    <div class="reminder-signal-grid">
+                        ${signalCards.map((signal) => `
+                            <button class="reminder-signal-card${state.remindersFilter === signal.key ? " reminder-signal-card--active" : ""}" type="button" data-reminder-filter="${escapeHtml(signal.key)}">
+                                <span>${escapeHtml(signal.label)}</span>
+                                <strong>${signal.count}</strong>
+                                <small>${escapeHtml(signal.hint)}</small>
+                            </button>
+                        `).join("")}
+                    </div>
+                    <div class="reminder-mode-card">
+                        <span>Mode</span>
+                        <div class="reminder-view-switch" role="tablist" aria-label="Reminder view">
+                            ${REMINDER_VIEW_MODES.map((mode) => `
+                                <button class="reminder-view-switch-btn${state.remindersViewMode === mode ? " reminder-view-switch-btn--active" : ""}" type="button" role="tab" aria-selected="${state.remindersViewMode === mode ? "true" : "false"}" data-reminder-view="${mode}">${escapeHtml(_humanizeLabel(mode))}</button>
+                            `).join("")}
+                        </div>
+                    </div>
+                </aside>
+            </div>
+            <div class="reminder-workspace${selectedReminder ? " reminder-workspace--with-detail" : " reminder-workspace--single"}">
+                <section class="reminder-main reminder-main--m6">
+                    <div class="reminder-toolbar reminder-toolbar--m6">
+                        <div>
+                            <p class="reminder-side-kicker">Reminder queue</p>
+                            <h3>${escapeHtml(_reminderSelectedRecipientLabel(selectedRecipient))}</h3>
+                            <p>${visibleItems.length} shown - ${active.length} active${dueNow.length ? ` - ${dueNow.length} due now` : ""}</p>
+                        </div>
+                        <div class="reminder-toolbar-actions">
+                            <details class="reminder-recipient-menu">
+                                <summary style="--reminder-accent:${selectedRecipientOption.color}">
+                                    <span class="reminder-recipient-avatar" style="background:${selectedRecipientOption.color}">${escapeHtml(selectedRecipientOption.initials)}</span>
+                                    <span>${escapeHtml(selectedRecipientOption.label)}</span>
+                                    <strong>${selectedRecipientOption.activeCount}</strong>
+                                </summary>
+                                <div class="reminder-recipient-menu__panel">
+                                    <div class="reminder-sidebar-head">
+                                        <div><h3>Recipients</h3><p>${active.length} active in this scope</p></div>
+                                        ${actions.has("create_reminder") ? `<button class="view-small-btn" data-app-action="reminders:create_reminder">New</button>` : ""}
+                                    </div>
+                                    <div class="reminder-recipient-tabs">
+                                        ${recipientOptions.map((recipient) => `
+                                            <button class="reminder-recipient-tab${selectedRecipient === recipient.id ? " reminder-recipient-tab--active" : ""}" type="button" data-reminder-recipient="${escapeHtml(recipient.id)}">
+                                                <span class="reminder-recipient-avatar" style="background:${recipient.color}">${escapeHtml(recipient.initials)}</span>
+                                                <span class="reminder-recipient-copy"><strong>${escapeHtml(recipient.label)}</strong><em>${recipient.activeCount} active</em></span>
+                                                <span class="reminder-recipient-count">${recipient.count}</span>
+                                            </button>
+                                        `).join("")}
+                                    </div>
+                                </div>
+                            </details>
+                            ${actions.has("create_reminder") ? `<button class="view-small-btn view-small-btn--primary" data-app-action="reminders:create_reminder">Add reminder</button>` : ""}
+                        </div>
+                    </div>
+                    <div class="reminder-filter-summary">
+                        <button class="reminder-now-chip${state.remindersFilter === "active" ? " reminder-now-chip--active" : ""}" type="button" data-reminder-filter="active">
+                            <span>Active</span><strong>${active.length}</strong>
+                        </button>
+                        <details class="app-advanced-section reminder-more-filters">
+                            <summary><span>More filters</span><small>${escapeHtml(_reminderFilterLabel(filterOptions, state.remindersFilter))}</small></summary>
+                            <div class="app-advanced-section__body">
+                                <div class="app-filter-row" role="tablist" aria-label="Reminder filter">
+                                    ${secondaryFilters.map((filter) => `
+                                        <button class="app-filter-chip${state.remindersFilter === filter.key ? " app-filter-chip--active" : ""}" type="button" data-reminder-filter="${escapeHtml(filter.key)}">
+                                            <span>${escapeHtml(filter.label)}</span><strong>${filter.count}</strong>
+                                        </button>
+                                    `).join("")}
+                                </div>
+                                <label class="reminder-search-wrap">
+                                    <span>Search</span>
+                                    <input class="reminder-search" type="search" data-reminder-search value="${escapeHtml(state.remindersSearchQuery || "")}" placeholder="Title, person, trigger">
+                                </label>
                             </div>
-                        </div>
-                        <span class="reminder-status reminder-status--${status}">${escapeHtml(_humanizeLabel(status))}</span>
-                        <div class="reminder-actions">
-                            ${canSnooze ? `<button class="view-action-btn" data-reminder-action="snooze_reminder" data-reminder-id="${escapeHtml(reminderId)}">Snooze 10m</button>` : ""}
-                            ${canDismiss ? `<button class="view-action-btn" data-reminder-action="dismiss_reminder" data-reminder-id="${escapeHtml(reminderId)}">Dismiss</button>` : ""}
-                            ${canDelete ? `<button class="view-action-btn view-action-btn--danger" data-reminder-action="delete_reminder" data-reminder-id="${escapeHtml(reminderId)}">Remove</button>` : ""}
-                        </div>
-                    </div>`;
-            }).join("")}
+                        </details>
+                    </div>
+                    ${_renderReminderSurface(visibleItems, scopedItems, manifest, currentMember)}
+                </section>
+                ${selectedReminder ? `<aside class="reminder-inspector reminder-detail-rail" id="reminder-inspector">
+                    ${_renderReminderDetail(selectedReminder, manifest, currentMember, scopedItems)}
+                </aside>` : ""}
+            </div>
         </div>`;
 
-    body.querySelectorAll("[data-reminder-action]").forEach((btn) => {
-        btn.addEventListener("click", async () => {
-            const reminderId = btn.dataset.reminderId;
-            const actionName = btn.dataset.reminderAction;
-            if (!reminderId || !actionName) return;
-            const params = actionName === "snooze_reminder"
-                ? { reminder_id: reminderId, snooze_until: _isoMinutesFromNow(10) }
-                : { reminder_id: reminderId };
-            await _submitAdapterAction("reminders", actionName, params);
+    body.querySelectorAll("[data-reminder-recipient]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+            state.remindersSelectedRecipient = btn.dataset.reminderRecipient === "__all__" ? null : btn.dataset.reminderRecipient;
+            state.remindersSelectedKey = null;
+            _renderAdapterBody(viewId, "reminders", manifest, writeActions, listData);
         });
     });
+    body.querySelectorAll("[data-reminder-view]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+            state.remindersViewMode = btn.dataset.reminderView || "timeline";
+            _renderAdapterBody(viewId, "reminders", manifest, writeActions, listData);
+        });
+    });
+    body.querySelectorAll("[data-reminder-filter]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+            state.remindersFilter = btn.dataset.reminderFilter || "active";
+            _renderAdapterBody(viewId, "reminders", manifest, writeActions, listData);
+        });
+    });
+    const searchInput = body.querySelector("[data-reminder-search]");
+    if (searchInput) {
+        searchInput.addEventListener("input", () => {
+            state.remindersSearchQuery = searchInput.value;
+            const cursor = searchInput.selectionStart || state.remindersSearchQuery.length;
+            window.clearTimeout(state._remindersSearchTimer);
+            state._remindersSearchTimer = window.setTimeout(() => {
+                _renderAdapterBody(viewId, "reminders", manifest, writeActions, listData);
+                const nextInput = dom.viewBody[viewId]?.querySelector("[data-reminder-search]");
+                if (nextInput) {
+                    nextInput.focus();
+                    nextInput.setSelectionRange(cursor, cursor);
+                }
+            }, 120);
+        });
+    }
+
+    const submitReminderAction = async (btn) => {
+        const reminderId = btn.dataset.reminderId;
+        const actionName = btn.dataset.reminderAction || btn.dataset.reminderDetailAction;
+        if (!reminderId || !actionName || btn.disabled) return;
+        const params = actionName === "snooze_reminder"
+            ? { reminder_id: reminderId, snooze_until: _isoMinutesFromNow(Number(btn.dataset.reminderSnoozeMinutes || 10)) }
+            : { reminder_id: reminderId };
+        await _submitAdapterAction("reminders", actionName, params);
+    };
+    body.querySelectorAll("[data-reminder-action]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+            await submitReminderAction(btn);
+        });
+    });
+    body.querySelectorAll("[data-reminder-detail-action]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+            const reminder = items.find((item) => _reminderKey(item) === btn.dataset.reminderKey);
+            if (!reminder) return;
+            const reminderId = _reminderId(reminder);
+            const actionName = btn.dataset.reminderDetailAction;
+            if (actionName === "update_reminder") {
+                _openAdapterAction("reminders", manifest, "update_reminder", _reminderUpdateDefaults(reminder));
+            } else if (actionName === "snooze_custom") {
+                _openAdapterAction("reminders", manifest, "snooze_reminder", { reminder_id: reminderId, snooze_until: _isoMinutesFromNow(30) });
+            } else if (actionName === "snooze_reminder" || actionName === "dismiss_reminder" || actionName === "delete_reminder") {
+                btn.dataset.reminderId = reminderId;
+                await submitReminderAction(btn);
+            }
+        });
+    });
+    body.querySelectorAll("[data-reminder-key]").forEach((node) => {
+        node.addEventListener("click", (event) => {
+            if (event.target.closest("[data-reminder-action], [data-reminder-detail-action]")) return;
+            state.remindersSelectedKey = node.dataset.reminderKey;
+            _renderAdapterBody(viewId, "reminders", manifest, writeActions, listData);
+        });
+        node.addEventListener("keydown", (event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            if (event.target.closest("[data-reminder-action], [data-reminder-detail-action]")) return;
+            event.preventDefault();
+            state.remindersSelectedKey = node.dataset.reminderKey;
+            _renderAdapterBody(viewId, "reminders", manifest, writeActions, listData);
+        });
+    });
+    body.querySelectorAll("[data-reminder-close-detail]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+            state.remindersSelectedKey = null;
+            _renderAdapterBody(viewId, "reminders", manifest, writeActions, listData);
+        });
+    });
+}
+
+function _renderReminderSurface(reminders, scopedItems, manifest, currentMember) {
+    if (state.remindersViewMode === "board") return _renderReminderBoard(reminders, manifest);
+    if (state.remindersViewMode === "focus") return _renderReminderFocus(reminders, scopedItems, manifest, currentMember);
+    return _renderReminderTimeline(reminders, manifest);
+}
+
+function _renderReminderTimeline(reminders, manifest) {
+    if (!reminders.length) return `<div class="reminder-empty">${escapeHtml(_reminderEmptyMessage())}</div>`;
+    const groups = _reminderGroupReminders(reminders);
+    return `
+        <div class="reminder-timeline-surface">
+            ${groups.map((group) => group.key === "dismissed" ? `
+                <details class="reminder-group reminder-history-group">
+                    <summary class="reminder-group-head"><h4>${escapeHtml(group.label)}</h4><span>${group.reminders.length}</span></summary>
+                    <div class="reminder-rows">
+                        ${group.reminders.map((reminder) => _renderReminderRow(reminder, manifest)).join("")}
+                    </div>
+                </details>
+            ` : `
+                <section class="reminder-group reminder-group--${escapeHtml(group.key)}">
+                    <header class="reminder-group-head"><h4>${escapeHtml(group.label)}</h4><span>${group.reminders.length}</span></header>
+                    <div class="reminder-rows">
+                        ${group.reminders.map((reminder) => _renderReminderRow(reminder, manifest)).join("")}
+                    </div>
+                </section>
+            `).join("")}
+        </div>`;
+}
+
+function _renderReminderBoard(reminders, manifest) {
+    const columns = [
+        { key: "fired", label: "Attention" },
+        { key: "scheduled", label: "Scheduled" },
+        { key: "snoozed", label: "Snoozed" },
+        { key: "dismissed", label: "Dismissed" },
+    ];
+    return `
+        <div class="reminder-board">
+            ${columns.map((column) => {
+                const columnReminders = reminders.filter((reminder) => (reminder.status || "scheduled") === column.key);
+                return `
+                    <section class="reminder-board-column reminder-board-column--${column.key}">
+                        <header><h4>${escapeHtml(column.label)}</h4><span>${columnReminders.length}</span></header>
+                        <div class="reminder-board-stack">
+                            ${columnReminders.length ? columnReminders.map((reminder) => _renderReminderRow(reminder, manifest, { compact: true })).join("") : `<p class="reminder-column-empty">Empty</p>`}
+                        </div>
+                    </section>`;
+            }).join("")}
+        </div>`;
+}
+
+function _renderReminderFocus(reminders, scopedItems, manifest, currentMember) {
+    const active = _reminderSortReminders(reminders.filter(_reminderIsActive));
+    const lanes = [
+        { label: "Needs Attention", reminders: active.filter(_reminderNeedsAttention).slice(0, 6) },
+        { label: "Due Now", reminders: active.filter(_reminderIsOverdue).slice(0, 6) },
+        { label: "Today", reminders: active.filter((reminder) => _reminderIsDueToday(reminder) && !_reminderIsOverdue(reminder)).slice(0, 6) },
+        { label: "Mine", reminders: active.filter((reminder) => _reminderRecipientCanonical(reminder) === _reminderCanonicalMemberId(currentMember)).slice(0, 6) },
+    ];
+    const allEmpty = lanes.every((lane) => lane.reminders.length === 0);
+    if (allEmpty && scopedItems.some((reminder) => reminder.status === "dismissed")) {
+        return `<div class="reminder-empty">No active reminders in this scope.</div>`;
+    }
+    if (allEmpty) return `<div class="reminder-empty">No focus reminders yet.</div>`;
+    return `
+        <div class="reminder-focus-grid">
+            ${lanes.map((lane) => `
+                <section class="reminder-focus-lane">
+                    <header><h4>${escapeHtml(lane.label)}</h4><span>${lane.reminders.length}</span></header>
+                    ${lane.reminders.length ? lane.reminders.map((reminder) => _renderReminderRow(reminder, manifest, { compact: true })).join("") : `<p class="reminder-column-empty">Clear</p>`}
+                </section>
+            `).join("")}
+        </div>`;
+}
+
+function _renderReminderRow(reminder, manifest, options = {}) {
+    const reminderId = _reminderId(reminder);
+    const reminderKey = _reminderKey(reminder);
+    const status = reminder.status || "scheduled";
+    const kind = _reminderKind(reminder);
+    const selected = state.remindersSelectedKey === reminderKey;
+    const recipient = reminder.recipient ? _actorDisplay(_reminderRecipientCanonical(reminder)) : null;
+    const canSnooze = _hasAction(manifest, "snooze_reminder") && reminderId && (status === "fired" || status === "snoozed");
+    const canDismiss = _hasAction(manifest, "dismiss_reminder") && reminderId && (status === "fired" || status === "snoozed");
+    const canUpdate = _hasAction(manifest, "update_reminder") && reminderId && status === "scheduled";
+    const canDelete = _hasAction(manifest, "delete_reminder") && reminderId;
+    const message = String(reminder.message || "").trim();
+    const dueClass = _reminderDueClass(reminder);
+    return `
+        <div class="reminder-row reminder-row--${escapeHtml(dueClass)}${selected ? " reminder-row--selected" : ""}${status === "dismissed" ? " reminder-row--muted" : ""}${options.compact ? " reminder-row--compact" : ""}" role="button" tabindex="0" data-reminder-key="${escapeHtml(reminderKey)}" style="--reminder-accent:${_reminderAccent(reminder)}">
+            <div class="reminder-icon reminder-icon--${escapeHtml(kind)}">${_reminderKindIcon(kind)}</div>
+            <div class="reminder-body">
+                <div class="reminder-title-line">
+                    <p class="reminder-title">${escapeHtml(reminder.title || "Reminder")}</p>
+                    ${_reminderStatusPill(reminder)}
+                </div>
+                <div class="reminder-meta">
+                    <span class="reminder-meta-item reminder-meta-item--${dueClass}">${escapeHtml(_reminderDueLabel(reminder))}</span>
+                    ${recipient ? `<span class="reminder-meta-item"><span class="reminder-avatar" style="background:${recipient.color}">${escapeHtml(recipient.initials)}</span>${escapeHtml(recipient.name)}</span>` : ""}
+                    <span class="reminder-meta-item">${escapeHtml(_reminderTriggerKindLabel(kind))}</span>
+                    ${message ? `<span class="reminder-meta-item reminder-message-preview">${escapeHtml(message.slice(0, 70))}${message.length > 70 ? "..." : ""}</span>` : ""}
+                </div>
+            </div>
+            <div class="reminder-actions">
+                ${canSnooze ? `<button class="view-action-btn" data-reminder-action="snooze_reminder" data-reminder-id="${escapeHtml(reminderId)}" data-reminder-snooze-minutes="10">Snooze 10m</button>` : ""}
+                ${canDismiss ? `<button class="view-action-btn" data-reminder-action="dismiss_reminder" data-reminder-id="${escapeHtml(reminderId)}">Dismiss</button>` : ""}
+                ${canUpdate ? `<button class="view-action-btn" data-reminder-detail-action="update_reminder" data-reminder-key="${escapeHtml(reminderKey)}">Edit</button>` : ""}
+                ${canDelete ? `<button class="view-action-btn view-action-btn--danger" data-reminder-action="delete_reminder" data-reminder-id="${escapeHtml(reminderId)}">Remove</button>` : ""}
+            </div>
+        </div>`;
+}
+
+function _renderReminderDetail(reminder, manifest, currentMember, scopedItems) {
+    if (!reminder) {
+        const active = scopedItems.filter(_reminderIsActive);
+        const focus = active.filter((item) => _reminderNeedsAttention(item) || _reminderIsOverdue(item) || _reminderIsDueToday(item));
+        return `
+            <section class="reminder-detail reminder-detail--empty">
+                <p class="reminder-side-kicker">Reminder details</p>
+                <h3>No reminder selected</h3>
+                <div class="reminder-detail-mini-stats">
+                    <span><strong>${focus.length}</strong> focus</span>
+                    <span><strong>${active.length}</strong> active</span>
+                </div>
+            </section>`;
+    }
+    const reminderId = _reminderId(reminder);
+    const reminderKey = _reminderKey(reminder);
+    const status = reminder.status || "scheduled";
+    const canSnooze = _hasAction(manifest, "snooze_reminder") && reminderId && (status === "fired" || status === "snoozed");
+    const canDismiss = _hasAction(manifest, "dismiss_reminder") && reminderId && (status === "fired" || status === "snoozed");
+    const canUpdate = _hasAction(manifest, "update_reminder") && reminderId && status === "scheduled";
+    const canDelete = _hasAction(manifest, "delete_reminder") && reminderId;
+    const recipient = reminder.recipient ? _actorDisplay(_reminderRecipientCanonical(reminder)) : null;
+    const creator = _actorDisplay(reminder.actor || "system");
+    const triggerDetail = _reminderTriggerDetail(reminder);
+    const message = String(reminder.message || "").trim();
+    return `
+        <section class="reminder-detail" style="--reminder-accent:${_reminderAccent(reminder)}">
+            <header class="reminder-detail-head">
+                <div>
+                    <p class="reminder-side-kicker">${escapeHtml(_reminderTriggerKindLabel(_reminderKind(reminder)))}</p>
+                    <h3>${escapeHtml(reminder.title || "Reminder")}</h3>
+                </div>
+                <button class="reminder-detail-close" type="button" data-reminder-close-detail aria-label="Close reminder details">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </header>
+            <div class="reminder-detail-status-row">
+                ${_reminderStatusPill(reminder)}
+                ${recipient ? `<span class="reminder-detail-recipient"><span style="background:${recipient.color}">${escapeHtml(recipient.initials)}</span>${escapeHtml(recipient.name)}</span>` : ""}
+            </div>
+            <div class="reminder-detail-meta">
+                <span><strong>When</strong>${escapeHtml(_reminderDueLabel(reminder, true))}</span>
+                <span><strong>Trigger</strong>${escapeHtml(triggerDetail)}</span>
+                <span><strong>Created By</strong>${escapeHtml(creator.name)}</span>
+                ${reminder.visibility ? `<span><strong>Visibility</strong>${escapeHtml(_humanizeLabel(reminder.visibility))}</span>` : ""}
+                ${reminder.linked_event_id ? `<span><strong>Calendar Link</strong>${escapeHtml(reminder.linked_event_id)}</span>` : ""}
+                ${reminder.fired_at ? `<span><strong>Fired</strong>${escapeHtml(_fmtReminderTime(reminder.fired_at))}</span>` : ""}
+            </div>
+            ${message ? `<p class="reminder-detail-message">${escapeHtml(message)}</p>` : ""}
+            ${canSnooze ? `
+                <div class="reminder-snooze-strip">
+                    ${[10, 30, 60].map((minutes) => `
+                        <button class="reminder-snooze-chip" type="button" data-reminder-detail-action="snooze_reminder" data-reminder-key="${escapeHtml(reminderKey)}" data-reminder-snooze-minutes="${minutes}">${minutes < 60 ? `${minutes}m` : "1h"}</button>
+                    `).join("")}
+                </div>` : ""}
+            <div class="reminder-detail-actions">
+                ${canUpdate ? `<button class="view-small-btn view-small-btn--primary" type="button" data-reminder-detail-action="update_reminder" data-reminder-key="${escapeHtml(reminderKey)}">Edit</button>` : ""}
+                ${canSnooze ? `<button class="view-small-btn" type="button" data-reminder-detail-action="snooze_custom" data-reminder-key="${escapeHtml(reminderKey)}">Snooze...</button>` : ""}
+                ${canDismiss ? `<button class="view-small-btn" type="button" data-reminder-detail-action="dismiss_reminder" data-reminder-key="${escapeHtml(reminderKey)}">Dismiss</button>` : ""}
+                ${canDelete ? `<button class="view-action-btn view-action-btn--danger" type="button" data-reminder-detail-action="delete_reminder" data-reminder-key="${escapeHtml(reminderKey)}">Remove</button>` : ""}
+            </div>
+        </section>`;
+}
+
+function _reminderScopeByRecipient(reminders, selectedRecipient) {
+    if (selectedRecipient === "__all__") return reminders;
+    const canonicalRecipient = _reminderCanonicalMemberId(selectedRecipient);
+    return reminders.filter((reminder) => _reminderRecipientCanonical(reminder) === canonicalRecipient);
+}
+
+function _reminderApplyFilters(reminders, filter, query, currentMember) {
+    const normalizedQuery = String(query || "").trim().toLowerCase();
+    return reminders.filter((reminder) => {
+        if (filter === "active" && !_reminderIsActive(reminder)) return false;
+        if (filter === "now" && (!_reminderIsActive(reminder) || !(_reminderNeedsAttention(reminder) || _reminderIsOverdue(reminder)))) return false;
+        if (filter === "attention" && !_reminderNeedsAttention(reminder)) return false;
+        if (filter === "today" && (!_reminderIsActive(reminder) || !_reminderIsDueToday(reminder) || _reminderNeedsAttention(reminder) || _reminderIsOverdue(reminder))) return false;
+        if (filter === "later" && (!_reminderIsActive(reminder) || _reminderNeedsAttention(reminder) || _reminderIsOverdue(reminder) || _reminderIsDueToday(reminder))) return false;
+        if (filter === "overdue" && (!_reminderIsActive(reminder) || !_reminderIsOverdue(reminder))) return false;
+        if (filter === "mine" && (!_reminderIsActive(reminder) || _reminderRecipientCanonical(reminder) !== _reminderCanonicalMemberId(currentMember))) return false;
+        if (filter === "scheduled" && reminder.status !== "scheduled") return false;
+        if (filter === "snoozed" && reminder.status !== "snoozed") return false;
+        if (filter === "dismissed" && reminder.status !== "dismissed") return false;
+        if (!normalizedQuery) return true;
+        const canonicalRecipient = _reminderRecipientCanonical(reminder);
+        const recipient = _actorDisplay(canonicalRecipient);
+        const haystack = [
+            reminder.title,
+            reminder.message,
+            reminder.recipient,
+            canonicalRecipient,
+            recipient.name,
+            reminder.status,
+            _reminderTriggerKindLabel(_reminderKind(reminder)),
+            _reminderTriggerDetail(reminder),
+        ].join(" ").toLowerCase();
+        return haystack.includes(normalizedQuery);
+    });
+}
+
+function _reminderFilterOptions(reminders, currentMember) {
+    const active = reminders.filter(_reminderIsActive);
+    const canonicalCurrentMember = _reminderCanonicalMemberId(currentMember);
+    const now = active.filter((reminder) => _reminderNeedsAttention(reminder) || _reminderIsOverdue(reminder));
+    const today = active.filter((reminder) => _reminderIsDueToday(reminder) && !now.includes(reminder));
+    return [
+        { key: "active", label: "Active", count: active.length },
+        { key: "now", label: "Due now", count: now.length },
+        { key: "today", label: "Today", count: today.length },
+        { key: "later", label: "Later", count: active.filter((reminder) => !now.includes(reminder) && !today.includes(reminder)).length },
+        { key: "attention", label: "Attention", count: reminders.filter(_reminderNeedsAttention).length },
+        { key: "overdue", label: "Overdue", count: active.filter(_reminderIsOverdue).length },
+        { key: "mine", label: "Mine", count: active.filter((reminder) => _reminderRecipientCanonical(reminder) === canonicalCurrentMember).length },
+        { key: "scheduled", label: "Scheduled", count: reminders.filter((reminder) => reminder.status === "scheduled").length },
+        { key: "snoozed", label: "Snoozed", count: reminders.filter((reminder) => reminder.status === "snoozed").length },
+        { key: "dismissed", label: "Dismissed", count: reminders.filter((reminder) => reminder.status === "dismissed").length },
+        { key: "all", label: "All", count: reminders.length },
+    ];
+}
+
+function _reminderFilterLabel(filterOptions, key) {
+    return filterOptions.find((filter) => filter.key === key)?.label || _humanizeLabel(key || "active");
+}
+
+function _reminderEmptyMessage() {
+    const filter = state.remindersFilter || "active";
+    if (filter === "active") return "No active nudges in this scope.";
+    if (filter === "now") return "Nothing needs a reset right now.";
+    if (filter === "today") return "No reminders left for today.";
+    if (filter === "later") return "No later reminders in this scope.";
+    if (filter === "attention") return "No alerts need attention.";
+    if (filter === "overdue") return "No overdue reminders.";
+    if (filter === "mine") return "No reminders assigned to you here.";
+    if (filter === "dismissed") return "No dismissed reminders in this scope.";
+    return "No reminders match this view.";
+}
+
+function _reminderGroupReminders(reminders) {
+    const order = ["now", "today", "upcoming", "location", "event", "snoozed", "dismissed", "other"];
+    const labels = {
+        now: "Due Now",
+        today: "Today",
+        upcoming: "Later",
+        location: "Location Triggers",
+        event: "Event Linked",
+        snoozed: "Snoozed",
+        dismissed: "Dismissed",
+        other: "Other",
+    };
+    const groups = new Map(order.map((key) => [key, []]));
+    reminders.forEach((reminder) => groups.get(_reminderBucket(reminder)).push(reminder));
+    return order.map((key) => ({ key, label: labels[key], reminders: groups.get(key) })).filter((group) => group.reminders.length);
+}
+
+function _reminderBucket(reminder) {
+    const status = reminder.status || "scheduled";
+    const kind = _reminderKind(reminder);
+    if (status === "dismissed") return "dismissed";
+    if (status === "snoozed") return "snoozed";
+    if (status === "fired" || _reminderIsOverdue(reminder)) return "now";
+    if (_reminderIsDueToday(reminder)) return "today";
+    if (kind === "location_enter" || kind === "location_leave") return "location";
+    if (kind === "event_offset") return "event";
+    if (_reminderNextAt(reminder)) return "upcoming";
+    return "other";
+}
+
+function _reminderSortReminders(reminders) {
+    return [...reminders].sort((first, second) => {
+        const firstStatus = REMINDER_STATUS_ORDER[first.status || "scheduled"] ?? 9;
+        const secondStatus = REMINDER_STATUS_ORDER[second.status || "scheduled"] ?? 9;
+        if (firstStatus !== secondStatus) return firstStatus - secondStatus;
+        const firstDue = _reminderDueMs(first);
+        const secondDue = _reminderDueMs(second);
+        if (firstDue !== secondDue) return firstDue - secondDue;
+        return String(first.created_at || "").localeCompare(String(second.created_at || ""));
+    });
+}
+
+function _reminderId(reminder) {
+    return _idOf(reminder, "reminder_id");
+}
+
+function _reminderKey(reminder) {
+    return _reminderId(reminder) || [reminder.title || "", reminder.created_at || "", reminder.recipient || ""].join("|");
+}
+
+function _reminderIsActive(reminder) {
+    return (reminder.status || "scheduled") !== "dismissed";
+}
+
+function _reminderNeedsAttention(reminder) {
+    return (reminder.status || "scheduled") === "fired";
+}
+
+function _reminderNextAt(reminder) {
+    if ((reminder.status || "scheduled") === "snoozed" && reminder.snoozed_until) return reminder.snoozed_until;
+    return reminder.trigger?.fire_at || reminder.fire_at || "";
+}
+
+function _reminderDueMs(reminder) {
+    const nextAt = _reminderNextAt(reminder);
+    if (!nextAt) return Number.POSITIVE_INFINITY;
+    const ms = new Date(nextAt).getTime();
+    return Number.isNaN(ms) ? Number.POSITIVE_INFINITY : ms;
+}
+
+function _reminderIsDueToday(reminder) {
+    const nextAt = _reminderNextAt(reminder);
+    if (!nextAt) return false;
+    const parts = _calDateTimeParts(nextAt);
+    if (!parts) return false;
+    const dateIso = `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+    return dateIso === _localDateIso();
+}
+
+function _reminderIsOverdue(reminder) {
+    const status = reminder.status || "scheduled";
+    if (status !== "scheduled" && status !== "snoozed") return false;
+    const dueMs = _reminderDueMs(reminder);
+    return Number.isFinite(dueMs) && dueMs < Date.now();
+}
+
+function _reminderDueClass(reminder) {
+    const status = reminder.status || "scheduled";
+    if (status === "fired") return "attention";
+    if (status === "dismissed") return "dismissed";
+    if (status === "snoozed") return _reminderIsOverdue(reminder) ? "overdue" : "snoozed";
+    if (_reminderIsOverdue(reminder)) return "overdue";
+    if (_reminderIsDueToday(reminder)) return "today";
+    if (_reminderNextAt(reminder)) return "future";
+    return _reminderKind(reminder);
+}
+
+function _reminderDueLabel(reminder, includeExact = false) {
+    const status = reminder.status || "scheduled";
+    if (status === "fired") return reminder.fired_at ? `Fired ${_relativeTimeAgo(reminder.fired_at)}` : "Needs attention";
+    if (status === "dismissed") return reminder.fired_at ? `Dismissed after ${_fmtReminderTime(reminder.fired_at)}` : "Dismissed";
+    const nextAt = _reminderNextAt(reminder);
+    if (nextAt) {
+        const prefix = status === "snoozed" ? "Snoozed until " : "";
+        if (includeExact) return `${prefix}${_fmtReminderTime(nextAt)}`;
+        const date = new Date(nextAt);
+        if (Number.isNaN(date.getTime())) return `${prefix}${nextAt}`;
+        const relative = _relativeDate(nextAt);
+        const timeZone = _displayTimeZone();
+        const time = date.toLocaleTimeString("en-US", timeZone ? { hour: "numeric", minute: "2-digit", timeZone } : { hour: "numeric", minute: "2-digit" });
+        return `${prefix}${relative} ${time}`;
+    }
+    return _reminderTriggerDetail(reminder);
+}
+
+function _reminderKind(reminder) {
+    return reminder.trigger?.kind || (reminder.fire_at ? "time" : "time");
+}
+
+function _reminderTriggerKindLabel(kind) {
+    if (kind === "time") return "Time";
+    if (kind === "location_enter") return "Arrive";
+    if (kind === "location_leave") return "Leave";
+    if (kind === "event_offset") return "Event";
+    return _humanizeLabel(kind || "reminder");
+}
+
+function _reminderTriggerDetail(reminder) {
+    const trigger = reminder.trigger || {};
+    const kind = _reminderKind(reminder);
+    if (kind === "time") return trigger.fire_at ? _fmtReminderTime(trigger.fire_at) : "Time reminder";
+    if (kind === "location_enter" || kind === "location_leave") {
+        const label = _reminderLocationLabel(trigger.location);
+        return `${kind === "location_enter" ? "Arrive at" : "Leave"} ${label}`;
+    }
+    if (kind === "event_offset") {
+        const offset = Number(trigger.offset_minutes || 0);
+        const when = offset === 0 ? "At event time" : `${Math.abs(offset)} minutes ${offset < 0 ? "before" : "after"}`;
+        return trigger.event_id ? `${when} (${trigger.event_id})` : when;
+    }
+    return _reminderTriggerLabel(trigger) || "Reminder trigger";
+}
+
+function _reminderLocationLabel(location) {
+    if (!location || typeof location !== "object") return "location";
+    if (location.name || location.label) return location.name || location.label;
+    const lat = location.lat ?? location.latitude;
+    const lon = location.lon ?? location.lng ?? location.longitude;
+    if (lat !== undefined && lon !== undefined) return `${lat}, ${lon}`;
+    return "location";
+}
+
+function _reminderStatusPill(reminder) {
+    const status = reminder.status || "scheduled";
+    return `<span class="reminder-status reminder-status--${escapeHtml(status)}">${escapeHtml(_humanizeLabel(status))}</span>`;
+}
+
+function _memberRefSlug(value) {
+    return String(value || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
+function _reminderIsKnownMemberId(value) {
+    const slug = _memberRefSlug(value);
+    if (!slug) return false;
+    return _reminderMembers().some((member) => _memberRefSlug(member.id) === slug);
+}
+
+function _reminderCanonicalMemberId(value, fallbackId = "") {
+    const raw = String(value || "").trim();
+    if (!raw) return fallbackId;
+    const slug = _memberRefSlug(raw);
+    if (["user", "me", "self", "myself", "current_user", "current_member"].includes(slug)) {
+        return fallbackId || _currentMemberActorId();
+    }
+    const members = _reminderMembers();
+    const direct = members.find((member) =>
+        _memberRefSlug(member.id) === slug || _memberRefSlug(member.label) === slug
+    );
+    if (direct) return direct.id;
+    for (const [name, meta] of Object.entries(MEMBERS)) {
+        if (_memberRefSlug(name) === slug || _memberRefSlug(meta.key) === slug) {
+            const familyMember = (state.family?.members || []).find((member) => member.name === name);
+            return familyMember?.actor_id || meta.key || slug;
+        }
+    }
+    return raw;
+}
+
+function _reminderRecipientCanonical(reminder) {
+    const actorCanonical = _reminderCanonicalMemberId(reminder?.actor || "");
+    const fallback = _reminderIsKnownMemberId(actorCanonical) ? actorCanonical : _currentMemberActorId();
+    return _reminderCanonicalMemberId(reminder?.recipient || "", fallback);
+}
+
+function _reminderRecipientOptions(reminders, currentMember) {
+    const memberOptions = _reminderMembers();
+    const known = new Set(memberOptions.map((member) => member.id));
+    const extraRecipients = Array.from(new Set(reminders.map((reminder) => _reminderRecipientCanonical(reminder)).filter(Boolean).filter((recipient) => !known.has(recipient))));
+    const allOptions = [
+        { id: "__all__", label: "All reminders", initials: "All", color: "#2563eb" },
+        ...memberOptions,
+        ...extraRecipients.map((recipient) => {
+            const display = _actorDisplay(recipient);
+            return { id: recipient, label: display.name, initials: display.initials, color: display.color };
+        }),
+    ];
+    return allOptions.map((option) => {
+        const canonicalOption = option.id === "__all__" ? option.id : _reminderCanonicalMemberId(option.id);
+        const scoped = canonicalOption === "__all__" ? reminders : reminders.filter((reminder) => _reminderRecipientCanonical(reminder) === canonicalOption);
+        const label = canonicalOption === _reminderCanonicalMemberId(currentMember) ? `${option.label} (you)` : option.label;
+        return {
+            ...option,
+            id: canonicalOption,
+            label,
+            count: scoped.length,
+            activeCount: scoped.filter(_reminderIsActive).length,
+        };
+    });
+}
+
+function _reminderSelectedRecipientLabel(selectedRecipient) {
+    if (selectedRecipient === "__all__") return "All Reminders";
+    const display = _actorDisplay(_reminderCanonicalMemberId(selectedRecipient));
+    return `${display.name}'s Reminders`;
+}
+
+function _reminderMembers() {
+    const members = state.family?.members?.length ? state.family.members : _defaultFamily();
+    return members.map((member) => {
+        const name = member.name || member.actor_id || "Member";
+        const id = member.actor_id || name.toLowerCase().replace(/\s+/g, "_");
+        const display = _actorDisplay(id);
+        return {
+            id,
+            label: display.name || name,
+            initials: display.initials || _initials(name),
+            color: display.color || _memberColor(id),
+        };
+    });
+}
+
+function _reminderAccent(reminder) {
+    const status = reminder.status || "scheduled";
+    if (status === "fired") return "#e11d48";
+    if (status === "dismissed") return "#9ca3af";
+    if (status === "snoozed") return "#0891b2";
+    const canonicalRecipient = _reminderRecipientCanonical(reminder);
+    const memberColor = canonicalRecipient ? _actorDisplay(canonicalRecipient).color || _memberColor(canonicalRecipient) : "";
+    if (memberColor && memberColor !== "#9ca3af") return memberColor;
+    const kind = _reminderKind(reminder);
+    if (kind === "location_enter" || kind === "location_leave") return "#16a34a";
+    if (kind === "event_offset") return "#7c3aed";
+    return "#2563eb";
+}
+
+function _reminderUpdateDefaults(reminder) {
+    return {
+        reminder_id: _reminderId(reminder),
+        title: reminder.title || "",
+        message: reminder.message || "",
+        trigger: reminder.trigger || { kind: "time", fire_at: _reminderNextAt(reminder) || _isoMinutesFromNow(60) },
+    };
 }
 
 function _reminderKindIcon(kind) {
@@ -3359,8 +6039,10 @@ function _fmtReminderTime(dt) {
     if (isNaN(d)) return dt;
     const diff = d - new Date();
     if (Math.abs(diff) < 60_000) return "now";
-    if (diff > 0 && diff < 86_400_000) return `in ${Math.round(diff / 60_000)}m`;
-    return d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+    if (diff > 0 && diff < 86_400_000) return `in ${Math.max(1, Math.round(diff / 60_000))}m`;
+    const timeZone = _displayTimeZone();
+    const options = { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" };
+    return d.toLocaleString("en-US", timeZone ? { ...options, timeZone } : options);
 }
 
 // ----------------------------------------------------------------------------
@@ -3373,74 +6055,209 @@ function _renderChoresView(viewId, manifest, writeActions, listData) {
     const body = dom.viewBody[viewId];
     const actions = new Set((manifest.actions || []).map((action) => action.name));
 
-    const pending = items.filter((chore) => (chore.status || "pending") === "pending");
-    const done = items.filter((chore) => chore.status === "done");
-    const skipped = items.filter((chore) => chore.status === "skipped");
+    if (!CHORE_VIEW_MODES.includes(state.choresViewMode)) state.choresViewMode = "today";
+    if (!state.choresSelectedAssignee) state.choresSelectedAssignee = "__all__";
+    if (state.choresSelectedAssignee !== "__all__") state.choresSelectedAssignee = _choreCanonicalAssigneeId(state.choresSelectedAssignee);
+    if (!state.choresFilter) state.choresFilter = "pending";
+    if (state.choresSelectedKey && !items.some((chore) => _choreKey(chore) === state.choresSelectedKey)) {
+        state.choresSelectedKey = null;
+    }
+
+    const selectedAssignee = state.choresSelectedAssignee || "__all__";
+    const scopedItems = selectedAssignee === "__all__"
+        ? items
+        : items.filter((chore) => _choreAssigneeId(chore) === selectedAssignee);
+    const pending = scopedItems.filter((chore) => _choreStatus(chore) === "pending");
+    const visibleItems = _choreSort(_choreApplyFilters(scopedItems, state.choresFilter, state.choresSearchQuery));
+    if (state.choresSelectedKey && !scopedItems.some((chore) => _choreKey(chore) === state.choresSelectedKey)) {
+        state.choresSelectedKey = null;
+    }
+    const done = scopedItems.filter((chore) => _choreStatus(chore) === "done");
+    const skipped = scopedItems.filter((chore) => _choreStatus(chore) === "skipped");
+    const dueNow = pending.filter((chore) => _choreIsDueNow(chore));
+    const upcoming = pending.filter((chore) => !_choreIsDueNow(chore));
+    const overdue = pending.filter(_choreIsOverdue);
     const points = done.reduce((total, chore) => total + Number(chore.points_awarded || 0), 0);
-
-    const renderChore = (chore) => {
-        const occurrenceId = _idOf(chore, "occurrence_id");
-        const status = chore.status || "pending";
-        const assignee = chore.assigned_to || "";
-        const due = chore.due_at ? _relativeDate(chore.due_at) : null;
-        const canComplete = status === "pending" && actions.has("complete_chore") && occurrenceId;
-        const canSkip = status === "pending" && actions.has("skip_chore") && occurrenceId;
-        const canReopen = status !== "pending" && actions.has("reopen_chore") && occurrenceId;
-        return `
-            <div class="chore-card chore-card--${escapeHtml(status)}">
-                <div class="chore-card-top">
-                    <span class="chore-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18"/><path d="M6 7v14h12V7"/><path d="M9 7V4h6v3"/></svg></span>
-                    <span class="chore-reward">${Number(chore.points_awarded || chore.base_points || 0)} pts</span>
-                </div>
-                <p class="chore-title">${escapeHtml(chore.title || "Chore")}</p>
-                ${chore.description ? `<p class="chore-desc">${escapeHtml(String(chore.description).slice(0, 90))}</p>` : ""}
-                <div class="chore-meta">
-                    ${status ? `<span class="chore-recur">${escapeHtml(_humanizeLabel(status))}</span>` : ""}
-                    ${due ? `<span class="chore-recur">${escapeHtml(due)}</span>` : ""}
-                    ${assignee ? `<span class="chore-assignee" style="background:${_memberColor(assignee)}" title="${escapeHtml(assignee)}">${escapeHtml(assignee.slice(0, 2).toUpperCase())}</span>` : ""}
-                </div>
-                <div class="chore-actions">
-                    ${canComplete ? `<button class="view-action-btn" data-chore-action="complete_chore" data-occurrence-id="${escapeHtml(occurrenceId)}">Done</button>` : ""}
-                    ${canSkip ? `<button class="view-action-btn" data-chore-action="skip_chore" data-occurrence-id="${escapeHtml(occurrenceId)}">Skip</button>` : ""}
-                    ${canReopen ? `<button class="view-action-btn" data-chore-action="reopen_chore" data-occurrence-id="${escapeHtml(occurrenceId)}">Reopen</button>` : ""}
-                </div>
-            </div>`;
-    };
-
-    const renderColumn = (title, rows, empty) => `
-        <section class="chore-column">
-            <div class="chore-column-head"><h3>${escapeHtml(title)}</h3><span>${rows.length}</span></div>
-            <div class="chore-column-list">${rows.length ? rows.map(renderChore).join("") : `<p class="muted-empty">${escapeHtml(empty)}</p>`}</div>
-        </section>`;
+    const hasSearchQuery = String(state.choresSearchQuery || "").trim().length > 0;
+    const todayScopedItems = hasSearchQuery ? _choreSort(_choreApplyFilters(scopedItems, "all", state.choresSearchQuery)) : scopedItems;
+    const todayPending = todayScopedItems.filter((chore) => _choreStatus(chore) === "pending");
+    const todayDone = todayScopedItems.filter((chore) => _choreStatus(chore) === "done");
+    const todayDueNow = todayPending.filter((chore) => _choreIsDueNow(chore));
+    const todayUpcoming = todayPending.filter((chore) => !_choreIsDueNow(chore));
+    const recentDone = _choreSort(todayDone).slice(0, 4);
+    const todaySelectionItems = state.choresViewMode === "today" && (state.choresFilter || "pending") === "pending"
+        ? [...todayDueNow, ...todayUpcoming, ...recentDone]
+        : visibleItems;
+    if (state.choresSelectedKey && !todaySelectionItems.some((chore) => _choreKey(chore) === state.choresSelectedKey)) {
+        state.choresSelectedKey = null;
+    }
+    const selectedChore = state.choresSelectedKey
+        ? scopedItems.find((chore) => _choreKey(chore) === state.choresSelectedKey) || null
+        : null;
+    const assigneeBuckets = _choreAssigneeBuckets(items, summary);
+    const filterOptions = _choreFilterOptions(scopedItems);
+    const selectedBucket = assigneeBuckets.find((bucket) => bucket.id === selectedAssignee) || assigneeBuckets[0];
+    const selectedLabel = _choreSelectedAssigneeLabel(assigneeBuckets, selectedAssignee);
+    const nextChore = _choreSort(todayPending)[0] || null;
+    const rhythmCount = todayDueNow.length + todayUpcoming.length;
+    const todayDisplayedCount = (state.choresFilter || "pending") === "pending" ? todayDueNow.length + todayUpcoming.length + recentDone.length : visibleItems.length;
+    const displayedCount = state.choresViewMode === "today" ? todayDisplayedCount : visibleItems.length;
+    const signalPoints = todayDone.reduce((total, chore) => total + Number(chore.points_awarded || 0), 0);
+    const heroTitle = nextChore ? nextChore.title || "Next chore" : "Chores are clear today";
+    const heroCopy = nextChore
+        ? `${selectedLabel} has ${_countPhrase(rhythmCount, "open chore")}. ${_choreDueLabel(nextChore)}.`
+        : hasSearchQuery && !todayDone.length
+            ? `No chores match this search in ${selectedLabel}.`
+            : `${todayDone.length ? _countPhrase(todayDone.length, "finished chore") : "No chores"} in this scope and nothing calling for attention.`;
+    const heroPills = [
+        selectedLabel,
+        todayDueNow.length ? `${todayDueNow.length} due now` : "Nothing due now",
+        todayDone.length ? `${todayDone.length} done` : "No wins yet",
+    ];
+    const primarySignals = [
+        { key: "due_now", label: "Due now", count: todayDueNow.length, hint: todayDueNow.length ? "Needs doing" : "Clear" },
+        { key: "upcoming", label: "Upcoming", count: todayUpcoming.length, hint: todayUpcoming.length ? "Next rhythm" : "Nothing waiting" },
+        { key: "done", label: "Done", count: todayDone.length, hint: todayDone.length ? `${signalPoints} points` : "No wins yet" },
+    ];
+    const filtersExpanded = hasSearchQuery || (state.choresFilter || "pending") !== "pending";
 
     body.innerHTML = `
-        <div class="chore-stats">
-            <div class="chore-stat"><p class="chore-stat-label">Pending</p><p class="chore-stat-value">${pending.length}</p></div>
-            <div class="chore-stat"><p class="chore-stat-label">Done</p><p class="chore-stat-value chore-stat-value--green">${done.length}</p></div>
-            <div class="chore-stat"><p class="chore-stat-label">Skipped</p><p class="chore-stat-value chore-stat-value--orange">${skipped.length}</p></div>
-            <div class="chore-stat"><p class="chore-stat-label">Points</p><p class="chore-stat-value chore-stat-value--blue">${points}</p></div>
-        </div>
-        <div class="chores-layout">
-            <div class="chores-board">
-                ${renderColumn("To Do", pending, "No pending chores.")}
-                ${renderColumn("Done", done, "Nothing completed yet.")}
-                ${renderColumn("Skipped", skipped, "No skipped chores.")}
+        <div class="chore-shell">
+            <div class="chore-stage">
+                <article class="chore-hero${nextChore ? "" : " chore-hero--clear"}" style="--chore-accent:${nextChore ? _choreAccent(nextChore) : selectedBucket?.color || "var(--brand-blue)"}">
+                    <div>
+                        <p class="chore-side-kicker">Today in chores</p>
+                        <h3>${escapeHtml(heroTitle)}</h3>
+                        <p>${escapeHtml(heroCopy)}</p>
+                        <div class="chore-hero-pills">
+                            ${heroPills.map((pill) => `<span>${escapeHtml(pill)}</span>`).join("")}
+                        </div>
+                    </div>
+                    <div class="chore-hero-actions">
+                        ${nextChore ? `<button class="view-small-btn view-small-btn--primary" type="button" data-chore-select-key="${escapeHtml(_choreKey(nextChore))}">Details</button>` : ""}
+                        ${nextChore && _hasAction(manifest, "complete_chore") && _choreOccurrenceId(nextChore) ? `<button class="view-small-btn" type="button" data-chore-action="complete_chore" data-occurrence-id="${escapeHtml(_choreOccurrenceId(nextChore))}">Done</button>` : ""}
+                        ${actions.has("create_template") ? `<button class="view-small-btn" data-app-action="chores:create_template">New template</button>` : ""}
+                    </div>
+                </article>
+                <aside class="chore-rhythm-panel">
+                    <header>
+                        <p class="chore-side-kicker">Rhythm</p>
+                        <h3>${rhythmCount ? `${rhythmCount} still moving` : "All clear"}</h3>
+                    </header>
+                    <div class="chore-signal-grid">
+                        ${primarySignals.map((signal) => `
+                            <button class="chore-signal-card${state.choresFilter === signal.key ? " chore-signal-card--active" : ""}" type="button" data-chore-filter="${escapeHtml(signal.key)}">
+                                <span>${escapeHtml(signal.label)}</span>
+                                <strong>${signal.count}</strong>
+                                <small>${escapeHtml(signal.hint)}</small>
+                            </button>
+                        `).join("")}
+                    </div>
+                    <div class="chore-mode-card">
+                        <span>Mode</span>
+                        <div class="chore-view-switch" role="tablist" aria-label="Chores view">
+                            ${CHORE_VIEW_MODES.map((mode) => `
+                                <button class="chore-view-switch-btn${state.choresViewMode === mode ? " chore-view-switch-btn--active" : ""}" type="button" role="tab" aria-selected="${state.choresViewMode === mode ? "true" : "false"}" data-chore-view="${mode}">${escapeHtml(_humanizeLabel(mode))}</button>
+                            `).join("")}
+                        </div>
+                    </div>
+                </aside>
             </div>
-            <aside class="chore-summary">
-                <div class="chore-summary-head">
-                    <h3>Leaderboard</h3>
-                    ${actions.has("create_template") ? `<button class="view-small-btn" data-app-action="chores:create_template">New template</button>` : ""}
-                </div>
-                ${summary.length === 0
-                    ? `<p class="muted-empty">Chore points will appear here.</p>`
-                    : summary.sort((a, b) => Number(b.total_points || 0) - Number(a.total_points || 0)).map((row) => `
-                        <div class="chore-summary-row">
-                            <span>${escapeHtml(row.member_id || "Unassigned")}</span>
-                            <strong>${Number(row.total_points || 0)} pts</strong>
-                        </div>`).join("")}
-            </aside>
+            <div class="chore-workspace${selectedChore ? " chore-workspace--with-detail" : " chore-workspace--single"}">
+                <section class="chore-main chore-main--m7">
+                    <div class="chore-toolbar chore-toolbar--m7">
+                        <div>
+                            <p class="chore-side-kicker">Chore queue</p>
+                            <h3>${escapeHtml(selectedLabel)}</h3>
+                            <p>${displayedCount} shown - ${pending.length} pending${done.length ? ` - ${done.length} done` : ""}</p>
+                        </div>
+                        <div class="chore-toolbar-actions">
+                            <details class="chore-assignee-menu">
+                                <summary style="--chore-accent:${selectedBucket?.color || "var(--brand-blue)"}">
+                                    <span class="chore-person-avatar chore-person-avatar--mini" style="background:${selectedBucket?.color || "#2563eb"}">${escapeHtml(selectedBucket?.initials || "All")}</span>
+                                    <span>${escapeHtml(selectedLabel)}</span>
+                                    <strong>${selectedBucket?.pending ?? pending.length}</strong>
+                                </summary>
+                                <div class="chore-assignee-menu__panel">
+                                    <div class="chore-panel-head">
+                                        <div><h3>Assignees</h3><p>${pending.length} pending - ${points} points</p></div>
+                                        ${actions.has("create_template") ? `<button class="view-small-btn" data-app-action="chores:create_template">New</button>` : ""}
+                                    </div>
+                                    <div class="chore-person-list">
+                                        ${assigneeBuckets.map((bucket) => _renderChoreAssigneeTab(bucket, selectedAssignee)).join("")}
+                                    </div>
+                                </div>
+                            </details>
+                            ${actions.has("create_template") ? `<button class="view-small-btn view-small-btn--primary" data-app-action="chores:create_template">New template</button>` : ""}
+                        </div>
+                    </div>
+                    <div class="chore-filter-summary">
+                        <button class="chore-now-chip${state.choresFilter === "pending" ? " chore-now-chip--active" : ""}" type="button" data-chore-filter="pending">
+                            <span>Pending</span><strong>${pending.length}</strong>
+                        </button>
+                        <details class="chore-more-filters app-advanced-section"${filtersExpanded ? " open" : ""}>
+                            <summary><span>More filters</span><small>${escapeHtml(_choreFilterLabel(filterOptions, state.choresFilter))}</small></summary>
+                            <div class="app-advanced-section__body">
+                                <div class="chore-filter-row" role="tablist" aria-label="Chore filter">
+                                    ${filterOptions.map((filter) => `
+                                        <button class="chore-filter-chip${state.choresFilter === filter.key ? " chore-filter-chip--active" : ""}" type="button" data-chore-filter="${escapeHtml(filter.key)}">
+                                            <span>${escapeHtml(filter.label)}</span><strong>${filter.count}</strong>
+                                        </button>
+                                    `).join("")}
+                                </div>
+                                <label class="chore-search-wrap">
+                                    <span>Search</span>
+                                    <input class="chore-search" type="search" data-chore-search value="${escapeHtml(state.choresSearchQuery || "")}" placeholder="Title, person, status">
+                                </label>
+                            </div>
+                        </details>
+                    </div>
+                    ${_renderChoresSurface(visibleItems, scopedItems, summary, manifest, { dueNow: todayDueNow, upcoming: todayUpcoming, recentDone })}
+                </section>
+                ${selectedChore ? `<aside class="chore-inspector chore-detail-rail" id="chore-inspector">
+                    <button class="app-detail-drawer__close chore-detail-close" type="button" data-chore-close-detail aria-label="Close chore details">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
+                    ${_renderChoreDetail(selectedChore, manifest, scopedItems, summary)}
+                </aside>` : ""}
+            </div>
         </div>`;
 
+    body.querySelectorAll("[data-chore-assignee]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+            state.choresSelectedAssignee = btn.dataset.choreAssignee || "__all__";
+            state.choresSelectedKey = null;
+            _renderAdapterBody(viewId, "chores", manifest, writeActions, listData);
+        });
+    });
+    body.querySelectorAll("[data-chore-view]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+            state.choresViewMode = btn.dataset.choreView || "today";
+            _renderAdapterBody(viewId, "chores", manifest, writeActions, listData);
+        });
+    });
+    body.querySelectorAll("[data-chore-filter]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+            state.choresFilter = btn.dataset.choreFilter || "pending";
+            _renderAdapterBody(viewId, "chores", manifest, writeActions, listData);
+        });
+    });
+    const searchInput = body.querySelector("[data-chore-search]");
+    if (searchInput) {
+        searchInput.addEventListener("input", () => {
+            state.choresSearchQuery = searchInput.value;
+            const cursor = searchInput.selectionStart || state.choresSearchQuery.length;
+            window.clearTimeout(state._choresSearchTimer);
+            state._choresSearchTimer = window.setTimeout(() => {
+                _renderAdapterBody(viewId, "chores", manifest, writeActions, listData);
+                const nextInput = dom.viewBody[viewId]?.querySelector("[data-chore-search]");
+                if (nextInput) {
+                    nextInput.focus();
+                    nextInput.setSelectionRange(cursor, cursor);
+                }
+            }, 120);
+        });
+    }
     body.querySelectorAll("[data-chore-action]").forEach((btn) => {
         btn.addEventListener("click", async () => {
             const occurrenceId = btn.dataset.occurrenceId;
@@ -3449,6 +6266,460 @@ function _renderChoresView(viewId, manifest, writeActions, listData) {
             await _submitAdapterAction("chores", actionName, { occurrence_id: occurrenceId });
         });
     });
+    body.querySelectorAll("[data-chore-form-action]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+            const chore = items.find((candidate) => _choreKey(candidate) === btn.dataset.choreKey);
+            if (!chore) return;
+            const actionName = btn.dataset.choreFormAction;
+            if (actionName === "assign_chore") {
+                _openAdapterAction("chores", manifest, "assign_chore", _choreAssignDefaults(chore));
+            } else if (actionName === "update_template") {
+                _openAdapterAction("chores", manifest, "update_template", _choreTemplateDefaults(chore));
+            }
+        });
+    });
+    body.querySelectorAll("[data-chore-close-detail]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+            state.choresSelectedKey = null;
+            _renderAdapterBody(viewId, "chores", manifest, writeActions, listData);
+        });
+    });
+    body.querySelectorAll("[data-chore-select-key]").forEach((node) => {
+        node.addEventListener("click", (event) => {
+            if (event.target.closest("[data-chore-action], [data-chore-form-action]")) return;
+            state.choresSelectedKey = node.dataset.choreSelectKey;
+            _renderAdapterBody(viewId, "chores", manifest, writeActions, listData);
+        });
+        node.addEventListener("keydown", (event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            if (event.target.closest("[data-chore-action], [data-chore-form-action]")) return;
+            event.preventDefault();
+            state.choresSelectedKey = node.dataset.choreSelectKey;
+            _renderAdapterBody(viewId, "chores", manifest, writeActions, listData);
+        });
+    });
+}
+
+function _renderChoreAssigneeTab(bucket, selectedAssignee) {
+    const active = bucket.id === selectedAssignee;
+    return `
+        <button class="chore-person-tab${active ? " chore-person-tab--active" : ""}" type="button" data-chore-assignee="${escapeHtml(bucket.id)}" style="--chore-accent:${bucket.color}">
+            <span class="chore-person-avatar" style="background:${bucket.color}">${escapeHtml(bucket.initials)}</span>
+            <span class="chore-person-copy"><strong>${escapeHtml(bucket.label)}</strong><small>${bucket.pending} pending - ${bucket.points} pts</small></span>
+            <span class="chore-person-count">${bucket.total}</span>
+        </button>`;
+}
+
+function _renderChoresSurface(items, scopedItems, summary, manifest, todayData = {}) {
+    if (state.choresViewMode === "today") return _renderChoresToday(items, scopedItems, manifest, todayData);
+    if (state.choresViewMode === "list") return _renderChoresList(items, manifest);
+    if (state.choresViewMode === "rewards") return _renderChoresRewards(scopedItems, summary, manifest);
+    return _renderChoresBoard(items, manifest);
+}
+
+function _renderChoresToday(items, scopedItems, manifest, todayData = {}) {
+    const filter = state.choresFilter || "pending";
+    const dueNow = filter === "pending" ? (todayData.dueNow || []) : items.filter((chore) => _choreStatus(chore) === "pending" && _choreIsDueNow(chore));
+    const upcoming = filter === "pending" ? (todayData.upcoming || []) : items.filter((chore) => _choreStatus(chore) === "pending" && !_choreIsDueNow(chore));
+    const done = filter === "pending" ? (todayData.recentDone || []) : items.filter((chore) => _choreStatus(chore) === "done");
+    const skipped = filter === "skipped" ? items.filter((chore) => _choreStatus(chore) === "skipped") : [];
+    const lanes = [
+        { key: "due_now", label: "Due now", items: dueNow, empty: "Nothing due now" },
+        { key: "upcoming", label: "Upcoming", items: upcoming.slice(0, 6), empty: "No chores waiting" },
+        { key: "done", label: "Done recently", items: done.slice(0, 6), empty: "No wins yet" },
+        ...(skipped.length ? [{ key: "skipped", label: "Skipped", items: skipped, empty: "None" }] : []),
+    ];
+    if (!scopedItems.length) return `<div class="chore-empty">No chores in this scope yet.</div>`;
+    if (!lanes.some((lane) => lane.items.length)) return `<div class="chore-empty">${escapeHtml(_choreEmptyMessage())}</div>`;
+    return `
+        <div class="chore-today-grid">
+            ${lanes.map((lane) => `
+                <section class="chore-today-lane chore-today-lane--${escapeHtml(lane.key)}">
+                    <header><h4>${escapeHtml(lane.label)}</h4><span>${lane.items.length}</span></header>
+                    <div class="chore-lane-list">
+                        ${lane.items.length ? lane.items.map((chore) => _renderChoreRow(chore, manifest, { compact: lane.key !== "done" })).join("") : `<p class="chore-column-empty">${escapeHtml(lane.empty)}</p>`}
+                    </div>
+                </section>
+            `).join("")}
+        </div>`;
+}
+
+function _renderChoresBoard(items, manifest) {
+    const lanes = [
+        { key: "due_now", label: "Due Now", items: items.filter((chore) => _choreStatus(chore) === "pending" && _choreIsDueNow(chore)) },
+        { key: "upcoming", label: "Upcoming", items: items.filter((chore) => _choreStatus(chore) === "pending" && !_choreIsDueNow(chore)) },
+        { key: "done", label: "Done", items: items.filter((chore) => _choreStatus(chore) === "done") },
+        { key: "skipped", label: "Skipped", items: items.filter((chore) => _choreStatus(chore) === "skipped") },
+    ];
+    if (!items.length) return `<div class="chore-empty">${escapeHtml(_choreEmptyMessage())}</div>`;
+    return `
+        <div class="chore-board">
+            ${lanes.map((lane) => `
+                <section class="chore-lane chore-lane--${lane.key}">
+                    <header><h4>${escapeHtml(lane.label)}</h4><span>${lane.items.length}</span></header>
+                    <div class="chore-lane-list">
+                        ${lane.items.length ? lane.items.map((chore) => _renderChoreRow(chore, manifest, { compact: true })).join("") : `<p class="chore-column-empty">Clear</p>`}
+                    </div>
+                </section>
+            `).join("")}
+        </div>`;
+}
+
+function _renderChoresList(items, manifest) {
+    if (!items.length) return `<div class="chore-empty">${escapeHtml(_choreEmptyMessage())}</div>`;
+    const groups = _choreListGroups(items);
+    return `
+        <div class="chore-list-surface">
+            ${groups.map((group) => `
+                <section class="chore-list-group">
+                    <header><h4>${escapeHtml(group.label)}</h4><span>${group.items.length}</span></header>
+                    ${group.items.map((chore) => _renderChoreRow(chore, manifest)).join("")}
+                </section>
+            `).join("")}
+        </div>`;
+}
+
+function _renderChoresRewards(scopedItems, summary, manifest) {
+    const leaderboard = _choreLeaderboard(scopedItems, summary);
+    const completed = scopedItems.filter((chore) => _choreStatus(chore) === "done");
+    return `
+        <div class="chore-rewards-grid">
+            <section class="chore-rewards-panel chore-rewards-panel--leaderboard">
+                <header><h4>Leaderboard</h4><span>${leaderboard.length}</span></header>
+                ${leaderboard.length ? leaderboard.map((row, index) => {
+                    const display = _choreAssigneeDisplay(row.member_id);
+                    return `
+                        <div class="chore-leader-row" style="--chore-accent:${display.color}">
+                            <span class="chore-leader-rank">${index + 1}</span>
+                            <span class="chore-person-avatar" style="background:${display.color}">${escapeHtml(display.initials)}</span>
+                            <span class="chore-leader-copy"><strong>${escapeHtml(display.name)}</strong><small>${row.done || 0} done - ${row.pending || 0} pending</small></span>
+                            <strong>${Number(row.total_points || 0)} pts</strong>
+                        </div>`;
+                }).join("") : `<p class="chore-column-empty">No points yet</p>`}
+            </section>
+            <section class="chore-rewards-panel">
+                <header><h4>Recent Wins</h4><span>${completed.length}</span></header>
+                ${completed.length ? _choreSort(completed).slice(0, 8).map((chore) => _renderChoreRow(chore, manifest, { compact: true })).join("") : `<p class="chore-column-empty">No completed chores yet</p>`}
+            </section>
+        </div>`;
+}
+
+function _renderChoreRow(chore, manifest, options = {}) {
+    const occurrenceId = _choreOccurrenceId(chore);
+    const choreKey = _choreKey(chore);
+    const status = _choreStatus(chore);
+    const selected = state.choresSelectedKey === choreKey;
+    const assignee = _choreAssigneeDisplay(_choreAssigneeId(chore));
+    const points = Number(chore.points_awarded || chore.base_points || 0);
+    const canComplete = status === "pending" && _hasAction(manifest, "complete_chore") && occurrenceId;
+    const canSkip = status === "pending" && _hasAction(manifest, "skip_chore") && occurrenceId;
+    const canReopen = status !== "pending" && _hasAction(manifest, "reopen_chore") && occurrenceId;
+    const canAssign = _hasAction(manifest, "assign_chore") && chore.template_id;
+    const canEdit = _hasAction(manifest, "update_template") && chore.template_id;
+    return `
+        <div class="chore-row chore-row--${escapeHtml(status)}${selected ? " chore-row--selected" : ""}${options.compact ? " chore-row--compact" : ""}" role="button" tabindex="0" data-chore-select-key="${escapeHtml(choreKey)}" style="--chore-accent:${_choreAccent(chore)}">
+            <button class="chore-check" type="button" data-chore-action="complete_chore" data-occurrence-id="${escapeHtml(occurrenceId)}" ${canComplete ? "" : "disabled"} aria-label="Complete ${escapeHtml(chore.title || "chore")}">
+                ${status === "done" ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>` : ""}
+            </button>
+            <div class="chore-row-body">
+                <div class="chore-row-title-line">
+                    <p class="chore-row-title">${escapeHtml(chore.title || "Chore")}</p>
+                    ${_choreStatusPill(chore)}
+                </div>
+                <div class="chore-row-meta">
+                    <span><span class="chore-person-avatar chore-person-avatar--mini" style="background:${assignee.color}">${escapeHtml(assignee.initials)}</span>${escapeHtml(assignee.name)}</span>
+                    <span>${escapeHtml(_choreDueLabel(chore))}</span>
+                    <span class="chore-points-badge">${points} pts</span>
+                    ${chore.skip_reason ? `<span>${escapeHtml(chore.skip_reason)}</span>` : ""}
+                </div>
+            </div>
+            <div class="chore-row-actions">
+                ${canSkip ? `<button class="view-action-btn" type="button" data-chore-action="skip_chore" data-occurrence-id="${escapeHtml(occurrenceId)}">Skip</button>` : ""}
+                ${canReopen ? `<button class="view-action-btn" type="button" data-chore-action="reopen_chore" data-occurrence-id="${escapeHtml(occurrenceId)}">Reopen</button>` : ""}
+                ${canAssign ? `<button class="view-action-btn" type="button" data-chore-form-action="assign_chore" data-chore-key="${escapeHtml(choreKey)}">Assign</button>` : ""}
+                ${canEdit ? `<button class="view-action-btn" type="button" data-chore-form-action="update_template" data-chore-key="${escapeHtml(choreKey)}">Edit</button>` : ""}
+            </div>
+        </div>`;
+}
+
+function _renderChoreDetail(chore, manifest, scopedItems, summary) {
+    if (!chore) {
+        const pending = scopedItems.filter((item) => _choreStatus(item) === "pending").length;
+        const points = scopedItems.filter((item) => _choreStatus(item) === "done").reduce((total, item) => total + Number(item.points_awarded || 0), 0);
+        return `
+            <section class="chore-detail chore-detail--empty">
+                <p class="chore-side-kicker">Chore details</p>
+                <h3>No chore selected</h3>
+                <div class="chore-detail-mini-stats">
+                    <span><strong>${pending}</strong> pending</span>
+                    <span><strong>${points}</strong> points</span>
+                </div>
+            </section>`;
+    }
+    const occurrenceId = _choreOccurrenceId(chore);
+    const choreKey = _choreKey(chore);
+    const status = _choreStatus(chore);
+    const assignee = _choreAssigneeDisplay(_choreAssigneeId(chore));
+    const points = Number(chore.points_awarded || chore.base_points || 0);
+    const canComplete = status === "pending" && _hasAction(manifest, "complete_chore") && occurrenceId;
+    const canSkip = status === "pending" && _hasAction(manifest, "skip_chore") && occurrenceId;
+    const canReopen = status !== "pending" && _hasAction(manifest, "reopen_chore") && occurrenceId;
+    const canAssign = _hasAction(manifest, "assign_chore") && chore.template_id;
+    const canEdit = _hasAction(manifest, "update_template") && chore.template_id;
+    return `
+        <section class="chore-detail" style="--chore-accent:${_choreAccent(chore)}">
+            <header class="chore-detail-head">
+                <div>
+                    <p class="chore-side-kicker">${escapeHtml(status)}</p>
+                    <h3>${escapeHtml(chore.title || "Chore")}</h3>
+                </div>
+                ${_choreStatusPill(chore)}
+            </header>
+            <div class="chore-detail-assignee">
+                <span class="chore-person-avatar" style="background:${assignee.color}">${escapeHtml(assignee.initials)}</span>
+                <div><strong>${escapeHtml(assignee.name)}</strong><small>${escapeHtml(_choreDueLabel(chore))}</small></div>
+            </div>
+            <div class="chore-detail-meta">
+                <span><strong>Points</strong>${points}</span>
+                <span><strong>Status</strong>${escapeHtml(_humanizeLabel(status))}</span>
+                <span><strong>Template</strong>${escapeHtml(chore.template_title || chore.template_name || "Recurring chore")}</span>
+                <span><strong>Created By</strong>${escapeHtml(_choreActorDisplay(chore.actor || "system").name)}</span>
+                ${chore.completed_at ? `<span><strong>Completed</strong>${escapeHtml(_relativeTimeAgo(chore.completed_at))}</span>` : ""}
+                ${chore.completed_by ? `<span><strong>Completed By</strong>${escapeHtml(_choreActorDisplay(chore.completed_by).name)}</span>` : ""}
+                ${chore.skipped_at ? `<span><strong>Skipped</strong>${escapeHtml(_relativeTimeAgo(chore.skipped_at))}</span>` : ""}
+            </div>
+            ${chore.skip_reason ? `<p class="chore-detail-note">${escapeHtml(chore.skip_reason)}</p>` : ""}
+            <div class="chore-detail-actions">
+                ${canComplete ? `<button class="view-small-btn view-small-btn--primary" type="button" data-chore-action="complete_chore" data-occurrence-id="${escapeHtml(occurrenceId)}">Done</button>` : ""}
+                ${canSkip ? `<button class="view-small-btn" type="button" data-chore-action="skip_chore" data-occurrence-id="${escapeHtml(occurrenceId)}">Skip</button>` : ""}
+                ${canReopen ? `<button class="view-small-btn view-small-btn--primary" type="button" data-chore-action="reopen_chore" data-occurrence-id="${escapeHtml(occurrenceId)}">Reopen</button>` : ""}
+                ${canAssign ? `<button class="view-small-btn" type="button" data-chore-form-action="assign_chore" data-chore-key="${escapeHtml(choreKey)}">Assign</button>` : ""}
+                ${canEdit ? `<button class="view-small-btn" type="button" data-chore-form-action="update_template" data-chore-key="${escapeHtml(choreKey)}">Edit template</button>` : ""}
+            </div>
+        </section>`;
+}
+
+function _choreOccurrenceId(chore) {
+    return _idOf(chore, "occurrence_id");
+}
+
+function _choreKey(chore) {
+    return _choreOccurrenceId(chore) || [chore.title || "", chore.template_id || "", chore.due_at || ""].join("|");
+}
+
+function _choreStatus(chore) {
+    return chore.status || "pending";
+}
+
+function _choreAssigneeId(chore) {
+    return _choreCanonicalAssigneeId(chore.assigned_to);
+}
+
+function _choreCanonicalAssigneeId(value) {
+    if (!value) return "__unassigned__";
+    return _reminderCanonicalMemberId(value, "") || String(value);
+}
+
+function _choreAssigneeDisplay(memberId) {
+    if (!memberId || memberId === "__unassigned__") return { name: "Unassigned", initials: "U", color: "#94a3b8" };
+    return _actorDisplay(memberId);
+}
+
+function _choreActorDisplay(actorId) {
+    const raw = String(actorId || "").toLowerCase();
+    if (/concierge|system|kernel|adapter/.test(raw)) return { name: "Family", initials: "F", color: "#2563eb" };
+    return _actorDisplay(actorId);
+}
+
+function _choreAssigneeBuckets(items, summary) {
+    const map = new Map();
+    const ensure = (rawId) => {
+        const id = rawId === "__unassigned__" ? rawId : _choreCanonicalAssigneeId(rawId);
+        if (!map.has(id)) {
+            const display = _choreAssigneeDisplay(id);
+            map.set(id, { id, label: display.name, initials: display.initials, color: display.color, total: 0, pending: 0, points: 0 });
+        }
+        return map.get(id);
+    };
+    (state.family?.members || []).forEach((member) => ensure(member.actor_id || member.name));
+    items.forEach((chore) => {
+        const bucket = ensure(_choreAssigneeId(chore));
+        bucket.total += 1;
+        if (_choreStatus(chore) === "pending") bucket.pending += 1;
+        if (_choreStatus(chore) === "done") bucket.points += Number(chore.points_awarded || 0);
+    });
+    summary.forEach((row) => {
+        const bucket = ensure(row.member_id || "__unassigned__");
+        bucket.points = Math.max(bucket.points, Number(row.total_points || 0));
+        bucket.pending = Math.max(bucket.pending, Number(row.pending || 0));
+    });
+    const allPoints = Array.from(map.values()).reduce((total, bucket) => total + bucket.points, 0);
+    const allPending = items.filter((chore) => _choreStatus(chore) === "pending").length;
+    const all = { id: "__all__", label: "All chores", initials: "All", color: "#2563eb", total: items.length, pending: allPending, points: allPoints };
+    return [all, ...Array.from(map.values()).sort((a, b) => b.pending - a.pending || b.points - a.points || a.label.localeCompare(b.label))];
+}
+
+function _choreSelectedAssigneeLabel(buckets, selectedAssignee) {
+    return buckets.find((bucket) => bucket.id === selectedAssignee)?.label || "All chores";
+}
+
+function _choreApplyFilters(items, filter, query) {
+    const normalizedQuery = String(query || "").trim().toLowerCase();
+    return items.filter((chore) => {
+        const status = _choreStatus(chore);
+        if (filter === "pending" && status !== "pending") return false;
+        if (filter === "due_now" && (status !== "pending" || !_choreIsDueNow(chore))) return false;
+        if (filter === "upcoming" && (status !== "pending" || _choreIsDueNow(chore))) return false;
+        if (filter === "overdue" && !(_choreIsOverdue(chore) && status === "pending")) return false;
+        if (filter === "mine" && (status !== "pending" || _choreAssigneeId(chore) !== _currentMemberActorId())) return false;
+        if (filter === "done" && status !== "done") return false;
+        if (filter === "skipped" && status !== "skipped") return false;
+        if (!normalizedQuery) return true;
+        const assignee = _choreAssigneeDisplay(_choreAssigneeId(chore));
+        const haystack = [chore.title, chore.description, status, chore.due_at, chore.skip_reason, chore.template_id, assignee.name].join(" ").toLowerCase();
+        return haystack.includes(normalizedQuery);
+    });
+}
+
+function _choreFilterOptions(items) {
+    const pending = items.filter((chore) => _choreStatus(chore) === "pending");
+    return [
+        { key: "pending", label: "Pending", count: pending.length },
+        { key: "due_now", label: "Due Now", count: pending.filter(_choreIsDueNow).length },
+        { key: "upcoming", label: "Upcoming", count: pending.filter((chore) => !_choreIsDueNow(chore)).length },
+        { key: "overdue", label: "Overdue", count: pending.filter(_choreIsOverdue).length },
+        { key: "mine", label: "Mine", count: pending.filter((chore) => _choreAssigneeId(chore) === _currentMemberActorId()).length },
+        { key: "done", label: "Done", count: items.filter((chore) => _choreStatus(chore) === "done").length },
+        { key: "skipped", label: "Skipped", count: items.filter((chore) => _choreStatus(chore) === "skipped").length },
+        { key: "all", label: "All", count: items.length },
+    ];
+}
+
+function _choreFilterLabel(filterOptions, key) {
+    return filterOptions.find((filter) => filter.key === key)?.label || _humanizeLabel(key || "pending");
+}
+
+function _choreEmptyMessage() {
+    const filter = state.choresFilter || "pending";
+    if (filter === "pending") return "No pending chores in this scope.";
+    if (filter === "due_now") return "Nothing is due now.";
+    if (filter === "upcoming") return "No upcoming chores in this scope.";
+    if (filter === "overdue") return "No overdue chores.";
+    if (filter === "mine") return "No chores assigned to you here.";
+    if (filter === "done") return "No completed chores in this view.";
+    if (filter === "skipped") return "No skipped chores in this view.";
+    return "No chores match this view.";
+}
+
+function _choreListGroups(items) {
+    const groupOrder = ["overdue", "today", "upcoming", "unscheduled", "done", "skipped"];
+    const labels = { overdue: "Overdue", today: "Today", upcoming: "Upcoming", unscheduled: "Unscheduled", done: "Done", skipped: "Skipped" };
+    const groups = new Map(groupOrder.map((key) => [key, []]));
+    items.forEach((chore) => groups.get(_choreBucket(chore)).push(chore));
+    return groupOrder.map((key) => ({ key, label: labels[key], items: groups.get(key) })).filter((group) => group.items.length);
+}
+
+function _choreBucket(chore) {
+    const status = _choreStatus(chore);
+    if (status === "done") return "done";
+    if (status === "skipped") return "skipped";
+    if (_choreIsOverdue(chore)) return "overdue";
+    if (_choreIsDueToday(chore)) return "today";
+    return chore.due_at ? "upcoming" : "unscheduled";
+}
+
+function _choreLeaderboard(items, summary) {
+    const byMember = new Map();
+    const ensure = (memberId) => {
+        const id = memberId || "__unassigned__";
+        if (!byMember.has(id)) byMember.set(id, { member_id: id, pending: 0, done: 0, skipped: 0, total_points: 0 });
+        return byMember.get(id);
+    };
+    summary.forEach((row) => Object.assign(ensure(row.member_id), row));
+    items.forEach((chore) => {
+        const row = ensure(_choreAssigneeId(chore));
+        const status = _choreStatus(chore);
+        row[status] = Number(row[status] || 0) + 1;
+        if (status === "done") row.total_points = Number(row.total_points || 0) + Number(chore.points_awarded || 0);
+    });
+    return Array.from(byMember.values()).sort((a, b) => Number(b.total_points || 0) - Number(a.total_points || 0) || Number(b.done || 0) - Number(a.done || 0));
+}
+
+function _choreSort(items) {
+    return [...items].sort((first, second) => {
+        const firstStatus = CHORE_STATUS_ORDER[_choreStatus(first)] ?? 9;
+        const secondStatus = CHORE_STATUS_ORDER[_choreStatus(second)] ?? 9;
+        if (firstStatus !== secondStatus) return firstStatus - secondStatus;
+        const firstDue = _choreDueMs(first);
+        const secondDue = _choreDueMs(second);
+        if (firstDue !== secondDue) return firstDue - secondDue;
+        return String(first.title || "").localeCompare(String(second.title || ""));
+    });
+}
+
+function _choreDueMs(chore) {
+    const ms = chore.due_at ? Date.parse(chore.due_at) : NaN;
+    return Number.isFinite(ms) ? ms : Number.MAX_SAFE_INTEGER;
+}
+
+function _choreIsOverdue(chore) {
+    if (!chore.due_at || _choreStatus(chore) !== "pending") return false;
+    const due = new Date(chore.due_at);
+    if (Number.isNaN(due.getTime())) return false;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return due < today;
+}
+
+function _choreIsDueToday(chore) {
+    if (!chore.due_at || _choreStatus(chore) !== "pending") return false;
+    const due = new Date(chore.due_at);
+    if (Number.isNaN(due.getTime())) return false;
+    const today = new Date();
+    return due.getFullYear() === today.getFullYear() && due.getMonth() === today.getMonth() && due.getDate() === today.getDate();
+}
+
+function _choreIsDueNow(chore) {
+    return _choreIsOverdue(chore) || _choreIsDueToday(chore);
+}
+
+function _choreDueLabel(chore) {
+    if (_choreStatus(chore) === "done") return chore.completed_at ? `Done ${_relativeTimeAgo(chore.completed_at)}` : "Done";
+    if (_choreStatus(chore) === "skipped") return chore.skipped_at ? `Skipped ${_relativeTimeAgo(chore.skipped_at)}` : "Skipped";
+    if (!chore.due_at) return "No due date";
+    if (_choreIsOverdue(chore)) return `Overdue ${_relativeDate(chore.due_at)}`;
+    return _relativeDate(chore.due_at);
+}
+
+function _choreStatusPill(chore) {
+    const status = _choreStatus(chore);
+    const label = _choreIsOverdue(chore) ? "Overdue" : (CHORE_STATUS_META[status]?.label || _humanizeLabel(status));
+    return `<span class="chore-status chore-status--${escapeHtml(_choreIsOverdue(chore) ? "overdue" : status)}">${escapeHtml(label)}</span>`;
+}
+
+function _choreAccent(chore) {
+    if (_choreIsOverdue(chore)) return "#dc2626";
+    return CHORE_STATUS_META[_choreStatus(chore)]?.color || "#2563eb";
+}
+
+function _choreAssignDefaults(chore) {
+    return {
+        template_id: chore.template_id || "",
+        assigned_to: _choreAssigneeId(chore) === "__unassigned__" ? _currentMemberActorId() : _choreAssigneeId(chore),
+        due_at: chore.due_at || "",
+        points_awarded: Number(chore.points_awarded || 0),
+        visibility: chore.visibility || "family",
+    };
+}
+
+function _choreTemplateDefaults(chore) {
+    return {
+        template_id: chore.template_id || "",
+        title: chore.title || "",
+        assigned_to: _choreAssigneeId(chore) === "__unassigned__" ? "" : _choreAssigneeId(chore),
+        base_points: Number(chore.points_awarded || 0),
+        visibility: chore.visibility || "family",
+    };
 }
 
 function _shortRecurrence(rrule) {
@@ -3471,9 +6742,34 @@ function _renderSettingsView(viewId, manifest, writeActions, listData) {
     const keywords = Array.isArray(policy?.sensitive_keywords) ? policy.sensitive_keywords : [];
     const kidCaps = policy?.kid_capabilities || {};
     const canUpdatePolicy = _hasAction(manifest, "update_visibility_policy");
+    const canSetFlag = _hasAction(manifest, "set_feature_flag");
     const enabledFlagCount = flags.filter((flag) => Boolean(flag.enabled)).length;
     const customizedRules = SETTINGS_SOURCE_RULES.filter((source) => Object.prototype.hasOwnProperty.call(rules, source.key)).length;
     const customizedKidCaps = SETTINGS_KID_CAPABILITIES.filter((cap) => Object.prototype.hasOwnProperty.call(kidCaps, cap.key)).length;
+    const disabledKidCaps = SETTINGS_KID_CAPABILITIES.filter((cap) => Object.prototype.hasOwnProperty.call(kidCaps, cap.key) ? !Boolean(kidCaps[cap.key]) : !cap.defaultValue).length;
+    const guardedSources = SETTINGS_SOURCE_RULES.filter((source) => _settingsBandForSource(source, rules) !== "family").length;
+    if (state.settingsViewMode === "permissions") state.settingsViewMode = "kids";
+    if (!SETTINGS_VIEW_MODES.includes(state.settingsViewMode)) state.settingsViewMode = "overview";
+    if (state.settingsViewMode !== "features" && state.settingsSearchQuery) state.settingsSearchQuery = "";
+    const filteredFlags = _settingsFilteredFlags(flags, state.settingsSearchQuery);
+    const openKidCaps = SETTINGS_KID_CAPABILITIES.length - disabledKidCaps;
+    const privateSources = SETTINGS_SOURCE_RULES.filter((source) => _settingsBandForSource(source, rules) === "private").length;
+    const safetySignals = [
+        { key: "privacy", label: "Privacy posture", value: guardedSources, detail: guardedSources ? `${guardedSources} sources limited` : "Family-wide defaults" },
+        { key: "kids", label: "Kid permissions", value: disabledKidCaps, detail: disabledKidCaps ? `${disabledKidCaps} locks active` : "All kid actions open" },
+        { key: "sensitive", label: "Sensitive terms", value: keywords.length, detail: keywords.length ? "Adults-only language guarded" : "No terms configured" },
+        { key: "features", label: "Feature access", value: enabledFlagCount, detail: flags.length ? `${enabledFlagCount}/${flags.length} enabled` : "No flags configured" },
+    ];
+    const reviewItems = [
+        !policy ? "Policy document has not loaded" : null,
+        guardedSources === 0 ? "No source visibility limits are active" : null,
+        keywords.length === 0 ? "No sensitive terms are configured" : null,
+        disabledKidCaps === 0 ? "Kid permissions are fully open" : null,
+    ].filter(Boolean);
+    const safetyTitle = reviewItems.length ? "Safety settings need a look" : "Family safety is set";
+    const safetyCopy = reviewItems.length
+        ? `${reviewItems.length} area${reviewItems.length === 1 ? "" : "s"} may need a parent review before this feels locked in.`
+        : `${guardedSources} privacy source${guardedSources === 1 ? "" : "s"}, ${disabledKidCaps} kid lock${disabledKidCaps === 1 ? "" : "s"}, and ${keywords.length} sensitive term${keywords.length === 1 ? "" : "s"} are active.`;
 
     const bandOptions = (selected) => SETTINGS_VISIBILITY_BANDS.map((band) =>
         `<option value="${escapeHtml(band.value)}" ${selected === band.value ? "selected" : ""}>${escapeHtml(band.label)}</option>`
@@ -3481,15 +6777,17 @@ function _renderSettingsView(viewId, manifest, writeActions, listData) {
 
     const renderSourceRule = (source) => {
         const customized = Object.prototype.hasOwnProperty.call(rules, source.key);
-        const band = rules[source.key] || source.defaultBand;
+        const band = _settingsBandForSource(source, rules);
         return `
-            <div class="settings-source-row">
+            <div class="settings-source-row" style="--settings-accent:${_settingsBandColor(band)}">
+                <span class="settings-source-swatch"></span>
                 <div class="settings-source-copy">
                     <p class="settings-source-name">${escapeHtml(source.label)}</p>
                     <p class="settings-source-meta">${escapeHtml(source.meta)}</p>
                 </div>
                 <div class="settings-source-controls">
                     <span class="settings-pill ${customized ? "settings-pill--custom" : ""}">${customized ? "Custom" : "Default"}</span>
+                    <span class="settings-band settings-band--${escapeHtml(band)}">${escapeHtml(_settingsBandLabel(band))}</span>
                     <select class="settings-select" data-setting-rule="${escapeHtml(source.key)}" data-current-band="${escapeHtml(band)}" ${canUpdatePolicy ? "" : "disabled"}>
                         ${bandOptions(band)}
                     </select>
@@ -3501,10 +6799,13 @@ function _renderSettingsView(viewId, manifest, writeActions, listData) {
         const customized = Object.prototype.hasOwnProperty.call(kidCaps, cap.key);
         const enabled = customized ? Boolean(kidCaps[cap.key]) : cap.defaultValue;
         return `
-            <div class="settings-permission-row">
+            <div class="settings-permission-row${enabled ? "" : " settings-permission-row--locked"}">
                 <div class="settings-permission-copy">
-                    <p class="settings-permission-name">${escapeHtml(cap.label)}</p>
-                    <span class="settings-pill ${customized ? "settings-pill--custom" : ""}">${customized ? "Custom" : "Default"}</span>
+                    <p class="settings-permission-name">${enabled ? "" : `<span class="settings-lock-mark" aria-hidden="true"></span>`}${escapeHtml(cap.label)}</p>
+                    <div class="settings-permission-meta">
+                        <span class="settings-pill ${customized ? "settings-pill--custom" : ""}">${customized ? "Custom" : "Default"}</span>
+                        <span class="settings-capability-state">${enabled ? "Allowed" : "Blocked"}</span>
+                    </div>
                 </div>
                 <div class="toggle settings-capability-toggle${enabled ? " toggle--on" : ""}" data-kid-capability="${escapeHtml(cap.key)}" data-enabled="${enabled}" role="switch" aria-checked="${enabled}" tabindex="0" ${canUpdatePolicy ? "" : "aria-disabled=\"true\""}>
                     <div class="toggle-thumb"></div>
@@ -3515,85 +6816,119 @@ function _renderSettingsView(viewId, manifest, writeActions, listData) {
     const renderFlag = (flag) => {
         const name = flag.flag_name || flag.name || flag.id || "flag";
         const enabled = Boolean(flag.enabled);
-        const desc = flag.description || flag.scope || "";
+        const desc = flag.description || "";
+        const scope = flag.scope || "";
+        const descriptionText = desc ? `${desc}${scope ? ` - ${scope}` : ""}` : (scope || name);
         return `
-            <div class="flag-row">
+            <div class="flag-row${enabled ? " flag-row--enabled" : ""}">
                 <div class="flag-info">
                     <p class="flag-name">${escapeHtml(_humanizeLabel(name))}</p>
-                    ${desc ? `<p class="flag-desc">${escapeHtml(desc)}</p>` : ""}
+                    <p class="flag-desc">${escapeHtml(descriptionText)}</p>
                 </div>
-                <div class="toggle settings-flag-toggle${enabled ? " toggle--on" : ""}" data-flag="${escapeHtml(name)}" data-enabled="${enabled}" role="switch" aria-checked="${enabled}" tabindex="0">
+                <span class="settings-pill ${enabled ? "settings-pill--custom" : ""}">${enabled ? "On" : "Off"}</span>
+                <div class="toggle settings-flag-toggle${enabled ? " toggle--on" : ""}" data-flag="${escapeHtml(name)}" data-enabled="${enabled}" role="switch" aria-checked="${enabled}" tabindex="0" ${canSetFlag ? "" : "aria-disabled=\"true\""}>
                     <div class="toggle-thumb"></div>
                 </div>
             </div>`;
     };
 
+    const settingsContext = {
+        policy,
+        rules,
+        keywords,
+        kidCaps,
+        flags,
+        filteredFlags,
+        canUpdatePolicy,
+        canSetFlag,
+        renderSourceRule,
+        renderKidCapability,
+        renderFlag,
+        customizedRules,
+        customizedKidCaps,
+        enabledFlagCount,
+        guardedSources,
+        disabledKidCaps,
+        openKidCaps,
+        privateSources,
+        reviewItems,
+        safetySignals,
+    };
+
     body.innerHTML = `
-        <div class="settings-overview">
-            <div class="settings-stat"><span>Privacy Rules</span><strong>${customizedRules}/${SETTINGS_SOURCE_RULES.length}</strong></div>
-            <div class="settings-stat"><span>Sensitive Terms</span><strong>${keywords.length}</strong></div>
-            <div class="settings-stat"><span>Kid Permissions</span><strong>${customizedKidCaps}/${SETTINGS_KID_CAPABILITIES.length}</strong></div>
-            <div class="settings-stat"><span>Features On</span><strong>${enabledFlagCount}</strong></div>
-        </div>
-        <div class="settings-grid">
-            <section class="settings-section settings-section--wide">
-                <div class="settings-section-head">
+        <div class="settings-shell">
+            <div class="settings-safety-stage">
+                <section class="settings-safety-hero${reviewItems.length ? " settings-safety-hero--review" : ""}">
                     <div>
-                        <p class="settings-section-title">Family Privacy</p>
-                        <h3>Default visibility by source</h3>
+                        <p class="settings-side-kicker">Family safety overview</p>
+                        <h3>${escapeHtml(safetyTitle)}</h3>
+                        <p>${escapeHtml(safetyCopy)}</p>
                     </div>
-                    ${canUpdatePolicy ? `<button class="view-small-btn" data-app-action="family_settings:update_visibility_policy">Advanced</button>` : ""}
-                </div>
-                ${policy == null ? `<p class="muted-empty">No policy document visible.</p>` : `
-                    <div class="settings-source-list">
-                        ${SETTINGS_SOURCE_RULES.map(renderSourceRule).join("")}
-                    </div>`}
-            </section>
-
-            <section class="settings-section">
-                <div class="settings-section-head">
+                    <div class="settings-safety-metrics">
+                        <span><strong>${guardedSources}</strong> protected sources</span>
+                        <span><strong>${disabledKidCaps}</strong> kid locks</span>
+                        <span><strong>${keywords.length}</strong> sensitive terms</span>
+                    </div>
+                </section>
+                <aside class="settings-safety-panel">
+                    <div class="settings-policy-card settings-policy-card--m8">
+                        <p class="settings-section-title">Parent control</p>
+                        <h3>${policy ? `Policy v${escapeHtml(policy.version || 1)}` : "Default policy"}</h3>
+                        <span class="settings-band settings-band--private">Parent only</span>
+                    </div>
+                    <div class="settings-signal-grid">
+                        ${safetySignals.map((signal) => `
+                            <button class="settings-signal-card${state.settingsViewMode === signal.key ? " settings-signal-card--active" : ""}" type="button" data-settings-mode="${escapeHtml(signal.key)}">
+                                <span>${escapeHtml(signal.label)}</span>
+                                <strong>${signal.value}</strong>
+                                <small>${escapeHtml(signal.detail)}</small>
+                            </button>
+                        `).join("")}
+                    </div>
+                </aside>
+            </div>
+            <div class="settings-category-strip" role="tablist" aria-label="Settings category">
+                ${SETTINGS_VIEW_MODES.map((mode) => `
+                    <button class="settings-mode-btn${state.settingsViewMode === mode ? " settings-mode-btn--active" : ""}" type="button" role="tab" aria-selected="${state.settingsViewMode === mode ? "true" : "false"}" data-settings-mode="${mode}">
+                        <span>${escapeHtml(_settingsModeLabel(mode))}</span>
+                        <strong>${escapeHtml(_settingsModeCount(mode, settingsContext))}</strong>
+                    </button>
+                `).join("")}
+            </div>
+            <section class="settings-main settings-main--m8">
+                <div class="settings-toolbar settings-toolbar--m8">
                     <div>
-                        <p class="settings-section-title">Sensitive Information</p>
-                        <h3>Adults-only terms</h3>
+                        <p class="settings-side-kicker">${escapeHtml(_settingsModeLabel(state.settingsViewMode))}</p>
+                        <h3>${escapeHtml(_settingsModeTitle(state.settingsViewMode))}</h3>
+                        <p>${escapeHtml(_settingsModeSubtitle(state.settingsViewMode))}</p>
+                    </div>
+                    <div class="settings-toolbar-actions">
+                        ${state.settingsViewMode === "features" && canSetFlag ? `<button class="view-small-btn view-small-btn--primary" data-app-action="family_settings:set_feature_flag">New flag</button>` : ""}
                     </div>
                 </div>
-                <div class="settings-keywords">
-                    ${keywords.length === 0
-                        ? `<p class="muted-empty">No sensitive terms configured.</p>`
-                        : `<div class="settings-keyword-list">${keywords.map((kw) => `
-                            <span class="settings-keyword-chip">${escapeHtml(kw)}${canUpdatePolicy ? `<button type="button" data-keyword-remove="${escapeHtml(kw)}" aria-label="Remove ${escapeHtml(kw)}">&times;</button>` : ""}</span>`).join("")}</div>`}
-                    ${canUpdatePolicy ? `
-                        <div class="settings-keyword-add">
-                            <input type="text" class="settings-keyword-input" data-keyword-input placeholder="doctor, salary, therapy" aria-label="Add sensitive terms">
-                            <button type="button" class="view-small-btn" data-keyword-add>Add</button>
-                        </div>` : ""}
-                </div>
+                ${_renderSettingsSurface(state.settingsViewMode, settingsContext)}
             </section>
-
-            <section class="settings-section">
-                <div class="settings-section-head">
-                    <div>
-                        <p class="settings-section-title">Kid Permissions</p>
-                        <h3>Child capability gates</h3>
-                    </div>
+            <details class="settings-advanced-policy app-advanced-section"${state.settingsAdvancedOpen ? " open" : ""}>
+                <summary><span>Advanced policy details</span><small>Raw IDs, visibility counts, and admin update</small></summary>
+                <div class="app-advanced-section__body settings-advanced-policy__body">
+                    ${_renderSettingsInspector(settingsContext)}
+                    ${canUpdatePolicy ? `<div class="settings-admin-actions"><button class="view-small-btn" data-app-action="family_settings:update_visibility_policy">Update policy manually</button></div>` : ""}
                 </div>
-                <div class="settings-permission-list">
-                    ${SETTINGS_KID_CAPABILITIES.map(renderKidCapability).join("")}
-                </div>
-            </section>
-
-            <section class="settings-section settings-section--advanced">
-                <div class="settings-section-head">
-                    <div>
-                        <p class="settings-section-title">Features</p>
-                        <h3>Family feature flags</h3>
-                    </div>
-                    ${_hasAction(manifest, "set_feature_flag") ? `<button class="view-small-btn" data-app-action="family_settings:set_feature_flag">New flag</button>` : ""}
-                </div>
-                ${flags.length === 0 ? `<p class="muted-empty">No feature flags configured.</p>` : flags.map(renderFlag).join("")}
-            </section>
+            </details>
         </div>`;
 
+    body.querySelectorAll("[data-settings-mode]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+            state.settingsViewMode = btn.dataset.settingsMode || "overview";
+            _renderAdapterBody(viewId, "family_settings", manifest, writeActions, listData);
+        });
+    });
+    const advancedPolicy = body.querySelector(".settings-advanced-policy");
+    if (advancedPolicy) {
+        advancedPolicy.addEventListener("toggle", () => {
+            state.settingsAdvancedOpen = advancedPolicy.open;
+        });
+    }
     body.querySelectorAll("[data-setting-rule]").forEach((select) => {
         select.addEventListener("change", () => _setVisibilityRule(select));
     });
@@ -3629,6 +6964,235 @@ function _renderSettingsView(viewId, manifest, writeActions, listData) {
             }
         });
     });
+    const flagSearch = body.querySelector("[data-settings-search]");
+    if (flagSearch) {
+        flagSearch.addEventListener("input", () => {
+            state.settingsSearchQuery = flagSearch.value;
+            const cursor = flagSearch.selectionStart ?? state.settingsSearchQuery.length;
+            window.clearTimeout(state._settingsSearchTimer);
+            state._settingsSearchTimer = window.setTimeout(() => {
+                _renderAdapterBody(viewId, "family_settings", manifest, writeActions, listData);
+                const nextInput = dom.viewBody[viewId]?.querySelector("[data-settings-search]");
+                if (nextInput) {
+                    nextInput.focus();
+                    nextInput.setSelectionRange(cursor, cursor);
+                }
+            }, 120);
+        });
+    }
+}
+
+function _renderSettingsSurface(mode, ctx) {
+    if (mode === "overview") return _renderSettingsOverview(ctx);
+    if (mode === "kids") return _renderSettingsKids(ctx);
+    if (mode === "sensitive") return _renderSettingsSensitive(ctx);
+    if (mode === "features") return _renderSettingsFeatures(ctx);
+    return _renderSettingsPrivacy(ctx);
+}
+
+function _renderSettingsOverview({ rules, kidCaps, keywords, flags, guardedSources, disabledKidCaps, openKidCaps, privateSources, reviewItems, enabledFlagCount }) {
+    const limitedSources = SETTINGS_SOURCE_RULES.filter((source) => _settingsBandForSource(source, rules) !== "family");
+    const lockedCaps = SETTINGS_KID_CAPABILITIES.filter((cap) => Object.prototype.hasOwnProperty.call(kidCaps, cap.key) ? !Boolean(kidCaps[cap.key]) : !cap.defaultValue);
+    return `
+        <div class="settings-overview-surface">
+            <section class="settings-overview-card settings-overview-card--privacy">
+                <header>
+                    <div><p class="settings-section-title">Privacy</p><h4>${guardedSources ? "Visibility boundaries are active" : "Family-wide by default"}</h4></div>
+                    <button class="view-small-btn" type="button" data-settings-mode="privacy">Privacy</button>
+                </header>
+                <div class="settings-posture-list">
+                    ${limitedSources.length ? limitedSources.map((source) => {
+                        const band = _settingsBandForSource(source, rules);
+                        return `<div class="settings-posture-row" style="--settings-accent:${_settingsBandColor(band)}"><span></span><strong>${escapeHtml(source.label)}</strong><small>${escapeHtml(_settingsBandLabel(band))}</small></div>`;
+                    }).join("") : `<p class="settings-callout">No source is limited beyond family visibility.</p>`}
+                </div>
+            </section>
+            <section class="settings-overview-card settings-overview-card--kids">
+                <header>
+                    <div><p class="settings-section-title">Kid permissions</p><h4>${disabledKidCaps} locked, ${openKidCaps} allowed</h4></div>
+                    <button class="view-small-btn" type="button" data-settings-mode="kids">Kid permissions</button>
+                </header>
+                <div class="settings-mini-list">
+                    ${lockedCaps.length ? lockedCaps.slice(0, 4).map((cap) => `<span>${escapeHtml(cap.label)}</span>`).join("") : `<p class="settings-callout">No kid permission locks are active.</p>`}
+                </div>
+            </section>
+            <section class="settings-overview-card settings-overview-card--sensitive">
+                <header>
+                    <div><p class="settings-section-title">Sensitive terms</p><h4>${keywords.length ? `${keywords.length} adults-only terms` : "No terms configured"}</h4></div>
+                    <button class="view-small-btn" type="button" data-settings-mode="sensitive">Sensitive terms</button>
+                </header>
+                ${keywords.length ? `<div class="settings-keyword-preview">${keywords.slice(0, 8).map((kw) => `<span>${escapeHtml(kw)}</span>`).join("")}${keywords.length > 8 ? `<span>${keywords.length - 8} more</span>` : ""}</div>` : `<p class="settings-callout">Sensitive language is not listed yet.</p>`}
+            </section>
+            <section class="settings-overview-card settings-overview-card--features">
+                <header>
+                    <div><p class="settings-section-title">Feature access</p><h4>${flags.length ? `${enabledFlagCount}/${flags.length} enabled` : "No feature flags"}</h4></div>
+                    <button class="view-small-btn" type="button" data-settings-mode="features">Feature access</button>
+                </header>
+                <div class="settings-feature-meter" style="--feature-on:${flags.length ? Math.round((enabledFlagCount / flags.length) * 100) : 0}%"><span></span></div>
+                <p class="settings-feature-note">${privateSources ? `${privateSources} private source${privateSources === 1 ? "" : "s"} stay parent-only.` : "No source is marked parent-only."}</p>
+            </section>
+            ${reviewItems.length ? `<section class="settings-review-list"><p class="settings-section-title">Needs review</p>${reviewItems.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</section>` : ""}
+        </div>`;
+}
+
+function _renderSettingsPrivacy({ policy, renderSourceRule }) {
+    return `
+        <div class="settings-privacy-surface">
+            ${policy == null ? `<p class="settings-callout">No policy document visible.</p>` : ""}
+            <div class="settings-source-list">
+                ${SETTINGS_SOURCE_RULES.map(renderSourceRule).join("")}
+            </div>
+        </div>`;
+}
+
+function _renderSettingsSensitive({ keywords, canUpdatePolicy }) {
+    return `
+        <div class="settings-sensitive-surface">
+            <section class="settings-section settings-section--keywords">
+                <div class="settings-section-head">
+                    <div>
+                        <p class="settings-section-title">Sensitive Information</p>
+                        <h3>Adults-only terms</h3>
+                    </div>
+                </div>
+                <div class="settings-keywords">
+                    ${keywords.length === 0
+                        ? `<p class="settings-callout">No sensitive terms configured.</p>`
+                        : `<div class="settings-keyword-list">${keywords.map((kw) => `
+                            <span class="settings-keyword-chip">${escapeHtml(kw)}${canUpdatePolicy ? `<button type="button" data-keyword-remove="${escapeHtml(kw)}" aria-label="Remove ${escapeHtml(kw)}">&times;</button>` : ""}</span>`).join("")}</div>`}
+                    ${canUpdatePolicy ? `
+                        <div class="settings-keyword-add">
+                            <input type="text" class="settings-keyword-input" data-keyword-input placeholder="doctor, salary, therapy" aria-label="Add sensitive terms">
+                            <button type="button" class="view-small-btn" data-keyword-add>Add</button>
+                        </div>` : ""}
+                </div>
+            </section>
+        </div>`;
+}
+
+function _renderSettingsKids({ renderKidCapability }) {
+    return `
+        <div class="settings-kids-surface">
+            <section class="settings-section settings-section--capabilities">
+                <div class="settings-section-head">
+                    <div>
+                        <p class="settings-section-title">Kid Permissions</p>
+                        <h3>Child capability gates</h3>
+                    </div>
+                </div>
+                <div class="settings-permission-list">
+                    ${SETTINGS_KID_CAPABILITIES.map(renderKidCapability).join("")}
+                </div>
+            </section>
+        </div>`;
+}
+
+function _renderSettingsFeatures({ flags, filteredFlags, renderFlag }) {
+    return `
+        <div class="settings-features-surface">
+            <div class="settings-feature-tools">
+                <label class="settings-search-wrap">
+                    <span>Search</span>
+                    <input class="settings-search" type="search" data-settings-search value="${escapeHtml(state.settingsSearchQuery || "")}" placeholder="Flag, scope, description">
+                </label>
+            </div>
+            <div class="settings-flag-list">
+                ${flags.length === 0
+                    ? `<p class="settings-callout">No feature flags configured.</p>`
+                    : filteredFlags.length === 0
+                        ? `<p class="settings-callout">No flags match this search.</p>`
+                        : filteredFlags.map(renderFlag).join("")}
+            </div>
+        </div>`;
+}
+
+function _renderSettingsInspector({ policy, rules, keywords, kidCaps, flags, customizedRules, customizedKidCaps, enabledFlagCount, guardedSources }) {
+    const bandCounts = _settingsBandCounts(rules);
+    return `
+        <section class="settings-detail">
+            <p class="settings-side-kicker">Policy snapshot</p>
+            <h3>${policy ? "Active policy" : "Default policy"}</h3>
+            <div class="settings-detail-stats">
+                <span><strong>${guardedSources}</strong> guarded</span>
+                <span><strong>${customizedRules}</strong> custom rules</span>
+                <span><strong>${keywords.length}</strong> terms</span>
+                <span><strong>${enabledFlagCount}</strong> flags on</span>
+            </div>
+            <div class="settings-band-stack">
+                ${SETTINGS_VISIBILITY_BANDS.map((band) => `
+                    <div class="settings-band-row" style="--settings-accent:${_settingsBandColor(band.value)}">
+                        <span class="settings-source-swatch"></span>
+                        <span>${escapeHtml(band.label)}</span>
+                        <strong>${bandCounts[band.value] || 0}</strong>
+                    </div>
+                `).join("")}
+            </div>
+            <div class="settings-detail-meta">
+                <span><strong>Policy ID</strong>${escapeHtml(policy?.id || "seeded on first read")}</span>
+                <span><strong>Visibility</strong>${escapeHtml(policy?.visibility || "private")}</span>
+                <span><strong>Kid caps changed</strong>${customizedKidCaps}/${SETTINGS_KID_CAPABILITIES.length}</span>
+                <span><strong>Flags total</strong>${flags.length}</span>
+            </div>
+        </section>`;
+}
+
+function _settingsModeLabel(mode) {
+    if (mode === "overview") return "Overview";
+    if (mode === "kids") return "Kid permissions";
+    if (mode === "sensitive") return "Sensitive terms";
+    if (mode === "features") return "Feature access";
+    return "Privacy";
+}
+
+function _settingsModeTitle(mode) {
+    if (mode === "overview") return "Safety posture";
+    if (mode === "kids") return "Child capability gates";
+    if (mode === "sensitive") return "Adults-only terms";
+    if (mode === "features") return "Feature availability";
+    return "Source visibility";
+}
+
+function _settingsModeSubtitle(mode) {
+    if (mode === "overview") return "The parent view before policy mechanics.";
+    if (mode === "kids") return "What children can do without parent intervention.";
+    if (mode === "sensitive") return "Terms that should stay in adult-facing contexts.";
+    if (mode === "features") return "Feature switches by family space or member.";
+    return "Who can see each source of family information.";
+}
+
+function _settingsModeCount(mode, counts) {
+    if (mode === "overview") return counts.reviewItems.length ? `${counts.reviewItems.length}` : "OK";
+    if (mode === "kids") return `${counts.disabledKidCaps}`;
+    if (mode === "sensitive") return `${counts.keywords.length}`;
+    if (mode === "features") return `${counts.enabledFlagCount}/${counts.flags.length}`;
+    return `${counts.guardedSources}/${SETTINGS_SOURCE_RULES.length}`;
+}
+
+function _settingsFilteredFlags(flags, query) {
+    const normalizedQuery = String(query || "").trim().toLowerCase();
+    if (!normalizedQuery) return flags;
+    return flags.filter((flag) => [flag.flag_name, flag.name, flag.id, flag.description, flag.scope, flag.target_member_id]
+        .join(" ").toLowerCase().includes(normalizedQuery));
+}
+
+function _settingsBandForSource(source, rules) {
+    return rules[source.key] || source.defaultBand || "family";
+}
+
+function _settingsBandLabel(band) {
+    return SETTINGS_VISIBILITY_BANDS.find((item) => item.value === band)?.label || _humanizeLabel(band);
+}
+
+function _settingsBandColor(band) {
+    return SETTINGS_BAND_COLORS[band] || SETTINGS_BAND_COLORS.family;
+}
+
+function _settingsBandCounts(rules) {
+    return SETTINGS_SOURCE_RULES.reduce((counts, source) => {
+        const band = _settingsBandForSource(source, rules);
+        counts[band] = (counts[band] || 0) + 1;
+        return counts;
+    }, {});
 }
 
 function _settingsCurrentPolicy() {

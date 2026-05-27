@@ -3144,11 +3144,16 @@ cognitive writes through update_beliefs/update_scoreboard/update_narrative/etc.
 That is the exact behavior the offload plan must remove after the updater exists.
 ```
 
-### Future Prompt Iteration 1: Grounded Reorganization Before Full Grounding Service
+### Future Prompt Iteration 1: Grounded Reorganization Of Current Front Inputs
 
-Iteration 1 should not wait for every temporal/spatial/grounding milestone to be complete.
-It should reorganize the current real inputs into a coherent Front situation frame while
-preserving the existing runtime sources.
+M4.I6 update: do not create a second prompt version. Iteration 1 is the prompt
+shape to modify and eventually seat in runtime.
+
+Iteration 1 now starts from M4.I5 code truth. It reorganizes the current real
+Front inputs into a coherent situation frame while preserving the existing
+runtime sources: SelfModel/GroundingCapsule, GroundingProjection NOW/PLACE,
+SessionState read projections, OPP compressed context, OPP dynamic identity,
+scenario data, chat history, and Front read/action tools.
 
 Goal:
 
@@ -3172,11 +3177,15 @@ Iteration 1 injection map:
 | `ACTIVE ACTOR` | SelfModel `GroundingCapsule.self_block` / `SituationFrame.self_view` | Uses `actor_id`, `display_name`, `role`, `age_band`, `language`, `pronouns`, `communication_style`. |
 | `VISIBLE SPACE` | SelfModel `GroundingCapsule.space_graph_block` / `SituationFrame.relations` | Uses visible relations and projected others only. Never raw hidden actor state. |
 | `CONSCIENCE` | SelfModel `GroundingCapsule.conscience_block` / `SituationFrame.conscience` | Only authoritative refusal/confirmation source for Front. |
-| `CURRENT SITUATION` | Current `NOW`, `AFFECT STATE`, `DYNAMIC IDENTITY CONTEXT`, `REFERENCE PROFILE` | Before final grounding service, use existing rendered blocks but place them together. |
-| `CONVERSATION STATE` | SessionState projection from `beliefs_active`, `scoreboard`, `clarifications`, `narrative_active`, `history_active` | Render as compact working memory, not raw sections. |
-| `ACTIVE WORK` | SessionState projection from `control`, `task_state`, `task_artifacts` | Render only flow state, active/suspended/completed work, pending HIL, available artifacts. Hide budgets/schema/session internals. |
+| `NOW` | GroundingProjection rendered by `render_now_block`, with temporal fallback only when projection is absent | Current authoritative time/freshness. Never guess missing time. |
+| `PLACE` | GroundingProjection rendered by `render_place_block` | Current semantic place/device surface/freshness/redactions. Never reconstruct hidden raw coordinates. |
+| `AFFECT STATE` | Builder affect band/modifiers + SessionState `affective_now` | Tone, pacing, and support posture only; not task truth. |
+| `DYNAMIC IDENTITY CONTEXT` | OPP `identity_block` from `opp_pipeline.on_pre_prompt_build` | Front-only current identity overlay, appended after promoted live blocks. |
+| `REFERENCE PROFILE` | Remaining GroundingCapsule profile blocks after active actor/space/conscience promotion | Preferences, hobbies, goals, routines, context, freshness. Reference material, not a tool list. |
+| `CONVERSATION STATE` | `DynamicPromptBuilder` SS read configs over `history_active`, `beliefs_active`, `scoreboard`, `clarifications`, `narrative_active`; OPP compressed context can replace history | Render as compact working memory/read projection. Front consumes it but does not write it. |
+| `ACTIVE WORK` | SessionState read projection from `control`, `task_state`, `task_artifacts` | Render only flow state, active/suspended/completed work, pending HIL, available artifacts. Hide budgets/schema/session internals. |
 | `INTERACTION PROFILE` | SessionState `persona` + SelfModel safe style defaults | Uses warmth/formality/verbosity/humor/directness, voice/language, vocabulary, response prefs. |
-| `TOOLS` | Front tool declarations | Keep read/action tools. Cognitive write tools stay only until `SectionUpdateClassifier` is wired. |
+| `TOOLS` | Front tool declarations after prompt-mode allowlist filtering | Keep read/action tools. Hidden cognitive SessionState writes are owned by the background updater, not Front. |
 | `CURRENT EVENT` | current user turn + scenario data | User message, PRESENT/WEAVE/HITL/CANCEL/ERROR payloads. |
 
 Iteration 1 target prompt template:
@@ -3198,7 +3207,7 @@ Your job this turn:
 - Dispatch or invoke tools when the user asks for operational work or live state.
 - Present, weave, ask, clarify, wait, cancel, or modify active work when the
   situation calls for it.
-- Write no hidden cognitive state yourself once the SectionUpdateClassifier is active.
+- Do not call or request hidden cognitive SessionState writes; state maintenance happens outside Front after the completed turn.
 
 == FRONT SITUATION FRAME ==
 
@@ -3228,13 +3237,30 @@ tier_floor={{conscience.tier_floor}}
 rule: this is the authoritative refusal and explicit-confirmation source.
 rule: everything not forbidden or must_ask is allowed by default, subject to tool/capability truth.
 
-[current_situation]
-source=current prompt NOW + dynamic identity + reference profile until grounding service owns it
-now={{rendered_now}}
-situation_kind={{SituationFrame.situation_kind}}
-device_or_surface={{SituationFrame.transient.device_or_surface if available}}
-freshness={{SituationFrame.freshness}}
-current_event={{scenario_data.current_event}}
+[now]
+source=GroundingProjection rendered NOW block, with temporal fallback only when projection is absent
+rendered_now={{rendered_now}}
+freshness={{time_freshness}}
+redactions={{time_redactions}}
+
+[place]
+source=GroundingProjection rendered PLACE block
+rendered_place={{rendered_place}}
+device_or_surface={{device_or_surface}}
+freshness={{place_freshness}}
+redactions={{place_redactions}}
+
+[dynamic_identity_context]
+source=OPP identity_block
+identity_overlay={{dynamic_identity_context}}
+
+[reference_profile]
+source=GroundingCapsule profile blocks after active actor, visible space, and conscience promotion
+preferences={{preferences}}
+goals={{goals}}
+routines={{routines}}
+context={{context}}
+freshness={{profile_freshness}}
 
 [affective_posture]
 source=SessionState.affective_now
@@ -3258,7 +3284,7 @@ response_preferences={{persona.response_prefs}}
 rule: this controls presentation style only. It does not override identity, policy, task truth, or privacy.
 
 [conversation_state]
-source=SessionState prompt projection over history_active, beliefs_active, scoreboard, clarifications, narrative_active
+source=DynamicPromptBuilder SS_READ_CONFIGS over history_active, beliefs_active, scoreboard, clarifications, narrative_active; OPP compressed_context may replace history_active
 recent_history={{history_active.recent_turns_or_summary}}
 active_thread={{narrative_active.active_thread}}
 paused_threads={{narrative_active.paused_threads}}
@@ -3307,17 +3333,12 @@ Keep Front-facing:
 - discover_capabilities: find available live capabilities.
 - invoke_capability: direct safe capability invocation when already known or discovered.
 
-Temporary until SectionUpdateClassifier is wired:
-- update_beliefs
-- update_scoreboard
-- update_clarifications
-- update_narrative
-- promote_belief
-
-After SectionUpdateClassifier is wired:
-- Do not call cognitive write tools from Front.
-- The updater records beliefs, scoreboard, clarifications, narrative, affect, and commitment mutations.
-- Front still notices commitments and asks/presents naturally, but the updater writes the state.
+Hidden cognitive SessionState writes are not Front tools:
+- Do not call, request, or simulate hidden state writes from Front.
+- Do not mutate beliefs_active, scoreboard, clarifications, narrative_active, or affective_now.
+- Notice commitments, resolved references, clarification answers, durable facts, and affect naturally in the response.
+- The completed-turn updater records hidden cognitive state after the user-facing turn.
+- If state is stale or missing, ask, dispatch, answer with uncertainty, or proceed with reference_context. Do not invent state.
 
 == RESPONSE BEHAVIOR ==
 For greetings and pure banter: reply directly, one short natural line, no tools.
@@ -3333,8 +3354,10 @@ Output only user-facing text. No reasoning trace. No internal machinery.
 #### Iteration 1 Actual Prompt With Injection Seats
 
 This is the concrete Iteration 1 prompt shape. It is intentionally grounded in the
-current runtime prompt and current available sources. It does not assume the full
-`GroundingProjection(front)` path is complete yet.
+current runtime prompt and M4.I5 code trace. It uses the live prompt sources that
+already feed Front today: SelfModel/GroundingCapsule, GroundingProjection,
+SessionState read projections, OPP compressed context, OPP dynamic identity,
+scenario data, chat history, and prompt-mode tool filtering.
 
 Important assembly rule:
 
@@ -3373,6 +3396,7 @@ Your job this turn:
 - Continue the conversation naturally.
 - Dispatch, invoke, ask, present, weave, wait, cancel, or modify work when the situation calls for it.
 - Use memory only for durable/historical context, never as live system-of-record truth.
+- Do not call or request hidden cognitive SessionState writes; state maintenance happens outside Front after the completed turn.
 - Output only the user-facing message. No hidden reasoning or tool rationale in final text.
 
 
@@ -3449,25 +3473,76 @@ Rules:
 -- END INJECT: CONSCIENCE / POLICY --
 
 
--- INJECT: CURRENT SITUATION --
-source=existing NOW block + current dynamic identity context + current reference profile until full grounding service is canonical
+-- INJECT: NOW --
+source=GroundingProjection rendered by render_now_block; fallback temporal projection only when GroundingProjection is absent
 required fields:
   rendered_now
-  situation_kind
-  device_or_surface if available
+  timezone or timezone_source when available
   freshness
   redactions if available
 
-Right now it is {{rendered_now}}. The situation kind framing this turn is {{situation_kind}}, the user is reaching you through {{device_or_surface}}, and the freshness of this snapshot is {{freshness}}. Fields marked under {{redactions}} have been intentionally hidden and must not be reconstructed or guessed.
-
-Use this as your turn-level situation awareness. If a field is stale, missing, or redacted, do not invent a value from prior chat or model priors. Until the full grounding service is canonical, this block is assembled from the existing NOW, Dynamic Identity Context, and Reference Profile renderers.
+Right now it is {{rendered_now}}. The freshness of this time snapshot is {{freshness}}. Fields marked under {{redactions}} have been intentionally hidden and must not be reconstructed or guessed.
 
 Rules:
-- Use this for turn-level situation awareness.
-- If a field is stale, missing, or redacted, do not fill it from guesses.
-- Until full grounding ships, this block may be assembled from today's NOW, Dynamic Identity Context, and Reference Profile renderers.
+- Use this as the authoritative current time for this turn.
+- If time is stale, missing, or redacted, do not fill it from chat history or model priors.
+- If corrected about schedule or time details, accept the correction naturally.
 
--- END INJECT: CURRENT SITUATION --
+-- END INJECT: NOW --
+
+
+-- INJECT: PLACE --
+source=GroundingProjection rendered by render_place_block
+required fields:
+  semantic_place if available
+  device_or_surface if available
+  precision or accuracy band if available
+  freshness
+  redactions if available
+
+The current place/surface context is {{rendered_place}}. The user is reaching you through {{device_or_surface}}, with place freshness {{freshness}}. Fields marked under {{redactions}} have been intentionally hidden and must not be reconstructed or guessed.
+
+Rules:
+- Use this as the authoritative place/device context for this turn.
+- Never expose raw coordinates unless a rendered prompt block explicitly says they are safe.
+- If place is stale, missing, or redacted, ask or proceed with uncertainty instead of guessing.
+
+-- END INJECT: PLACE --
+
+
+-- INJECT: DYNAMIC IDENTITY CONTEXT --
+source=OPP identity_block from opp_pipeline.on_pre_prompt_build
+required fields:
+  rendered dynamic identity block when available
+
+Use {{dynamic_identity_context}} as a Front-only turn overlay for how identity, role, or current self-presentation should be interpreted in this conversation. It supplements the authoritative active actor and visible space blocks; it does not override conscience, privacy visibility, task truth, or live records.
+
+Rules:
+- Use this only for conversational calibration and identity continuity.
+- Do not expose it as diagnostics or internal state.
+- If absent, continue with the active actor, visible space, persona, and conversation state blocks.
+
+-- END INJECT: DYNAMIC IDENTITY CONTEXT --
+
+
+-- INJECT: REFERENCE PROFILE --
+source=GroundingCapsule profile blocks remaining after active actor, visible space, and conscience are promoted
+required fields:
+  preferences if available
+  hobbies if available
+  goals if available
+  routines if available
+  context if available
+  freshness if available
+
+Use {{reference_profile}} as lookup material for personalization and relevance: stored defaults, routines, goals, preferences, context, and freshness. This is a reference profile, not a tool allowlist and not live system-of-record truth.
+
+Rules:
+- Use profile facts to personalize and rank suggestions.
+- Treat stale profile facts with care and mention uncertainty when it matters.
+- Do not use reference profile to bypass conscience, visibility, task truth, or live records.
+
+-- END INJECT: REFERENCE PROFILE --
 
 
 -- INJECT: AFFECTIVE POSTURE --
@@ -3519,7 +3594,7 @@ Rules:
 
 
 -- INJECT: CONVERSATION STATE --
-source=FrontPromptContextProjection over SessionState history_active, beliefs_active, scoreboard, clarifications, narrative_active
+source=DynamicPromptBuilder SS_READ_CONFIGS over SessionState history_active, beliefs_active, scoreboard, clarifications, narrative_active; OPP compressed_context may replace history_active
 required fields:
   recent_history
   active_thread
@@ -3536,14 +3611,14 @@ The recent conversation so far is {{history_active.recent_turns_or_summary}}. Th
 
 The facts you can rely on with high confidence are {{beliefs_active.high_confidence_facts}}, while these are believed but uncertain and should be flagged or verified before acting on them: {{beliefs_active.medium_or_low_confidence_facts}}. There are open clarification gaps {{clarifications.open_gaps}} and outstanding commitments to {{self_view.display_name}}: {{scoreboard.open_commitments}}.
 
-Use this to continue the thread and resolve references naturally. If a commitment trigger appears in the user's current message, surface that commitment. If an open clarification is blocking, ask before dispatch; if it is non-blocking, proceed and mark the uncertainty in dispatch reference_context. Once the SectionUpdateClassifier is active, do not rewrite these sections from Front.
+Use this to continue the thread and resolve references naturally. If a commitment trigger appears in the user's current message, surface that commitment. If an open clarification is blocking, ask before dispatch; if it is non-blocking, proceed and mark the uncertainty in dispatch reference_context. Do not rewrite these sections from Front.
 
 Rules:
 - Use this to continue the thread and resolve references.
 - If a commitment trigger appears in the user message, surface the commitment naturally.
 - If an open clarification is blocking, ask before dispatch.
 - If a gap is non-blocking, proceed and mark uncertainty in dispatch reference_context.
-- Do not write these sections from Front after the SectionUpdateClassifier is active.
+- Do not write these sections from Front; the completed-turn updater owns hidden cognitive state mutation.
 
 -- END INJECT: CONVERSATION STATE --
 
@@ -3620,17 +3695,12 @@ Front-facing tools in Iteration 1:
 - discover_capabilities: find available capabilities for a user intent.
 - invoke_capability: direct safe capability call after discovery or when known.
 
-Temporary cognitive write tools until SectionUpdateClassifier is wired:
-- update_beliefs
-- update_scoreboard
-- update_clarifications
-- update_narrative
-- promote_belief
-
-Rules while temporary cognitive tools still exist:
-- Do not call them for greetings, salutation, lightweight banter, or obvious conversation flow.
-- If a cognitive write is truly needed before offload, batch it with other independent work.
-- Once SectionUpdateClassifier is active, remove these tools from Front and remove all instructions to call them.
+Hidden cognitive SessionState writes are not Front tools:
+- Do not call, request, or simulate hidden state writes from Front.
+- Do not mutate beliefs_active, scoreboard, clarifications, narrative_active, or affective_now.
+- Notice commitments, resolved references, clarification answers, durable facts, and affect naturally in the response.
+- The completed-turn updater records hidden cognitive state after the user-facing turn.
+- If state is stale or missing, ask, dispatch, answer with uncertainty, or proceed with reference_context. Do not invent state.
 
 
 == RESPONSE BEHAVIOR ==
@@ -3713,12 +3783,24 @@ CONSCIENCE / POLICY
   sits inside FRONT SITUATION FRAME before any behavior/tool rules
   injected from: SituationFrame.conscience or GroundingCapsule.conscience_block
 
-CURRENT SITUATION
+NOW
   sits inside FRONT SITUATION FRAME after policy
-  injected from: current NOW + Dynamic Identity Context + Reference Profile until full grounding service exists
+  injected from: GroundingProjection render_now_block, with temporal fallback only when projection is absent
+
+PLACE
+  sits inside FRONT SITUATION FRAME after NOW
+  injected from: GroundingProjection render_place_block
+
+DYNAMIC IDENTITY CONTEXT
+  sits inside FRONT SITUATION FRAME after PLACE
+  injected from: OPP identity_block
+
+REFERENCE PROFILE
+  sits inside FRONT SITUATION FRAME after dynamic identity
+  injected from: GroundingCapsule profile blocks after active actor, visible space, and conscience promotion
 
 AFFECTIVE POSTURE
-  sits inside FRONT SITUATION FRAME after current situation
+  sits inside FRONT SITUATION FRAME after reference profile
   injected from: SessionState.affective_now
 
 INTERACTION PROFILE
@@ -3743,7 +3825,7 @@ CURRENT EVENT
 
 TOOL CONTRACT
   sits after CURRENT EVENT
-  injected from: runtime Front tool declarations and prompt-mode allowlist
+  injected from: runtime Front read/action tool declarations and prompt-mode allowlist; hidden cognitive writes are explicitly excluded
 
 RESPONSE BEHAVIOR
   sits last
@@ -4690,67 +4772,103 @@ observability for applied/rejected classifier mutations
 Live API turn_complete as a normalized trigger source
 ```
 
-### Milestone 3: Activate Classifier And Prove It Works
+### Milestone 3: Prove Classifier Quality, Not Production Active Mode
 
 Epic issue:
 
 ```text
-M3 Epic: Run SectionUpdateClassifier in shadow mode, then active mode, with mutation-quality gates
+M3 Epic: Prove SectionUpdateClassifier mutation quality with provider-backed corpus gates
 ```
 
 Purpose:
 
 ```text
-Prove classifier mutation quality before removing Front cognitive tools.
+Prove the background classifier's semantic quality before it owns Front's hidden cognitive writes.
+This milestone is an evidence gate, not a separate production active-mode cutover.
+```
+
+Architecture correction:
+
+```text
+SectionUpdateClassifier is a background turn-boundary process.
+It is not a Front ReAct tool.
+It is not a Back agent.
+It is not part of user-visible response generation.
+It reads the completed turn record and SessionState snapshot, emits SectionUpdatePlan data,
+and the kernel applies accepted mutations through writer_port when the background lane is enabled.
+```
+
+Planning correction, 2026-05-26:
+
+```text
+Do not require a separate "active mode behind flag" proof before starting M4.
+That creates unnecessary ceremony and blocks the actual deloading work.
+
+M3 proves quality and guardrails.
+M4 integrates the background updater and removes Front cognitive write tools.
+M5 validates the integrated no-cognitive Front path and rollback.
 ```
 
 Issues:
 
 ```text
-M3.I1 Shadow mode against existing Front cognitive tool writes.
+M3.I1 Preserve shadow/manifest evidence surfaces.
   Files:
     k1/concierge/section_update/classifier.py
     k1/concierge/section_update/observability.py
     k1/sessionstate/adapters/direct_writer.py:L701 snapshot_turn_stats
   Work:
-    Run classifier plans without applying them while old Front cognitive tools still exist.
-    Compare classifier plan sections/operations against actual tool-written sections where possible.
+    Keep mutation manifests, rejected candidates, plan diagnostics, and operation-level comparison data.
+    Legacy Front cognitive operations are comparison telemetry only, not oracle truth.
   Acceptance:
-    Shadow output records plan, rejected candidates, confidence, and diff status.
+    Every provider run can be audited case-by-case from report JSON.
+    Report distinguishes golden comparison from legacy Front comparison.
 
-M3.I2 Add mutation manifest observability if turn stats are too coarse.
-  Problem:
-    Current writer turn stats summarize by section/rejection counts; they may not preserve operation-level diff detail.
+M3.I2 Prove the staged provider corpus.
   Work:
-    Add a lightweight per-turn mutation manifest for classifier evaluation only.
+    Maintain the 100-case staged corpus:
+      40 no-op/forbidden/ambiguous
+      35 belief/definition/correction
+      25 scoreboard/clarification/narrative/affect
+    Run provider-backed simulated-kernel proof with real ModelHub calls and 12s provider spacing.
+    Use the simulated-kernel harness to isolate classifier/provider quality from boot_web/FSM/browser failures.
   Acceptance:
-    Test can assert exact planned vs applied operations.
+    Full 100-case report is green before claiming M3 quality complete.
+    Provider failure degradation is zero or within explicit threshold.
+    Dangerous false writes are zero.
+    No-op precision and mutation precision satisfy the configured gate report.
 
-M3.I3 Golden classifier evaluation from the 47-case POC suite.
+M3.I3 Lock classifier prompt/schema/runner guardrails.
   Files:
-    poc/front_prompt_compare/additional_front_deloading_use_cases.json
-    poc/front_prompt_compare/compare_front_prompts.py
-    poc/section_update_classifier_poc.py
-    poc/section_update_classifier_cases.json
-    poc/section_update_classifier_runs/20260521_163606/summary.md
+    k1/concierge/section_update/prompt.py
+    scripts/m3_live_shadow_validation.py
+    tests/k1/concierge/section_update/test_classifier_stub.py
+    tests/k1/concierge/section_update/test_m3_live_shadow_validation_runner.py
   Work:
-    Convert current `classifier_stub` expectations into golden `SectionUpdatePlan` expectations.
-    Include the live classifier POC findings: batch multi-mutation is viable, per-section parallel is observed but not reliable enough for V0 contract, and invalid/no-output model responses must become safe no-op diagnostics.
+    Encode SessionState section semantics in the classifier prompt.
+    Keep strict writer-compatible tool schema.
+    Keep semantic sanitizer guards for runtime-owned live reads, unresolved placeholder writes,
+    local vs durable definitions, clarification id rules, duplicate paraphrase writes, affect routing, and topic/narrative boundaries.
   Acceptance:
-    Golden eval measures mutation quality, not assistant wording.
-    No-op precision on greeting/backchannel cases is a required gate.
-    Plans that mix no-op with mutations fail validation.
-    Plans that emit section-supported but MutationGuard-rejected operations fail compiler validation until guard/compiler reconciliation lands.
+    Targeted prompt/runner tests pass.
+    Schema-valid malformed/no-tool/provider-failure cases degrade to safe no-op diagnostics.
+    Duplicate or unsafe mutation candidates are rejected before any writer path.
 
-M3.I4 Active mode behind feature flag.
-  Flags:
-    K1_ENABLE_SECTION_UPDATE_CLASSIFIER=true
-    K1_SECTION_UPDATE_SHADOW_ONLY=false
+M3.I4 Freeze quality evidence and move forward.
+  Work:
+    Record report paths, run labels, metrics, operation distribution, and mismatch progression.
+    Do not reframe a focused repair subset as full corpus proof.
+    Latest full report: data/m3_section_update_shadow_validation_100_simulated_provider_contract_guard_v5_report.json, run_label=m3-sim100-contract-guard-v5-260526a, completed_turns=100/100, golden_pass_rate=0.97, dangerous_false_writes=3.
+    Latest focused repair report: data/m3_section_update_repair_subset_v6_report.json, run_label=m3-repair-subset-3-v6-260526a, completed_turns=3/3, golden_pass_rate=1.0, dangerous_false_writes=0.
   Acceptance:
-    Classifier writes through writer_port.
-    Front still has cognitive tools available until M4, but the flag proves classifier can own the write path.
+    Evidence doc says exactly which report passed and which report still needs rerun.
+    M4 may start once the current quality gate is understood; it does not wait for a separate active-mode proof wall.
+    Per 2026-05-26 direction, do not rerun the 100-case loop before moving forward; carry full-v5 residual risk into M5 tracker/cutover confidence.
+```
 
-M3.I5 Mutation-quality gates.
+Quality gates:
+
+```text
   Required gates:
     schema-valid plan rate
     no-op precision on greetings/backchannels
@@ -4761,22 +4879,19 @@ M3.I5 Mutation-quality gates.
     stale snapshot rejection
     idempotency duplicate-write prevention
     rejected mutation handling
-    commit-before-next-snapshot rate
-  Initial cutover thresholds:
+  Current corpus thresholds:
     schema-valid plan rate >= 99.5%
     no-op precision on greetings/backchannels >= 99%
     false-write rate <= 0.5%
     per-section operation precision >= 95%
     per-section operation recall >= 90%
-    commitment fulfillment/cancellation precision >= 85%
-    HITL_RESOLVE fact extraction precision >= 90%
-    stale snapshot rejection = 100% in targeted concurrency tests
-    duplicate writes from retry/idempotency tests = 0
-    commit-before-next-snapshot success >= 99% outside intentional timeout cases
+    duplicate candidate acceptance = 0 for known duplicate/paraphrase classes
+    provider failure degradation <= configured threshold
   Acceptance:
-    No Front behavior regressions in HITL_RELAY, PRESENT, WEAVE, STANDARD dispatch.
+    Golden eval measures mutation quality, not assistant wording.
+    Plans that mix no-op with mutations fail validation.
     Low-confidence plans are safe no-op and appear in shadow diagnostics for review.
-    Manual operator accept/reject APIs are not required for first cutover, but rejected/low-confidence records must be exportable as evaluation data.
+    Rejected/low-confidence records are exportable as evaluation data.
 ```
 
 Tests:
@@ -4784,8 +4899,9 @@ Tests:
 ```text
 New:
   tests/k1/concierge/section_update/test_shadow_mode.py
-  tests/k1/concierge/section_update/test_active_apply.py
   tests/k1/concierge/section_update/test_golden_mutation_eval.py
+  tests/k1/concierge/section_update/test_classifier_stub.py
+  tests/k1/concierge/section_update/test_m3_live_shadow_validation_runner.py
 
 Existing targeted:
   tests/k1/concierge/test_m04_e42_write_path.py
@@ -4794,7 +4910,8 @@ Existing targeted:
   tests/k1/concierge/test_front_weave_frame.py
 
 Run:
-  pytest tests/k1/concierge/section_update/test_shadow_mode.py tests/k1/concierge/section_update/test_active_apply.py tests/k1/concierge/section_update/test_golden_mutation_eval.py -v
+  pytest tests/k1/concierge/section_update/test_classifier_stub.py tests/k1/concierge/section_update/test_m3_live_shadow_validation_runner.py -q
+  pytest tests/k1/concierge/section_update/test_shadow_mode.py tests/k1/concierge/section_update/test_golden_mutation_eval.py -v
 ```
 
 Missed items included by this milestone:
@@ -4803,21 +4920,42 @@ Missed items included by this milestone:
 classifier evaluation must judge mutation quality, not final assistant phrasing
 numeric quality thresholds are required before cutover
 low-confidence/rejected plans must be exportable as evaluation data
-Front cognitive tools should not be removed until active mode passes gates
+Front cognitive tools should not be removed until the background updater integration plan begins in M4
+No separate active-mode-before-M4 proof wall
 ```
 
-### Milestone 4: Trace Temporal / SelfModel / SessionState And Formalize Prompt Iteration 1
+### Milestone 4: Integrate Background Updater And Deload Front
 
 Epic issue:
 
 ```text
-M4 Epic: Trace grounding sources, remove cognitive prompt instructions, and write the formal Front prompt modification contract
+M4 Epic: Wire the SectionUpdateClassifier as a background process and remove Front cognitive write ownership
 ```
 
 Purpose:
 
 ```text
-Once classifier is active and tests prove it, remove cognitive write tools from Front and formalize how future temporal/spatial/grounding changes enter the prompt.
+Start the actual deloading integration after M3 quality proof: the classifier runs in the background at the completed-turn boundary, while Front keeps conversation and action tools only.
+```
+
+Integration rule:
+
+```text
+The classifier is not attached to Front or Back.
+Front emits the user-visible response and dispatches work as before.
+Back executes task envelopes as before.
+The background section updater consumes the completed turn record and applies safe cognitive deltas through writer_port.
+Failure, timeout, low confidence, stale snapshot, or invalid payload becomes diagnostic no-op and does not break the user-visible turn.
+```
+
+Detailed construction spec:
+
+```text
+docs/plans/front_deloading_sequential_execution_plan.md is the floor-by-floor integration spec.
+M4 starts from the assumption that M3 foundation quality/guardrails are ready enough to integrate.
+M4 builds the kernel/session floor first, then Concierge turn feed, then writer apply, then Front deload.
+M5 tracks whether the integrated path is working turn by turn.
+M6 is steady-state cleanup after evidence, not a blocker before M4/M5 integration.
 ```
 
 Reality checkpoint:
@@ -4827,34 +4965,69 @@ k1/temporal is implemented.
 k1/selfmodel is implemented and wired through GroundingCapsule/SituationFrame.
 k1/grounding is skeleton only.
 k1/spatial is skeleton only.
+M4.I1/I2 first integration floor is implemented: SectionUpdateBackgroundWorker exists,
+KernelService has a default-off P5.5 worker slot, SessionInstance stores the worker,
+destroy_session stops it before MemoryWriter, and health_check exposes worker readiness when enabled.
 ```
 
 Issues:
 
 ```text
-M4.I1 Trace current prompt grounding source map.
+M4.I1 Wire the background section-update worker.
   Files:
-    k1/concierge/prompt/builder.py:L584 _render_temporal_context_full
-    k1/concierge/prompt/builder.py:L620 _render_temporal_context_slim
-    k1/concierge/prompt/builder.py:L648 SECTION_SOURCE_MAP
-    k1/concierge/prompt/builder.py:L1006-L1009 grounding capsule injection
-    k1/selfmodel/contracts/capsule.py:L31 GroundingCapsule
-    k1/selfmodel/contracts/situation.py:L125 SituationFrame
+    k1/kernel/service.py
+    k1/kernel/session.py
+    k1/concierge/fsm/controller.py
+    k1/concierge/bus/topics.py
+    k1/concierge/bus/builders.py
+    k1/concierge/section_update/input_builder.py
+    k1/concierge/section_update/classifier.py
+    k1/concierge/section_update/apply.py
+    k1/concierge/section_update/observability.py
+  Work:
+    Add a per-session worker at KernelService P5.5 after MemoryWriter start succeeds and before SessionInstance registration.
+    Store the worker on SessionInstance for health and teardown.
+    Subscribe on the session bus to k1.session.turn.completed.v1; do not subscribe on the kernel bus.
+    Reuse Concierge completed-turn payloads and build_section_update_input instead of adding a Front tool.
+    Keep the old synchronous active boundary as non-default compatibility or dispatch-critical overlay only.
+    Run as background continuity maintenance; do not block response.final or attach to Back.
   Acceptance:
-    Formal trace says what is live today and what is planned-only.
+    No Front ReAct tool exposes the classifier.
+    No Back code path calls the classifier.
+    KernelService lifecycle logs include the P5.5 worker start/stop when enabled.
+    Background no-op/failure diagnostics are visible in section-update observability.
+  Status 2026-05-26:
+    First worker skeleton landed in k1/concierge/section_update/worker.py.
+    Targeted validation passed: pytest tests/k1/concierge/section_update/test_background_worker.py -v => 3 passed.
+    Kernel lifecycle validation passed: pytest tests/k1/kernel/test_service.py -k "optional_fields_default_none or section_update_worker" -v => 2 passed, 437 deselected.
 
-M4.I2 Write formal Front prompt modification contract.
-  Proposed file:
-    docs/architecture/front_prompt_contract.md
-  Contract rules:
-    Identity, visible space, conscience, policy, spatial, and grounding signals must enter through GroundingCapsule/GroundingProjection path, not ad hoc prompt_parts append.
-    Current SessionState cognitive working memory enters through FrontPromptContextProjection.
-    Runtime task truth enters through control/task_state/task_artifacts projection.
-    Future spatial/grounding modules must feed projection contracts before prompt builder changes.
+M4.I2 Apply through writer_port with fail-closed background semantics.
+  Files:
+    k1/concierge/section_update/apply.py
+    k1/sessionstate/ports/writer.py
+    k1/sessionstate/adapters/direct_writer.py
   Acceptance:
-    Prompt changes have a source-of-truth map and precedence order.
+    Accepted mutations target only beliefs_active, scoreboard, clarifications, narrative_active, affective_now.
+    Invalid/stale/low-confidence/provider-failed plans do not write.
+    MutationGuard rejections are recorded and do not fail the turn.
+    Existing rollback flag can disable background apply and return to the old Front cognitive tool path during hardening.
+  Status 2026-05-26:
+    Background worker uses apply_section_update_plan(...) and writer_port only in background_apply mode.
+    Shadow/degraded modes publish diagnostics without writer calls.
 
-M4.I3 Remove Front cognitive tools from allowlist after classifier active gates pass.
+Current execution-plan M4.I3/I4 status 2026-05-26:
+  M4.I3 controller ownership correction landed.
+    ConciergeController worker-owned modes disabled|shadow|background_apply|degraded_noop no longer gate turn.completed.
+    Legacy active is only an alias for explicit sync_overlay compatibility.
+    turn.completed now carries prompt_mode and fsm_state for background worker input.
+    Validation: test_turn_completed_coordination.py => 6 passed; test_memory_writer_ordering.py => 3 passed; test_turn_input_builder.py => 4 passed.
+  M4.I4 fail-closed diagnostics landed.
+    Invalid classifier schema returns rejected/invalid_schema without writer_port calls.
+    Queue overflow emits queue_full degraded_noop diagnostics when turn input can be built.
+    requested/completed diagnostics now include provider_id/model_id.
+    Validation: test_background_worker.py => 5 passed; test_classifier_turn_boundary.py => 5 passed; test_plan_compiler.py + test_idempotency.py => 11 passed.
+
+M4.I3 Remove Front cognitive tools from allowlists.
   Files:
     k1/concierge/prompt/mode.py:L65 TOOL_ALLOWLIST
     k1/concierge/prompt/mode.py:L130 get_tool_allowlist
@@ -4874,22 +5047,45 @@ M4.I3 Remove Front cognitive tools from allowlist after classifier active gates 
   Acceptance:
     HITL_RELAY remains text-only.
     STANDARD keeps read/action tools but no cognitive writes.
+    Old cognitive tool definitions may remain as rollback/internal compatibility surfaces, but they are not Front-visible.
 
-M4.I4 Rewrite prompt sections in the same changeset as allowlist removal.
+M4.I4 Rewrite Front prompt sections in the same changeset as allowlist removal.
   Files:
     k1/concierge/prompt/sections.py:L379 COGNITIVE_DISCIPLINE
     k1/concierge/prompt/sections.py:L407 COGNITIVE_DISCIPLINE_REDUCED
     k1/concierge/prompt/sections.py:L769 COMMITMENT_TRACKING
     k1/concierge/prompt/sections.py:L839/L860/L883/L891/L906 MODE_SECTIONS seating
   Required:
-    Remove cognitive discipline sections from Front prompt modes.
-    Rewrite commitment tracking so Front surfaces/delivers commitments naturally but classifier records add/fulfill mutations.
+    Remove instructions telling Front to call cognitive write tools.
+    Rewrite commitment tracking so Front surfaces/delivers commitments naturally while the background updater records add/fulfill mutations.
     Rewrite REACT_RHYTHM text that tells Front to batch cognitive tools.
   Acceptance:
     Built prompt does not mention calling removed cognitive tools.
-    Commitment behavior remains visible, but state writes are classifier-owned.
+    Commitment behavior remains visible, but state writes are background-updater-owned.
 
-M4.I5 Update Front schemas only after allowlist tests pass.
+M4.I5 Trace current prompt grounding source map.
+  Files:
+    k1/concierge/prompt/builder.py:L584 _render_temporal_context_full
+    k1/concierge/prompt/builder.py:L620 _render_temporal_context_slim
+    k1/concierge/prompt/builder.py:L648 SECTION_SOURCE_MAP
+    k1/concierge/prompt/builder.py:L1006-L1009 grounding capsule injection
+    k1/selfmodel/contracts/capsule.py:L31 GroundingCapsule
+    k1/selfmodel/contracts/situation.py:L125 SituationFrame
+  Acceptance:
+    Formal trace says what is live today and what is planned-only.
+
+M4.I6 Write formal Front prompt modification contract.
+  Proposed file:
+    docs/architecture/front_prompt_contract.md
+  Contract rules:
+    Identity, visible space, conscience, policy, spatial, and grounding signals must enter through GroundingCapsule/GroundingProjection path, not ad hoc prompt_parts append.
+    Current SessionState cognitive working memory enters through FrontPromptContextProjection.
+    Runtime task truth enters through control/task_state/task_artifacts projection.
+    Future spatial/grounding modules must feed projection contracts before prompt builder changes.
+  Acceptance:
+    Prompt changes have a source-of-truth map and precedence order.
+
+M4.I7 Update Front schemas only after allowlist tests pass.
   File:
     k1/concierge/tools/schemas_front.py:L660 FRONT_TOOL_SCHEMAS
   Rule:
@@ -4899,7 +5095,7 @@ M4.I5 Update Front schemas only after allowlist tests pass.
     Classifier can still reuse internal operation types or schemas if needed.
     Rollback path remains possible.
 
-M4.I6 Implement Iteration 1 prompt from formal contract.
+M4.I8 Implement Iteration 1 prompt from formal contract.
   Files:
     k1/concierge/prompt/builder.py
     k1/concierge/prompt/sections.py
@@ -4933,29 +5129,36 @@ Missed items included by this milestone:
 COMMITMENT_TRACKING is a blocker because it currently instructs update_scoreboard calls
 grounding/spatial modules are skeleton-only and must not be assumed live
 prompt contract must prevent future ad hoc prompt injections
+classifier integration must be background turn-boundary work, not Front/Back attachment
 ```
 
-### Milestone 5: Final Tests, Live Validation, And Cutover
+### Milestone 5: Integrated Validation, Rollback, And Hardening
 
 Epic issue:
 
 ```text
-M5 Epic: Finalize Front deloading cutover with targeted tests, POC live validation, and rollback proof
+M5 Epic: Validate the integrated background-updater/no-cognitive-Front path with targeted tests and rollback proof
 ```
 
 Purpose:
 
 ```text
-Prove the full path: classifier active, Front cognitive tools removed, prompt Iteration 1 contract enforced, and no regression in core Concierge flows.
+Prove the practical system path: background updater maintains cognitive SessionState, Front cognitive write tools are removed from prompt/allowlist, Front/Back behavior stays intact, and rollback remains possible while hardening continues.
 ```
 
 Issues:
 
 ```text
 M5.I1 Run targeted classifier and prompt suites.
+  First produce a working-tracker report from turn.completed and section_update.completed:
+    per-session worker_running, queue_depth, last_turn_id_seen, last_turn_id_completed
+    requested/completed counts
+    applied/noop/degraded/provider_failed/timed_out/rejected/stale/duplicate/writer_failed counts
+    p50/p95 classifier and worker elapsed times
+    0 cognitive Front tool calls in deloaded mode
   Run:
     pytest tests/k1/concierge/section_update/test_plan_schema.py tests/k1/concierge/section_update/test_plan_compiler.py tests/k1/concierge/section_update/test_operation_vocabulary.py -v
-    pytest tests/k1/concierge/section_update/test_shadow_mode.py tests/k1/concierge/section_update/test_active_apply.py tests/k1/concierge/section_update/test_golden_mutation_eval.py -v
+    pytest tests/k1/concierge/section_update/test_shadow_mode.py tests/k1/concierge/section_update/test_golden_mutation_eval.py -v
     pytest tests/k1/concierge/prompt/test_mode_allowlist_deloaded.py tests/k1/concierge/prompt/test_builder_deloaded.py tests/k1/concierge/react/test_front_no_cognitive_tool_calls.py -v
 
 M5.I2 Run targeted existing regression tests touched by the migration.
@@ -4987,15 +5190,22 @@ M5.I4 Rerun POC dry and selected live cases.
   Acceptance:
     0 cognitive tool calls in no-cognitive path.
     0 classifier operation misses in dry metadata validation.
-    M3.I5 numeric thresholds pass on the selected golden set or are explicitly waived with a reason.
+    M3 numeric thresholds pass on the selected golden set or are explicitly waived with a reason.
     Previously failed response wording cases are either fixed or explicitly waived as prompt behavior, not classifier failure.
 
 M5.I5 Rollback proof.
   Work:
-    Turn off classifier and Front deload flags.
-    Verify old prompt/tool path still works until final deletion milestone.
+    Turn off background updater and Front deload flags.
+    Verify old prompt/tool path can still be restored until final deletion milestone.
   Acceptance:
-    Operational fallback exists while classifier is being hardened.
+    Operational fallback exists while the background updater is being hardened.
+
+M5.I6 Full-corpus background confidence check.
+  Work:
+    Rerun the 100-case provider corpus after integrated prompt/tool deload changes if classifier prompt/schema changed.
+  Acceptance:
+    Integration did not regress classifier quality.
+    If only Front prompt/allowlist changed and classifier prompt/schema did not, record why the existing M3 corpus remains valid.
 ```
 
 Test discipline:
@@ -5005,13 +5215,61 @@ Do not run the full kernel suite for this plan.
 Run only the targeted tests listed in the issue being implemented plus direct touched-file regression.
 ```
 
+### Milestone 6: Steady-State Cutover And Cleanup
+
+Epic issue:
+
+```text
+M6 Epic: Move the integrated background-updater path from migration mode to steady state after M5 evidence
+```
+
+Purpose:
+
+```text
+Cleanup only after the background updater has evidence. M6 is not required before M4/M5 integration and can be deferred when rollback evidence or deployment stability is not enough.
+```
+
+Issues:
+
+```text
+M6.I1 Define stability and rollback-removal criteria.
+  Acceptance:
+    100 integrated validation turns with 0 dangerous false writes, or an explicit staging/deployment window with 0 rollback invocations and 0 unsafe writer calls, or cleanup is deferred.
+
+M6.I2 Remove obsolete Front cognitive schema/implementation surfaces only after gates.
+  Candidate files:
+    k1/concierge/tools/schemas_front.py
+    k1/concierge/tools/implementations.py
+    k1/concierge/tools/parallelism.py
+    k1/concierge/protocols/hitl_wiring.py
+  Keep until audited:
+    update_session_bundle
+    section_update classifier schemas
+    MutationGuard vocabulary
+    shadow/diagnostic event builders
+
+M6.I3 Collapse migration flags to steady-state controls.
+  Rule:
+    Keep model/provider/shadow/degraded diagnostics knobs.
+    Remove or default-on Front deload migration flags only after rollback-removal criteria pass.
+
+M6.I4 Lock docs/runbooks/evidence.
+  Required docs:
+    docs/architecture/front_prompt_contract.md
+    docs/architecture/front_prompt_grounding_sources.md
+    docs/runbooks/section_update_background_worker.md
+
+M6.I5 Keep targeted validation discipline.
+  Run only tests for worker lifecycle, prompt/tool visibility, schema cleanup, rollback/deferral, and touched files.
+```
+
 ### Final Cutover Criteria
 
 The system is ready to declare Front cognitive deloading complete only when all are true:
 
 ```text
 1. SectionUpdateClassifier emits schema-valid plans or safe no-op for every tested turn.
-2. Active mode writes only the five cognitive sections through writer_port.
+2. Background section updater writes only the five cognitive sections through writer_port.
 3. MutationGuard rejects are logged and do not fail user-visible turns.
 4. No Front prompt mode exposes update_beliefs/update_scoreboard/update_clarifications/update_narrative/refine_affect/promote_belief.
 5. Front prompt text no longer instructs the model to call removed cognitive tools.
@@ -5022,8 +5280,9 @@ The system is ready to declare Front cognitive deloading complete only when all 
 10. Temporal/SelfModel prompt sources are traced, and future spatial/grounding changes have a formal contract.
 11. Snapshot freshness, idempotency, and duplicate retry behavior are tested.
 12. Dispatch-critical overlay/gating is tested against Back's snapshot-at-start behavior.
-13. M3.I5 numeric classifier quality thresholds pass or have explicit signed waivers.
+13. M3 numeric classifier quality thresholds pass on the full corpus or have explicit signed waivers.
 14. Rollback flags can restore the previous Front cognitive tool path during hardening.
+15. The classifier remains a background turn-boundary process, not a Front or Back attachment.
 ```
 
 ### Explicit Non-Goals For This Plan
@@ -5049,18 +5308,20 @@ MemoryWriter seams. No code was changed during this exploration.
 
 ### Summary Judgment
 
-The direction in this whiteboard is correct, but the cutover must be staged.
-Do not start by removing cognitive tools from Front.
+The direction in this whiteboard is correct, but the old post-M3 plan was too ceremonial.
+Do not create a separate active-mode proof wall before starting Front deloading.
+The classifier is a background turn-boundary updater, not a Front or Back attachment.
 
 The safe implementation order is:
 
 ```text
 1. Build SectionUpdateClassifier as a typed, batch-first planner.
 2. Compile plans to BatchRequest through writer_port, never direct section writes.
-3. Run shadow mode beside current Front cognitive writes.
-4. Add active mode behind feature flags.
-5. Only then remove cognitive write tools from Front allowlists and prompt instructions.
-6. Later reorganize the Front prompt into the coherent situation-frame shape.
+3. Prove classifier quality with shadow/simulated-kernel provider corpus gates.
+4. Wire the classifier as a background completed-turn process with fail-closed writer_port apply.
+5. Remove cognitive write tools from Front allowlists and prompt instructions.
+6. Reorganize the Front prompt into the coherent situation-frame shape.
+7. Validate targeted Front/Back/HITL/PRESENT/WEAVE behavior and rollback.
 ```
 
 The conceptual split remains:
@@ -5386,24 +5647,32 @@ FrontLock can immediately drain a queued user input and call `_on_user_input`
 for the next turn. If the classifier is only an async subscriber, the next
 Front prompt may read SessionState before classifier writes land.
 
-Active-mode invariant:
+Background-updater invariant:
 
 ```text
-Classifier commit must finish, or explicitly time out, before the next turn's
-SS_READ_CONFIGS snapshot is built.
+Classifier writes are best-effort continuity maintenance after the completed turn.
+If the provider, schema, snapshot, guard, or writer path fails, the updater emits diagnostic no-op.
+The user-visible turn does not fail.
 ```
 
-Recommended mode split:
+Recommended mode split after the M3 plan correction:
 
 ```text
 shadow mode:
-  subscribe to turn.completed
+  consume completed-turn records
   produce plans/diagnostics
   do not block FrontLock or MemoryWriter
 
-active mode:
-  add an explicit section-update barrier before next turn snapshot
-  or gate final turn completion/front-lock drain until classifier completes or times out
+background apply mode:
+  consume completed-turn records
+  validate plan and snapshot freshness
+  apply accepted cognitive mutations through writer_port
+  no-op on failure/stale/low-confidence/invalid payload
+  remain outside Front ReAct and outside Back
+
+dispatch-critical overlay/gate:
+  separate exceptional path only when same-turn dispatch correctness requires it
+  not a prerequisite for normal Front deloading
 ```
 
 #### 3. MemoryWriter Ordering
@@ -5415,7 +5684,7 @@ Because MemoryWriter batches by threshold/idle/session-end, the race is less
 urgent than Front next-turn continuity, but the contract still needs to be
 explicit.
 
-Recommended stance:
+Recommended stance after the plan correction:
 
 ```text
 shadow mode:
@@ -5423,9 +5692,10 @@ shadow mode:
   classifier publishes section_update.completed diagnostics separately
   MemoryWriter continues existing buffered behavior
 
-active mode:
-  either turn.completed waits for section-update completion/timeout
-  or MemoryWriter consumes a later section_update.completed signal for enriched snapshots
+background apply mode:
+  turn.completed can remain the normal lifecycle event
+  section_update.completed carries updater diagnostics and applied/rejected counts
+  MemoryWriter ordering should be documented, not turned into a global blocker for M4
 ```
 
 Do not leave this implicit. Otherwise durable memory extraction may observe
@@ -5582,7 +5852,7 @@ session.py / factory.py / config:
   service construction, lifecycle, feature flags, model settings
 ```
 
-Front and prompt deload after active gates:
+Front and prompt deload after M3 quality proof and during M4 background integration:
 
 ```text
 k1/concierge/actors/front.py
@@ -5601,7 +5871,7 @@ front.py:
   possibly pass TurnStateOverlay into prompt build in exceptional sync mode
 
 mode.py:
-  remove cognitive write tools from Front allowlists only after active classifier gates pass
+  remove cognitive write tools from Front allowlists when background updater integration starts
 
 sections.py:
   remove/rewrite cognitive tool instructions and commitment write instructions
@@ -5708,20 +5978,21 @@ First slice:
 Second slice:
 
 ```text
-1. Add active apply behind feature flags.
-2. Add commit-before-next-snapshot coordination.
-3. Prove safe no-op on model/provider failure.
-4. Prove HITL_RELAY produces no cognitive writes.
-5. Prove greeting/backchannel no-op precision.
+1. Prove safe no-op on model/provider failure.
+2. Prove HITL_RELAY produces no cognitive writes.
+3. Prove greeting/backchannel no-op precision.
+4. Prove the 100-case provider corpus or record explicit waivers.
+5. Freeze quality evidence and known limitations.
 ```
 
-Only after those pass:
+M4 integration slice:
 
 ```text
-1. Remove cognitive write tools from Front mode allowlists.
-2. Rewrite prompt sections that currently instruct cognitive tool use.
-3. Keep cognitive schemas/implementations temporarily for rollback/comparison.
-4. Reorganize prompt into the Iteration 1 situation frame.
+1. Wire background completed-turn updater with writer_port fail-closed apply.
+2. Remove cognitive write tools from Front mode allowlists.
+3. Rewrite prompt sections that currently instruct cognitive tool use.
+4. Keep cognitive schemas/implementations temporarily for rollback/comparison.
+5. Reorganize prompt into the Iteration 1 situation frame.
 ```
 
 This turns Front deloading into a controlled ownership migration instead of a

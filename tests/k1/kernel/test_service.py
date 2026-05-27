@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -228,11 +228,36 @@ class TestSessionInstance:
 
     def test_optional_fields_default_none(self) -> None:
         s = _make_session()
+        assert s.section_update_worker is None
         assert s.front_ctx is None
         assert s.back_ctx is None
         assert s.ledger is None
         assert s.ledger_store is None
         assert s.concierge_task is None
+
+    @pytest.mark.asyncio
+    async def test_destroy_session_stops_section_update_worker_before_memory_writer(self) -> None:
+        order: list[str] = []
+        worker = MagicMock()
+        worker.stop.side_effect = lambda **kwargs: order.append("section_update_worker")
+        memory_writer = MagicMock()
+
+        async def stop_memory_writer() -> None:
+            order.append("memory_writer")
+
+        memory_writer.stop = AsyncMock(side_effect=stop_memory_writer)
+        svc = KernelService(config=KernelConfig())
+        svc._sessions["s1"] = _make_session(
+            section_update_worker=worker,
+            memory_writer=memory_writer,
+            concierge=MagicMock(stop=AsyncMock()),
+            fabric=MagicMock(shutdown=AsyncMock()),
+            delta_aggregator=MagicMock(flush=AsyncMock()),
+        )
+
+        await svc.destroy_session("s1")
+
+        assert order[:2] == ["section_update_worker", "memory_writer"]
 
     def test_mutable_task_assignment(self) -> None:
         """SessionInstance is NOT frozen — tasks can be set post-construction."""

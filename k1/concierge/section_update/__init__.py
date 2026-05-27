@@ -71,6 +71,11 @@ from k1.concierge.section_update.vocabulary import (
     allowed_operations,
     validate_target,
 )
+from k1.concierge.section_update.worker import (
+    SectionUpdateBackgroundWorker,
+    SectionUpdateWorkerConfig,
+    SectionUpdateWorkerStats,
+)
 
 __all__ = [
     "ApplyTiming",
@@ -118,4 +123,7 @@ __all__ = [
     "PlanCompiler",
     "DeterministicSectionUpdateClassifier",
     "ISectionUpdateClassifier",
+    "SectionUpdateBackgroundWorker",
+    "SectionUpdateWorkerConfig",
+    "SectionUpdateWorkerStats",
 ]

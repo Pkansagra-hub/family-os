@@ -206,12 +206,20 @@ def _normalize_capability_params(capability_name: str, params: Any) -> dict[str,
                 if normalized.get(title_key):
                     normalized["title"] = normalized[title_key]
                     break
+        if normalized.get("assigned_to"):
+            normalized["assigned_to"] = _member_id_alias(normalized["assigned_to"])
         if not normalized.get("assigned_to") and normalized.get("assignee"):
             normalized["assigned_to"] = _member_id_alias(normalized["assignee"])
         if not normalized.get("assigned_to"):
             assignee = _task_text_assignee_alias(normalized.get("title"))
             if assignee:
                 normalized["assigned_to"] = assignee
+    if capability_name in {
+        "tool.execute.reminders.create_reminder",
+        "tool.read.reminders.list_reminders",
+    }:
+        if normalized.get("recipient"):
+            normalized["recipient"] = _member_id_alias(normalized["recipient"])
     return normalized
 
 

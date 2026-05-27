@@ -67,49 +67,66 @@ M2.I6 Add dispatch-critical overlay/gating for Back snapshot-at-start behavior.
 M2.I7 Normalize Live API turn-complete records into the same classifier input contract.
 ```
 
-### M3: Shadow Mode, Active Mode, And Quality Gates
+### M3: Foundation Quality Proof And Integration Readiness
 
-Epic: run the classifier in shadow mode, then active mode, and prove mutation quality before removing Front cognitive tools.
+Epic: prove SectionUpdateClassifier mutation quality with provider-backed corpus gates, freeze what is ready, and publish the integration contract M4 will consume. M3 is the foundation floor, not a separate production active-mode wall before M4.
 
 Issue headings:
 
 ```text
-M3.I1 Run shadow mode beside current Front cognitive tool writes.
-M3.I2 Add mutation manifest observability if writer turn stats are too coarse.
-M3.I3 Convert POC cases into golden SectionUpdatePlan expectations.
-M3.I4 Validate provider/model choices, latency, and degradation behavior.
-M3.I5 Enable active apply behind feature flags.
-M3.I6 Enforce numeric mutation-quality gates.
+M3.I1 Preserve shadow/manifest evidence surfaces.
+M3.I2 Prove the staged provider corpus.
+M3.I3 Lock classifier prompt/schema/runner guardrails.
+M3.I4 Freeze quality evidence and known limitations.
+M3.I5 Publish the exact integration contract for KernelService and Concierge.
 ```
 
-### M4: Front Deload Cutover And Prompt Contract
+### M4: Kernel Background Updater Integration And Front Deload
 
-Epic: after classifier active gates pass, remove cognitive write tools from Front and formalize the Front prompt situation-frame contract.
+Epic: wire the classifier as a per-session background completed-turn updater in KernelService, remove cognitive write tools from Front, and formalize the Front prompt situation-frame contract.
 
 Issue headings:
 
 ```text
-M4.I1 Trace current temporal, SelfModel, SessionState, and prompt grounding sources.
-M4.I2 Write the formal Front prompt modification contract.
-M4.I3 Remove cognitive write tools from Front mode allowlists.
-M4.I4 Rewrite prompt sections that instruct cognitive tool use.
-M4.I5 Preserve cognitive schemas temporarily for rollback/internal comparison.
-M4.I6 Implement Iteration 1 prompt seating from the formal contract.
+M4.I1 Specify the per-session worker lifecycle against KernelService P1-P6.
+M4.I2 Add the P5.5 worker slot, SessionInstance field, teardown, config, and health contract.
+M4.I3 Convert the current Concierge active boundary into background-worker semantics.
+M4.I4 Apply accepted plans through writer_port with fail-closed background diagnostics.
+M4.I5 Trace temporal, SelfModel, SessionState, spatial, and grounding sources for the situation frame.
+M4.I6 Write the formal Front prompt modification contract.
+M4.I7 Remove cognitive write tools from Front mode allowlists while preserving rollback schemas.
+M4.I8 Rewrite prompt sections and commitment text so Front consumes state instead of writing it.
+M4.I9 Preserve cognitive schemas temporarily for rollback/internal comparison.
+M4.I10 Implement Iteration 1 prompt seating from the formal contract.
 ```
 
-### M5: Final Validation, Rollback Proof, And Cutover
+### M5: Track Working, Validate, And Prove Rollback
 
-Epic: prove the full path with targeted tests, live/dry POC validation, old-test updates, and rollback proof.
+Epic: track the integrated background-updater/no-cognitive-Front path turn by turn, validate it with targeted tests and selected live/dry probes, update stale assumptions, and prove rollback.
 
 Issue headings:
 
 ```text
-M5.I1 Run targeted classifier contract suites.
-M5.I2 Run targeted Front/prompt/Concierge regressions touched by the migration.
+M5.I1 Define the working-tracker dashboard/report from section_update.completed and turn.completed.
+M5.I2 Run targeted classifier, kernel wiring, prompt, Front, and rollback tests.
 M5.I3 Update old tests that assume cognitive tools are Front-visible tools.
-M5.I4 Rerun POC dry and selected live cases.
+M5.I4 Rerun POC dry and selected live cases against the integrated path.
 M5.I5 Prove rollback flags restore the previous Front cognitive tool path.
-M5.I6 Declare cutover only after final criteria pass or have explicit waivers.
+M5.I6 Record the cutover decision with evidence, waivers, and next risk controls.
+```
+
+### M6: Steady-State Cutover And Cleanup
+
+Epic: after M5 proves the integrated path, move the system to steady state: keep the background updater as the default hidden cognitive writer, remove obsolete Front cognitive surfaces only after rollback/stability criteria, and lock the monitoring contract.
+
+Issue headings:
+
+```text
+M6.I1 Define the stability window and rollback-removal criteria.
+M6.I2 Remove obsolete Front cognitive schema/implementation surfaces only after M6 gates.
+M6.I3 Collapse feature flags from migration toggles to steady-state diagnostics/model knobs.
+M6.I4 Lock prompt contracts, runbooks, and evidence artifacts.
+M6.I5 Keep targeted validation discipline; do not introduce broad-suite requirements.
 ```
 
 ## Detailed Milestones
@@ -1708,19 +1725,19 @@ Validation run:
    pytest tests/k1/concierge/section_update -v: 69 passed
 
 Next issue:
-   M3 shadow/active quality gates. Do not remove Front cognitive tools until M3 gates explicitly pass.
+   M3 provider-backed quality proof and guardrails, then M4 background updater integration plus Front deload.
 ```
 
-### M3 Detailed Plan: Shadow Mode, Active Mode, And Quality Gates
+### M3 Detailed Plan: Classifier Quality Proof And Guardrails
 
-Epic: run `SectionUpdateClassifier` in batch-only shadow mode beside existing Front cognitive writes, prove semantic equivalence and safety with per-turn manifests, then enable active apply behind flags only after numeric quality gates clear.
+Epic: prove `SectionUpdateClassifier` semantic mutation quality with per-turn manifests, golden cases, provider-backed simulated-kernel corpus runs, and fail-closed guardrails. M3 does not require a separate active-mode proof wall before M4 starts.
 
-Execution correction for this pass: M3 quality proof stays in POC/live-kernel validation first. Do not land new M3 runtime wiring, production feature flags, or automatic classifier attachment in Concierge until the live POC gate report proves the thresholds below. Production code may keep the M0-M2 SectionUpdate contract and active-boundary scaffolding, but M3 proof artifacts belong in the live-kernel POC runner and its reports.
+Execution correction for this pass: M3 quality proof stays in POC/simulated-kernel validation first. Production code may keep the M0-M2 SectionUpdate contract and boundary scaffolding, but the next architectural move is M4 background integration, not a standalone active-mode canary wall.
 
 M3 operating picture:
 
 ```text
-M3 is the proof ladder.
+M3 is the quality proof ladder.
 
 current Front cognitive writes
    |
@@ -1738,7 +1755,7 @@ numeric quality gates
    |
    +--> fail: stay shadow/degraded
    |
-   +--> pass: allow active canary behind flags
+   +--> pass: start M4 background integration and Front deload
 ```
 
 M3 drift guard:
@@ -1747,7 +1764,8 @@ M3 drift guard:
 Do not treat provider success as mutation quality.
 Do not treat aggregate writer stats as semantic equivalence.
 Do not remove Front cognitive tools in M3.
-Do not allow active apply until the latest gate report satisfies every threshold, including the 100-turn safe-shadow window.
+Do not call a focused repair subset a full-corpus pass.
+Do not require a separate active-mode proof wall before M4.
 ```
 
 M3 non-negotiables from M0-M2:
@@ -1757,7 +1775,7 @@ Earlier gemini-2.5-flash-lite POC pass rate was 16.7%; do not cite that baseline
 Batch plan remains the only production V0 shape.
 Parallel/by-section calls remain diagnostic and cannot drive active writes.
 Front cognitive tools remain seated through M3 for comparison and rollback.
-Active mode must obey M2 ordering: apply/degrade before turn.completed.
+The classifier remains a background turn-boundary updater, not a Front or Back attachment.
 ```
 
 Latest live POC evidence snapshot, 2026-05-26:
@@ -1784,7 +1802,7 @@ failed_gates=consecutive_shadow_turns_without_dangerous_false_writes
 consecutive_shadow_turns_without_dangerous_false_writes=4/100
 ```
 
-Quality conclusion: the corrected live POC now proves the four-turn golden mutation set, including turn-4 close acknowledgement no-op. It does not authorize production active mode; M3 remains blocked until the configured 100-turn safe-shadow window is met.
+Quality conclusion: the corrected live POC proves the four-turn golden mutation set, including turn-4 close acknowledgement no-op. It is early evidence only; M3 quality is judged by the staged corpus and targeted repair proofs below, not by production active-mode authorization.
 
 POC harness corrections proven by this run:
 
@@ -1803,9 +1821,51 @@ Conversational closure/acknowledgement candidates are fail-closed to no_op, not 
 ```text
 Current sequence target: 40 no-op/forbidden/ambiguous, then 35 belief/definition/correction, then 15 scoreboard/clarification, then 10 narrative/affect.
 First tranche status: 40 new noop_* golden cases added to scripts/m3_section_update_golden_cases.json.
-Active runner config: scripts/m3_live_shadow_validation_quota_config.yaml now selects exactly those 40 noop_* cases with max_turns=40.
-Dry-run artifact: data/m3_section_update_shadow_validation_noop40_dry_run_report.json.
-Quality status: fixture/config/schema dry-run only; do not count this as live safe-shadow evidence until the 40-turn live kernel run is explicitly executed.
+Second tranche status: 35 new belief/definition/correction cases added: 12 belief_*, 12 definition_*, 11 correction_*.
+Final tranche status: 25 new scoreboard/clarification/narrative/affect cases added: 8 scoreboard_*, 7 clarification_*, 5 narrative_*, 5 affect_*.
+Active runner config: scripts/m3_live_shadow_validation_quota_config.yaml now selects the full 100-case staged corpus with max_turns=100 and max_model_calls=100.
+Dry-run artifacts: data/m3_section_update_shadow_validation_noop40_dry_run_report.json, data/m3_section_update_shadow_validation_belief35_dry_run_report.json, and data/m3_section_update_shadow_validation_100_dry_run_report.json.
+Latest dry-run report: run_label=m3-final25-260526a, turn_count=100, golden_fixture_validity=1.0, active_eligible=false because dry run never authorizes active apply.
+Quality status: fixture/config/schema dry-run only; do not count this as live safe-shadow evidence until the cumulative live kernel run is explicitly executed.
+```
+
+Simulated-kernel provider proof path, 2026-05-26:
+
+```text
+Why: the full boot_web/FSM/WebSocket kernel can fail for reasons unrelated to SectionUpdateClassifier quality.
+Runner mode: scripts/m3_live_shadow_validation.py --simulated-kernel.
+What it keeps: in-memory SessionStateManager, LocalEventAdapter capture mode, DirectWriterAdapter, writer-compatible golden oracle mutations applied after each synthetic pre-turn snapshot, bus/activity metadata shaped like a completed turn, live ModelHub provider calls, manifest/evaluate_quality_gates accounting.
+What it removes: boot_web, WebSocket transport, Front ReAct, full FSM progression, browser/UI, and live kernel timeout risk.
+Provider routing correction: runner CLI defaults no longer let ambient LLM_PROVIDER override config preferred_provider; classify_observations re-normalizes env after POC dotenv loading so poc/chat_experience_poc/.env cannot flip the classifier from vertex to google.
+Four-turn smoke: data/m3_section_update_shadow_validation_simulated4_report.json proves the simulated harness path and reports provider_id=vertex/model_id=gemini-2.5-flash-lite, but active_eligible=false because the terminal lacked Vertex project/location env for that run.
+100-turn simulated provider run: data/m3_section_update_shadow_validation_100_simulated_provider_report.json, run_label=m3-sim100-260526a, completed_turns=100/100, oracle_mutation_count=60, oracle_failed_mutation_count=0, active_eligible=false.
+100-turn metrics: golden_pass_rate=0.19, schema_validity=0.21, shadow_golden_operation_agreement=0.38, provider_failure_degradation_rate=0.79, dangerous_false_writes=2, consecutive_shadow_turns_without_dangerous_false_writes=82, shadow_p95_ms=1242.
+Status distribution: 19 shadow_noop, 2 shadow_plan, 79 provider_failed. First provider failure was turn 22 ProviderError, followed by NoEligibleProviderError. The two dangerous false writes were turn 12 noop_forbidden_control_set_state_request and turn 18 noop_forbidden_meta_policy_question, both emitted beliefs_active.add_fact when the golden oracle expected no_op.
+Quality status: simulated-kernel provider proof completed and failed. It is valid classifier/provider failure evidence, not active-mode evidence and not a replacement for later full live-kernel cutover evidence.
+
+Throttled 100-turn simulated provider run: data/m3_section_update_shadow_validation_100_simulated_provider_throttle12b_report.json, run_label=m3-sim100-throttle12b-260526a, model-call spacing=12s, completed_turns=100/100, elapsed_s=1334.141, active_eligible=false.
+Throttle result: provider_failure_degradation_rate=0.0 with 59 shadow_plan and 41 shadow_noop; the previous provider collapse was rate/pace-sensitive.
+Throttled metrics: golden_fixture_validity=1.0, golden_pass_rate=0.73, schema_validity=1.0, guard_vocabulary_validity=1.0, noop_precision=0.875, mutation_precision=0.6393, critical_recall=0.65, shadow_golden_operation_agreement=0.735, dangerous_false_writes=22, consecutive_shadow_turns_without_dangerous_false_writes=0, shadow_p95_ms=2389.
+Throttled mismatch shape: 27 golden mismatches. Remaining failures are classifier behavior, not provider health: 5 no-op false writes; 1 missed definition; 1 correction duplicate/over-write; all 8 scoreboard cases missed or mapped to beliefs/narrative; all 7 clarification cases missed or mapped to beliefs/scoreboard; all 5 affect cases missed or mapped to beliefs. Dominant wrong operation was beliefs_active.add_fact (53 emitted operations).
+
+Prompt/contract repair proof for final 25 non-belief cases: data/m3_section_update_prompt_semantics_probe_provider_contract_guard_report.json, run_label=m3-prompt-contract-guard-25-260526a, model-call spacing=12s, completed_turns=25/25, elapsed_s=333.18, active_eligible=true for this slice.
+Repair summary: clarified that clarifications.request is classifier-owned gap detection for underspecified actionable commands even when simulated Front did not ask aloud; added prompt and sanitizer guards for conversation-local deictic referents, topic-only focus/switch language, exact-id clarifications.answer, and first-person affect.
+Repair metrics: golden_fixture_validity=1.0, golden_pass_rate=1.0, schema_validity=1.0, guard_vocabulary_validity=1.0, noop_precision=1.0, mutation_precision=1.0, critical_recall=1.0, shadow_golden_operation_agreement=1.0, dangerous_false_writes=0, consecutive_shadow_turns_without_dangerous_false_writes=25, provider_failure_degradation_rate=0.0, shadow_p95_ms=3415.
+Repair operation distribution: 4 scoreboard.add_referent, 2 scoreboard.push_question, 2 scoreboard.push_topic, 7 clarifications.request, 5 narrative_active.create_thread, 5 affective_now.update.
+
+Full 100 simulated provider contract-guard v5: data/m3_section_update_shadow_validation_100_simulated_provider_contract_guard_v5_report.json, run_label=m3-sim100-contract-guard-v5-260526a, model-call spacing=12s, completed_turns=100/100, elapsed_s=1351.001, active_eligible=false.
+v5 metrics: golden_pass_rate=0.97, schema_validity=1.0, guard_vocabulary_validity=1.0, noop_precision=0.95, mutation_precision=0.9516, critical_recall=0.9833, shadow_golden_operation_agreement=0.97, provider_failure_degradation_rate=0.0, dangerous_false_writes=3, untriaged_high_risk_mismatches=3, consecutive_shadow_turns_without_dangerous_false_writes=25.
+v5 failed gates: noop_precision, mutation_precision, untriaged_high_risk_mismatches, dangerous_false_writes, consecutive_shadow_turns_without_dangerous_false_writes.
+
+Focused repair subset v5: data/m3_section_update_100_repair_subset_provider_v5_report.json, run_label=m3-repair-subset-27-v5-260526a, model-call spacing=12s, completed_turns=27/27, active_eligible=true for this focused subset.
+v5 subset metrics: golden_pass_rate=1.0, noop_precision=1.0, mutation_precision=1.0, critical_recall=1.0, shadow_golden_operation_agreement=1.0, dangerous_false_writes=0, provider_failure_degradation_rate=0.0, shadow_p95_ms=1753.
+v5 subset operation distribution: 5 beliefs_active.add_fact, 2 clarifications.request, 2 scoreboard.add_referent, 1 scoreboard.push_question, 1 scoreboard.push_topic, 16 no-op turns.
+
+Focused repair subset v6: data/m3_section_update_repair_subset_v6_report.json, run_label=m3-repair-subset-3-v6-260526a, model-call spacing=12s, completed_turns=3/3, active_eligible=true for this exact failure subset.
+v6 subset metrics: golden_pass_rate=1.0, noop_precision=1.0, mutation_precision=1.0, critical_recall=1.0, shadow_golden_operation_agreement=1.0, dangerous_false_writes=0, provider_failure_degradation_rate=0.0, shadow_p95_ms=4287.
+v6 subset covered the three full-v5 failure classes: internal policy/meta write question, warm/archive live-state read question, and durable red/yellow lunchbox correction misrouted as a local referent.
+
+Quality status, 2026-05-26: do not run another full 100-case loop before integration. Full v5 is sufficient risk evidence for the remaining corpus shape, and v6 proves the exact high-risk failure subset after repair. Move to M4 background integration with this known evidence package; full-corpus rerun is deferred to M5 tracker/cutover confidence if classifier prompt/schema changes again.
 ```
 
 #### M3.I1 Run Shadow Mode Beside Current Front Cognitive Tool Writes
@@ -2058,7 +2118,7 @@ ModelHub route
 What this prevents:
 
 ```text
-M3.I4 prevents accidental active writes from the wrong provider/model path or from malformed provider output.
+M3.I4 prevents background classifier evidence from being polluted by the wrong provider/model path or malformed provider output.
 ```
 
 Code boundaries:
@@ -2084,7 +2144,7 @@ Provider/model IDs are recorded in every manifest.
 Acceptance:
 
 ```text
-Provider route mismatch blocks active apply.
+Provider route mismatch blocks quality credit and background apply.
 Timeout returns safe no-op with degradation_reason.
 Live adapter can be forced off by mode.
 Validation summary reports model latency and classifier E2E latency.
@@ -2101,70 +2161,66 @@ $env:K1_SECTION_UPDATE_MODEL='gemini-2.5-flash-lite'
 python .\poc\section_update_classifier_poc.py --live --mode batch --preferred-provider vertex --preferred-model gemini-2.5-flash-lite --temperature 0 --timeout-ms 45000 --max-output-tokens 2048
 ```
 
-#### M3.I5 Enable Active Apply Behind Feature Flags
+#### M3.I5 Freeze Quality Evidence And Known Limitations
 
-Core concept: active writes are permitted only when the mode is explicit and M3 quality gates are satisfied.
+Core concept: M3 exits with auditable evidence, known failures, and a clear decision record for M4. It does not create a separate active-mode canary wall before Front deloading work starts.
 
 Issue context:
 
 ```text
-runtime flags + gate report
+provider run reports + manifests + repair subsets
    |
-   +--> disabled: current Front path
-   +--> shadow: manifest only
-   +--> degraded_noop: diagnostics only
-   +--> offline_stub: deterministic tests
-   +--> active + gates pass
-            |
-            v
-         compile/apply before turn.completed
+   +--> full corpus result
+   +--> focused repair evidence
+   +--> mismatch taxonomy
+   +--> guardrail/test coverage
+   |
+   v
+M4 background integration decision record
 ```
 
 What this prevents:
 
 ```text
-M3.I5 prevents active apply from becoming the accidental default just because the classifier package exists.
+M3.I5 prevents a green focused repair subset from being misread as full-corpus proof, and prevents the old active-mode gate from blocking M4 integration planning.
 ```
 
 Code boundaries:
 
 ```text
-k1/concierge/section_update/lifecycle.py
-k1/concierge/section_update/apply.py
-k1/concierge/section_update/plan_compiler.py
-k1/sessionstate/ports/writer.py
-k1/sessionstate/adapters/direct_writer.py
-k1/concierge/fsm/controller.py _execute_response_final_decision
+scripts/m3_live_shadow_validation.py
+data/m3_section_update_*_report.json
+data/m3_section_update_prompt_semantics_probe_audit.md
+docs/plans/front_deloading_sequential_execution_plan.md
 ```
 
-Feature flag behavior:
+Evidence behavior:
 
 ```text
-K1_ENABLE_SECTION_UPDATE_CLASSIFIER=false -> disabled, current Front path unchanged
-K1_SECTION_UPDATE_MODE=shadow -> classifier diagnostics only, no writer calls
-K1_SECTION_UPDATE_MODE=active -> compile/apply before turn.completed if gates are satisfied
-K1_SECTION_UPDATE_MODE=offline_stub -> deterministic test adapter only
-K1_SECTION_UPDATE_MODE=degraded_noop -> no writer calls, emit diagnostics
+Full corpus reports decide whether M3 quality is complete.
+Focused repair subset reports prove specific failure classes are repaired.
+Both are preserved with run_label, provider/model, operation counts, and failed_gates.
+M4 can start once the quality state is understood; full proof still matters before declaring M3 complete.
 ```
 
 Acceptance:
 
 ```text
-Valid active plans call writer_port.batch_mutations exactly once.
-Shadow, degraded, invalid, stale, duplicate, timed-out, and provider-failed plans call writer_port zero times.
-Active mode closes with applied, no-op, rejected, stale, duplicate, timed-out, or provider-failed status before turn.completed.
-Rollback to disabled/shadow does not require schema deletion.
+Evidence doc records latest full 100 result and latest focused repair result separately.
+Known high-risk mismatch classes map to prompt/schema/sanitizer tests.
+Plan says background integration is next, not active-mode proof as a separate milestone.
+Rollback surfaces remain available because schemas/implementations are not deleted in M3.
 ```
 
 Targeted test:
 
 ```powershell
-pytest tests/k1/concierge/section_update/test_active_apply.py tests/k1/concierge/section_update/test_feature_flags.py -v
+pytest tests/k1/concierge/section_update/test_classifier_stub.py tests/k1/concierge/section_update/test_m3_live_shadow_validation_runner.py -q
 ```
 
 #### M3.I6 Enforce Numeric Mutation-Quality Gates
 
-Core concept: active mode is blocked until measured quality exceeds the current POC baseline by a large, explicit margin.
+Core concept: hidden cognitive writes need measurable quality. Gates decide M3 completion and background-updater readiness; they are not a separate active-mode ceremony before M4.
 
 Issue context:
 
@@ -2182,7 +2238,7 @@ quality gate evaluator
    +--> latency/degradation rates
    |
    v
-active eligible? yes/no
+M3 quality complete? yes/no
 ```
 
 What this prevents:
@@ -2200,7 +2256,7 @@ poc/section_update_classifier_runs/20260524_101604/summary.md
 poc/front_prompt_compare/runs/20260521_150501/summary.md
 ```
 
-Required active-mode gates:
+Required full-corpus quality gates:
 
 ```text
 golden pass rate >= 95%
@@ -2213,14 +2269,13 @@ critical recall >= 90%
 shadow section-operation agreement with current Front writes >= 90%
 untriaged high-risk mismatches = 0
 dangerous false writes = 0
-100 consecutive shadow turns with 0 dangerous false writes before active canary
+100-case staged corpus has 0 dangerous false writes before M3 is declared complete
 ```
 
 Latency and degradation gates:
 
 ```text
 shadow p95 <= 10s
-active boundary timeout <= 1500ms
 provider failure/degradation rate <= 1% over validation window
 timeout path always safe no-op
 no same-turn retry loop
@@ -2230,8 +2285,8 @@ Acceptance:
 
 ```text
 Quality gate evaluator can fail the build/test run from manifest summaries.
-Active mode refuses to apply when gates are missing or failing.
 Gate report records evidence artifact paths and provider/model identity.
+Background apply must remain disabled or diagnostic-only for failing high-risk classes until guardrails are added.
 ```
 
 Targeted test:
@@ -2244,23 +2299,31 @@ M3 blockers and risks:
 
 ```text
 Latest four-turn live POC no longer fails golden/schema/guard/no-op/mutation quality gates.
-Active remains blocked because only 4 consecutive shadow turns without dangerous false writes are proven; gate requires 100.
-1-5 second classifier latency in the latest POC is acceptable for shadow diagnostics but unsafe for synchronous active without the M2 timeout/degrade boundary.
+Latest full 100 v5 still fails with 3 dangerous false writes; latest 3-case v6 focused repair subset passes all gates for those exact failure classes.
+Per user direction on 2026-05-26, stop rerunning the 100-case loop now and move to M4 integration; carry the full-v5 failure shape as tracked risk.
+1-5 second classifier latency is acceptable for asynchronous background maintenance but unsafe for synchronous same-turn gating without a timeout/degrade boundary.
 Legacy Front operation mismatch is expected on some turns and remains telemetry only; golden SectionUpdatePlan comparison is the primary oracle.
-Batch apply is not transactional, so M1 whole-plan validation remains mandatory before any M3 active attempt.
-M1 snapshot epoch/idempotency must be real before active stale rejection can be trusted.
+Batch apply is not transactional, so M1 whole-plan validation remains mandatory before background apply.
+M1 snapshot epoch/idempotency must be real before stale rejection can be trusted.
 ```
 
-### M4 Detailed Plan: Front Deload Cutover And Prompt Contract
+### M4 Detailed Plan: Background Updater Integration And Front Deload
 
-Epic: after M3 gates pass, cut Front over from ReAct-owned cognitive writes to classifier-owned SessionState mutation, so Front becomes voice, clarification, presentation, memory read, and routing while `SectionUpdateClassifier` owns cognitive write intent for `beliefs_active`, `scoreboard`, `clarifications`, `narrative_active`, and `affective_now`.
+Epic: after M3 quality is understood, wire `SectionUpdateClassifier` as a background completed-turn updater and cut Front over from ReAct-owned cognitive writes to classifier-owned SessionState mutation. Front remains voice, clarification, presentation, memory read, routing, dispatch, HIL, PRESENT, and WEAVE.
 
 M4 operating picture:
 
 ```text
-M4 changes Front's job after evidence says it is safe.
+M4 changes Front's job and adds the background updater lane.
 
-M3 gates pass
+M3 quality evidence understood
+   |
+   v
+Background SectionUpdateClassifier consumes completed turns
+   |
+   +--> validates plan/snapshot/schema
+   +--> applies accepted cognitive writes through writer_port
+   +--> no-op diagnostics on provider/schema/stale/guard failure
    |
    v
 Front prompt contract changes
@@ -2270,7 +2333,7 @@ Front prompt contract changes
    +--> Front loses visible cognitive write tools
    |
    v
-SectionUpdateClassifier owns hidden cognitive writes
+SectionUpdateClassifier owns hidden cognitive writes as background maintenance
    |
    v
 old cognitive schemas remain hidden for rollback/internal comparison
@@ -2279,21 +2342,492 @@ old cognitive schemas remain hidden for rollback/internal comparison
 M4 drift guard:
 
 ```text
-Do not start M4 before M3 gates pass.
 Do not delete cognitive schemas or implementations.
 Do not remove recall, summary, dispatch, discovery, or safe capability tools from Front.
 Do not make classifier mechanics visible to the user.
+Do not attach the classifier to Front ReAct or Back execution.
 ```
 
 M4 start gate:
 
 ```text
-Do not start M4 allowlist removal until M3 active-mode gates pass.
+Do not start M4 allowlist removal from a failing or unknown classifier quality state.
+Focused repair subsets are evidence for fixes, not full proof by themselves.
 Do not delete cognitive schemas or implementations in M4.
 Rollback must be able to restore old Front cognitive tool visibility by flag/config change.
 ```
 
-#### M4.I1 Trace Current Temporal, SelfModel, SessionState, And Prompt Grounding Sources
+#### M4.I1 Specify The Per-Session Worker Lifecycle Against KernelService P1-P6
+
+Core concept: M4 is the first integration floor. The classifier foundation exists; now the plan must say exactly where the background updater lives in the kernel session lifecycle and which already-built ports it consumes.
+
+Source surfaces read for this issue:
+
+```text
+k1/kernel/service.py _create_session_tier2
+   P1: session_bus, session_router, front/back mailboxes
+   P2: SessionStateManager, DirectWriterAdapter, AsyncSSMBridge
+   P3: per-session Fabric and event/delta/model adapters
+   P3.5/P3.6/P3.7/P3.8: SelfModel, temporal, spatial, grounding handles
+   P4: ConciergeRuntime with PortBundle(writer=ss_writer)
+   P5: MemoryWriterService
+   P6: SessionInstance assembly and _sessions registration
+
+k1/kernel/session.py SessionInstance
+   currently stores bus, router, session_state, fabric, concierge, memory_writer,
+   dispatchers, contexts, ledger, self_model, temporal, spatial, grounding.
+   It does not yet store a section_update_worker.
+
+k1/kernel/service.py destroy_session
+   tears down in reverse order after popping _sessions; current reverse order stops
+   MemoryWriter before Concierge, then HIL/Fabric/SessionState/Bus.
+```
+
+Worker ownership decision:
+
+```text
+Owner: KernelService per-session tier.
+Instance count: one worker per SessionInstance.
+Scope: session_bus only, never kernel bus.
+Inputs: turn.completed envelopes, SessionState read surface, writer_port, ModelHub, classifier config.
+Outputs: section_update.requested/completed diagnostics, writer_port BatchRequest apply results.
+Forbidden attachment points: Front react_loop, Back actor/tool execution, user-visible prompt text.
+```
+
+Why the worker belongs at the kernel/session floor:
+
+```text
+KernelService already owns the only place where all required ports are present together:
+session_bus from P1, ssm + ss_writer from P2, model_hub from tier 1, Concierge from P4,
+MemoryWriter from P5, and SessionInstance teardown from P6.
+
+Concierge knows turn semantics, but KernelService owns lifecycle, startup failure cleanup,
+multi-session isolation, health, and teardown. Therefore M4 should create a per-session
+background worker in KernelService and let Concierge remain the turn publisher.
+```
+
+Construction simulation:
+
+```text
+Floor 0, M3 foundation:
+   classifier prompt/schema/runner/guards exist and have evidence.
+
+Floor 1, M4 kernel frame:
+   build one SectionUpdateBackgroundWorker per session and store it on SessionInstance.
+
+Floor 2, M4 Concierge turn feed:
+   worker consumes completed-turn records emitted by Concierge, not Front tool calls.
+
+Floor 3, M4 writer/apply lane:
+   worker validates/compiles/applies accepted plans through writer_port only.
+
+Floor 4, M4 Front deload:
+   hide cognitive tools and rewrite prompt once the background lane is wired and observable.
+```
+
+Acceptance:
+
+```text
+Spec names every source port the worker consumes and where it is created.
+Spec says the classifier is per-session, not global.
+Spec says the worker uses session_bus, not kernel bus.
+Spec says SessionInstance gains an optional section_update_worker field.
+Spec says startup failure cleanup mirrors neighboring P5/P6 cleanup style.
+```
+
+#### M4.I2 Add The P5.5 Worker Slot, SessionInstance Field, Teardown, Config, And Health Contract
+
+Core concept: define and implement the first KernelService construction floor for the hidden background updater.
+
+Implementation checkpoint, 2026-05-26:
+
+```text
+Landed first M4 floor:
+   k1/concierge/section_update/worker.py
+      SectionUpdateBackgroundWorker
+      SectionUpdateWorkerConfig
+      SectionUpdateWorkerStats
+      turn.completed subscription, bounded queue, requested/completed diagnostics,
+      shadow/degraded/background_apply modes, writer_port apply boundary, stats snapshot.
+
+   k1/kernel/service.py
+      P5.5 worker slot after MemoryWriter start and before SessionInstance assembly.
+      set_section_update_classifier(...) injection point for future provider adapter wiring.
+      destroy_session stops the worker before MemoryWriter teardown.
+      health_check exposes section_update_workers readiness when the feature is enabled.
+
+   k1/kernel/session.py
+      optional section_update_worker field.
+
+   k1/concierge/config/kernel.py
+      enable_section_update_worker default False.
+      section_update_worker_mode default off.
+      section_update_worker_timeout_ms, section_update_worker_queue_max,
+      section_update_classifier_version.
+```
+
+Issue context:
+
+```text
+_create_session_tier2
+    |
+    +--> P1 session_bus exists
+    +--> P2 ssm + ss_writer exist
+    +--> P4 ConciergeRuntime exists and has writer in PortBundle
+    +--> P5 MemoryWriter exists and starts
+    |
+    v
+P5.5 SectionUpdateBackgroundWorker starts and subscribes to completed turns
+    |
+    v
+P6 SessionInstance stores section_update_worker and session enters _sessions
+```
+
+Exact source anchors and what to look for:
+
+```text
+k1/kernel/service.py _create_session_tier2:
+   Look at P2 for ss_writer.bind_manager(ssm, ssm.mutation_guard).
+   Look at P4 for PortBundle(writer=ss_writer).
+   Look at P5 for session_memory_writer creation and await session_memory_writer.start().
+   Insert P5.5 after MemoryWriter start succeeds and before SessionInstance construction.
+
+k1/kernel/session.py SessionInstance:
+   Add section_update_worker: Any = None next to background/session helpers.
+
+k1/kernel/service.py destroy_session:
+   Stop section_update_worker before MemoryWriter teardown, because the worker can still hold
+   pending classification/apply work and needs writer_port/session_bus alive during its own stop.
+
+k1/concierge/config/kernel.py KernelConfig:
+   Add migration flags and model knobs here; no section_update flags currently exist.
+```
+
+P5.5 worker contract:
+
+```text
+Create only when section_update_enabled or section_update_mode is not off/disabled.
+Constructor receives session_id, session_bus, ssm/state reader, writer_port, model_hub,
+classifier adapter/factory, idempotency store, config, and logger/metrics hooks.
+start() subscribes to k1.session.turn.completed.v1 and creates any worker task/queue.
+stop() unsubscribes, cancels/drains pending background work according to mode, and never writes after stop begins.
+```
+
+Config contract:
+
+```text
+enable_section_update_worker: bool = False during migration default.
+section_update_worker_mode: off|shadow|degraded_noop|background_apply|offline_stub.
+section_update_provider: vertex by provider proof default.
+section_update_model: gemini-2.5-flash-lite by current M3 evidence.
+section_update_worker_timeout_ms: classifier call deadline for background work.
+section_update_worker_queue_max: bounded queue to prevent turn-completed backlog.
+front_deload_cognitive_tools: bool = False until M4 allowlist/prompt change is validated.
+```
+
+Health contract:
+
+```text
+KernelService.health_check should expose per-session worker state when present:
+   running/stopped
+   mode
+   queue_depth
+   last_completed_turn_id
+   last_status
+   last_error_code
+   applied_count/rejected_count/noop_count/provider_failed_count
+
+Health is diagnostic. A failed background worker does not fail the user-visible turn,
+but should fail readiness for completed deload cutover in M5.
+```
+
+Startup/teardown failure semantics:
+
+```text
+P5.5 start failure:
+   If section_update_mode is off/shadow/degraded_noop, fail closed to no worker and log diagnostics.
+   If section_update_mode is background_apply and configured as required, abort session create and run reverse cleanup.
+
+P5.5 stop failure:
+   destroy_session continues collecting errors, matching existing MemoryWriter/Concierge teardown style.
+   Worker stop must happen before SessionStateManager stop and before session_bus close.
+```
+
+Acceptance:
+
+```text
+SessionInstance exposes section_update_worker for teardown and inspection.
+Worker start/stop lifecycle appears in KernelService lifecycle logs as P5.5_complete and P5.5_teardown_complete.
+Worker is absent when disabled and present when enabled in targeted KernelService wiring tests.
+No full kernel suite is required for this milestone.
+```
+
+Targeted tests to create or update:
+
+```powershell
+pytest tests/k1/concierge/section_update/test_background_worker.py -v
+pytest tests/k1/kernel/test_service.py -k "optional_fields_default_none or section_update_worker" -v
+```
+
+Latest targeted validation:
+
+```text
+pytest tests/k1/concierge/section_update/test_background_worker.py -v
+   3 passed
+
+pytest tests/k1/kernel/test_service.py -k "optional_fields_default_none or section_update_worker" -v
+   2 passed, 437 deselected
+```
+
+#### M4.I3 Convert The Current Concierge Active Boundary Into Background-Worker Semantics
+
+Core concept: Concierge already has section-update hooks, but the current names and mode shape are synchronous active-boundary language. M4 must reuse the good contracts and move the ownership out to the background worker.
+
+Implementation checkpoint, 2026-05-26:
+
+```text
+Landed controller ownership correction:
+   k1/concierge/fsm/controller.py
+      normal worker-owned modes are disabled|shadow|background_apply|degraded_noop and do not gate turn.completed.
+      old active mode is accepted only as a legacy alias for explicit sync_overlay.
+      _finalize_turn now calls _run_sync_section_update_overlay_boundary, then emits turn.completed, then drains FrontLock.
+      turn.completed payload now includes prompt_mode and fsm_state for the background worker input path.
+
+   tests/k1/concierge/section_update/test_turn_completed_coordination.py
+      reframed active-boundary tests as sync_overlay compatibility tests.
+      added coverage that worker-owned modes do not publish requested/completed from the controller.
+
+   tests/k1/concierge/section_update/test_memory_writer_ordering.py
+      confirms worker-owned modes leave MemoryWriter ordering unchanged while sync_overlay remains explicit compatibility.
+```
+
+Source surfaces read for this issue:
+
+```text
+k1/concierge/fsm/controller.py set_section_update_classifier
+   currently accepts disabled|shadow|active and says active is the only mode gating turn.completed.
+
+k1/concierge/fsm/controller.py _finalize_turn
+   currently calls _run_active_section_update_boundary(envelope), then _emit_turn_completed, then _drain_front_lock_queue.
+
+k1/concierge/fsm/controller.py _run_active_section_update_boundary
+   currently builds input, publishes requested, classifies blocking, applies through writer_port,
+   publishes completed, and degrades on exceptions before turn.completed.
+
+k1/concierge/fsm/controller.py _build_section_update_input
+   already delegates to build_section_update_input with user_text, assistant_text, fsm_state,
+   prompt_mode, classifier_version, and timeout constraints.
+
+k1/concierge/fsm/controller.py _emit_turn_completed
+   publishes k1.session.turn.completed.v1 with turn_id, session_id, cognitive_trace_id,
+   user_message, assistant_response, timestamp_ms, turn_number, and optional section_update summary.
+```
+
+Integration decision:
+
+```text
+Do not keep the normal path as synchronous active gating.
+The normal M4 mode is background_apply: turn.completed is emitted and the worker consumes it.
+The old active boundary becomes one of two things:
+   1. a compatibility/diagnostic path behind a non-default flag, or
+   2. a same-turn dispatch-critical overlay path only when explicitly required.
+```
+
+Concrete refactor spec:
+
+```text
+Rename concepts in docs/tests from active to background_apply for the normal integrated lane.
+Keep build_section_update_input as the shared input builder.
+Keep SectionUpdateCompletionStatus and requested/completed payload builders.
+Move classify/apply orchestration out of _finalize_turn normal path and into the worker.
+Keep _emit_turn_completed as the publisher of completed-turn records.
+Do not publish classifier internals to Front prompt text or Back task payload unless using explicit overlay.
+```
+
+Turn payload requirements for the worker:
+
+```text
+Required fields from _emit_turn_completed:
+   turn_id
+   session_id
+   cognitive_trace_id
+   user_message
+   assistant_response
+   timestamp_ms
+   turn_number
+
+Additional fields to add if needed for better quality/replay:
+   prompt_mode
+   fsm_state
+   input_snapshot_version
+   input_snapshot_source_epoch
+   front_tool_call_summaries redacted to names/counts only
+   section_update_trace_id
+```
+
+Snapshot rule:
+
+```text
+M3 evidence used per-turn cognitive snapshots. M4 must be explicit about the runtime snapshot it passes.
+Preferred runtime rule: include snapshot_version/source_epoch in the turn-completed-derived input and reject stale apply through PlanCompiler.
+If only current post-turn snapshot is available in M4, record that as a known limitation and measure drift in M5.
+```
+
+Acceptance:
+
+```text
+Normal turn completion does not call the classifier inside Front ReAct or Back execution.
+Background worker can build the same SectionUpdateInput shape as the existing controller helper.
+Old active boundary tests are either renamed/reframed to background_apply or kept as explicit sync-overlay tests.
+No hidden classifier failure prevents response.final or user-visible response delivery.
+```
+
+Targeted tests to create or update:
+
+```powershell
+pytest tests/k1/concierge/section_update/test_turn_completed_background_worker.py -v
+pytest tests/k1/concierge/section_update/test_turn_input_builder.py -v
+pytest tests/k1/concierge/section_update/test_turn_completed_coordination.py -v
+```
+
+Latest targeted validation:
+
+```text
+pytest tests/k1/concierge/section_update/test_turn_completed_coordination.py -v
+   6 passed
+
+pytest tests/k1/concierge/section_update/test_memory_writer_ordering.py -v
+   3 passed
+
+pytest tests/k1/concierge/section_update/test_turn_input_builder.py -v
+   4 passed
+```
+
+#### M4.I4 Apply Accepted Plans Through writer_port With Fail-Closed Background Diagnostics
+
+Core concept: applying a plan is not a worker privilege. The worker only reaches the already-built compiler and writer_port path, and every unsafe condition becomes diagnostic no-op or rejection.
+
+Implementation checkpoint, 2026-05-26:
+
+```text
+Landed fail-closed background diagnostics:
+   k1/concierge/section_update/lifecycle.py
+      classify_section_update_blocking now rejects malformed classifier returns with diagnostics code invalid_schema.
+
+   k1/concierge/section_update/worker.py
+      queue overflow publishes requested/completed diagnostics with code queue_full when turn input can be built.
+      background_apply rejects invalid schema without writer_port calls.
+      completed diagnostics include provider_id and model_id from worker config.
+
+   k1/concierge/section_update/events.py
+      requested/completed payloads carry provider_id/model_id without mutation payload bodies.
+
+   k1/concierge/config/kernel.py and k1/kernel/service.py
+      section_update_provider and section_update_model config are passed into worker diagnostics.
+```
+
+Source surfaces read for this issue:
+
+```text
+k1/concierge/section_update/apply.py apply_section_update_plan
+k1/concierge/section_update/plan_compiler.py PlanCompiler
+k1/concierge/section_update/events.py SectionUpdateCompletionStatus and payload builders
+k1/concierge/section_update/lifecycle.py run_shadow_section_update and classify_section_update_blocking
+k1/concierge/bus/topics.py TOPIC_SECTION_UPDATE_REQUESTED and TOPIC_SECTION_UPDATE_COMPLETED
+k1/concierge/bus/builders.py build_section_update_requested and build_section_update_completed
+k1/concierge/tools/implementations.py old cognitive tools using ctx.writer_port for rollback comparison
+```
+
+Background apply algorithm, in spec form:
+
+```text
+1. Receive turn.completed on the session_bus.
+2. Build SectionUpdateInput from the turn payload plus SessionState snapshot/projection.
+3. Publish section_update.requested with mode=background_apply or mode=shadow.
+4. Run classifier with configured provider/model/timeout.
+5. If provider fails, times out, emits no tool call, emits invalid schema, or confidence is too low:
+       publish section_update.completed with provider_failed/timed_out/degraded_noop and do not call writer_port.
+6. If a plan exists, compile with PlanCompiler and idempotency store.
+7. If compile rejects stale/duplicate/invalid/forbidden target:
+       publish section_update.completed with rejected/stale/duplicate and do not call writer_port.
+8. If compile requires no writer call:
+       publish no-op/shadow_noop and do not call writer_port.
+9. If compile produces BatchRequest:
+       call writer_port exactly once.
+10. Publish section_update.completed with applied/writer_rejected/writer_failed and compact writer summary.
+```
+
+Failure taxonomy to track:
+
+```text
+provider_failed
+timed_out
+invalid_schema
+no_tool_call
+low_confidence_noop
+forbidden_section_or_operation
+stale_snapshot
+duplicate_plan_or_mutation
+writer_unavailable
+writer_rejected
+writer_failed
+applied
+shadow_plan
+shadow_noop
+```
+
+Observability payload requirements:
+
+```text
+Every completed event should include:
+   turn_id, session_id, cognitive_trace_id, mode, classifier_version, provider_id, model_id
+   status, mutation_count, rejected_candidate_count, elapsed_ms
+   plan_id, plan_idempotency_key, snapshot_version, snapshot_source_epoch where available
+   diagnostics as compact code/message records
+   writer_summary with section/operation counts but no private raw payload leakage in normal logs
+```
+
+Backpressure and idempotency rules:
+
+```text
+Worker queue is bounded. On overflow, emit degraded_noop/queue_full and skip the turn.
+Processed turn ids are tracked per session so duplicate turn.completed events do not double-write.
+PlanCompiler/idempotency remains the authoritative duplicate mutation guard.
+Retries are off by default for same-turn work; no same-turn retry loop.
+```
+
+Acceptance:
+
+```text
+writer_port is called zero times for shadow/degraded/invalid/stale/duplicate/provider-failed cases.
+writer_port is called exactly once for one accepted compiled BatchRequest.
+section_update.completed exists for every requested turn, including failures.
+Logs and events expose enough status to build the M5 working tracker.
+```
+
+Targeted tests to create or update:
+
+```powershell
+pytest tests/k1/concierge/section_update/test_background_worker.py -v
+pytest tests/k1/concierge/section_update/test_plan_compiler.py -v
+pytest tests/k1/concierge/section_update/test_idempotency.py -v
+pytest tests/k1/concierge/section_update/test_worker_observability.py -v
+```
+
+Latest targeted validation:
+
+```text
+pytest tests/k1/concierge/section_update/test_background_worker.py -v
+   5 passed
+
+pytest tests/k1/concierge/section_update/test_classifier_turn_boundary.py -v
+   5 passed
+
+pytest tests/k1/concierge/section_update/test_plan_compiler.py tests/k1/concierge/section_update/test_idempotency.py -v
+   11 passed
+```
+
+#### M4.I5 Trace Current Temporal, SelfModel, SessionState, And Prompt Grounding Sources
 
 Core concept: prove that Front receives enough situation frame as prompt context before removing cognitive write chores.
 
@@ -2318,7 +2852,7 @@ Front situation frame
 What this prevents:
 
 ```text
-M4.I1 prevents the cutover from making Front lighter but less situated.
+M4.I5 prevents the cutover from making Front lighter but less situated.
 Front loses write chores only after its read/projection context is proven intact.
 ```
 
@@ -2341,6 +2875,97 @@ Document which blocks are required for final answer voice and which are only cog
 Remove mutation chores from Front prompt only after replacement situation frame is present.
 ```
 
+Current code trace checkpoint, 2026-05-26:
+
+```text
+Browser/device source chain:
+   ui/web/static/app.js _browserDeviceContext
+      sends timezone, locale, surface, profile_timezone, profile_location, browser geolocation status/fix
+   ui/web/app.py _handle_user_message and device_context websocket branch
+      forwards device_context before each user turn and on explicit device_context messages
+   ui/web/coordinator.py _record_device_context
+      writes DeviceContextSnapshot to KernelService.device_context_port
+   k1/kernel/service.py S2.7/S2.8
+      wires the same InMemoryDeviceContextPort into Temporal and Spatial bundles
+
+Kernel/session source chain:
+   k1/kernel/service.py S2.6/S2.7/S2.8/S2.9
+      builds SelfModel, Temporal, Spatial, and Grounding service bundles
+   k1/kernel/service.py P3.5/P3.6/P3.7/P3.8
+      builds per-session SelfModelHandle, TemporalHandle, SpatialHandle, and GroundingHandle
+   k1/concierge/factory.py _construct_concierge
+      passes temporal/spatial/grounding through PortBundle and calls runtime setters before start
+   k1/kernel/service.py P3.5 pre-start install
+      installs SelfModel policy gate and attaches SelfModelHandle to ConciergeRuntime
+   k1/concierge/session.py _front_consumer
+      calls front_handler with temporal, spatial, grounding, self_model, and opp_pipeline
+
+Front handler prompt source chain:
+   k1/concierge/actors/front.py front_handler
+      resolves PromptMode from FSM state, event topic, clarification/task/affect state, and routing metadata
+      reads affective_now for affect band and tool/filter decisions
+      builds scenario_data by mode from envelope payload and SessionState
+      refreshes grounding for the turn and builds the Front GroundingProjection
+      builds chat messages from history_active plus current/event turn text
+      calls OppPipeline.on_pre_prompt_build for compressed_context and identity_block
+      calls self_model.render_capsule for the SelfModel GroundingCapsule
+      calls DynamicPromptBuilder.build with ss, scenario_data, grounding_capsule, grounding_projection
+
+DynamicPromptBuilder prompt assembly chain:
+   Stage 0 strips compressed_context and identity_block out of scenario_data
+      so neither leaks through generic scenario formatting
+   Stage 1-7 add mode sections, examples, affect/domain/depth blocks, anti-patterns, and scenario template data
+   Stage 8 reads SessionState sections per SS_READ_CONFIGS; temporal is intentionally filtered out
+      if compressed_context exists, history_active is omitted and compressed_context replaces it
+   Stage 9.5 promotes live situation-frame blocks directly after IDENTITY:
+      active member from GroundingCapsule self_block + space_graph_block
+      NOW/PLACE from GroundingProjection render_now_block/render_place_block
+      fallback NOW from temporal SessionState only if GroundingProjection rendering is absent
+      AFFECT STATE from affect band/modifiers plus affective_now raw fields
+      CONSCIENCE from GroundingCapsule conscience_block
+      identity_block after promoted live blocks
+      REFERENCE PROFILE from remaining capsule preferences/hobbies/goals/routines/context/freshness
+   Tool selection happens after prompt assembly through get_tool_allowlist and all_tool_schemas filtering.
+
+Required situation-frame/read blocks:
+   IDENTITY grounding protocol and output identity boundaries
+   ACTIVE MEMBER [self]/[space]
+   NOW and PLACE
+   AFFECT STATE plus affective_now SessionState renderer
+   CONSCIENCE
+   REFERENCE PROFILE capsule body
+   SessionState projections: beliefs_active, scoreboard, clarifications, narrative_active, control,
+      persona, task_state, task_artifacts, history_active or compressed_context depending on mode/input
+   scenario templates for task result, weave, HITL, error, cancel, active member, and async result context
+   chat messages from history_active plus current/event turn text
+
+Cognitive write chores/hints, not grounding sources:
+   REACT_RHYTHM and REACT_RHYTHM_REDUCED tool-loop write instructions
+   COGNITIVE_DISCIPLINE and COGNITIVE_DISCIPLINE_REDUCED
+   COMMITMENT_TRACKING update_scoreboard instructions
+   MODE_EXAMPLES that demonstrate update_beliefs/update_scoreboard/update_clarifications/update_narrative
+   prompt.mode TOOL_ALLOWLIST cognitive entries
+   tools.schemas_front cognitive schemas and tools.implementations cognitive writer handlers
+```
+
+Trace conclusion:
+
+```text
+Current situation-frame blocks are not coupled to Front tool schema visibility.
+The builder receives grounding_capsule, grounding_projection, ss, compressed_context, and identity_block
+as prompt inputs before _select_tools filters the actual model tool surface.
+
+Therefore M4.I6-I8 can remove cognitive write instructions/allowlist entries without deleting:
+   active member grounding
+   temporal/spatial NOW and PLACE grounding
+   affect/conscience grounding
+   SessionState read projection
+   compressed conversation context
+   dynamic identity overlay
+
+Do not delete or collapse the read/projection inputs during cognitive tool removal.
+```
+
 Acceptance:
 
 ```text
@@ -2353,9 +2978,10 @@ Targeted tests:
 
 ```powershell
 pytest tests/k1/concierge/test_m6_e1_episodic_compression.py tests/k1/concierge/test_m6_e3_dynamic_identity.py tests/k1/concierge/actors/test_front_spatial_projection.py -v
+pytest tests/k1/concierge/prompt/test_builder_grounding.py -v
 ```
 
-#### M4.I2 Write The Formal Front Prompt Modification Contract
+#### M4.I6 Write The Formal Front Prompt Modification Contract
 
 Core concept: replace “write cognitive state through tools” instructions with “consume state projection and answer/route correctly.”
 
@@ -2379,15 +3005,38 @@ classifier handles hidden cognitive updates after the turn
 What this prevents:
 
 ```text
-M4.I2 prevents prompt text from reintroducing the exact cognitive chores that the architecture moved to the classifier.
+M4.I6 prevents prompt text from reintroducing the exact cognitive chores that the architecture moved to the classifier.
 ```
 
 Code boundaries:
 
 ```text
 k1/concierge/prompt/sections.py COGNITIVE_DISCIPLINE
+k1/concierge/prompt/sections.py REACT_RHYTHM and REACT_RHYTHM_REDUCED
+k1/concierge/prompt/sections.py COMMITMENT_TRACKING, INTERRUPT_RULES, ANTI_PATTERNS_FULL, MODE_EXAMPLES
+k1/concierge/prompt/mode.py TOOL_ALLOWLIST and conditional refine_affect/promote_belief
 k1/concierge/prompt/builder.py prompt assembly
 whiteboard_front_deloading.md Front prompt contract sections
+```
+
+M4.I6 implementation boundary, 2026-05-26:
+
+```text
+Do not create a new prompt version or a parallel front_prompt_contract.md for M4.I6.
+Modify the existing whiteboard_front_deloading.md Iteration 1 target prompt and
+Actual Iteration 1 prompt only.
+
+M4.I5 current Front prompt sources read before writing the contract:
+   SelfModel/GroundingCapsule active actor, visible space, conscience, reference profile
+   GroundingProjection NOW and PLACE rendered before tool selection
+   SessionState read projections from DynamicPromptBuilder SS_READ_CONFIGS
+   OPP compressed_context replacing history_active when present
+   OPP dynamic identity block appended after promoted live blocks
+   scenario_data/current event and chat history
+   Front tool selection after prompt assembly
+
+Runtime sections.py still contains old cognitive write instructions until M4.I7/M4.I8.
+M4.I6 locks the replacement contract; it does not remove runtime allowlists or schemas.
 ```
 
 Formal Front prompt contract:
@@ -2422,7 +3071,7 @@ Front receives:
 Acceptance:
 
 ```text
-No prompt text instructs Front to call update_beliefs, update_scoreboard, update_clarifications, update_narrative, refine_affect, promote_belief, or update_session_bundle.
+No Iteration 1 contract prompt text instructs Front to call update_beliefs, update_scoreboard, update_clarifications, update_narrative, refine_affect, promote_belief, or update_session_bundle.
 Prompt still explicitly tells Front how to answer, clarify, dispatch, and use memory read tools.
 Prompt does not imply the classifier is user-visible.
 ```
@@ -2433,9 +3082,9 @@ Targeted test:
 pytest tests/k1/concierge/section_update/test_front_prompt_contract.py -v
 ```
 
-#### M4.I3 Remove Cognitive Write Tools From Front Mode Allowlists
+#### M4.I7 Remove Cognitive Write Tools From Front Mode Allowlists
 
-Core concept: hide write tools from active Front contexts only after M3 gates pass.
+Core concept: hide write tools from deloaded Front contexts once the background worker path is wired and observable.
 
 Issue context:
 
@@ -2459,7 +3108,7 @@ Front active tool context after cutover
 What this prevents:
 
 ```text
-M4.I3 prevents Front from continuing to own cognitive writes after classifier active gates pass, while preserving the tools Front still needs to do its actual job.
+M4.I7 prevents Front from continuing to own cognitive writes after the background updater becomes the hidden owner, while preserving the tools Front still needs to do its actual job.
 ```
 
 Code boundaries:
@@ -2519,7 +3168,7 @@ Targeted test:
 pytest tests/k1/concierge/section_update/test_front_tool_allowlist_cutover.py -v
 ```
 
-#### M4.I4 Rewrite Prompt Sections That Instruct Cognitive Tool Use
+#### M4.I8 Rewrite Prompt Sections That Instruct Cognitive Tool Use
 
 Core concept: revise the prompt wording so Front is no longer responsible for deciding or narrating hidden cognitive updates.
 
@@ -2540,7 +3189,7 @@ instructions to consume rendered state and avoid hidden writes
 What this prevents:
 
 ```text
-M4.I4 prevents a confusing state where the tools are hidden but the prompt still tells Front to perform hidden update work.
+M4.I8 prevents a confusing state where the tools are hidden but the prompt still tells Front to perform hidden update work.
 ```
 
 Code boundaries:
@@ -2563,7 +3212,7 @@ Preserve the shorter Iteration 1 prompt posture measured in M0 as the target dir
 Acceptance:
 
 ```text
-Prompt text contains no cognitive write tool names in active cutover mode.
+Prompt text contains no cognitive write tool names in deloaded Front mode.
 Prompt text contains no hidden update todo list for Front.
 Prompt compare still runs without runtime errors.
 ```
@@ -2575,7 +3224,7 @@ pytest tests/k1/concierge/section_update/test_front_prompt_contract.py -v
 python .\poc\front_prompt_compare\compare_front_prompts.py --no-cognitive-tools --simulate-classifier --output-dir .\poc\front_prompt_compare\runs
 ```
 
-#### M4.I5 Preserve Cognitive Schemas Temporarily For Rollback/Internal Comparison
+#### M4.I9 Preserve Cognitive Schemas Temporarily For Rollback/Internal Comparison
 
 Core concept: hide Front-visible cognitive tools without deleting schemas or implementations.
 
@@ -2595,7 +3244,7 @@ mode/allowlist gates decide Front visibility
 What this prevents:
 
 ```text
-M4.I5 prevents the migration from becoming irreversible. Rollback should be a flag transition, not a code resurrection.
+M4.I9 prevents the migration from becoming irreversible. Rollback should be a flag transition, not a code resurrection.
 ```
 
 Code boundaries:
@@ -2631,7 +3280,7 @@ Targeted test:
 pytest tests/k1/concierge/section_update/test_cognitive_schema_rollback_surface.py -v
 ```
 
-#### M4.I6 Implement Iteration 1 Prompt Seating From The Formal Contract
+#### M4.I10 Implement Iteration 1 Prompt Seating From The Formal Contract
 
 Core concept: seat the deloaded prompt as the default cutover prompt shape once M3 gates pass and M4 allowlists are hidden.
 
@@ -2657,7 +3306,7 @@ prompt compare and targeted prompt tests
 What this prevents:
 
 ```text
-M4.I6 prevents the deloaded prompt from being a vague shorter prompt. It must be the measured baseline plus the formal situation-frame contract.
+M4.I10 prevents the deloaded prompt from being a vague shorter prompt. It must be the measured baseline plus the formal situation-frame contract.
 ```
 
 Code boundaries:
@@ -2698,15 +3347,16 @@ pytest tests/k1/concierge/test_m6_e1_episodic_compression.py tests/k1/concierge/
 M4 blockers and risks:
 
 ```text
-M4 is blocked until M3 quality gates pass; otherwise cognitive tool removal would hide the only working write path.
+M4 should not proceed from unknown classifier quality, but it does not wait for a separate active-mode gate.
 Commitment tracking semantics currently flow through update_scoreboard; classifier must own equivalent behavior before cutover.
 Prompt grounding regressions can make Front feel less situated even if classifier writes are correct.
 Deleting schemas instead of hiding allowlists would break rollback; preserve schemas and implementations.
+Background updater failure must degrade to diagnostic no-op, not user-visible turn failure.
 ```
 
 ### M5 Detailed Plan: Final Validation, Rollback Proof, And Cutover
 
-Epic: prove the Front-deloading cutover is reversible, observable, and safe: Front no longer sees cognitive write tools by default, SectionUpdate remains shadow-only until M3 gates pass, active apply is ordered before `turn.completed`, and rollback restores the current Front tool contract without deleting schemas or implementations.
+Epic: prove the Front-deloading cutover is reversible, observable, and practical: Front no longer sees cognitive write tools by default, the background updater owns hidden cognitive writes through writer_port, failures degrade to diagnostics/no-op, and rollback restores the current Front tool contract without deleting schemas or implementations.
 
 M5 operating picture:
 
@@ -2726,7 +3376,7 @@ rollback flag matrix
    v
 cutover decision
    |
-   +--> pass: active canary / cutover record
+   +--> pass: background-updater deload / cutover record
    |
    +--> fail: shadow/degraded only or rollback
 ```
@@ -2735,7 +3385,7 @@ M5 drift guard:
 
 ```text
 Do not run broad suites to compensate for unclear evidence.
-Do not declare active cutover while M3 gates fail.
+Do not declare hidden cognitive write ownership complete while M3 gates fail.
 Do not update legacy tests to hide rollback regressions.
 Do not waive schema/guard validity or forbidden-section/op gates.
 ```
@@ -2746,12 +3396,112 @@ M5 release posture:
 No full kernel suite.
 No full Fabric suite.
 Run only targeted contract, prompt, lifecycle, writer, POC, and rollback validation.
-If M3 gates are not green, final state is shadow/degraded, not active cutover.
+If M3 gates are not green, final state is diagnostic-only background work or rollback, not completed deload cutover.
 ```
 
-#### M5.I1 Run Targeted Classifier Contract Suites
+#### M5.I1 Define The Working-Tracker Dashboard/Report From section_update.completed And turn.completed
 
-Core concept: prove M1-M3 classifier contract, compiler, lifecycle, quality, and provider behavior with narrow tests.
+Core concept: after M4 builds the floors, M5 proves the building is standing by tracking the integrated path turn by turn. This is not a broad test sweep; it is evidence from the exact event and lifecycle surfaces M4 wires.
+
+Source surfaces read for this issue:
+
+```text
+k1/concierge/fsm/controller.py _emit_turn_completed
+   publishes k1.session.turn.completed.v1 with turn_id, session_id, cognitive_trace_id,
+   user_message, assistant_response, timestamp_ms, and turn_number.
+
+k1/concierge/section_update/events.py
+   builds section_update.requested/completed payloads with status, plan, compile,
+   writer_summary, diagnostics, and elapsed_ms.
+
+k1/concierge/bus/topics.py
+   TOPIC_TURN_COMPLETED, TOPIC_SECTION_UPDATE_REQUESTED, TOPIC_SECTION_UPDATE_COMPLETED.
+
+k1/kernel/service.py health_check and lifecycle logs
+   source for worker alive/stopped, P5.5 lifecycle, and per-session health summary.
+```
+
+Tracker report shape:
+
+```text
+For each session_id:
+   mode
+   worker_running
+   queue_depth
+   last_turn_id_seen
+   last_turn_id_completed
+   turn_completed_count
+   section_update_requested_count
+   section_update_completed_count
+   missing_completion_count
+   applied_count
+   shadow_noop_count
+   degraded_noop_count
+   provider_failed_count
+   timed_out_count
+   rejected_count
+   stale_count
+   duplicate_count
+   writer_rejected_count
+   writer_failed_count
+   p50/p95 classifier_elapsed_ms
+   p50/p95 end_to_end_worker_elapsed_ms
+```
+
+Per-turn evidence row:
+
+```text
+turn_id
+session_id
+cognitive_trace_id
+turn_number
+prompt_mode if available
+fsm_state if available
+section_update_mode
+provider_id
+model_id
+status
+mutation_count
+rejected_candidate_count
+plan_id
+plan_idempotency_key
+snapshot_version
+snapshot_source_epoch
+diagnostic_codes
+writer_summary section/operation counts
+```
+
+What to look for while validating:
+
+```text
+Every turn.completed has either a matching section_update.completed or an intentional mode=off reason.
+No background_apply turn lacks a terminal status.
+No provider/schema/guard failure reaches writer_port.
+No cognitive tool appears in the deloaded Front tool context.
+No user-visible answer includes classifier mechanics or diagnostics.
+Rollback mode restores old Front-visible cognitive tools and disables background writer calls.
+```
+
+Acceptance:
+
+```text
+M5 has a report artifact path, not just console logs.
+Report distinguishes Front deload failures from classifier quality failures.
+Report can prove 0 cognitive Front tool calls and 0 unsafe writer calls for selected validation turns.
+Report records whether the full M3 100-case v5 corpus was rerun or deliberately reused.
+```
+
+Targeted tests/probes to create or update:
+
+```powershell
+pytest tests/k1/concierge/section_update/test_worker_observability.py -v
+pytest tests/k1/concierge/section_update/test_front_no_cognitive_tool_calls.py -v
+python .\poc\front_prompt_compare\compare_front_prompts.py --no-cognitive-tools --simulate-classifier --output-dir .\poc\front_prompt_compare\runs
+```
+
+#### M5.I2 Run Targeted Classifier, Kernel Wiring, Prompt, Front, And Rollback Tests
+
+Core concept: prove M1-M4 classifier contract, compiler, kernel lifecycle, prompt, Front tool visibility, and rollback behavior with narrow tests.
 
 Issue context:
 
@@ -2772,7 +3522,7 @@ eligible for lifecycle/prompt release checks
 What this prevents:
 
 ```text
-M5.I1 prevents release validation from skipping the core contract and relying only on end-to-end happy paths.
+M5.I2 prevents release validation from skipping the core contract and relying only on end-to-end happy paths.
 ```
 
 Code boundaries:
@@ -2795,9 +3545,9 @@ Acceptance:
 ```text
 Schema/type validation is deterministic.
 Invalid section/op rejects before writer_port.
-Whole-plan validation prevents partial dependent active apply.
+Whole-plan validation prevents partial dependent background apply.
 Idempotency prevents duplicate writes.
-Quality gates block active mode when evidence is missing or failing.
+Quality gates block completed hidden-write ownership when evidence is missing or failing.
 ```
 
 Targeted command:
@@ -2807,7 +3557,7 @@ pytest tests/k1/concierge/section_update/test_plan_schema.py tests/k1/concierge/
 pytest tests/k1/sessionstate/test_guard.py -k "valid_operations or invalid_operation" -v
 ```
 
-#### M5.I2 Run Targeted Front, Prompt, And Concierge Regressions Touched By The Migration
+##### M5.I2 Runtime Regression Pack: Front, Prompt, And Concierge
 
 Core concept: prove M2/M4 lifecycle and Front cutover behavior without broad suites.
 
@@ -2818,7 +3568,7 @@ changed runtime surfaces
    |
    +--> turn input builder
    +--> section-update lifecycle events
-   +--> active apply ordering
+   +--> background apply/degrade ordering
    +--> Back overlay/gating
    +--> Front prompt contract
    +--> Front tool allowlist
@@ -2849,17 +3599,17 @@ k1/concierge/tools/implementations.py
 Acceptance:
 
 ```text
-Active apply closes before turn.completed.
+Background apply either writes accepted mutations or emits diagnostic no-op without failing the user-visible turn.
 Shadow mode never mutates SessionState.
 Front prompt still receives grounding blocks.
-Front active tool context omits cognitive write tools only when deload flag is active.
+Front deloaded tool context omits cognitive write tools only when deload flag is active.
 Back dispatch-critical overlay/gating behavior is explicit and tested.
 ```
 
 Targeted command:
 
 ```powershell
-pytest tests/k1/concierge/section_update/test_turn_input_builder.py tests/k1/concierge/section_update/test_classifier_turn_boundary.py tests/k1/concierge/section_update/test_active_apply.py tests/k1/concierge/section_update/test_turn_completed_coordination.py tests/k1/concierge/section_update/test_dispatch_overlay.py tests/k1/concierge/section_update/test_back_snapshot_gating.py -v
+pytest tests/k1/concierge/section_update/test_turn_input_builder.py tests/k1/concierge/section_update/test_classifier_turn_boundary.py tests/k1/concierge/section_update/test_background_apply.py tests/k1/concierge/section_update/test_turn_completed_coordination.py tests/k1/concierge/section_update/test_dispatch_overlay.py tests/k1/concierge/section_update/test_back_snapshot_gating.py -v
 pytest tests/k1/concierge/section_update/test_front_tool_allowlist_cutover.py tests/k1/concierge/section_update/test_front_prompt_contract.py tests/k1/concierge/section_update/test_cognitive_schema_rollback_surface.py -v
 pytest tests/k1/concierge/test_m6_e1_episodic_compression.py tests/k1/concierge/test_m6_e3_dynamic_identity.py tests/k1/concierge/actors/test_front_spatial_projection.py -v
 ```
@@ -2965,7 +3715,7 @@ Acceptance:
 Dry classifier run passes schema/validation checks for golden cases.
 Selected live Vertex run records provider/model identity, validation pass rate, model latency, and E2E latency.
 Prompt compare dry run records no cognitive tool exposure and no runtime errors.
-If live pass rate remains below M3 gates, active cutover is blocked.
+If live pass rate remains below M3 gates, completed hidden-write ownership is blocked or explicitly waived.
 ```
 
 Targeted commands:
@@ -2992,7 +3742,7 @@ runtime state matrix
    +--> rollback/current: Front tools visible, classifier inactive
    +--> shadow: Front tools hidden/transitional, manifests only
    +--> degraded_noop: diagnostics only
-   +--> active canary: gated apply before turn.completed
+   +--> background_apply: fail-closed writer_port apply after completed turn
    +--> offline_stub: deterministic tests
    |
    v
@@ -3002,7 +3752,7 @@ same codebase can move between states without schema deletion
 What this prevents:
 
 ```text
-M5.I5 prevents the release from becoming one-way. If active cutover misbehaves, the old Front-visible cognitive path must still be restorable.
+M5.I5 prevents the release from becoming one-way. If background updater deload misbehaves, the old Front-visible cognitive path must still be restorable.
 ```
 
 Code boundaries:
@@ -3022,7 +3772,7 @@ Flag matrix:
 | Rollback/current | `0` | `off` or disabled | Front-visible cognitive tools restored; classifier inactive. |
 | Shadow deload | `1` | `shadow` | Front hides cognitive tools; classifier manifests only; no writer calls. |
 | Degraded no-op | `1` | `degraded_noop` | Front hides cognitive tools; classifier emits diagnostics; no writer calls. |
-| Active canary | `1` | `active` | Allowed only after M3 gates pass; apply/degrade before turn.completed. |
+| Background apply | `1` | `background_apply` | Front hides cognitive tools; accepted classifier mutations apply through writer_port; failures emit diagnostic no-op. |
 | Offline tests | either | `offline_stub` | Deterministic stub only; no live provider dependency. |
 
 Rollback proof checklist:
@@ -3033,7 +3783,7 @@ Cognitive implementations still exist.
 Rollback/current flags expose old tools to Front.
 Deload flags hide old tools from Front.
 update_session_bundle rollback/internal path remains callable.
-Switching out of active mode prevents writer calls from classifier lifecycle.
+Switching out of background_apply prevents writer calls from classifier lifecycle.
 ```
 
 Targeted command:
@@ -3060,13 +3810,13 @@ cutover decision record
    +--> known waivers, if any
    |
    v
-decision: active / shadow-only / degraded / rollback
+decision: background_apply / shadow-only / degraded / rollback
 ```
 
 What this prevents:
 
 ```text
-M5.I6 prevents a vague release call. The system either has evidence for active cutover or it explicitly ships shadow/degraded/rollback behavior.
+M5.I6 prevents a vague release call. The system either has evidence for background-updater deload or it explicitly ships shadow/degraded/rollback behavior.
 ```
 
 Final cutover criteria:
@@ -3084,8 +3834,8 @@ No dangerous false writes are observed in the required shadow window.
 Waiver rules:
 
 ```text
-Active mode cannot be globally waived while quality gates fail.
-Per-session active canary waiver requires rollback proof, manifest logging, and explicit owner signoff.
+Background hidden-write ownership cannot be globally waived while quality gates fail.
+Per-session or per-environment background_apply waiver requires rollback proof, manifest logging, and explicit owner signoff.
 Latency waiver cannot remove timeout/degraded-noop behavior.
 Schema/guard validity and forbidden-section/op gates are not waivable.
 ```
@@ -3101,7 +3851,7 @@ Final targeted validation command list:
 
 ```powershell
 pytest tests/k1/concierge/section_update/test_plan_schema.py tests/k1/concierge/section_update/test_operation_vocabulary.py tests/k1/concierge/section_update/test_plan_compiler.py tests/k1/concierge/section_update/test_idempotency.py tests/k1/concierge/section_update/test_classifier_stub.py tests/k1/concierge/section_update/test_quality_gates.py -v
-pytest tests/k1/concierge/section_update/test_turn_input_builder.py tests/k1/concierge/section_update/test_classifier_turn_boundary.py tests/k1/concierge/section_update/test_active_apply.py tests/k1/concierge/section_update/test_turn_completed_coordination.py tests/k1/concierge/section_update/test_dispatch_overlay.py tests/k1/concierge/section_update/test_back_snapshot_gating.py -v
+pytest tests/k1/concierge/section_update/test_turn_input_builder.py tests/k1/concierge/section_update/test_classifier_turn_boundary.py tests/k1/concierge/section_update/test_background_apply.py tests/k1/concierge/section_update/test_turn_completed_coordination.py tests/k1/concierge/section_update/test_dispatch_overlay.py tests/k1/concierge/section_update/test_back_snapshot_gating.py -v
 pytest tests/k1/concierge/section_update/test_front_tool_allowlist_cutover.py tests/k1/concierge/section_update/test_front_prompt_contract.py tests/k1/concierge/section_update/test_cognitive_schema_rollback_surface.py tests/k1/concierge/section_update/test_feature_flags.py -v
 pytest tests/k1/sessionstate/test_guard.py -k "valid_operations or invalid_operation" -v
 pytest tests/k1/concierge/test_m04_e42_write_path.py tests/k1/concierge/test_m04_e43_session_bundle.py tests/k1/concierge/test_m04_e44_prompt_ss.py -v
@@ -3114,8 +3864,204 @@ python .\poc\front_prompt_compare\compare_front_prompts.py --no-cognitive-tools 
 M5 blockers and risks:
 
 ```text
-Current live classifier quality is too low for active cutover until M3 gates improve.
+Full-corpus classifier quality is not yet green until the v5 100-case rerun proves the repaired guardrails.
 Operation vocabulary must remain exactly aligned with MutationGuard and section apply surfaces.
 Batch writer semantics are not transactional, so whole-plan validation proof is release-critical.
 Legacy tests may need careful rewriting to protect rollback instead of preserving old Front-visible behavior.
+```
+
+### M6 Detailed Plan: Steady-State Cutover And Cleanup
+
+Epic: once M5 proves the integrated background-updater/no-cognitive-Front path, move from migration mode to steady state. M6 is cleanup after evidence, not a prerequisite for M4 or M5 integration work.
+
+M6 operating picture:
+
+```text
+M5 cutover record
+    |
+    +--> background updater healthy
+    +--> Front deloaded tool context stable
+    +--> rollback proof exists
+    +--> quality evidence accepted or waived
+    |
+    v
+steady-state decision
+    |
+    +--> keep rollback if stability evidence is not enough
+    +--> remove obsolete Front cognitive surfaces only after M6 gates
+    |
+    v
+locked runbook + monitoring + cleanup commit list
+```
+
+M6 drift guard:
+
+```text
+Do not delete rollback surfaces during M4 or M5.
+Do not require M6 cleanup before integrated M4/M5 validation.
+Do not remove diagnostic shadow mode; keep it for future model/prompt regressions.
+Do not run broad kernel/fabric suites as the definition of M6 safety.
+Do not delete update_session_bundle or any internal schema until a separate audit proves it is not used for rollback/internal tools.
+```
+
+#### M6.I1 Define The Stability Window And Rollback-Removal Criteria
+
+Core concept: remove migration scaffolding only after the integrated path has real evidence, not because the plan wants symmetry.
+
+Stability evidence options:
+
+```text
+Minimum acceptable evidence before rollback removal:
+   100 integrated validation turns with 0 dangerous false writes, or
+   an explicitly named deployment/staging window with 0 rollback invocations and 0 unsafe writer calls, or
+   an explicit owner waiver that keeps rollback surfaces instead of deleting them.
+
+For no-user or pre-deployment environments:
+   M6 cleanup can be deferred. M4/M5 completion may leave rollback flags and schemas intact.
+```
+
+Acceptance:
+
+```text
+Cutover record names the stability window, evidence artifact, and rollback decision.
+Rollback removal is denied if M5 tracker has missing completions, unsafe writer calls, or unresolved high-risk mismatches.
+If stability evidence is insufficient, M6 records "cleanup deferred" rather than forcing deletion.
+```
+
+#### M6.I2 Remove Obsolete Front Cognitive Schema/Implementation Surfaces Only After Gates
+
+Core concept: deletion is the last floor. First hide, validate, and run with rollback; only then remove old Front cognitive write surfaces.
+
+Deletion candidates to audit:
+
+```text
+k1/concierge/tools/schemas_front.py
+   UPDATE_BELIEFS_SCHEMA
+   UPDATE_SCOREBOARD_SCHEMA
+   UPDATE_CLARIFICATIONS_SCHEMA
+   UPDATE_NARRATIVE_SCHEMA
+   REFINE_AFFECT_SCHEMA
+   PROMOTE_BELIEF_SCHEMA
+   FRONT_TOOL_SCHEMAS cognitive entries
+
+k1/concierge/tools/implementations.py
+   execute_update_beliefs
+   execute_update_scoreboard
+   execute_update_clarifications
+   execute_update_narrative
+   execute_refine_affect
+   execute_promote_belief
+
+k1/concierge/tools/parallelism.py
+   cognitive write grouping assumptions
+
+k1/concierge/protocols/hitl_wiring.py
+   HITL_RESOLVE assumptions that update_beliefs is Front-visible
+```
+
+Keep until separately audited:
+
+```text
+update_session_bundle
+internal writer contracts
+section_update classifier schemas
+MutationGuard operation vocabulary
+rollback evidence reports
+shadow/diagnostic event builders
+```
+
+Acceptance:
+
+```text
+No deloaded Front mode references deleted tool names.
+No tests require the deleted tools to be Front-visible.
+Rollback removal is documented; if rollback must remain, schemas stay hidden but present.
+```
+
+#### M6.I3 Collapse Feature Flags From Migration Toggles To Steady-State Controls
+
+Core concept: migration flags should not become permanent ambiguity. After M6 gates, the default path is background updater ownership; diagnostics and model knobs remain.
+
+Flag disposition:
+
+```text
+front_deload_cognitive_tools:
+   migration flag; collapse to true/default-on after rollback removal.
+
+section_update_enabled:
+   migration flag; collapse to true/default-on only after M6 gates.
+
+section_update_mode:
+   keep as operational control with allowed values background_apply, shadow, degraded_noop, off.
+   off remains an incident rollback until old Front cognitive surfaces are deleted; after deletion, off means no hidden cognitive writes.
+
+section_update_provider / section_update_model:
+   keep as model routing knobs for future provider swaps.
+
+section_update_shadow_only or equivalent:
+   keep for diagnostics/comparison after model or prompt changes.
+```
+
+Acceptance:
+
+```text
+Config defaults express the steady-state path clearly.
+Operators can still force shadow/degraded_noop for incident investigation.
+No flag combination exposes cognitive write tools to Front after rollback surfaces are removed.
+```
+
+#### M6.I4 Lock Prompt Contracts, Runbooks, And Evidence Artifacts
+
+Core concept: after cleanup, future contributors should not accidentally rebuild the old Front cognitive tool posture.
+
+Artifacts to lock:
+
+```text
+docs/architecture/front_prompt_contract.md
+docs/architecture/front_prompt_grounding_sources.md
+docs/runbooks/section_update_background_worker.md
+data/m3_section_update_*_report.json evidence references
+M5 cutover/working-tracker report path
+```
+
+Runbook must include:
+
+```text
+How to identify provider_failed vs writer_rejected vs forbidden target.
+How to switch to shadow/degraded_noop.
+How to rerun the focused repair subset and full 100-case corpus.
+How to verify Front tool context has no cognitive write tools.
+How to decide whether rollback removal is still safe.
+```
+
+Acceptance:
+
+```text
+Docs name the background updater as the hidden cognitive writer.
+Docs say Front consumes situation frame and does not write cognitive SessionState.
+Docs say Back is not the classifier owner.
+Docs keep spatial/grounding skeleton caveats accurate.
+```
+
+#### M6.I5 Keep Targeted Validation Discipline
+
+Core concept: M6 cleanup should be proven by the surfaces it touches. Do not replace precision with a broad suite.
+
+Targeted validation after cleanup:
+
+```powershell
+pytest tests/k1/concierge/section_update/test_background_apply.py tests/k1/concierge/section_update/test_worker_observability.py -v
+pytest tests/k1/concierge/section_update/test_front_tool_allowlist_cutover.py tests/k1/concierge/section_update/test_front_prompt_contract.py -v
+pytest tests/k1/concierge/section_update/test_cognitive_schema_rollback_surface.py -v
+pytest tests/k1/concierge/tools/test_tool_dispatcher_tier_collapse.py tests/k1/concierge/test_m03_validator.py -v
+pytest tests/k1/kernel/test_service.py -k "section_update_worker or session_instance" -v
+```
+
+Acceptance:
+
+```text
+Cleanup does not reintroduce Front cognitive tool visibility.
+Background updater still emits requested/completed diagnostics.
+Kernel session lifecycle still starts/stops cleanly with the worker enabled and disabled.
+Rollback deletion or deferral is explicit in the cutover record.
 ```

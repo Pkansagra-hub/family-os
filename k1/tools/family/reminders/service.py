@@ -55,6 +55,22 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _member_id_alias(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if not text:
+        return value
+    return "_".join("".join(ch.lower() if ch.isalnum() else " " for ch in text).split())
+
+
+def _recipient_alias(value: Any, ctx: WriteContext) -> Any:
+    alias = _member_id_alias(value)
+    if alias in {"user", "me", "self", "myself", "current_user", "current_member"}:
+        return _member_id_alias(ctx.user_id)
+    return alias
+
+
 class RemindersToolService(BaseToolService):
     """Family Reminders adapter service."""
 
@@ -69,12 +85,12 @@ class RemindersToolService(BaseToolService):
 
     async def create_reminder(self, params: dict[str, Any], ctx: WriteContext) -> dict[str, Any]:
         action = self._spec("create_reminder")
-        recipient = params.get("recipient")
+        recipient = _recipient_alias(params.get("recipient"), ctx)
         if not recipient:
             raise ValueError("create_reminder requires recipient")
 
         # Cross-member guard: only guardian+ may set reminders for others.
-        if recipient != ctx.user_id and not role_satisfies(ctx.role, "guardian"):
+        if recipient != _member_id_alias(ctx.user_id) and not role_satisfies(ctx.role, "guardian"):
             raise PermissionError("only a guardian or parent may set reminders for other members")
 
         raw_trigger = params.get("trigger")
@@ -235,7 +251,9 @@ class RemindersToolService(BaseToolService):
             raise ValueError(f"reminder not found: {reminder_id}")
 
         # Delete gate: creator OR parent+.
-        if existing.actor != ctx.user_id and not role_satisfies(ctx.role, "parent"):
+        if _member_id_alias(existing.actor) != _member_id_alias(ctx.user_id) and not role_satisfies(
+            ctx.role, "parent"
+        ):
             raise PermissionError("only the reminder creator or a parent may delete this reminder")
 
         deleted = existing.model_copy(
@@ -252,7 +270,7 @@ class RemindersToolService(BaseToolService):
     async def list_reminders(self, params: dict[str, Any], ctx: WriteContext) -> dict[str, Any]:
         rows = self._scan_reminders(
             space_id=ctx.space_id,
-            recipient=params.get("recipient"),
+            recipient=_recipient_alias(params.get("recipient"), ctx),
             status=params.get("status"),
         )
         # due_before filter: only works for time-based triggers (fire_at in trigger JSON)
@@ -288,8 +306,8 @@ class RemindersToolService(BaseToolService):
     ) -> None:
         """Raise PermissionError unless caller is recipient, creator, or guardian+."""
         if (
-            ctx.user_id != reminder.recipient
-            and ctx.user_id != reminder.actor
+            _member_id_alias(ctx.user_id) != _member_id_alias(reminder.recipient)
+            and _member_id_alias(ctx.user_id) != _member_id_alias(reminder.actor)
             and not role_satisfies(ctx.role, "guardian")
         ):
             raise PermissionError(
@@ -399,15 +417,18 @@ class RemindersToolService(BaseToolService):
     ) -> list[dict[str, Any]]:
         sql = "SELECT * FROM reminders WHERE space_id=?"
         args: list[Any] = [space_id]
-        if recipient:
-            sql += " AND recipient=?"
-            args.append(recipient)
         if status:
             sql += " AND status=?"
             args.append(status)
         sql += " ORDER BY created_at ASC LIMIT 500"
         cur = self._conn.execute(sql, args)
-        return [_decode_reminder_cols(_row_to_dict(r)) for r in cur.fetchall()]
+        rows = [_decode_reminder_cols(_row_to_dict(r)) for r in cur.fetchall()]
+        if recipient:
+            recipient_alias = _member_id_alias(recipient)
+            rows = [
+                row for row in rows if _member_id_alias(row.get("recipient")) == recipient_alias
+            ]
+        return rows
 
 
 # ---------------------------------------------------------------------------

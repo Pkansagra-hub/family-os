@@ -1,4 +1,4 @@
-"""M2.I4 controller coordination for section-update turn boundary."""
+"""M4.I3 controller coordination for section-update turn boundary."""
 
 from __future__ import annotations
 
@@ -121,7 +121,7 @@ def _captured_topics(bus) -> list[str]:
     return [item.topic for item in bus.captured]
 
 
-def test_active_section_update_applies_before_turn_completed() -> None:
+def test_sync_overlay_section_update_applies_before_turn_completed() -> None:
     ctrl, bus = _controller()
     writer = _Writer()
     ctrl._ss = _SessionState(writer)
@@ -130,7 +130,7 @@ def test_active_section_update_applies_before_turn_completed() -> None:
     ctrl._current_turn_assistant_response = "done"
     ctrl.set_section_update_classifier(
         _Classifier(),
-        mode="active",
+        mode="sync_overlay",
         timeout_ms=100,
         classifier_version="classifier-v1",
     )
@@ -151,8 +151,8 @@ def test_active_section_update_applies_before_turn_completed() -> None:
     assert payload["writer"]["applied_count"] == 1
 
 
-def test_disabled_and_shadow_do_not_gate_turn_completed() -> None:
-    for mode in ("disabled", "shadow"):
+def test_worker_owned_modes_do_not_gate_turn_completed() -> None:
+    for mode in ("disabled", "shadow", "background_apply", "degraded_noop"):
         ctrl, bus = _controller()
         writer = _Writer()
         ctrl._ss = _SessionState(writer)
@@ -167,15 +167,18 @@ def test_disabled_and_shadow_do_not_gate_turn_completed() -> None:
         assert TOPIC_SECTION_UPDATE_COMPLETED not in topics
         assert topics[0] == TOPIC_TURN_COMPLETED
         assert writer.calls == []
+        turn_payload = json.loads(bus.captured[0].payload.decode())
+        assert turn_payload["prompt_mode"] == "front_react"
+        assert turn_payload["fsm_state"]
 
 
-def test_active_timeout_degrades_before_turn_completed_without_writer_call() -> None:
+def test_sync_overlay_timeout_degrades_before_turn_completed_without_writer_call() -> None:
     ctrl, bus = _controller()
     writer = _Writer()
     ctrl._ss = _SessionState(writer)
     ctrl._turn_number = 2
     ctrl._current_turn_assistant_response = "done"
-    ctrl.set_section_update_classifier(_SlowClassifier(), mode="active", timeout_ms=1)
+    ctrl.set_section_update_classifier(_SlowClassifier(), mode="sync_overlay", timeout_ms=1)
 
     ctrl._finalize_turn(_final_response_env())
 
@@ -191,7 +194,7 @@ def test_active_timeout_degrades_before_turn_completed_without_writer_call() -> 
     assert completed["diagnostics"][0]["code"] == "classifier_timeout"
 
 
-def test_active_boundary_does_not_retry_same_turn() -> None:
+def test_sync_overlay_boundary_does_not_retry_same_turn() -> None:
     ctrl, bus = _controller()
     writer = _Writer()
     classifier = _Classifier()
@@ -200,7 +203,7 @@ def test_active_boundary_does_not_retry_same_turn() -> None:
     ctrl._current_turn_assistant_response = "done"
     ctrl.set_section_update_classifier(
         classifier,
-        mode="active",
+        mode="sync_overlay",
         timeout_ms=100,
         classifier_version="classifier-v1",
     )
@@ -216,13 +219,13 @@ def test_active_boundary_does_not_retry_same_turn() -> None:
     assert len(writer.calls) == 1
 
 
-def test_active_boundary_degrades_malformed_plan_before_turn_completed() -> None:
+def test_sync_overlay_boundary_degrades_malformed_plan_before_turn_completed() -> None:
     ctrl, bus = _controller()
     writer = _Writer()
     ctrl._ss = _SessionState(writer)
     ctrl._turn_number = 4
     ctrl._current_turn_assistant_response = "done"
-    ctrl.set_section_update_classifier(_MalformedClassifier(), mode="active", timeout_ms=100)
+    ctrl.set_section_update_classifier(_MalformedClassifier(), mode="sync_overlay", timeout_ms=100)
 
     ctrl._finalize_turn(_final_response_env())
 
@@ -234,16 +237,16 @@ def test_active_boundary_degrades_malformed_plan_before_turn_completed() -> None
     ]
     assert writer.calls == []
     completed = json.loads(bus.captured[1].payload.decode())
-    assert completed["status"] == SectionUpdateCompletionStatus.DEGRADED_NOOP.value
-    assert completed["diagnostics"][0]["code"] == "active_boundary_failed"
+    assert completed["status"] == SectionUpdateCompletionStatus.REJECTED.value
+    assert completed["diagnostics"][0]["code"] == "invalid_schema"
 
 
-def test_active_boundary_closes_before_front_lock_drain() -> None:
+def test_sync_overlay_boundary_closes_before_front_lock_drain() -> None:
     ctrl, _bus = _controller()
     order: list[str] = []
-    ctrl._section_update_mode = "active"
+    ctrl._section_update_mode = "sync_overlay"
     ctrl._section_update_classifier = object()
-    ctrl._run_active_section_update_boundary = lambda _env: order.append("section_update")
+    ctrl._run_sync_section_update_overlay_boundary = lambda _env: order.append("section_update")
     ctrl._emit_turn_completed = lambda _env: order.append("turn_completed")
     ctrl._drain_front_lock_queue = lambda: order.append("drain")
 

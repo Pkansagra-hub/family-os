@@ -7,7 +7,7 @@ import queue
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Mapping
 
 from k1.bus.envelope import Envelope
 from k1.concierge.bus.builders import (
@@ -154,13 +154,33 @@ def classify_section_update_blocking(
             diagnostics=[{"code": "provider_failed", "message": str(value)}],
             elapsed_ms=elapsed_ms,
         )
+    if isinstance(value, SectionUpdatePlan):
+        plan = value
+    elif isinstance(value, Mapping):
+        try:
+            plan = SectionUpdatePlan.from_dict(value)
+        except Exception as exc:  # noqa: BLE001 - malformed model output is diagnostic only.
+            return SectionUpdateClassificationResult(
+                status=SectionUpdateCompletionStatus.REJECTED,
+                plan=None,
+                diagnostics=[{"code": "invalid_schema", "message": str(exc)}],
+                elapsed_ms=elapsed_ms,
+            )
+    else:
+        return SectionUpdateClassificationResult(
+            status=SectionUpdateCompletionStatus.REJECTED,
+            plan=None,
+            diagnostics=[
+                {
+                    "code": "invalid_schema",
+                    "message": f"classifier returned {type(value).__name__}",
+                }
+            ],
+            elapsed_ms=elapsed_ms,
+        )
     return SectionUpdateClassificationResult(
-        status=(
-            SectionUpdateCompletionStatus.NOOP
-            if value.is_noop
-            else SectionUpdateCompletionStatus.REQUESTED
-        ),
-        plan=value,
+        status=SectionUpdateCompletionStatus.NOOP if plan.is_noop else SectionUpdateCompletionStatus.REQUESTED,
+        plan=plan,
         diagnostics=[],
         elapsed_ms=elapsed_ms,
     )

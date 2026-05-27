@@ -34,6 +34,8 @@ def build_section_update_requested_payload(
     *,
     mode: str,
     classifier_version: str = "section-update-v0",
+    provider_id: str = "",
+    model_id: str = "",
 ) -> dict[str, Any]:
     """Build the public request diagnostic payload without prompt dumps."""
 
@@ -50,6 +52,8 @@ def build_section_update_requested_payload(
         "snapshot_version": snapshot_version,
         "snapshot_source_epoch": snapshot_source_epoch,
         "classifier_version": classifier_version,
+        "provider_id": str(provider_id or ""),
+        "model_id": str(model_id or ""),
         "plan_idempotency_key": build_plan_idempotency_key(
             session_id=input_data.session_id,
             turn_id=input_data.turn_id,
@@ -65,6 +69,8 @@ def build_section_update_completed_payload(
     status: SectionUpdateCompletionStatus | str,
     mode: str,
     classifier_version: str = "section-update-v0",
+    provider_id: str = "",
+    model_id: str = "",
     plan: SectionUpdatePlan | None = None,
     compile_result: CompileResult | None = None,
     writer_summary: dict[str, Any] | None = None,
@@ -91,6 +97,8 @@ def build_section_update_completed_payload(
         "snapshot_version": snapshot_version,
         "snapshot_source_epoch": _snapshot_value(input_data, "snapshot_source_epoch"),
         "classifier_version": classifier_version,
+        "provider_id": str(provider_id or ""),
+        "model_id": str(model_id or ""),
         "elapsed_ms": int(elapsed_ms or 0),
         "diagnostics": list(diagnostics or []),
     }

@@ -62,6 +62,7 @@ class SessionInstance:
     created_at: datetime
 
     # ── optional fields (set post-construction) ─────────────
+    section_update_worker: Any = None
     front_ctx: Any = None
     back_ctx: Any = None
     ledger: Any = None
