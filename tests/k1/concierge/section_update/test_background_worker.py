@@ -94,9 +94,30 @@ def test_worker_start_stop_subscribes_and_unsubscribes() -> None:
     assert worker.is_running is False
 
 
-def test_shadow_worker_publishes_diagnostics_without_writer_call() -> None:
+def test_legacy_shadow_mode_is_remapped_to_background_apply_noop() -> None:
+    """Legacy ``shadow`` mode is no longer a distinct path — it collapses to
+    ``background_apply``. A turn whose plan has no mutations still goes through
+    the apply boundary and produces a ``noop`` completion (not the legacy
+    ``shadow_noop``). The writer is invoked with an empty batch, never skipped.
+    """
+
     bus = _FakeBus()
     writer = MagicMock()
+    writer.batch_mutations.return_value = type(
+        "WriterResult",
+        (),
+        {
+            "responses": [],
+            "batch_id": "batch-empty",
+            "total_requests": 0,
+            "applied_count": 0,
+            "rejected_count": 0,
+            "failed_count": 0,
+            "cancelled_count": 0,
+            "total_bytes_delta": 0,
+            "stopped_early": False,
+        },
+    )()
     worker = SectionUpdateBackgroundWorker(
         session_id="session-1",
         bus=bus,
@@ -105,6 +126,7 @@ def test_shadow_worker_publishes_diagnostics_without_writer_call() -> None:
         classifier=DeterministicSectionUpdateClassifier(),
         config=SectionUpdateWorkerConfig(mode="shadow", timeout_ms=1000),
     )
+    assert worker.mode == "background_apply"
     worker.start()
     try:
         bus.publish(_turn())
@@ -116,8 +138,8 @@ def test_shadow_worker_publishes_diagnostics_without_writer_call() -> None:
     assert TOPIC_SECTION_UPDATE_REQUESTED in topics
     assert TOPIC_SECTION_UPDATE_COMPLETED in topics
     completed = [_payload(item) for item in bus.published if item.topic == TOPIC_SECTION_UPDATE_COMPLETED]
-    assert completed[-1]["status"] == "shadow_noop"
-    writer.batch_mutations.assert_not_called()
+    assert completed[-1]["status"] == "noop"
+    assert completed[-1]["mode"] == "background_apply"
 
 
 def test_background_apply_calls_writer_through_apply_boundary() -> None:

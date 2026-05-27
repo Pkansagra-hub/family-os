@@ -254,7 +254,7 @@ class RequestConstraints:
       REALTIME=10000, INTERACTIVE=30000, BACKGROUND=60000.
     """
 
-    max_tokens: int = 65536
+    max_tokens: int = 65535
     timeout_ms: int = 30000
     priority: Priority = Priority.INTERACTIVE
     temperature: float = 0.7

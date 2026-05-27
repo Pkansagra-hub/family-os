@@ -45,6 +45,7 @@ from k1.concierge.config.kernel import KernelConfig
 from k1.concierge.factory import ConciergeFactory, PortBundle
 from k1.concierge.section_update import (
     DeterministicSectionUpdateClassifier,
+    LLMSectionUpdateClassifier,
     SectionUpdateBackgroundWorker,
     SectionUpdateWorkerConfig,
 )
@@ -2934,11 +2935,59 @@ class KernelService:
         section_update_enabled = bool(
             getattr(self._config, "enable_section_update_worker", False)
         ) and section_update_mode not in {"", "off", "disabled", "none"}
+        logger.info(
+            "P5.5: section_update worker gate session=%s enable_flag=%s mode=%s -> %s",
+            session_id,
+            bool(getattr(self._config, "enable_section_update_worker", False)),
+            section_update_mode,
+            "STARTING" if section_update_enabled else "SKIPPED",
+        )
         if section_update_enabled:
             try:
                 classifier = self._section_update_classifier
-                if classifier is None and section_update_mode == "offline_stub":
-                    classifier = DeterministicSectionUpdateClassifier()
+                if classifier is None:
+                    # No external classifier wired. Production default is
+                    # the LLM-backed classifier (vertex/gemini by config).
+                    # Only fall back to the deterministic stub if the
+                    # ModelHub is unavailable, in which case the worker
+                    # will publish noop plans rather than crashing.
+                    if self._model_hub is not None:
+                        provider_id = str(
+                            getattr(self._config, "section_update_provider", "") or ""
+                        ) or "vertex"
+                        model_id = str(
+                            getattr(self._config, "section_update_model", "") or ""
+                        ) or "gemini-2.5-flash-lite"
+                        timeout_ms = int(
+                            getattr(self._config, "section_update_worker_timeout_ms", 75_000)
+                            or 75_000
+                        )
+                        classifier = LLMSectionUpdateClassifier(
+                            model_hub=self._model_hub,
+                            provider_id=provider_id,
+                            model_id=model_id,
+                            timeout_ms=timeout_ms,
+                        )
+                        logger.info(
+                            "P5.5: no external section_update classifier wired; "
+                            "auto-wired LLMSectionUpdateClassifier "
+                            "(session=%s, mode=%s, provider=%s, model=%s, timeout_ms=%d)",
+                            session_id,
+                            section_update_mode,
+                            provider_id,
+                            model_id,
+                            timeout_ms,
+                        )
+                    else:
+                        classifier = DeterministicSectionUpdateClassifier()
+                        logger.warning(
+                            "P5.5: no external section_update classifier wired and "
+                            "ModelHub is unavailable; falling back to "
+                            "DeterministicSectionUpdateClassifier (session=%s, mode=%s) -- "
+                            "section updates will be no-ops",
+                            session_id,
+                            section_update_mode,
+                        )
                 section_update_worker = SectionUpdateBackgroundWorker(
                     session_id=session_id,
                     bus=session_bus,
@@ -2969,8 +3018,21 @@ class KernelService:
                     ),
                 )
                 section_update_worker.start()
+                logger.info(
+                    "P5.5: SectionUpdateBackgroundWorker started session=%s mode=%s classifier=%s timeout_ms=%s queue_max=%s",
+                    session_id,
+                    section_update_mode,
+                    type(classifier).__name__ if classifier is not None else "None",
+                    getattr(self._config, "section_update_worker_timeout_ms", 75_000),
+                    getattr(self._config, "section_update_worker_queue_max", 128),
+                )
                 self._log_lifecycle("P5_5_complete", f"session:{session_id}")
             except Exception:
+                logger.exception(
+                    "P5.5: SectionUpdateBackgroundWorker start FAILED session=%s mode=%s",
+                    session_id,
+                    section_update_mode,
+                )
                 if section_update_worker is not None:
                     await asyncio.to_thread(section_update_worker.stop)
                 await session_memory_writer.stop()

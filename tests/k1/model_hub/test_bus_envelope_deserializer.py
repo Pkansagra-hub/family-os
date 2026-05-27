@@ -188,7 +188,7 @@ class TestDeserializeHubRequest:
             "trace_id": "t-3",
         }
         req = deserialize_hub_request(data)
-        assert req.constraints.max_tokens == 65536
+        assert req.constraints.max_tokens == 65535
         assert req.constraints.timeout_ms == 30000
 
     def test_unknown_capability_raises(self) -> None:

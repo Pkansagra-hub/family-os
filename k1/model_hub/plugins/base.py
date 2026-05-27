@@ -47,7 +47,7 @@ class NormalizedRequest:
     tools: Optional[List[Dict[str, Any]]] = None
     tool_choice: Optional[str] = None
     output_schema: Optional[Dict[str, Any]] = None
-    max_tokens: int = 65536
+    max_tokens: int = 65535
     timeout_ms: int = 30000
     temperature: float = 0.7
     model_id: str = ""

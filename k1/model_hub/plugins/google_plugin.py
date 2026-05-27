@@ -132,7 +132,7 @@ def _dump_gemini_config_preview(request: NormalizedRequest) -> dict[str, Any]:
     config: dict[str, Any] = {
         "system_instruction": request.system_prompt or "",
         "temperature": request.temperature,
-        "max_output_tokens": request.max_tokens,
+        "max_output_tokens": min(request.max_tokens, _GEMINI_MAX_OUTPUT_TOKENS),
     }
     if request.tools:
         config["tools"] = [{"function_declarations": request.tools}]
@@ -265,6 +265,10 @@ _THINKING_BUDGET_MAP: Dict[str, int] = {
     "medium": 8192,
     "high": 24576,
 }
+
+# Vertex/Gemini accepts max_output_tokens in [1, 65536) -- exclusive upper bound.
+# Passing 65536 yields HTTP 400 INVALID_ARGUMENT.
+_GEMINI_MAX_OUTPUT_TOKENS: int = 65535
 
 
 def _supports_thinking_config(model_id: str) -> bool:
@@ -568,8 +572,9 @@ class GooglePlugin:
         # Temperature
         config_kwargs["temperature"] = request.temperature
 
-        # Max output tokens
-        config_kwargs["max_output_tokens"] = request.max_tokens
+        # Max output tokens (Vertex/Gemini accepts 1..65535 inclusive; 65536 is rejected with
+        # INVALID_ARGUMENT. Cap defensively in case an upstream caller passes a higher value.)
+        config_kwargs["max_output_tokens"] = min(request.max_tokens, _GEMINI_MAX_OUTPUT_TOKENS)
 
         # Tools
         gemini_tools = self._to_genai_tools(request, types)

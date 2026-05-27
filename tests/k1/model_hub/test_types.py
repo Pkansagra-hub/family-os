@@ -332,7 +332,7 @@ class TestModelInfo:
 class TestRequestConstraints:
     def test_defaults(self) -> None:
         c = RequestConstraints()
-        assert c.max_tokens == 65536
+        assert c.max_tokens == 65535
         assert c.timeout_ms == 30000
         assert c.priority == Priority.INTERACTIVE
         assert c.temperature == 0.7

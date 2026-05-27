@@ -72,6 +72,7 @@ from ..sections import (
     ScoreboardSection,
     SpatialSection,
     TemporalSection,
+    TrustLevelSection,
 )
 from ..sections.task_artifacts import TaskArtifactsSection
 from ..sections.task_state import TaskStateSection
@@ -102,6 +103,7 @@ SECTION_BUDGETS: Dict[str, int] = {
     "temporal": 4 * 1024,
     "spatial": 4 * 1024,
     "grounding": 2 * 1024,
+    "trust_level": 2 * 1024,
     "task_state": 4 * 1024,
     "task_artifacts": 4 * 1024,
 }
@@ -116,7 +118,7 @@ DEMOTE_ORDER: List[str] = [
 
 # Sections that can never be demoted
 NEVER_DEMOTE: frozenset[str] = frozenset(
-    ["control", "meta", "temporal", "spatial", "grounding", "task_state"]
+    ["control", "meta", "temporal", "spatial", "grounding", "trust_level", "task_state"]
 )
 
 # Demotion target pairs: HOT section -> WARM section
@@ -139,6 +141,7 @@ HOT_SECTION_NAMES: List[str] = [
     "temporal",
     "spatial",
     "grounding",
+    "trust_level",
     "task_state",
     "task_artifacts",
 ]
@@ -289,6 +292,7 @@ SectionType = Union[
     TemporalSection,
     SpatialSection,
     GroundingSection,
+    TrustLevelSection,
     TaskStateSection,
     TaskArtifactsSection,
 ]
@@ -298,7 +302,7 @@ class HotTier:
     """
     HOT CORE tier manager.
 
-    Manages 10 HOT sections with a combined 52KB budget.
+    Manages HOT sections with a combined 52KB budget.
     Coordinates demotion to WARM tier when under pressure.
 
     Budget: 52KB (53248 bytes)
@@ -345,7 +349,7 @@ class HotTier:
         config: Optional[SessionStateConfig] = None,
     ) -> None:
         """
-        Initialize HotTier with all 10 sections.
+        Initialize HotTier with all HOT sections.
 
         Args:
             session_id: Session UUID (for section initialization)
@@ -357,7 +361,7 @@ class HotTier:
         self._migration_engine = migration_engine
         self._created_at_ms = int(time.time() * 1000)
 
-        # Initialize all 10 sections
+        # Initialize all HOT sections
         self._sections: Dict[str, SectionType] = {
             "control": ControlSection(session_id=session_id),
             "beliefs_active": BeliefsActiveSection(session_id=session_id),
@@ -370,6 +374,7 @@ class HotTier:
             "temporal": TemporalSection(session_id=session_id),
             "spatial": SpatialSection(session_id=session_id),
             "grounding": GroundingSection(session_id=session_id),
+            "trust_level": TrustLevelSection(session_id=session_id),
             "task_state": TaskStateSection(),
             "task_artifacts": TaskArtifactsSection(),
         }

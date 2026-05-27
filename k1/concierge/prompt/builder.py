@@ -37,9 +37,8 @@ from k1.concierge.prompt.affect import (
 from k1.concierge.prompt.clarify_depth import CLARIFY_DEPTH_BLOCKS
 from k1.concierge.prompt.domain_rules import get_domain_rules, is_domain_applicable
 from k1.concierge.prompt.mode import (
-    CRISIS_ITERATIONS_TABLE,
-    MAX_ITERATIONS_TABLE,
     PromptMode,
+    get_max_iterations,
     get_tool_allowlist,
 )
 from k1.concierge.prompt.scenario_templates import SCENARIO_DATA_TEMPLATES
@@ -184,7 +183,14 @@ SS_READ_CONFIGS: dict[PromptMode, list[SSReadConfig]] = {
 }
 
 for _mode, _configs in list(SS_READ_CONFIGS.items()):
-    SS_READ_CONFIGS[_mode] = [cfg for cfg in _configs if cfg.section != "temporal"]
+    augmented_configs: list[SSReadConfig] = []
+    for cfg in _configs:
+        if cfg.section == "temporal":
+            continue
+        augmented_configs.append(cfg)
+        if cfg.section == "affective_now":
+            augmented_configs.append(SSReadConfig("trust_level", "full"))
+    SS_READ_CONFIGS[_mode] = augmented_configs
 
 
 # =========================================================================
@@ -322,19 +328,29 @@ def _render_beliefs_active_slim(section: Any, cfg: SSReadConfig) -> str:
 
 
 def _render_scoreboard_full(section: Any, cfg: SSReadConfig) -> str:
-    """Format referents, current topic, QUD stack, and open commitments."""
+    """Format referents (salience-ranked), topic, user intent, QUD, commitments."""
     lines: list[str] = []
-    # Referents
-    if hasattr(section, "_referents"):
-        for ref in section._referents.values():
-            text = getattr(ref, "text", "")
-            sal = getattr(ref, "salience", 0)
-            lines.append(f"- referent: {text} (salience: {sal:.2f})")
-    # Primary topic
+    # Primary topic first -- anchors the rest of the block
     if hasattr(section, "get_primary_topic"):
         topic = section.get_primary_topic()
         if topic:
             lines.append(f"Topic: {topic.name}")
+    # User intent (when classifier has set it)
+    user_intent = getattr(section, "_user_intent", None) or getattr(section, "user_intent", None)
+    if isinstance(user_intent, str) and user_intent:
+        lines.append(f"User intent: {user_intent}")
+    elif isinstance(user_intent, dict) and user_intent.get("intent"):
+        lines.append(f"User intent: {user_intent['intent']}")
+    # Referents: salience-ranked, top 5, with entity_type when present
+    if hasattr(section, "_referents") and section._referents:
+        refs = list(section._referents.values())
+        refs.sort(key=lambda r: getattr(r, "salience", 0.0), reverse=True)
+        for ref in refs[:5]:
+            text = getattr(ref, "text", "")
+            sal = getattr(ref, "salience", 0.0)
+            etype = getattr(ref, "entity_type", "") or getattr(ref, "type", "")
+            tag = f" [{etype}]" if etype else ""
+            lines.append(f"- referent: {text}{tag} (salience: {sal:.2f})")
     # QUD stack
     if hasattr(section, "_qud_stack"):
         for q in section._qud_stack:
@@ -355,12 +371,18 @@ def _render_scoreboard_full(section: Any, cfg: SSReadConfig) -> str:
 
 
 def _render_scoreboard_slim(section: Any, cfg: SSReadConfig) -> str:
-    """Slim: current topic + referent count + open commitment count."""
+    """Slim: topic + top-3 salient referents + open commitment count."""
     parts: list[str] = []
     if hasattr(section, "get_primary_topic"):
         topic = section.get_primary_topic()
         if topic:
             parts.append(f"Topic: {topic.name}")
+    if hasattr(section, "_referents") and section._referents:
+        refs = list(section._referents.values())
+        refs.sort(key=lambda r: getattr(r, "salience", 0.0), reverse=True)
+        top = [getattr(r, "text", "") for r in refs[:3] if getattr(r, "text", "")]
+        if top:
+            parts.append("Top refs: " + ", ".join(top))
     ref_count = len(section._referents) if hasattr(section, "_referents") else 0
     parts.append(f"Referents: {ref_count}")
     if hasattr(section, "get_open_commitments"):
@@ -402,17 +424,32 @@ def _render_clarifications_slim(section: Any, cfg: SSReadConfig) -> str:
 
 
 def _render_narrative_active_full(section: Any, cfg: SSReadConfig) -> str:
-    """Full: active thread name, goal, related entities."""
+    """Full: active thread + lifecycle state + arc stage + resumption hint."""
     lines: list[str] = []
     thread = getattr(section, "_primary_thread", None)
     if thread is None and hasattr(section, "primary_thread"):
         thread = section.primary_thread
     if thread:
-        lines.append(f"Thread: {thread.title}")
-        if thread.goal:
-            lines.append(f"Goal: {thread.goal}")
-        if thread.related_entities:
-            lines.append(f"Entities: {', '.join(thread.related_entities)}")
+        title = getattr(thread, "title", "")
+        state = getattr(thread, "state", "") or getattr(thread, "status", "")
+        header = f"Thread: {title}"
+        if state:
+            header += f" [{state}]"
+        lines.append(header)
+        goal = getattr(thread, "goal", "")
+        if goal:
+            lines.append(f"Goal: {goal}")
+        entities = getattr(thread, "related_entities", None)
+        if entities:
+            lines.append(f"Entities: {', '.join(entities)}")
+        hint = getattr(thread, "resumption_hint", "")
+        if hint:
+            lines.append(f"Resumption: {hint}")
+    arc = getattr(section, "_arc", None) or getattr(section, "arc", None)
+    if arc is not None:
+        stage = getattr(arc, "stage", "")
+        if stage:
+            lines.append(f"Arc stage: {stage}")
     return "\n".join(lines)
 
 
@@ -480,7 +517,7 @@ def _style_to_hints(style: dict[str, Any]) -> list[str]:
 
 
 def _render_affective_now_full(section: Any, cfg: SSReadConfig) -> str:
-    """Full: emotion, intensity, valence, arousal + tone/style hints."""
+    """Full: emotion, intensity, V/A + arc trajectory + recent emotion drift."""
     emotion = getattr(section, "current_emotion", "neutral")
     intensity = getattr(section, "intensity", 0.0)
     valence = getattr(section, "valence", 0.0)
@@ -491,6 +528,26 @@ def _render_affective_now_full(section: Any, cfg: SSReadConfig) -> str:
         f"Valence: {valence}",
         f"Arousal: {arousal}",
     ]
+
+    # Emotional ARC -- progression matters more than the snapshot.
+    # Renders prior turn emotions so Front can read drift (neutral -> playful).
+    recent = getattr(section, "recent_emotions", None) or []
+    if recent:
+        try:
+            arc_labels = [getattr(s, "emotion", "") for s in recent if getattr(s, "emotion", "")]
+        except Exception:
+            arc_labels = []
+        if arc_labels:
+            arc_labels = arc_labels[-5:] + [emotion]
+            lines.append("Arc: " + " -> ".join(arc_labels))
+    trajectory = getattr(section, "trajectory", None)
+    if trajectory is not None:
+        traj_name = getattr(trajectory, "name", str(trajectory))
+        lines.append(f"Trajectory: {traj_name}")
+    if getattr(section, "empathy_needed", False):
+        lines.append("Posture cue: empathy_needed=true (lead with warmth)")
+    if getattr(section, "celebration_appropriate", False):
+        lines.append("Posture cue: celebration_appropriate=true (mirror their lift)")
 
     # Tone adjustment from AffectiveMirror (Experience Layer)
     tone = getattr(section, "_tone_adjustment", None)
@@ -524,19 +581,91 @@ def _render_affective_now_slim(section: Any, cfg: SSReadConfig) -> str:
     return " | ".join(parts)
 
 
+def _render_trust_level_full(section: Any, cfg: SSReadConfig) -> str:
+    """Full: trust score/band + latest calibration signal for Front."""
+    score = getattr(section, "trust_score", None)
+    confidence = getattr(section, "confidence", None)
+    band = getattr(section, "band", "steady")
+    stance = getattr(section, "stance", "calibrating")
+    last_signal = getattr(section, "_last_signal", "")
+    last_reason = getattr(section, "_last_reason", "")
+    recent = getattr(section, "_recent_signals", None) or []
+    lines = [
+        f"Trust score: {score if score is not None else 0.5}",
+        f"Band: {band}",
+        f"Confidence: {confidence if confidence is not None else 0.5}",
+        f"Stance: {stance}",
+    ]
+    if last_signal:
+        lines.append(f"Latest signal: {last_signal}")
+    if last_reason:
+        lines.append(f"Reason: {last_reason}")
+    if recent:
+        labels = [str(item.get("signal") or "") for item in recent[-3:] if isinstance(item, dict)]
+        labels = [item for item in labels if item]
+        if labels:
+            lines.append("Recent signals: " + " -> ".join(labels))
+    lines.append(
+        "Guidance: low/guarded trust means be explicit and ask before assumptions; "
+        "steady/high trust means stay concise without skipping policy gates."
+    )
+    return "\n".join(lines)
+
+
+def _render_trust_level_slim(section: Any, cfg: SSReadConfig) -> str:
+    """Slim: compact trust score/band."""
+    score = getattr(section, "trust_score", 0.5)
+    band = getattr(section, "band", "steady")
+    return f"Trust: {score} ({band})"
+
+
+# Control-section fields that are pure telemetry / storage bookkeeping
+# and carry no meaning for the Front LLM. These are stripped before the
+# control snapshot is seated into the Active Work block.
+_CONTROL_NOISE_FIELDS: frozenset[str] = frozenset(
+    {
+        "name",
+        "tier",
+        "budget_bytes",
+        "current_size_bytes",
+        "utilization_pct",
+        "can_evict",
+        "schema_version",
+        "last_updated_ms",
+        "session_id",
+        "current_turn_id",
+        "turn_count",
+        "agent_count",
+        "is_locked",
+    }
+)
+
+
 def _render_control_full(section: Any, cfg: SSReadConfig) -> str:
-    """Full: get_metadata() dict including fsm_overlay. Pretty-prints
-    nested dicts as ``key.subkey: value`` lines (avoids Python ``repr``
-    leaking into the prompt)."""
+    """Full: meaningful control-flow fields only.
+
+    Strips storage bookkeeping (bytes, utilization, schema_version, ids,
+    counts) that the LLM cannot act on. Pretty-prints nested dicts as
+    ``key.subkey: value`` lines (avoids Python ``repr`` leaking into the
+    prompt).
+    """
     if hasattr(section, "get_metadata"):
         meta = section.get_metadata()
         lines: list[str] = []
         for key, val in meta.items():
+            if key in _CONTROL_NOISE_FIELDS:
+                continue
             if isinstance(val, dict):
                 if not val:
                     continue
                 for sub_key, sub_val in val.items():
                     lines.append(f"{key}.{sub_key}: {sub_val}")
+            elif isinstance(val, (list, tuple)):
+                if not val:
+                    continue
+                lines.append(f"{key}: {', '.join(str(v) for v in val)}")
+            elif val in (None, "", 0):
+                continue
             else:
                 lines.append(f"{key}: {val}")
         return "\n".join(lines)
@@ -646,6 +775,7 @@ SECTION_RENDERERS: dict[str, tuple] = {
     "clarifications": (_render_clarifications_full, _render_clarifications_slim),
     "narrative_active": (_render_narrative_active_full, _render_narrative_active_slim),
     "affective_now": (_render_affective_now_full, _render_affective_now_slim),
+    "trust_level": (_render_trust_level_full, _render_trust_level_slim),
     "control": (_render_control_full, _render_control_slim),
     "persona": (_render_persona_full, _render_persona_slim),
     "temporal": (_render_temporal_full, _render_temporal_slim),
@@ -859,14 +989,23 @@ class DynamicPromptBuilder:
             clarify_depth,
         )
 
-        prompt_parts: list[str] = []
+        role_contract = PROMPT_SECTIONS.get("FRONT_ROLE_CONTRACT", "")
+        behavior_parts: list[str] = []
+        final_output_rule = ""
 
-        # Stage 1: Select and concatenate prompt sections from MODE_SECTIONS
+        # Stage 1: Select prompt sections from MODE_SECTIONS. Iteration 1
+        # seats FRONT_ROLE_CONTRACT before the Situation Frame; all other
+        # static sections become behavior/tool guidance after CURRENT EVENT.
         section_keys = MODE_SECTIONS.get(mode, [])
         for key in section_keys:
+            if key == "FRONT_ROLE_CONTRACT":
+                continue
             section_text = PROMPT_SECTIONS.get(key, "")
             if section_text:
-                prompt_parts.append(section_text)
+                if key == "FINAL_OUTPUT_RULE":
+                    final_output_rule = section_text
+                else:
+                    behavior_parts.append(section_text)
         logger.debug(
             "  Stage 1  sections=%d keys=%s",
             len(section_keys),
@@ -876,18 +1015,18 @@ class DynamicPromptBuilder:
         # Stage 2: Append mode-specific example from MODE_EXAMPLES
         example_text = MODE_EXAMPLES.get(mode, "")
         if example_text:
-            prompt_parts.append(example_text)
+            behavior_parts.append(example_text)
             logger.debug("  Stage 2  example appended (len=%d)", len(example_text))
 
         # Stage 3: Append affect tone modifier (skip neutral -- empty string)
         tone_block = AFFECT_TONE_BLOCKS.get(affect_band.band, "")
         if tone_block:
-            prompt_parts.append(tone_block)
+            behavior_parts.append(tone_block)
 
         # Stage 3b: Append affect x mode interaction block
         interaction_block = get_affect_mode_interaction(mode.name, affect_band.band)
         if interaction_block:
-            prompt_parts.append(interaction_block)
+            behavior_parts.append(interaction_block)
             logger.debug("  Stage 3b  affect x mode interaction appended")
 
         # Stage 4: Append clarification depth block (CLARIFY_ASK only)
@@ -902,7 +1041,7 @@ class DynamicPromptBuilder:
                     )
                 except KeyError:
                     pass  # Use raw template if formatting fails
-            prompt_parts.append(depth_block)
+            behavior_parts.append(depth_block)
 
         # Stage 5: Append domain rules (only for applicable modes)
         # RC-3 fix: consult is_domain_applicable() to avoid leaking
@@ -910,60 +1049,95 @@ class DynamicPromptBuilder:
         if domain and is_domain_applicable(domain, mode.value):
             domain_block = get_domain_rules(domain)
             if domain_block:
-                prompt_parts.append(domain_block)
+                behavior_parts.append(domain_block)
 
         # Stage 6: Append anti-pattern subset
         if mode in ANTI_PATTERN_KEYS:
             ap_key = ANTI_PATTERN_KEYS[mode]
             ap_text = PROMPT_SECTIONS.get(ap_key, "")
             if ap_text:
-                prompt_parts.append(ap_text)
+                behavior_parts.append(ap_text)
 
-        active_member_block = ""
+        active_actor_block = ""
+        visible_space_block = ""
         if grounding_capsule is not None:
-            active_member_block = self._build_active_member_block(grounding_capsule)
+            active_actor_block = self._build_active_actor_block(grounding_capsule)
+            visible_space_block = self._build_visible_space_block(grounding_capsule)
 
         # Stage 7: Format and append scenario data from template
         scenario_payload = scenario_data
         if (
             scenario_data
-            and active_member_block
+            and (active_actor_block or visible_space_block)
             and mode in (PromptMode.STANDARD, PromptMode.INTERRUPT)
         ):
             scenario_payload = dict(scenario_data)
             scenario_payload["_suppress_active_member_block"] = True
 
+        scenario_block = ""
         if scenario_payload:
             scenario_block = self._format_scenario_data(mode, scenario_payload)
-            if scenario_block:
-                prompt_parts.append(scenario_block)
 
-        # Stage 8: Read and render SS sections per mode config.
+        # Stage 8: Read and render SS sections per mode config into the
+        # Situation Frame seats instead of a late standalone block.
         # M6.E1.I4: when an OPP-6 compressed_context is present we replace
         # the raw history_active SS read with the compressed block at the
-        # same position. We do this by filtering history_active out of the
-        # configs list before delegating to ``_read_ss_sections`` (which
-        # owns the rendering of all other sections unchanged), then append
-        # the compressed block. This keeps the SessionState section
-        # untouched and the substitution surface explicit + observable.
+        # conversation-state position.
+        interaction_profile_block = ""
+        conversation_state_block = ""
+        active_work_block = ""
+        trust_calibration_block = ""
         if ss is not None:
             ss_configs = SS_READ_CONFIGS.get(mode, [])
+            interaction_profile_block = self._read_ss_body_for_sections(
+                ss,
+                ss_configs,
+                {"persona"},
+            )
+            trust_calibration_block = self._read_ss_body_for_sections(
+                ss,
+                ss_configs,
+                {"trust_level"},
+            )
+            conversation_configs = [
+                cfg
+                for cfg in ss_configs
+                if cfg.section
+                in {
+                    "history_active",
+                    "beliefs_active",
+                    "scoreboard",
+                    "clarifications",
+                    "narrative_active",
+                }
+            ]
             if compressed_context_block:
-                ss_configs = [c for c in ss_configs if c.section != "history_active"]
-            ss_block = self._read_ss_sections(ss, ss_configs)
-            if ss_block:
-                prompt_parts.append(ss_block)
+                conversation_configs = [
+                    cfg for cfg in conversation_configs if cfg.section != "history_active"
+                ]
+            conversation_parts: list[str] = []
+            conversation_body = self._read_ss_body(ss, conversation_configs)
+            if conversation_body:
+                conversation_parts.append(conversation_body)
             if compressed_context_block:
-                prompt_parts.append(compressed_context_block)
+                conversation_parts.append(compressed_context_block)
                 logger.debug(
-                    "  Stage 8  history_active replaced by OPP-6 " "compressed_context (len=%d)",
+                    "  Stage 8  history_active replaced by OPP-6 compressed_context (len=%d)",
                     len(compressed_context_block),
                 )
+            conversation_state_block = "\n\n".join(conversation_parts)
+            active_work_block = self._read_ss_body_for_sections(
+                ss,
+                ss_configs,
+                {"control", "task_state", "task_artifacts"},
+            )
+        elif compressed_context_block:
+            conversation_state_block = compressed_context_block
 
         # Stage 9: Apply affect modifiers + pre-call budget check
         base_max_iter = self._get_max_iterations(mode, affect_band)
         modifiers = compute_affect_modifiers(affect_band)
-        max_iter, _ = apply_affect_modifiers(modifiers, base_max_iter, prompt_parts)
+        max_iter, _ = apply_affect_modifiers(modifiers, base_max_iter, behavior_parts)
         logger.debug(
             "  Stage 9  base_iter=%d adjusted_iter=%d skip_refine=%s",
             base_max_iter,
@@ -971,30 +1145,26 @@ class DynamicPromptBuilder:
             modifiers.skip_refine_affect,
         )
 
-        # Stage 9.5: Promote LIVE turn-specific signals + split capsule.
-        #
-        # Rationale (audit findings, May 2026): the previous layout buried
-        # CURRENT TIME, affect band, and the conscience block at positions
-        # 14+, 16, and 17 — even though IDENTITY/SAFETY rules at positions 1
-        # and 10 directly reference them. We now promote three blocks to
-        # sit RIGHT AFTER IDENTITY so they precede every rule that depends
-        # on them:
-        #   1. == NOW ==              one-line clock from temporal_context
-        #   2. == AFFECT STATE ==     band + tone-rule + length-rule (consolidated)
-        #   3. == CONSCIENCE ==       forbidden / must_ask acts (from capsule)
-        #
-        # The remaining capsule blocks ([self] / [preferences] / [space]
-        # / etc. and the freshness footer) stay at the bottom under a
-        # tightened == GROUNDING == header.
-        #
-        # M6 framing note: the LLM previously confused the conscience
-        # (behavioural) with ``tools=[]`` (capability menu). The new
-        # preamble keeps that disambiguation while being much shorter.
+        # Stage 9.5: Build Iteration 1/2 Situation Frame seats.
         live_grounding_blocks = self._build_grounding_live_blocks(grounding_projection)
         if not live_grounding_blocks:
             now_block = self._build_now_block(ss)
             if now_block:
                 live_grounding_blocks = [now_block]
+        now_block_text = ""
+        place_block_text = ""
+        grounding_meta_block_text = ""
+        for live_block in live_grounding_blocks:
+            if live_block.startswith("== NOW =="):
+                now_block_text = live_block
+            elif live_block.startswith("== PLACE =="):
+                place_block_text = live_block
+            elif live_block.startswith("== GROUNDING =="):
+                grounding_meta_block_text = live_block
+            elif live_block.startswith("== TIME =="):
+                now_block_text = live_block
+            elif live_block.startswith("== PLACE AND DEVICE =="):
+                place_block_text = live_block
         affect_state_block = self._build_affect_state_block(affect_band, modifiers, ss)
         conscience_block_text = ""
         capsule_text = ""
@@ -1005,75 +1175,37 @@ class DynamicPromptBuilder:
             except Exception:
                 logger.exception("  Stage 9.5  capsule render raised; skipping capsule body")
                 capsule_text = ""
-
-        # Compute insertion index: directly after IDENTITY (always part[0]
-        # when present). For modes whose first section is not IDENTITY we
-        # still insert at index 0.
-        insert_idx = 1 if prompt_parts and prompt_parts[0].startswith("== IDENTITY ==") else 0
-
-        # Promotion order (inserted at insert_idx in sequence):
-        #   [self]+[space]  ->  NOW  ->  AFFECT STATE  ->  CONSCIENCE
-        # This ensures IDENTITY is immediately followed by WHO the user is,
-        # then the live turn signals, then the refusal authority — all before
-        # any rule section that references them.
-        promoted: list[str] = []
-        if active_member_block:
-            promoted.append(active_member_block)
-        promoted.extend(live_grounding_blocks)
-        if affect_state_block:
-            promoted.append(affect_state_block)
-        if conscience_block_text:
-            conscience_header = (
-                "== CONSCIENCE (live, from constitution) ==\n"
-                "This block is the ONLY authoritative refusal source for this turn.\n"
-                "  forbidden=...  -> these act ids MUST NOT be performed.\n"
-                "  must_ask=...   -> these act ids REQUIRE explicit user confirmation.\n"
-                "  everything else is allowed by default.\n"
-                "Read this BEFORE the SAFETY & HITL RELAY rules below.\n\n" + conscience_block_text
-            )
-            promoted.append(conscience_header)
-
-        # Insert in original order at insert_idx
-        for i, block in enumerate(promoted):
-            prompt_parts.insert(insert_idx + i, block)
-
-        # M6.E3.I2: OPP-7 dynamic identity block. Appended AFTER promoted
-        # blocks (so static IDENTITY + member + NOW + AFFECT + CONSCIENCE
-        # are already in place) and BEFORE late grounding/reference body.
-        # The block carries its own ``== DYNAMIC IDENTITY CONTEXT ==``
-        # header from ``IdentitySnapshot.to_prompt_block()``. It must NOT
-        # flow through scenario formatting; ``build`` already stripped it
-        # from ``scenario_data`` at the top of the method.
         if identity_block_text:
-            prompt_parts.append(identity_block_text)
             logger.debug(
-                "  Stage 9.5  OPP-7 identity_block appended (len=%d)",
-                len(identity_block_text),
+                "  Stage 9.5  OPP-7 identity_block seated (len=%d)", len(identity_block_text)
             )
-
-        # Late grounding (reference-lookup blocks: prefs, hobbies, goals,
-        # routines, context, freshness). Identity + space + conscience
-        # are already promoted earlier in this stage.
         if capsule_text:
-            preamble = (
-                "== REFERENCE PROFILE (live projection) ==\n"
-                "Look up facts here when personalizing a response. These supplement\n"
-                "the [self]/[space] blocks already shown above.\n"
-                "- [preferences]  stored defaults for decisions (payment, dietary, etc.)\n"
-                "- [hobbies]      likes/dislikes for tone + recommendation flavoring\n"
-                "- [goals]        active goals for relevance-ranking + suggestions\n"
-                "- [routines]     regular patterns for habit-aware responses\n"
-                "- [context]      current device/situation override\n"
-                "- [freshness]    staleness signal — stale = note but proceed\n"
-                "- NOT a tool allowlist; tools are listed under `tools=[...]`."
-            )
-            prompt_parts.append(preamble)
-            prompt_parts.append(capsule_text)
             logger.debug(
                 "  Stage 9.5  capsule split: conscience_promoted=%s body_len=%d",
                 bool(conscience_block_text),
                 len(capsule_text),
             )
+
+        situation_frame = self._build_situation_frame(
+            active_actor_block=active_actor_block,
+            visible_space_block=visible_space_block,
+            conscience_block=conscience_block_text,
+            now_block=now_block_text,
+            place_block=place_block_text,
+            identity_block=identity_block_text,
+            reference_profile_block=capsule_text,
+            affective_posture_block=affect_state_block,
+            trust_calibration_block=trust_calibration_block,
+            interaction_profile_block=interaction_profile_block,
+            conversation_state_block=conversation_state_block,
+            active_work_block=active_work_block,
+            grounding_meta_block=grounding_meta_block_text,
+        )
+        current_event = self._build_current_event_block(mode, scenario_block)
+        if final_output_rule:
+            behavior_parts.append(final_output_rule)
+
+        prompt_parts = [role_contract, situation_frame, current_event, *behavior_parts]
 
         # Assemble and interpolate placeholders
         system_prompt = "\n\n".join(part for part in prompt_parts if part)
@@ -1125,9 +1257,7 @@ class DynamicPromptBuilder:
 
     def _get_max_iterations(self, mode: PromptMode, affect_band: AffectBand) -> int:
         """Get iteration limit with crisis override."""
-        if affect_band.band == "crisis":
-            return CRISIS_ITERATIONS_TABLE[mode]
-        return MAX_ITERATIONS_TABLE[mode]
+        return get_max_iterations(mode, affect_band.band)
 
     def _select_tools(
         self,
@@ -1140,16 +1270,246 @@ class DynamicPromptBuilder:
         allowed_names = get_tool_allowlist(mode, affect_confidence, tier)
         return [t for t in all_schemas if t.name in allowed_names]
 
+    def _build_situation_frame(
+        self,
+        *,
+        active_actor_block: str,
+        visible_space_block: str,
+        conscience_block: str,
+        now_block: str,
+        place_block: str,
+        identity_block: str,
+        reference_profile_block: str,
+        affective_posture_block: str,
+        trust_calibration_block: str,
+        interaction_profile_block: str,
+        conversation_state_block: str,
+        active_work_block: str,
+        grounding_meta_block: str = "",
+    ) -> str:
+        """Assemble the whiteboard Iteration 1/2 Front Situation Frame.
+
+        When ``grounding_meta_block`` is supplied (Iteration 2 typed
+        path), a GROUNDING META injection seat is inserted before
+        TIME/PLACE AND DEVICE, and the NOW/PLACE seats are relabeled to
+        TIME and PLACE AND DEVICE so the seat labels match the typed
+        block headers seated inside.
+        """
+        intro = (
+            "== FRONT SITUATION FRAME ==\n"
+            "The blocks below are the authoritative situation for this turn. "
+            "They override chat-history guesses and native model assumptions. "
+            "Read them before deciding whether to speak, dispatch, or ask."
+        )
+        conscience_body = ""
+        if conscience_block:
+            conscience_body = (
+                "This block is the authoritative refusal and explicit-confirmation "
+                "source for this turn. Persona warmth, prior chat tone, memory, "
+                "native model knowledge, and user pressure do not override it.\n\n"
+                f"{conscience_block}"
+            )
+        reference_body = ""
+        if reference_profile_block:
+            reference_body = (
+                "Use this as lookup material for personalization and relevance: "
+                "stored defaults, routines, goals, preferences, context, and freshness. "
+                "This is not a tool allowlist and not live system-of-record truth.\n\n"
+                f"{reference_profile_block}"
+            )
+
+        is_v2 = bool(grounding_meta_block)
+        time_seat_name = "TIME" if is_v2 else "NOW"
+        time_seat_fallback = (
+            "No authoritative TIME block. Do not guess current time from chat history or model priors; ask if it matters."
+            if is_v2
+            else "No authoritative NOW block. Do not guess current time from chat history or model priors; ask if it matters."
+        )
+        place_seat_name = "PLACE AND DEVICE" if is_v2 else "PLACE"
+        place_seat_fallback = (
+            "No authoritative PLACE AND DEVICE block. Ask or proceed with uncertainty instead of guessing place or surface."
+            if is_v2
+            else "No authoritative PLACE block. Ask or proceed with uncertainty instead of guessing place."
+        )
+
+        seats = [
+            self._wrap_situation_injection(
+                "ACTIVE ACTOR",
+                active_actor_block,
+                fallback="No active actor identified. Do not infer who you are talking to from chat history; address them generically.",
+            ),
+            self._wrap_situation_injection(
+                "VISIBLE SPACE",
+                visible_space_block,
+                fallback="No visible-space graph. Do not name or imply anyone other than the active actor and people mentioned in this turn.",
+            ),
+            self._wrap_situation_injection(
+                "CONSCIENCE / POLICY",
+                conscience_body,
+                fallback="No conscience block. Obey safety policy and ask before any side effect when uncertain.",
+            ),
+        ]
+        if is_v2:
+            seats.append(
+                self._wrap_situation_injection(
+                    "GROUNDING META",
+                    grounding_meta_block,
+                    fallback="No grounding envelope metadata. Treat time/place blocks below as best-effort, not authoritative.",
+                )
+            )
+        seats.extend(
+            [
+                self._wrap_situation_injection(
+                    time_seat_name,
+                    now_block,
+                    fallback=time_seat_fallback,
+                ),
+                self._wrap_situation_injection(
+                    place_seat_name,
+                    place_block,
+                    fallback=place_seat_fallback,
+                ),
+                self._wrap_situation_injection(
+                    "DYNAMIC IDENTITY CONTEXT",
+                    identity_block,
+                    fallback="No dynamic identity overlay. Continue with active actor, visible space, persona, and conversation state.",
+                ),
+                self._wrap_situation_injection(
+                    "REFERENCE PROFILE",
+                    reference_body,
+                    fallback="No reference profile. Personalize only from visible state, memory results, and the current conversation.",
+                ),
+                self._wrap_situation_injection(
+                    "AFFECTIVE POSTURE",
+                    affective_posture_block,
+                ),
+                self._wrap_situation_injection(
+                    "TRUST CALIBRATION",
+                    trust_calibration_block,
+                    fallback="No trust calibration yet. Be warm and explicit by default; never use trust as permission to bypass policy or side-effect gates.",
+                ),
+                self._wrap_situation_injection(
+                    "INTERACTION PROFILE",
+                    interaction_profile_block,
+                    fallback="No persona overrides this turn. Default to the role contract and current affect for tone, length, and formality.",
+                ),
+                self._wrap_situation_injection(
+                    "CONVERSATION STATE",
+                    conversation_state_block,
+                    fallback="No rendered beliefs, scoreboard, or narrative yet. Use the chat history below as the only conversational context.",
+                ),
+                self._wrap_situation_injection(
+                    "ACTIVE WORK",
+                    active_work_block,
+                    fallback="No active tasks or artifacts. Do not claim work is in progress or complete.",
+                ),
+                self._wrap_situation_injection(
+                    "MEMORY AND AUTHORITY BOUNDARY",
+                    self._memory_authority_boundary_block(),
+                ),
+            ]
+        )
+        return "\n\n".join([intro, *seats])
+
+    @staticmethod
+    def _wrap_situation_injection(
+        name: str,
+        body: str,
+        *,
+        source: str = "",
+        fallback: str = "",
+    ) -> str:
+        # ``source`` is developer-only provenance kept on the signature for
+        # logging and back-compat; it must NEVER be emitted to the LLM.
+        content = body.strip() if body else fallback
+        parts = [f"-- INJECT: {name} --"]
+        if content:
+            parts.append(content)
+        parts.append(f"-- END INJECT: {name} --")
+        return "\n".join(parts)
+
+    @staticmethod
+    def _memory_authority_boundary_block() -> str:
+        return (
+            "For recent conversation, rely on the messages and rendered history already in this prompt. "
+            "For durable historical context, routines, preferences, and prior events, call recall_memory. "
+            "For any live system-of-record read or write, route through dispatch_task or a safe capability invocation; "
+            "never answer live state from memory. To find what capabilities exist for a user intent, call "
+            "discover_capabilities, and to invoke a known safe capability directly, call invoke_capability. "
+            "Your own general knowledge is available as background framing only; it is not authoritative for facts "
+            "about this user, their space, or any live system.\n\n"
+            "Rules:\n"
+            "- Memory is historical context, not live state.\n"
+            "- Live records, schedules, account data, prices, device state, availability, and external truth require dispatch_task or a safe capability.\n"
+            "- If the user asks to add what you know as general context, preserve provenance in reference_context.\n"
+            "- Do not store capability-owned live records as beliefs."
+        )
+
+    @staticmethod
+    def _build_current_event_block(mode: PromptMode, scenario_block: str) -> str:
+        lines = [
+            "== CURRENT EVENT ==",
+            f"Prompt mode: {mode.value}",
+            "This is the event to answer right now. The user's actual message is the last entry in the chat history below; do not ask them to repeat it.",
+        ]
+        if scenario_block:
+            lines.extend(["", scenario_block])
+        return "\n".join(lines)
+
+    def _read_ss_body_for_sections(
+        self,
+        ss: Any,
+        configs: list[SSReadConfig],
+        sections: set[str],
+    ) -> str:
+        return self._read_ss_body(ss, [cfg for cfg in configs if cfg.section in sections])
+
+    def _read_ss_body(self, ss: Any, configs: list[SSReadConfig]) -> str:
+        block = self._read_ss_sections(ss, configs)
+        prefix = "== SESSION STATE ==\n\n"
+        if block.startswith(prefix):
+            return block[len(prefix) :]
+        return block
+
     # -----------------------------------------------------------------
     # Stage 9.5 helpers — promote live signals + split capsule
     # -----------------------------------------------------------------
 
     @staticmethod
     def _build_grounding_live_blocks(projection: Any) -> list[str]:
-        """Render Front live grounding blocks from a GroundingProjection."""
+        """Render Front live grounding blocks from a GroundingProjection.
+
+        Iteration switch (``prompt.front_prompt_iteration``):
+        - ``v1`` -> legacy ``== NOW ==`` / ``== PLACE ==`` rendered blocks.
+        - ``v2`` -> typed ``== GROUNDING ==`` / ``== TIME ==`` /
+          ``== PLACE AND DEVICE ==`` blocks sourced directly from the typed
+          ``GroundingProjection``. No fallback chain when projection is
+          present (M4.I11).
+        """
         if projection is None:
             return []
+        iteration = "v1"
         try:
+            iteration = (
+                str(getattr(get_config().prompt, "front_prompt_iteration", "v1")).strip().lower()
+            )
+        except Exception:
+            iteration = "v1"
+        try:
+            if iteration == "v2":
+                from k1.grounding.service.prompt_block_renderer import (
+                    render_grounding_meta_block_v2,
+                    render_place_and_device_block_v2,
+                    render_time_block_v2,
+                )
+
+                blocks = [
+                    render_grounding_meta_block_v2(projection),
+                    render_time_block_v2(projection),
+                    render_place_and_device_block_v2(projection),
+                ]
+                return [block for block in blocks if block]
+
             from k1.grounding.service.prompt_block_renderer import (
                 render_now_block,
                 render_place_block,
@@ -1186,7 +1546,7 @@ class DynamicPromptBuilder:
         modifiers: Any,
         ss: Any,
     ) -> str:
-        """Consolidated ``== AFFECT STATE ==`` block.
+        """Consolidated ``== AFFECTIVE POSTURE ==`` block.
 
         Combines: resolved band, tone rule (from AFFECT_TONE_BLOCKS body),
         response-length rule (from AffectModifiers), and raw valence/arousal
@@ -1198,12 +1558,16 @@ class DynamicPromptBuilder:
         valence = None
         arousal = None
         emotion = None
+        intensity = None
+        confidence = None
         if ss is not None:
             section = _safe_get_ss_section(ss, "affective_now")
             if section is not None:
                 emotion = getattr(section, "current_emotion", None)
                 valence = getattr(section, "valence", None)
                 arousal = getattr(section, "arousal", None)
+            intensity = getattr(section, "intensity", None)
+            confidence = getattr(section, "confidence", None)
 
         length_hint = ""
         if modifiers is not None:
@@ -1219,7 +1583,7 @@ class DynamicPromptBuilder:
         }
         tone = tone_rules.get(band, tone_rules["neutral"])
 
-        lines = ["== AFFECT STATE ==", f"Band: {band.upper()}"]
+        lines = ["== AFFECTIVE POSTURE ==", f"Band: {band.upper()}"]
         raw_parts = []
         if emotion:
             raw_parts.append(f"emotion={emotion}")
@@ -1227,6 +1591,10 @@ class DynamicPromptBuilder:
             raw_parts.append(f"valence={valence}")
         if arousal is not None:
             raw_parts.append(f"arousal={arousal}")
+        if intensity is not None:
+            raw_parts.append(f"intensity={intensity}")
+        if confidence is not None:
+            raw_parts.append(f"confidence={confidence}")
         if raw_parts:
             lines.append(f"Raw: {' '.join(raw_parts)}")
         lines.append(f"Tone rule: {tone}")
@@ -1235,39 +1603,51 @@ class DynamicPromptBuilder:
         return "\n".join(lines)
 
     @staticmethod
-    def _build_active_member_block(grounding_capsule: Any) -> str:
-        """Compose ``== ACTIVE MEMBER ==`` from M7 typed ``self_block`` +
-        ``space_graph_block`` only.
+    def _build_active_actor_block(grounding_capsule: Any) -> str:
+        """Compose the ACTIVE ACTOR seat from the typed self block.
 
-        Placed at position 2 (right after IDENTITY) so every rule that
-        references 'the user' or 'the family' is grounded before the LLM
-        reads it.
-
-        Only uses M7 typed fields. Legacy ``actor_block`` / ``family_block``
-        are intentionally excluded so backward-compat tests that use only
-        legacy fields are unaffected by this promotion.
+        Wording is address-the-user: this block tells YOU (the model) who
+        the human in front of you is. It never says YOU are that person.
         """
         self_block = getattr(grounding_capsule, "self_block", "") or ""
-        space_graph_block = getattr(grounding_capsule, "space_graph_block", "") or ""
-        if not self_block and not space_graph_block:
+        if not self_block:
             return ""
         parts = [
-            "== ACTIVE MEMBER (authoritative — read before all rules) ==",
-            "Ground truth for who you are talking to and their space.\n"
-            "These blocks override any inference from chat history.",
+            "The person you are talking to right now is identified below. "
+            "Address them by name and calibrate to their role and style; "
+            "do not infer a different actor from chat history.",
+            self_block,
+            "Rules:\n"
+            "- You are the Concierge speaking TO this person; you are not them.\n"
+            "- Address and calibrate to this actor.\n"
+            "- If display_name is absent, stay natural and avoid forced naming.",
         ]
-        if self_block:
-            parts.append(self_block)
-        if space_graph_block:
-            parts.append(space_graph_block)
+        return "\n\n".join(parts)
+
+    @staticmethod
+    def _build_visible_space_block(grounding_capsule: Any) -> str:
+        """Compose the VISIBLE SPACE seat from the typed space graph block."""
+        space_graph_block = getattr(grounding_capsule, "space_graph_block", "") or ""
+        if not space_graph_block:
+            return ""
+        parts = [
+            "These are the people, roles, and relationships visible in the "
+            'user\'s space this turn. Resolve relationship language ("my kid", '
+            '"my wife", "the boss") through this graph before naming anyone.',
+            space_graph_block,
+            "Rules:\n"
+            "- Before naming, referencing, or inferring another actor, look here.\n"
+            "- If an actor or attribute is not visible here, do not disclose it.\n"
+            "- If a reference is unresolved, ask or use a generic noun.",
+        ]
         return "\n\n".join(parts)
 
     @staticmethod
     def _render_capsule_without_conscience(grounding_capsule: Any) -> str:
         """Render capsule WITHOUT:
         - ``conscience_block`` (promoted near SAFETY rules)
-        - ``self_block`` (promoted to ACTIVE MEMBER when M7 field is set)
-        - ``space_graph_block`` (promoted to ACTIVE MEMBER when M7 field is set)
+        - ``self_block`` (promoted to ACTIVE ACTOR when M7 field is set)
+        - ``space_graph_block`` (promoted to VISIBLE SPACE when M7 field is set)
 
         If only the legacy ``actor_block`` / ``family_block`` fields are
         present (no M7 typed blocks), they fall through here unchanged for

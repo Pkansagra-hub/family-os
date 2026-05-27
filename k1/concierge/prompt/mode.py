@@ -59,10 +59,23 @@ class PromptMode(Enum):
 
 
 # =========================================================================
-# Tool allowlist per mode (V2 Section 16.3)
+# Tool allowlist per mode (V2 Section 16.3, M4 Front deload cutover)
 # =========================================================================
 
-TOOL_ALLOWLIST: dict[PromptMode, list[str]] = {
+COGNITIVE_WRITE_TOOL_NAMES: frozenset[str] = frozenset(
+    {
+        "update_beliefs",
+        "update_scoreboard",
+        "update_clarifications",
+        "update_narrative",
+        "refine_affect",
+        "promote_belief",
+        "update_session_bundle",
+    }
+)
+
+
+LEGACY_TOOL_ALLOWLIST: dict[PromptMode, list[str]] = {
     PromptMode.STANDARD: [
         "update_beliefs",
         "update_scoreboard",
@@ -71,10 +84,8 @@ TOOL_ALLOWLIST: dict[PromptMode, list[str]] = {
         "recall_memory",
         "summarize_context",
         "dispatch_task",
-        # P1.1: Front handles LOW-tier single-step lookups directly via Fabric
         "discover_capabilities",
         "invoke_capability",
-        # refine_affect and promote_belief added conditionally at build time
     ],
     PromptMode.CLARIFY_ASK: [
         "update_clarifications",
@@ -88,7 +99,7 @@ TOOL_ALLOWLIST: dict[PromptMode, list[str]] = {
         "recall_memory",
         "dispatch_task",
     ],
-    PromptMode.HITL_RELAY: [],  # Pure text-only
+    PromptMode.HITL_RELAY: [],
     PromptMode.HITL_RESOLVE: [
         "update_beliefs",
     ],
@@ -99,8 +110,6 @@ TOOL_ALLOWLIST: dict[PromptMode, list[str]] = {
     PromptMode.WEAVE: [
         "update_beliefs",
         "update_narrative",
-        # V3 E0.1.2: update_scoreboard added so salience scoring is updated
-        # when async results are woven into conversation in the same turn.
         "update_scoreboard",
     ],
     PromptMode.CANCEL: [
@@ -117,7 +126,6 @@ TOOL_ALLOWLIST: dict[PromptMode, list[str]] = {
         "recall_memory",
         "summarize_context",
         "dispatch_task",
-        # P1.1: even during interrupts, allow direct lookups for new topics
         "discover_capabilities",
         "invoke_capability",
     ],
@@ -127,6 +135,41 @@ TOOL_ALLOWLIST: dict[PromptMode, list[str]] = {
 }
 
 
+TOOL_ALLOWLIST: dict[PromptMode, list[str]] = {
+    PromptMode.STANDARD: [
+        "recall_memory",
+        "summarize_context",
+        "dispatch_task",
+        "discover_capabilities",
+        "invoke_capability",
+    ],
+    PromptMode.CLARIFY_ASK: [
+        "recall_memory",
+    ],
+    PromptMode.CLARIFY_RESOLVE: [
+        "recall_memory",
+        "dispatch_task",
+    ],
+    PromptMode.HITL_RELAY: [],
+    PromptMode.HITL_RESOLVE: [],
+    PromptMode.PRESENT: [],
+    PromptMode.WEAVE: [],
+    PromptMode.CANCEL: [],
+    PromptMode.INTERRUPT: [
+        "recall_memory",
+        "summarize_context",
+        "dispatch_task",
+        "discover_capabilities",
+        "invoke_capability",
+    ],
+    PromptMode.ERROR: [],
+}
+
+
+def _front_deload_cognitive_tools_enabled() -> bool:
+    return bool(getattr(get_config().prompt, "front_deload_cognitive_tools", True))
+
+
 def get_tool_allowlist(
     mode: PromptMode,
     affect_confidence: float = 1.0,
@@ -134,12 +177,9 @@ def get_tool_allowlist(
 ) -> list[str]:
     """Return the tool allowlist for a mode with conditional inclusions.
 
-    V2 Design Doc Section 6.1 (Conditional Tool Inclusion, ITEM #11):
-      - refine_affect: added when affect_confidence < 0.6 (Phase 1 uncertain)
-      - promote_belief: added when tier != "LOW" (MEDIUM/HIGH complexity)
-
-    STANDARD mode has 8 base tools, up to 10 with conditionals.
-    INTERRUPT always has all 10 (conditionals are already in the base list).
+        M4 deload cutover hides Front cognitive write tools by default. The legacy
+        allowlist remains available when prompt.front_deload_cognitive_tools is
+        explicitly disabled for rollback/comparison.
 
     Args:
         mode: The current PromptMode.
@@ -149,7 +189,8 @@ def get_tool_allowlist(
     Returns:
         List of tool names available for this mode.
     """
-    base = list(TOOL_ALLOWLIST[mode])
+    deload_enabled = _front_deload_cognitive_tools_enabled()
+    base = list(TOOL_ALLOWLIST[mode] if deload_enabled else LEGACY_TOOL_ALLOWLIST[mode])
 
     # HITL_RELAY is strictly text-only -- no conditional tools.
     # Adding tools here wastes the tight 2-iteration budget and
@@ -157,12 +198,15 @@ def get_tool_allowlist(
     if mode == PromptMode.HITL_RELAY:
         return base
 
-    # Conditional: refine_affect when Phase 1 affect is uncertain
+    if deload_enabled:
+        return base
+
+    # Legacy conditional: refine_affect when Phase 1 affect is uncertain.
     threshold = get_config().prompt.affect_confidence_threshold
     if affect_confidence < threshold and "refine_affect" not in base:
         base.append("refine_affect")
 
-    # Conditional: promote_belief for non-LOW tier tasks
+    # Legacy conditional: promote_belief for non-LOW tier tasks.
     if tier != "LOW" and "promote_belief" not in base:
         base.append("promote_belief")
 

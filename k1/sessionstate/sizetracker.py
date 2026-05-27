@@ -190,6 +190,13 @@ SECTION_BUDGETS: Dict[str, SectionBudget] = {
         eviction_priority=None,  # NEVER EVICT
         can_migrate=False,
     ),
+    "trust_level": SectionBudget(
+        name="trust_level",
+        tier=Tier.HOT,
+        max_bytes=2 * 1024,
+        eviction_priority=None,  # NEVER EVICT
+        can_migrate=False,
+    ),
     "spatial": SectionBudget(
         name="spatial",
         tier=Tier.HOT,

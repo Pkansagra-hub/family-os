@@ -2037,6 +2037,10 @@ function _familyLocation() {
     return loc || null;
 }
 
+function _semanticPlaceHint() {
+    return _familyLocation();
+}
+
 function _browserTimeZone() {
     try {
         return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
@@ -2130,6 +2134,7 @@ function _browserDeviceContext() {
         browser_timezone: browserTimezone,
         profile_timezone: profileTimezone,
         profile_location: _familyLocation(),
+        semantic_place_hint: _semanticPlaceHint(),
         browser_geolocation_supported: _browserGeolocationSupported(),
         browser_geolocation_permission: state.browserLocationPermission,
         browser_geolocation_status: state.browserLocationStatus,

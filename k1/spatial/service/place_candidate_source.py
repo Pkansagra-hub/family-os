@@ -20,7 +20,11 @@ def candidates_from_device_context(snapshot: DeviceContextSnapshot) -> tuple[Pla
             normalized_text=hint,
             source="device_hint",
             confidence=0.72,
-            metadata={"device_id": snapshot.device_id, "installation_id": snapshot.installation_id},
+            metadata={
+                "device_id": snapshot.device_id,
+                "installation_id": snapshot.installation_id,
+                "allow_unregistered_semantic_place": True,
+            },
         ),
     )
 

@@ -296,6 +296,15 @@ prompt:
   safety_margin: 0.80
   chars_per_token: 4
 
+  # M4 Front deloading -- hide cognitive SessionState write tools from Front.
+  # Set false only for rollback/comparison while schemas remain registered.
+  front_deload_cognitive_tools: true
+
+  # M4.I11 Front Situation Frame iteration. "v1" keeps == NOW == / == PLACE ==
+  # blocks. "v2" promotes the typed GroundingProjection into == GROUNDING ==,
+  # == TIME ==, and == PLACE AND DEVICE == blocks with no fallback chain.
+  front_prompt_iteration: v1
+
   # prompt/mode.py -- per-mode iteration budgets
   max_iterations:
     STANDARD: 10

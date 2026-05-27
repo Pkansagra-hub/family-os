@@ -180,7 +180,7 @@ def test_final_response_turn_captures_user_assistant_and_read_only_context() -> 
         == "Find quiet hotels"
     )
     assert section_input.history_context["entry_count"] == 2
-    assert ss.reads == ["scoreboard", "history_active"]
+    assert ss.reads == ["scoreboard", "persona", "history_active"]
 
 
 def test_dispatch_turn_carries_dispatch_specs_without_requiring_final_text() -> None:

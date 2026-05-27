@@ -6,6 +6,113 @@ import json
 
 from k1.grounding.types import AgentGroundingLease, GroundingProjection
 
+# ---------------------------------------------------------------------------
+# Front Iteration 2 typed blocks
+# ---------------------------------------------------------------------------
+#
+# Iteration 2 of the Front prompt seats the typed ``GroundingProjection``
+# directly into three structured blocks: ``[grounding]`` (envelope metadata
+# and freshness), ``[time]`` (temporal anchor + windows + resolved
+# expressions), and ``[place_and_device]`` (spatial projection + active
+# device surface). These are the canonical successors to the v1
+# ``== NOW ==`` and ``== PLACE ==`` headers when
+# ``prompt.front_prompt_iteration == "v2"``.
+
+
+def render_grounding_meta_block_v2(projection: GroundingProjection) -> str:
+    """Render the Front Iteration 2 ``== GROUNDING ==`` envelope block."""
+    freshness = projection.freshness
+    lines = [
+        "== GROUNDING ==",
+        f"projection_id: {projection.projection_id}",
+        f"envelope_id: {projection.envelope_id}",
+        f"consumer: {projection.consumer}",
+        f"freshness.status: {freshness.status}",
+        f"freshness.generated_at_utc: {freshness.generated_at_utc}",
+        f"freshness.age_ms: {freshness.age_ms}",
+    ]
+    if freshness.source_status:
+        compact = ", ".join(f"{k}={v}" for k, v in sorted(freshness.source_status.items()))
+        lines.append(f"freshness.source_status: {compact}")
+    if projection.redactions:
+        lines.append(f"redactions: {', '.join(projection.redactions)}")
+    lines.append(
+        "Rule: these grounding values are authoritative for this turn. "
+        "Do not override them with chat-history guesses or native model priors."
+    )
+    return "\n".join(lines)
+
+
+def render_time_block_v2(projection: GroundingProjection) -> str:
+    """Render the Front Iteration 2 ``== TIME ==`` typed block."""
+    temporal = projection.temporal
+    anchor = temporal.anchor
+    kind = "weekend" if anchor.is_weekend else "weekday"
+    lines = [
+        "== TIME ==",
+        f"now_local: {anchor.now_local}",
+        f"local_date: {anchor.local_date}",
+        f"local_time: {anchor.local_time}",
+        f"day_of_week: {anchor.day_of_week} ({kind})",
+        f"time_of_day: {anchor.time_of_day}",
+        f"timezone: {anchor.timezone} (source={anchor.timezone_source})",
+    ]
+    if anchor.locale:
+        lines.append(f"locale: {anchor.locale}")
+    lines.append(f"precision: {temporal.precision}")
+    lines.append(f"freshness: {temporal.freshness}")
+    if temporal.windows:
+        window_labels = ", ".join(sorted(temporal.windows.keys()))
+        lines.append(f"windows: {window_labels}")
+    if temporal.resolved_expressions:
+        lines.append("resolved_expressions:")
+        for resolution in temporal.resolved_expressions:
+            detail = (
+                resolution.instant_local
+                or resolution.clarification_reason
+                or resolution.resolution_kind
+            )
+            lines.append(
+                f"- {resolution.raw_text} -> {resolution.normalized_label} "
+                f"({resolution.resolution_kind}: {detail})"
+            )
+    return "\n".join(lines)
+
+
+def render_place_and_device_block_v2(projection: GroundingProjection) -> str:
+    """Render the Front Iteration 2 ``== PLACE AND DEVICE ==`` typed block."""
+    spatial = projection.spatial
+    place = spatial.semantic_place or "unknown"
+    lines = [
+        "== PLACE AND DEVICE ==",
+        f"semantic_place: {place}",
+        f"precision: {spatial.precision}",
+        f"freshness: {spatial.freshness}",
+        f"location_permission: {spatial.location_permission}",
+    ]
+    if spatial.active_device_surface:
+        lines.append(f"active_device_surface: {spatial.active_device_surface}")
+    accuracy_m = _spatial_accuracy_m(spatial)
+    if accuracy_m is not None:
+        lines.append(f"accuracy_m: {_format_accuracy_m(accuracy_m)}")
+    if spatial.place_refs:
+        refs = ", ".join(
+            f"{ref.place_id}({ref.place_kind})"
+            for ref in spatial.place_refs[:3]
+            if ref.place_id
+        )
+        if refs:
+            lines.append(f"place_refs: {refs}")
+    if spatial.co_presence:
+        names = ", ".join(
+            ref.subject_ref for ref in spatial.co_presence[:5] if ref.subject_ref
+        )
+        if names:
+            lines.append(f"co_presence: {names}")
+    if spatial.redactions:
+        lines.append(f"redactions: {', '.join(spatial.redactions)}")
+    return "\n".join(lines)
+
 
 def render_now_block(projection: GroundingProjection) -> str:
     """Render the user-facing NOW block from a grounding projection."""

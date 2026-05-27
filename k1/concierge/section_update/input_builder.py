@@ -104,6 +104,9 @@ def build_section_update_input(
     scoreboard_context = _collect_scoreboard_context(ss)
     if scoreboard_context:
         snapshot["scoreboard_context"] = scoreboard_context
+    speaker_identity = _collect_speaker_identity(ss)
+    if speaker_identity:
+        snapshot["speaker_identity"] = speaker_identity
 
     return SectionUpdateInput(
         turn_id=resolved_turn_id,
@@ -241,6 +244,46 @@ def _collect_scoreboard_context(ss: Any | None) -> dict[str, Any]:
         "open_questions": _normalize(list(questions)[:MAX_SCOREBOARD_ITEMS]),
         "open_commitments": _normalize(list(commitments)[:MAX_SCOREBOARD_ITEMS]),
     }
+
+
+def _collect_speaker_identity(ss: Any | None) -> dict[str, Any]:
+    """Surface the active speaker so the classifier never writes 'I' as subject.
+
+    Reads ``persona._preferences`` (where the coordinator stores family data)
+    to expose ``active_member`` (resolved first-person name) plus the roster
+    of known family members. Used by the LLM classifier to normalize
+    first-person pronouns ("I", "me", "my") into the speaker's actual name.
+    """
+
+    persona = _safe_get_section(ss, "persona")
+    if persona is None:
+        return {}
+    prefs = getattr(persona, "_preferences", None)
+    if not isinstance(prefs, Mapping):
+        return {}
+    active_member = str(prefs.get("active_member", "") or "")
+    family_data = prefs.get("family", {}) if isinstance(prefs.get("family"), Mapping) else {}
+    members_raw = family_data.get("members", []) if isinstance(family_data, Mapping) else []
+    members: list[dict[str, Any]] = []
+    if isinstance(members_raw, list):
+        for m in members_raw[:16]:
+            if not isinstance(m, Mapping):
+                continue
+            members.append(
+                {
+                    "name": str(m.get("name", "") or ""),
+                    "relation": str(m.get("relation", "") or ""),
+                }
+            )
+    identity: dict[str, Any] = {}
+    if active_member:
+        identity["active_member"] = active_member
+    if members:
+        identity["known_members"] = members
+    family_name = str(family_data.get("family_name", "") or "") if isinstance(family_data, Mapping) else ""
+    if family_name:
+        identity["family_name"] = family_name
+    return identity
 
 
 def _dispatch_specs(react_result: Any | None) -> list[dict[str, Any]]:

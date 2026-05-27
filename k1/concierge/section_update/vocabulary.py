@@ -15,6 +15,7 @@ LLM_WRITABLE_SECTIONS: tuple[str, ...] = (
     "clarifications",
     "narrative_active",
     "affective_now",
+    "trust_level",
 )
 
 FORBIDDEN_SECTIONS: frozenset[str] = frozenset(
@@ -91,6 +92,7 @@ SECTION_APPLY_OPERATIONS: dict[str, frozenset[str]] = {
             "clear",
         }
     ),
+    "trust_level": frozenset({"update", "clear"}),
 }
 
 # Snapshot of MutationGuard.VALID_OPERATIONS relevant to M1. Tests assert the
@@ -127,6 +129,7 @@ POLICY_EXCLUDED_OPERATIONS: dict[str, frozenset[str]] = {
     "clarifications": frozenset({"clear"}),
     "narrative_active": frozenset({"record_turn", "clear"}),
     "affective_now": frozenset({"clear"}),
+    "trust_level": frozenset({"clear"}),
 }
 
 GUARD_APPLY_MISMATCHES: dict[str, frozenset[str]] = {

@@ -1500,7 +1500,7 @@ async def react_loop(
             capability=_cap,
             payload=_payload,
             constraints=RequestConstraints(
-                max_tokens=65536,
+                max_tokens=65535,
                 consumer_id=f"concierge.{actor}",
                 reasoning_effort=_request_reasoning_effort,
             ),

@@ -39,6 +39,7 @@ from k1.spatial.service.presence_resolver import resolve_presence
 from k1.spatial.service.projection_builder import SpatialProjectionBuilder
 from k1.spatial.types import (
     LocationFix,
+    PlaceCandidate,
     PlaceRef,
     SpatialContext,
     SpatialProjection,
@@ -129,6 +130,11 @@ class SpatialService:
                 if geocoded_places:
                     active_place = geocoded_places[0]
                     places = _merge_places(places, geocoded_places)
+        if active_place is None or active_place.place_id == "unknown":
+            active_place = _fallback_place_from_semantic_hint(
+                candidates[0] if candidates else None,
+                timezone=snapshot.timezone,
+            )
         now = datetime.now(UTC).isoformat()
         redactions = tuple(fix.redactions)
         context = SpatialContext(
@@ -326,6 +332,36 @@ def _merge_places(
     for place in extra_places:
         by_id.setdefault(place.place_id, place)
     return tuple(by_id.values())
+
+
+def _fallback_place_from_semantic_hint(
+    candidate: PlaceCandidate | None,
+    *,
+    timezone: str | None,
+) -> PlaceRef | None:
+    if candidate is None or not candidate.normalized_text:
+        return None
+    if not bool(dict(candidate.metadata).get("allow_unregistered_semantic_place")):
+        return None
+    label = str(candidate.raw_text or "").strip()
+    if not label:
+        return None
+    normalized = str(candidate.normalized_text or "").strip()
+    place_id = "device_hint:" + "-".join(normalized.split())
+    return PlaceRef(
+        place_id=place_id,
+        label=label,
+        place_kind="locality" if "," in label else "semantic",
+        confidence=max(0.5, min(float(candidate.confidence), 0.72)),
+        source="device_hint",
+        aliases=(normalized,),
+        timezone=timezone,
+        metadata={
+            "semantic_fallback": True,
+            "unregistered_semantic_place": True,
+            "matched_candidate_source": candidate.source,
+        },
+    )
 
 
 __all__ = ["SpatialService"]

@@ -477,6 +477,19 @@ class UiCoordinator:
             enable_temporal=_env_flag("K1_ENABLE_TEMPORAL", default=True),
             enable_grounding=_env_flag("K1_ENABLE_GROUNDING", default=True),
             enable_spatial=_env_flag("K1_ENABLE_SPATIAL"),
+            # Front de-loading section-update worker (M4 plan). Honors the
+            # K1_ENABLE_SECTION_UPDATE_WORKER and K1_SECTION_UPDATE_WORKER_MODE
+            # env vars so operators can flip the worker on at boot without
+            # editing config. When the worker is enabled but no mode is
+            # specified, default to ``background_apply`` (production: the
+            # worker actually writes session-state deltas). Operators who
+            # want observe-only behavior must set
+            # K1_SECTION_UPDATE_WORKER_MODE=shadow explicitly.
+            enable_section_update_worker=_env_flag("K1_ENABLE_SECTION_UPDATE_WORKER"),
+            section_update_worker_mode=(
+                os.environ.get("K1_SECTION_UPDATE_WORKER_MODE", "").strip().lower()
+                or ("background_apply" if _env_flag("K1_ENABLE_SECTION_UPDATE_WORKER") else "off")
+            ),
             # M13: self-model seeding is MANDATORY per product spec — the L1/L2
             # space-graph projection must be populated so downstream services
             # (composer, capsule builder, policy evaluator) see the family.
@@ -991,6 +1004,13 @@ class UiCoordinator:
             context["timezone"] = timezone_name
         if family_timezone and not context.get("profile_timezone"):
             context["profile_timezone"] = family_timezone
+        semantic_place_hint = str(context.get("semantic_place_hint") or "").strip()
+        if not semantic_place_hint:
+            semantic_place_hint = str(context.get("profile_location") or "").strip()
+        if not semantic_place_hint:
+            semantic_place_hint = self._family_location() or ""
+        if semantic_place_hint:
+            context["semantic_place_hint"] = semantic_place_hint
         context.setdefault("surface", "web")
         context.setdefault("observed_at_utc", datetime.now(timezone.utc).isoformat())
         return context
@@ -998,6 +1018,15 @@ class UiCoordinator:
     def _family_timezone(self) -> str | None:
         candidate = getattr(self.family_profile_obj, "timezone", None) or self.family_profile.get(
             "timezone"
+        )
+        if isinstance(candidate, str):
+            candidate = candidate.strip()
+            return candidate or None
+        return None
+
+    def _family_location(self) -> str | None:
+        candidate = getattr(self.family_profile_obj, "location", None) or self.family_profile.get(
+            "location"
         )
         if isinstance(candidate, str):
             candidate = candidate.strip()

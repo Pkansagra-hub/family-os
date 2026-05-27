@@ -42,7 +42,7 @@ _DEGRADED_MODES = {"degraded_noop"}
 class SectionUpdateWorkerConfig:
     """Runtime knobs for one per-session section-update worker."""
 
-    mode: str = "shadow"
+    mode: str = "background_apply"
     timeout_ms: int = 75_000
     queue_max: int = 128
     classifier_version: str = "section-update-v0"
@@ -55,7 +55,7 @@ class SectionUpdateWorkerStats:
     """Payload-free worker counters used by health checks and M5 tracking."""
 
     running: bool = False
-    mode: str = "shadow"
+    mode: str = "background_apply"
     queue_depth: int = 0
     last_turn_id_seen: str = ""
     last_turn_id_completed: str = ""
@@ -242,12 +242,28 @@ class SectionUpdateBackgroundWorker:
         self._processed_turn_ids.add(input_data.turn_id)
 
         self._publish_requested(input_data, envelope)
-        if self._mode in _DEGRADED_MODES or self._classifier is None:
+
+        # Production path — no shadow / degraded toggles. The worker is
+        # constructed by the kernel with an auto-instantiated classifier and a
+        # bound writer_port; the only legitimate skip is a structural failure
+        # (missing classifier or writer), which is logged loudly so operators
+        # see the misconfiguration instead of silent no-ops.
+        if self._classifier is None or self._writer_port is None:
+            logger.error(
+                "section_update worker misconfigured session=%s classifier=%s writer=%s — "
+                "skipping turn; kernel must wire both ports.",
+                self.session_id,
+                type(self._classifier).__name__ if self._classifier else "None",
+                type(self._writer_port).__name__ if self._writer_port else "None",
+            )
             self._publish_completed(
                 input_data,
                 envelope,
                 status=SectionUpdateCompletionStatus.DEGRADED_NOOP,
-                diagnostics=[{"code": "classifier_unavailable", "message": "background classifier unavailable"}],
+                diagnostics=[{
+                    "code": "worker_misconfigured",
+                    "message": "classifier or writer_port missing",
+                }],
                 elapsed_ms=_elapsed_ms(started),
             )
             return
@@ -267,46 +283,6 @@ class SectionUpdateBackgroundWorker:
                 envelope,
                 status=classification.status,
                 diagnostics=classification.diagnostics,
-                elapsed_ms=classification.elapsed_ms,
-                classifier_version=classifier_version,
-            )
-            return
-
-        if self._mode in _SHADOW_MODES:
-            self._publish_completed(
-                input_data,
-                envelope,
-                status=(
-                    SectionUpdateCompletionStatus.SHADOW_NOOP
-                    if plan.is_noop
-                    else SectionUpdateCompletionStatus.SHADOW_PLAN
-                ),
-                plan=plan,
-                diagnostics=classification.diagnostics,
-                elapsed_ms=classification.elapsed_ms,
-                classifier_version=classifier_version,
-            )
-            return
-
-        if self._mode not in _BACKGROUND_APPLY_MODES:
-            self._publish_completed(
-                input_data,
-                envelope,
-                status=SectionUpdateCompletionStatus.DEGRADED_NOOP,
-                plan=plan,
-                diagnostics=[{"code": "unsupported_mode", "message": self._mode}],
-                elapsed_ms=classification.elapsed_ms,
-                classifier_version=classifier_version,
-            )
-            return
-
-        if self._writer_port is None:
-            self._publish_completed(
-                input_data,
-                envelope,
-                status=SectionUpdateCompletionStatus.DEGRADED_NOOP,
-                plan=plan,
-                diagnostics=[{"code": "writer_unavailable", "message": "writer_port missing"}],
                 elapsed_ms=classification.elapsed_ms,
                 classifier_version=classifier_version,
             )
@@ -418,6 +394,18 @@ class SectionUpdateBackgroundWorker:
             elapsed_ms=elapsed_ms,
         )
         self._bus.publish(build_section_update_completed(payload, parent_id=envelope.envelope_id))
+        status_text = (
+            status.value if isinstance(status, SectionUpdateCompletionStatus) else str(status)
+        )
+        logger.info(
+            "section_update completed session=%s turn=%s mode=%s status=%s plan_ops=%s elapsed_ms=%d",
+            self.session_id,
+            input_data.turn_id,
+            self._mode,
+            status_text,
+            (len(plan.mutations) if plan is not None else 0),
+            int(elapsed_ms or 0),
+        )
         self._record_status(status, _diagnostic_code(diagnostics), turn_id=input_data.turn_id)
 
     def _record_status(
@@ -460,8 +448,19 @@ class SectionUpdateBackgroundWorker:
 
 
 def _normalize_mode(mode: str) -> str:
+    """Collapse legacy mode strings down to the two real states.
+
+    Production has exactly two outcomes: the worker is OFF (disabled, no
+    subscription, no processing) or it is ON and applies plans against
+    SessionState via the bound writer port. Legacy ``shadow`` /
+    ``offline_stub`` / ``degraded_noop`` values are intentionally remapped
+    to ``background_apply`` — there is no observe-only mode any more.
+    """
+
     normalized = str(mode or "").strip().lower()
-    return "off" if normalized in _DISABLED_MODES else normalized
+    if normalized in _DISABLED_MODES:
+        return "off"
+    return "background_apply"
 
 
 def _payload_dict(envelope: Envelope) -> dict[str, Any]:

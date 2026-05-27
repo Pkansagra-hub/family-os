@@ -89,6 +89,43 @@ async def test_record_device_context_falls_back_to_family_timezone() -> None:
     assert snapshot.metadata["profile_timezone"] == "America/Chicago"
 
 
+async def test_record_device_context_falls_back_to_family_location_hint() -> None:
+    port = _Port()
+    coord = UiCoordinator(test_mode=True)
+    coord.family_profile = {"location": "Denton, Texas"}
+    coord._runtime = type(
+        "Runtime",
+        (),
+        {"_session_id": "web-s1", "_service": type("Service", (), {"device_context_port": port})()},
+    )()
+
+    await coord._record_device_context(device="alex_phone", device_context={})
+
+    assert len(port.snapshots) == 1
+    snapshot = port.snapshots[0]
+    assert snapshot.semantic_place_hint == "Denton, Texas"
+
+
+async def test_record_device_context_promotes_profile_location_to_semantic_hint() -> None:
+    port = _Port()
+    coord = UiCoordinator(test_mode=True)
+    coord._runtime = type(
+        "Runtime",
+        (),
+        {"_session_id": "web-s1", "_service": type("Service", (), {"device_context_port": port})()},
+    )()
+
+    await coord._record_device_context(
+        device="alex_phone",
+        device_context={"profile_location": "Denton, Texas"},
+    )
+
+    assert len(port.snapshots) == 1
+    snapshot = port.snapshots[0]
+    assert snapshot.semantic_place_hint == "Denton, Texas"
+    assert snapshot.metadata["profile_location"] == "Denton, Texas"
+
+
 async def test_record_device_context_preserves_browser_location_fix() -> None:
     port = _Port()
     coord = UiCoordinator(test_mode=True)

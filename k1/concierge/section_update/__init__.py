@@ -15,6 +15,7 @@ from k1.concierge.section_update.classifier import (
     DeterministicSectionUpdateClassifier,
     ISectionUpdateClassifier,
 )
+from k1.concierge.section_update.llm_classifier import LLMSectionUpdateClassifier
 from k1.concierge.section_update.events import (
     SectionUpdateCompletionStatus,
     build_section_update_completed_payload,
@@ -123,6 +124,7 @@ __all__ = [
     "PlanCompiler",
     "DeterministicSectionUpdateClassifier",
     "ISectionUpdateClassifier",
+    "LLMSectionUpdateClassifier",
     "SectionUpdateBackgroundWorker",
     "SectionUpdateWorkerConfig",
     "SectionUpdateWorkerStats",

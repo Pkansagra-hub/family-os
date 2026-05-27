@@ -92,7 +92,12 @@ from .events import (
 from .eviction import EvictionEngine, EvictionResult
 
 # Core manager and factory
-from .factory import PortProtocolError, SessionStateFactory, create_for_testing, create_standalone
+from .factory import (
+    PortProtocolError,
+    SessionStateFactory,
+    create_for_testing,
+    create_standalone,
+)
 from .guard import Approval, MutationGuard, RejectionReason
 
 # Local cold archive
@@ -144,6 +149,7 @@ from .sections import (  # HOT CORE; WARM TIER
     PersonaSection,
     ScoreboardSection,
     TelemetrySection,
+    TrustLevelSection,
 )
 
 # Size and guard
@@ -233,6 +239,7 @@ __all__ = [
     "AffectiveNowSection",
     "NarrativeActiveSection",
     "MetaSection",
+    "TrustLevelSection",
     # WARM TIER Sections
     "BeliefsHistorySection",
     "HistoryRecentSection",

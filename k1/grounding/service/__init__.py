@@ -15,9 +15,12 @@ from k1.grounding.service.projection_policy import (
 )
 from k1.grounding.service.prompt_block_renderer import (
     render_execution_grounding_block,
+    render_grounding_meta_block_v2,
     render_now_block,
+    render_place_and_device_block_v2,
     render_place_block,
     render_planning_grounding_block,
+    render_time_block_v2,
 )
 from k1.grounding.service.propagation import (
     attach_propagation_metadata,
@@ -42,7 +45,10 @@ __all__ = [
     "envelope_age_ms",
     "is_stale",
     "render_execution_grounding_block",
+    "render_grounding_meta_block_v2",
     "render_now_block",
+    "render_place_and_device_block_v2",
     "render_place_block",
     "render_planning_grounding_block",
+    "render_time_block_v2",
 ]

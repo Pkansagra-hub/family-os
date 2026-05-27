@@ -75,6 +75,18 @@ class TestSeedSpaceProjection:
         assert len(parent_of) == 2
         assert ("alex", "riley", "parent_of") in edges
         assert ("jordan", "riley", "parent_of") in edges
+        # Reverse child_of edges so children see all parents in their view.
+        child_of = [e for e in edges if e[2] == "child_of"]
+        assert len(child_of) == 2
+        assert ("riley", "alex", "child_of") in edges
+        assert ("riley", "jordan", "child_of") in edges
+        # Symmetric coparent_of edges so each guardian sees the other.
+        coparent_of = [e for e in edges if e[2] == "coparent_of"]
+        assert len(coparent_of) == 2
+        assert ("alex", "jordan", "coparent_of") in edges
+        assert ("jordan", "alex", "coparent_of") in edges
+        # No sibling_of edges expected for one-child Smith profile.
+        assert not [e for e in edges if e[2] == "sibling_of"]
 
     def test_idempotent_skip_on_second_call(self):
         seeder = SpaceDataSeeder()
@@ -133,10 +145,13 @@ class TestSeedSelfProjections:
         assert frame.self_view is not None
         assert frame.self_view.role == "guardian"
         assert "riley" in frame.visibility.can_see_members
+        assert "jordan" in frame.visibility.can_see_members
         assert any(other.member_id == "riley" for other in frame.relations.projected_others)
+        assert any(other.member_id == "jordan" for other in frame.relations.projected_others)
         assert capsule is not None
         assert capsule.space_graph_block.startswith("[space]")
         assert "Riley" in capsule.space_graph_block
+        assert "Jordan" in capsule.space_graph_block
         assert "must_ask=send_message" in capsule.conscience_block
         assert "forbidden=prescribe_medication" in capsule.conscience_block
 

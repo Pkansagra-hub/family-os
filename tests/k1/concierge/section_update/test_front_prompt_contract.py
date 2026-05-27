@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from k1.concierge.prompt.affect import AffectBand
+from k1.concierge.prompt.builder import DynamicPromptBuilder
+from k1.concierge.prompt.mode import PromptMode
 
 ROOT = Path(__file__).resolve().parents[4]
 WHITEBOARD = ROOT / "whiteboard_front_deloading.md"
@@ -92,3 +95,65 @@ def test_iteration_1_tool_contract_keeps_read_and_action_surface() -> None:
     assert "Do not call, request, or simulate hidden state writes from Front" in prompt
     assert "Do not mutate beliefs_active, scoreboard, clarifications" in prompt
     assert "Do not invent state" in prompt
+
+
+def test_runtime_prompt_text_no_longer_instructs_front_cognitive_writes() -> None:
+    for mode in PromptMode:
+        built = DynamicPromptBuilder().build(
+            mode=mode,
+            affect_band=AffectBand("neutral"),
+            history_messages=[],
+            all_tool_schemas=[],
+            scenario_data={"open_gaps_list": "(none)"},
+            affect_confidence=0.0,
+            tier="HIGH",
+        )
+        prompt = built.system_prompt
+        for tool_name in COGNITIVE_WRITE_TOOL_NAMES:
+            assert tool_name not in prompt, (mode, tool_name)
+        assert "SectionUpdateClassifier" not in prompt
+
+
+def test_runtime_prompt_keeps_iteration_1_front_job_surface() -> None:
+    prompt = (
+        DynamicPromptBuilder()
+        .build(
+            mode=PromptMode.STANDARD,
+            affect_band=AffectBand("neutral"),
+            history_messages=[],
+            all_tool_schemas=[],
+            scenario_data={},
+        )
+        .system_prompt
+    )
+
+    expected_order = [
+        "== FRONT ROLE CONTRACT ==",
+        "== FRONT SITUATION FRAME ==",
+        "-- INJECT: ACTIVE ACTOR --",
+        "-- INJECT: VISIBLE SPACE --",
+        "-- INJECT: CONSCIENCE / POLICY --",
+        "-- INJECT: NOW --",
+        "-- INJECT: PLACE --",
+        "-- INJECT: DYNAMIC IDENTITY CONTEXT --",
+        "-- INJECT: REFERENCE PROFILE --",
+        "-- INJECT: AFFECTIVE POSTURE --",
+        "-- INJECT: INTERACTION PROFILE --",
+        "-- INJECT: CONVERSATION STATE --",
+        "-- INJECT: ACTIVE WORK --",
+        "-- INJECT: MEMORY AND AUTHORITY BOUNDARY --",
+        "== CURRENT EVENT ==",
+        "== TOOL CONTRACT ==",
+        "== RESPONSE BEHAVIOR ==",
+    ]
+    positions = [prompt.index(marker) for marker in expected_order]
+    assert positions == sorted(positions)
+
+    assert "== STATE CONSUMPTION DISCIPLINE ==" in prompt
+    assert "Hidden cognitive state mutation happens outside Front" in prompt
+    assert "Hidden cognitive SessionState writes are not Front tools" in prompt
+    assert "recall_memory" in prompt
+    assert "dispatch_task" in prompt
+    assert "discover_capabilities" in prompt
+    assert "invoke_capability" in prompt
+    assert "Live system-of-record state is always work" in prompt

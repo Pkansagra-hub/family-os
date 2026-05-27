@@ -50,6 +50,7 @@ from .task_artifacts import ArtifactType, TaskArtifactEntry, TaskArtifactsSectio
 from .task_state import TaskStateEntry, TaskStateSection, TaskStatus
 from .telemetry import TelemetrySection
 from .temporal import TemporalSection
+from .trust_level import TrustLevelSection
 
 __all__ = [
     # HOT CORE
@@ -62,6 +63,7 @@ __all__ = [
     "NarrativeActiveSection",
     "MetaSection",
     "TemporalSection",
+    "TrustLevelSection",
     "SpatialSection",
     "GroundingSection",
     "TaskStateSection",

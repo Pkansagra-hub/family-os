@@ -48,7 +48,7 @@ class TestNormalizedRequest:
         assert nr.tools is None
         assert nr.tool_choice is None
         assert nr.output_schema is None
-        assert nr.max_tokens == 65536
+        assert nr.max_tokens == 65535
         assert nr.timeout_ms == 30000
         assert nr.temperature == 0.7
         assert nr.model_id == ""

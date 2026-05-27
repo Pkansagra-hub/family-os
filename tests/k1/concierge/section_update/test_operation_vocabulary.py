@@ -16,7 +16,7 @@ from k1.sessionstate.guard import VALID_OPERATIONS
 from k1.sessionstate.sizetracker import ALL_SECTIONS
 
 
-def test_registry_has_only_five_cognitive_sections() -> None:
+def test_registry_has_only_six_cognitive_sections() -> None:
     assert tuple(CLASSIFIER_OPERATION_REGISTRY) == LLM_WRITABLE_SECTIONS
     assert set(CLASSIFIER_OPERATION_REGISTRY) == {
         "beliefs_active",
@@ -24,6 +24,7 @@ def test_registry_has_only_five_cognitive_sections() -> None:
         "clarifications",
         "narrative_active",
         "affective_now",
+        "trust_level",
     }
 
 
@@ -48,6 +49,7 @@ def test_registry_matches_safe_v0_operations() -> None:
         "update_thread",
     )
     assert allowed_operations("affective_now") == ("update",)
+    assert allowed_operations("trust_level") == ("update",)
 
 
 def test_every_allowed_operation_is_guard_and_apply_compatible() -> None:

@@ -50,6 +50,7 @@ def test_device_context_candidates_use_semantic_hint() -> None:
 
     assert candidate.normalized_text == "jordan school"
     assert candidate.source == "device_hint"
+    assert candidate.metadata["allow_unregistered_semantic_place"] is True
 
 
 def _snapshot(**overrides: object) -> DeviceContextSnapshot:

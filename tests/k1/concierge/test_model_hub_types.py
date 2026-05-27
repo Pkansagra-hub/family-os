@@ -189,7 +189,7 @@ class TestToolCallResult:
 class TestRequestConstraints:
     def test_defaults(self) -> None:
         rc = RequestConstraints()
-        assert rc.max_tokens == 65536
+        assert rc.max_tokens == 65535
         assert rc.timeout_ms == 30_000
         assert rc.priority == Priority.INTERACTIVE
         assert rc.temperature == 0.7

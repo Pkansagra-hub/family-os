@@ -50,6 +50,25 @@ class _CoordinateOnlyDeviceContextPort:
         )
 
 
+class _SemanticOnlyDeviceContextPort:
+    async def get_snapshot(
+        self,
+        session_id: str,
+        device_id: str,
+        installation_id: str,
+    ) -> DeviceContextSnapshot:
+        return DeviceContextSnapshot(
+            session_id=session_id,
+            device_id=device_id,
+            installation_id=installation_id,
+            observed_at_utc="2026-05-23T01:00:00+00:00",
+            surface="web",
+            timezone="America/Chicago",
+            location_permission="hidden",
+            semantic_place_hint="Denton, Texas",
+        )
+
+
 class _ReverseGeocoderPort:
     async def geocode(self, session_id: str, candidate):  # type: ignore[no-untyped-def]
         return ()
@@ -166,6 +185,28 @@ async def test_spatial_service_projects_coordinate_only_browser_fix_without_raw_
     assert snapshot.projection.approximate_location is None
     assert snapshot.projection.metadata["location_accuracy_m"] == 42.0
     assert snapshot.projection.raw_location is None
+
+
+async def test_spatial_service_uses_profile_semantic_hint_when_no_fix_or_registry_match() -> None:
+    service = SpatialService(
+        device_context_port=SpatialDeviceContextAdapter(_SemanticOnlyDeviceContextPort()),
+        device_location_port=None,
+        place_registry_port=LocalPlaceRegistryAdapter(),
+        state_port=SpatialStateAdapter(),
+    )
+
+    snapshot = await service.refresh_turn(
+        "s1",
+        device_id="alex_laptop",
+        installation_id="alex_laptop",
+        turn_id="t1",
+    )
+
+    assert snapshot.context.active_place is not None
+    assert snapshot.context.active_place.label == "Denton, Texas"
+    assert snapshot.context.active_place.source == "device_hint"
+    assert snapshot.context.active_place.metadata["semantic_fallback"] is True
+    assert snapshot.projection.semantic_place == "Denton, Texas"
 
 
 async def test_spatial_service_reverse_geocodes_coordinate_only_browser_fix() -> None:

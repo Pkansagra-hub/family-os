@@ -56,7 +56,7 @@ def test_prompts_route_existing_artifact_note_updates_without_domain_shortcuts()
     assert "Do NOT search an unrelated domain" in back_prompt
 
 
-def test_front_modes_include_native_intelligence_after_identity() -> None:
+def test_front_modes_include_native_intelligence_after_role_contract() -> None:
     native = PROMPT_SECTIONS["NATIVE_INTELLIGENCE"]
     assert "You are not a blank router" in native
     assert "broad general-world knowledge" in native
@@ -65,8 +65,9 @@ def test_front_modes_include_native_intelligence_after_identity() -> None:
 
     for mode in PromptMode:
         keys = MODE_SECTIONS[mode]
+        assert "FRONT_ROLE_CONTRACT" in keys
         assert "NATIVE_INTELLIGENCE" in keys
-        assert keys.index("NATIVE_INTELLIGENCE") == keys.index("IDENTITY") + 1
+        assert keys.index("NATIVE_INTELLIGENCE") > keys.index("FRONT_ROLE_CONTRACT")
 
 
 def test_back_prompt_marks_native_knowledge_as_general_provenance() -> None:
