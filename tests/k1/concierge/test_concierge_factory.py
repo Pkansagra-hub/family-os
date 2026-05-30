@@ -318,6 +318,30 @@ class TestConfigFlagGating:
         session = ConciergeFactory.create_for_testing(config=cfg)
         assert session.experience_layer is None
 
+    def test_m6_opp_pipeline_wired_when_experience_enabled(self):
+        """M6.E1.I1: factory must attach OppPipeline to the FSM with
+        EpisodicCompressor + DynamicIdentityContext, and the same
+        compressor instance must back ExperienceLayer."""
+        cfg = ConciergeConfig.for_testing(enable_experience=True)
+        session = ConciergeFactory.create_for_testing(config=cfg)
+        opp = getattr(session.fsm, "_opp_pipeline", None)
+        assert opp is not None, "FSM must have _opp_pipeline attached"
+        status = opp.status()
+        assert status["opp6_episodic_compression"] is True
+        assert status["opp7_dynamic_identity"] is True
+        # Single-instance-per-session invariant: same compressor on both.
+        assert session.experience_layer is not None
+        assert (
+            session.experience_layer.episodic_compressor is opp._episodic_compressor
+        ), "ExperienceLayer must share the OppPipeline's compressor"
+
+    def test_m6_opp_pipeline_absent_when_experience_disabled(self):
+        """When ``enable_experience=False`` the OPP wiring must also be off."""
+        cfg = ConciergeConfig.for_testing(enable_experience=False)
+        session = ConciergeFactory.create_for_testing(config=cfg)
+        assert getattr(session.fsm, "_opp_pipeline", None) is None
+        assert session.experience_layer is None
+
     def test_enable_delta_true(self):
         cfg = ConciergeConfig.for_testing(enable_delta=True)
         session = ConciergeFactory.create_for_testing(config=cfg)

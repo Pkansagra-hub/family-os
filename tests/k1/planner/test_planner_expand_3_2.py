@@ -963,7 +963,12 @@ class TestEnrichSteps:
         steps = svc._enrich_steps(llm_steps, {})
         assert steps[1].deps == ["s1"]
 
-    def test_prompt_template_preserved(self, svc: ExpandService) -> None:
+    def test_prompt_template_preserved_when_inventory_backed(self, svc: ExpandService) -> None:
+        svc = ExpandService(
+            llm_port=svc.llm_port,
+            tool_router=svc.tool_router,
+            prompt_inventory={"tmpl_booking"},
+        )
         llm_steps = [
             {"id": "s1", "capability": "cap.a", "params": {}, "prompt_template": "tmpl_booking"}
         ]

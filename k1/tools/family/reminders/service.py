@@ -55,6 +55,52 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _member_id_alias(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if not text:
+        return value
+    return "_".join("".join(ch.lower() if ch.isalnum() else " " for ch in text).split())
+
+
+def _recipient_alias(value: Any, ctx: WriteContext) -> Any:
+    alias = _member_id_alias(value)
+    if alias in {"user", "me", "self", "myself", "current_user", "current_member"}:
+        return _member_id_alias(ctx.user_id)
+    return alias
+
+
+def _ui_interaction_metadata(params: dict[str, Any]) -> dict[str, Any]:
+    source = str(params.get("interaction_source") or "").strip()
+    kind = str(params.get("interaction_kind") or "").strip()
+    if not source and not kind:
+        return {}
+    stamp: dict[str, Any] = {"at": _now_iso()}
+    if source:
+        stamp["source"] = source[:80]
+    if kind:
+        stamp["kind"] = kind[:80]
+    return {"_last_ui_interaction": stamp}
+
+
+def _metadata_updates(params: dict[str, Any]) -> dict[str, Any]:
+    updates: dict[str, Any] = {}
+    if "metadata" in params and params["metadata"] is not None:
+        if not isinstance(params["metadata"], dict):
+            raise ValueError("reminder metadata must be an object")
+        updates.update(params["metadata"])
+    updates.update(_ui_interaction_metadata(params))
+    return updates
+
+
+def _merged_metadata(existing: Reminder, params: dict[str, Any]) -> dict[str, Any]:
+    updates = _metadata_updates(params)
+    if not updates:
+        return existing.metadata
+    return {**existing.metadata, **updates}
+
+
 class RemindersToolService(BaseToolService):
     """Family Reminders adapter service."""
 
@@ -69,12 +115,12 @@ class RemindersToolService(BaseToolService):
 
     async def create_reminder(self, params: dict[str, Any], ctx: WriteContext) -> dict[str, Any]:
         action = self._spec("create_reminder")
-        recipient = params.get("recipient")
+        recipient = _recipient_alias(params.get("recipient"), ctx)
         if not recipient:
             raise ValueError("create_reminder requires recipient")
 
         # Cross-member guard: only guardian+ may set reminders for others.
-        if recipient != ctx.user_id and not role_satisfies(ctx.role, "guardian"):
+        if recipient != _member_id_alias(ctx.user_id) and not role_satisfies(ctx.role, "guardian"):
             raise PermissionError("only a guardian or parent may set reminders for other members")
 
         raw_trigger = params.get("trigger")
@@ -122,13 +168,21 @@ class RemindersToolService(BaseToolService):
         if "trigger" in params and params["trigger"] is not None:
             raw = params["trigger"]
             updates["trigger"] = ReminderTrigger(**raw) if isinstance(raw, dict) else raw
+        metadata = _merged_metadata(existing, params)
+        if metadata is not existing.metadata:
+            updates["metadata"] = metadata
 
         if updates:
             existing = existing.model_copy(update=updates)
         reminder = existing.bump(ctx.user_id)
         self._upsert_reminder(reminder)
         self.emit_entity_write("update", reminder, ctx, action=action)
-        return {"success": True, "reminder_id": reminder.id, "version": reminder.version}
+        return {
+            "success": True,
+            "reminder_id": reminder.id,
+            "version": reminder.version,
+            "reminder": reminder.model_dump(mode="json"),
+        }
 
     async def snooze_reminder(self, params: dict[str, Any], ctx: WriteContext) -> dict[str, Any]:
         action = self._spec("snooze_reminder")
@@ -146,7 +200,12 @@ class RemindersToolService(BaseToolService):
         # fired_at may already be set (normal snooze); if not, stamp it now.
         fired_at = existing.fired_at or _now_iso()
         reminder = existing.model_copy(
-            update={"status": "snoozed", "snoozed_until": snooze_until, "fired_at": fired_at}
+            update={
+                "status": "snoozed",
+                "snoozed_until": snooze_until,
+                "fired_at": fired_at,
+                "metadata": _merged_metadata(existing, params),
+            }
         ).bump(ctx.user_id)
         self._upsert_reminder(reminder)
         self.emit_entity_write("update", reminder, ctx, action=action)
@@ -154,6 +213,8 @@ class RemindersToolService(BaseToolService):
             "success": True,
             "reminder_id": reminder.id,
             "snoozed_until": snooze_until,
+            "version": reminder.version,
+            "reminder": reminder.model_dump(mode="json"),
         }
 
     async def dismiss_reminder(self, params: dict[str, Any], ctx: WriteContext) -> dict[str, Any]:
@@ -167,18 +228,33 @@ class RemindersToolService(BaseToolService):
 
         # Idempotent: already dismissed.
         if existing.status == "dismissed":
-            return {"success": True, "reminder_id": reminder_id}
+            return {
+                "success": True,
+                "reminder_id": reminder_id,
+                "version": existing.version,
+                "reminder": existing.model_dump(mode="json"),
+            }
 
         # Actor gate: recipient, creator, or guardian+.
         self._assert_actor_gate(existing, ctx, action_name="dismiss")
 
         fired_at = existing.fired_at or _now_iso()
         reminder = existing.model_copy(
-            update={"status": "dismissed", "fired_at": fired_at, "snoozed_until": None}
+            update={
+                "status": "dismissed",
+                "fired_at": fired_at,
+                "snoozed_until": None,
+                "metadata": _merged_metadata(existing, params),
+            }
         ).bump(ctx.user_id)
         self._upsert_reminder(reminder)
         self.emit_entity_write("update", reminder, ctx, action=action)
-        return {"success": True, "reminder_id": reminder.id}
+        return {
+            "success": True,
+            "reminder_id": reminder.id,
+            "version": reminder.version,
+            "reminder": reminder.model_dump(mode="json"),
+        }
 
     async def fire_reminder(self, params: dict[str, Any], ctx: WriteContext) -> dict[str, Any]:
         """System-only — called by K1 scheduler when a trigger condition is met.
@@ -235,7 +311,9 @@ class RemindersToolService(BaseToolService):
             raise ValueError(f"reminder not found: {reminder_id}")
 
         # Delete gate: creator OR parent+.
-        if existing.actor != ctx.user_id and not role_satisfies(ctx.role, "parent"):
+        if _member_id_alias(existing.actor) != _member_id_alias(ctx.user_id) and not role_satisfies(
+            ctx.role, "parent"
+        ):
             raise PermissionError("only the reminder creator or a parent may delete this reminder")
 
         deleted = existing.model_copy(
@@ -252,7 +330,7 @@ class RemindersToolService(BaseToolService):
     async def list_reminders(self, params: dict[str, Any], ctx: WriteContext) -> dict[str, Any]:
         rows = self._scan_reminders(
             space_id=ctx.space_id,
-            recipient=params.get("recipient"),
+            recipient=_recipient_alias(params.get("recipient"), ctx),
             status=params.get("status"),
         )
         # due_before filter: only works for time-based triggers (fire_at in trigger JSON)
@@ -288,8 +366,8 @@ class RemindersToolService(BaseToolService):
     ) -> None:
         """Raise PermissionError unless caller is recipient, creator, or guardian+."""
         if (
-            ctx.user_id != reminder.recipient
-            and ctx.user_id != reminder.actor
+            _member_id_alias(ctx.user_id) != _member_id_alias(reminder.recipient)
+            and _member_id_alias(ctx.user_id) != _member_id_alias(reminder.actor)
             and not role_satisfies(ctx.role, "guardian")
         ):
             raise PermissionError(
@@ -399,15 +477,18 @@ class RemindersToolService(BaseToolService):
     ) -> list[dict[str, Any]]:
         sql = "SELECT * FROM reminders WHERE space_id=?"
         args: list[Any] = [space_id]
-        if recipient:
-            sql += " AND recipient=?"
-            args.append(recipient)
         if status:
             sql += " AND status=?"
             args.append(status)
         sql += " ORDER BY created_at ASC LIMIT 500"
         cur = self._conn.execute(sql, args)
-        return [_decode_reminder_cols(_row_to_dict(r)) for r in cur.fetchall()]
+        rows = [_decode_reminder_cols(_row_to_dict(r)) for r in cur.fetchall()]
+        if recipient:
+            recipient_alias = _member_id_alias(recipient)
+            rows = [
+                row for row in rows if _member_id_alias(row.get("recipient")) == recipient_alias
+            ]
+        return rows
 
 
 # ---------------------------------------------------------------------------

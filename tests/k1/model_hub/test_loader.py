@@ -28,6 +28,7 @@ from k1.model_hub.plugins.base import (
     ProviderHealth,
     ProviderResponse,
 )
+from k1.model_hub.ports.event_port import Subscription
 from k1.model_hub.types import CapabilityType, HealthStatus
 
 # ---------------------------------------------------------------------------
@@ -52,7 +53,7 @@ class _StubPlugin:
         return ProviderResponse(text="stub")
 
     async def stream_execute(self, request: NormalizedRequest) -> AsyncIterator[ProviderChunk]:
-        yield ProviderChunk(delta="stub")
+        yield ProviderChunk(text="stub")
 
     def estimate_tokens(self, text: str) -> int:
         return len(text.split()) if isinstance(text, str) else 0
@@ -84,6 +85,9 @@ class _RecordingEventPort:
 
     async def publish(self, topic: str, payload: object) -> None:
         self.published.append((topic, payload))
+
+    async def subscribe(self, topics, handler) -> Subscription:
+        return Subscription(subscription_id="test-sub", topics=list(topics))
 
 
 # Module-level so importlib can resolve them via dotted paths.
@@ -163,6 +167,27 @@ class TestProviderConfig:
         # providers; self-hosted (ollama/vllm) require explicit opt-in.
         assert ids == ["google", "openai", "anthropic"]
         assert all(e.enabled for e in config.providers)
+
+    def test_from_env_empty_keeps_legacy_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("LLM_PROVIDER", "vertex")
+        config = ProviderConfig.from_env({})
+        assert [e.provider_id for e in config.providers] == ["google", "openai", "anthropic"]
+
+    def test_from_env_google_loads_only_developer_api_provider(self) -> None:
+        config = ProviderConfig.from_env({"LLM_PROVIDER": "google"})
+        assert [e.provider_id for e in config.providers] == ["google"]
+
+    def test_from_env_vertex_loads_only_agent_platform_provider(self) -> None:
+        config = ProviderConfig.from_env({"LLM_PROVIDER": "vertex"})
+        assert [e.provider_id for e in config.providers] == ["vertex"]
+
+    def test_from_env_cloud_alias_loads_vertex(self) -> None:
+        config = ProviderConfig.from_env({"LLM_PROVIDER": "agent-platform"})
+        assert [e.provider_id for e in config.providers] == ["vertex"]
+
+    def test_from_env_vertexai_flag_loads_vertex_when_provider_unset(self) -> None:
+        config = ProviderConfig.from_env({"GOOGLE_GENAI_USE_VERTEXAI": "True"})
+        assert [e.provider_id for e in config.providers] == ["vertex"]
 
 
 # ---------------------------------------------------------------------------

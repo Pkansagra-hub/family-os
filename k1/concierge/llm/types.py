@@ -141,7 +141,8 @@ class ConciergeModelRequest:
     # --- Budget constraints ---
     # Defaults read from config (llm.default_max_tokens, etc.).
     # Kept as module-level defaults for backward compatibility.
-    max_tokens: int = 65536
+    # Note: Vertex/Gemini rejects max_output_tokens >= 65536 with HTTP 400 INVALID_ARGUMENT.
+    max_tokens: int = 65535
     timeout_ms: int = 120_000
     temperature: float = 1.0  # Gemini 3 recommends 1.0 default
 

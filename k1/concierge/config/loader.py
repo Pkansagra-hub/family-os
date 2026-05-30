@@ -33,7 +33,7 @@ class BackActorConfig:
     )
     budget_floor: int = 2
     history_window: int = 5
-    default_safety_band: str = "AMBER"
+    default_safety_band: str = "GREEN"
     hitl_timeout_s: int = 60
     summarize_args_max_len: int = 200
     summarize_result_max_len: int = 500
@@ -164,32 +164,32 @@ class KernelConfig:
 class LlmConfig:
     """Knobs from llm/model_selection.py, llm/gemini_adapter.py, llm/types.py."""
 
-    default_model: str = "gemini-3-flash-preview"
+    default_model: str = "gemini-2.5-flash"
     batch_max_concurrency: int = 5
     default_max_tokens: int = 4096
     default_timeout_ms: int = 30_000
     default_temperature: float = 1.0
     model_hint_overrides: dict[str, str] = field(
         default_factory=lambda: {
-            "fast": "gemini-3-flash-preview",
-            "smart": "gemini-3-flash-preview",
-            "cheap": "gemini-3-flash-preview",
-            "thinking": "gemini-3.1-pro-preview",
-            "pro": "gemini-3.1-pro-preview",
-            "flash": "gemini-3-flash-preview",
+            "fast": "gemini-2.5-flash",
+            "smart": "gemini-2.5-flash",
+            "cheap": "gemini-2.5-flash-lite",
+            "thinking": "gemini-2.5-flash",
+            "pro": "gemini-2.5-pro",
+            "flash": "gemini-2.5-flash",
         }
     )
     model_selection_table: dict[str, dict[str, str]] = field(
         default_factory=lambda: {
-            "CHAT": {"front": "gemini-3-flash-preview", "back": "gemini-3.1-pro-preview"},
+            "CHAT": {"front": "gemini-2.5-flash", "back": "gemini-2.5-flash"},
             "TOOL_CALL": {
-                "front": "gemini-3-flash-preview",
-                "back": "gemini-3.1-pro-preview",
-                "planner": "gemini-3.1-pro-preview",
+                "front": "gemini-2.5-flash",
+                "back": "gemini-2.5-flash",
+                "planner": "gemini-2.5-flash",
             },
-            "STRUCTURED": {"front": "gemini-3-flash-preview", "back": "gemini-3.1-pro-preview"},
-            "REASON": {"front": "gemini-3-flash-preview", "back": "gemini-3.1-pro-preview"},
-            "STREAM": {"front": "gemini-3-flash-preview"},
+            "STRUCTURED": {"front": "gemini-2.5-flash", "back": "gemini-2.5-flash"},
+            "REASON": {"front": "gemini-2.5-flash", "back": "gemini-2.5-flash"},
+            "STREAM": {"front": "gemini-2.5-flash"},
         }
     )
 
@@ -215,6 +215,13 @@ class PromptConfig:
     context_window: int = 128_000
     safety_margin: float = 0.80
     chars_per_token: int = 4
+    front_deload_cognitive_tools: bool = True
+    # M4.I11 — selects the Front Situation Frame iteration. "v1" keeps the
+    # legacy ``== NOW ==``/``== PLACE ==`` rendered blocks. "v2" promotes
+    # the typed ``GroundingProjection`` into ``== GROUNDING ==``,
+    # ``== TIME ==``, and ``== PLACE AND DEVICE ==`` blocks with no
+    # fallback chain when the typed projection is present.
+    front_prompt_iteration: str = "v1"
     max_iterations: dict[str, int] = field(
         default_factory=lambda: {
             "STANDARD": 6,
@@ -693,9 +700,13 @@ class SessionStateConfig:
             "task_state",
             "task_artifacts",
             "meta",
+            "temporal",
+            "spatial",
+            "grounding",
             "history_active",
             "beliefs_history",
             "history_recent",
+            "place_registry",
             "persona",
             "telemetry",
             "artifacts_warm",
@@ -942,6 +953,13 @@ def _build_prompt(raw: dict[str, Any]) -> PromptConfig:
         cfg.safety_margin = float(raw["safety_margin"])
     if "chars_per_token" in raw:
         cfg.chars_per_token = int(raw["chars_per_token"])
+    if "front_deload_cognitive_tools" in raw:
+        cfg.front_deload_cognitive_tools = bool(raw["front_deload_cognitive_tools"])
+    if "front_prompt_iteration" in raw:
+        value = str(raw["front_prompt_iteration"]).strip().lower()
+        if value not in {"v1", "v2"}:
+            raise ValueError(f"prompt.front_prompt_iteration must be 'v1' or 'v2', got {value!r}")
+        cfg.front_prompt_iteration = value
     if "max_iterations" in raw and isinstance(raw["max_iterations"], dict):
         cfg.max_iterations = {str(k): int(v) for k, v in raw["max_iterations"].items()}
     if "crisis_iterations" in raw and isinstance(raw["crisis_iterations"], dict):

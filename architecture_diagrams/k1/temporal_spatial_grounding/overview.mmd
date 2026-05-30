@@ -1,0 +1,11 @@
+flowchart TB
+    DEVICE[Installed device context] --> TEMPORAL[k1.temporal]
+    DEVICE --> SPATIAL[k1.spatial]
+    TEMPORAL --> GROUNDING[k1.grounding envelope]
+    SPATIAL --> GROUNDING
+    GROUNDING --> FRONT[Concierge Front projection]
+    GROUNDING --> BACK[Concierge Back execution grounding]
+    GROUNDING --> PLANNER[Planner constraints]
+    GROUNDING --> FABRIC[Fabric context]
+    GROUNDING --> AGENT[Agent grounding lease]
+    GROUNDING --> MEMORY[MemoryWriter metadata]

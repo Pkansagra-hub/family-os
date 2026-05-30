@@ -20,6 +20,7 @@ from k1.fabric.core.contract_validator import (
     ContractValidator,
     detect_contract_type,
 )
+from k1.fabric.types import CapabilityContract
 from tests.k1.fabric.helpers import load_fixture_contract
 
 # ---------------------------------------------------------------------------
@@ -199,6 +200,47 @@ class TestValidContractsPasses:
     def test_fixture_weekly_health_check_valid(self) -> None:
         contract = load_fixture_contract("weekly_health_check")
         assert contract.name == "workflow.run.weekly_health_check"
+
+
+class TestCapabilityContractPromptProfileMetadata:
+    """CapabilityContract preserves M1 prompt/profile metadata."""
+
+    def test_round_trips_prompt_profile_fields(self) -> None:
+        contract = CapabilityContract(
+            name="tool.execute.test_tool",
+            version="1.0.0",
+            domain=["TEST"],
+            description="Test tool",
+            provider_type="MCP",
+            provider_id="test-provider",
+            prompt_template="test_activity_v1",
+            activity_profile="test.activity.v1",
+            tool_instructions="Inspect the schema before invoking.",
+            prompt_variables_schema={
+                "type": "object",
+                "properties": {"input_a": {"type": "string"}},
+                "required": ["input_a"],
+            },
+        )
+
+        restored = CapabilityContract.from_dict(contract.to_dict())
+
+        assert restored.prompt_template == "test_activity_v1"
+        assert restored.activity_profile == "test.activity.v1"
+        assert restored.tool_instructions == "Inspect the schema before invoking."
+        assert restored.prompt_variables_schema == {
+            "type": "object",
+            "properties": {"input_a": {"type": "string"}},
+            "required": ["input_a"],
+        }
+
+    def test_defaults_keep_prompt_profile_fields_empty(self) -> None:
+        restored = CapabilityContract.from_dict(CapabilityContract().to_dict())
+
+        assert restored.prompt_template is None
+        assert restored.activity_profile is None
+        assert restored.tool_instructions is None
+        assert restored.prompt_variables_schema is None
 
 
 # ====================================================================

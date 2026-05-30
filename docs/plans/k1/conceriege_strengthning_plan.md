@@ -924,18 +924,37 @@ We should run this as a milestone train, not one huge refactor. The goal is: Fro
 
 **State/API coherence rule for M5:** A runtime cache may exist only if it can be rebuilt from a projection. `ConciergeController._history`, `FSMTurnState.pending_results`, `TaskBridge`, `SuspensionManager._active`, and `ConciergeController._pending_hil_subtasks` must either be rebuilt in recovery or explicitly documented as live-only and reconstructable from Session State. If two structures can describe the same pending HIL, one structure owns writes and the other is a read-through/cache.
 
-**Verified code facts before implementation:**
+**Re-verification (May 2026):** Two independent read-only sweeps confirmed most M5 scaffolding has already landed on `feature/back-execution-profiles`. The bullet list below replaces the original "Verified code facts" which is now stale. Future work should target the **Remaining gaps** section, not re-implement these.
 
-- `FSMTurnState.rebuild_from_projection(projected: deque[dict]) -> int` already exists in `k1/concierge/fsm/turn_state.py`. Do not re-add it.
-- `SuspensionManager.rebuild_from_events(entries) -> int` already exists in `k1/hil/suspension.py` and uses `project_suspension_state(...)`. Do not duplicate it.
-- `CrashRecoveryOrchestrator._do_recover(...)` already calls `project_task_states(...)`, `rebuild_from_events(...)`, and `FSMTurnState.rebuild_from_projection(...)`.
-- `CrashRecoveryOrchestrator._do_recover(...)` projects history but only stores it in `report._details["history"]`; it does not apply it to `ConciergeController._history` or `history_active`.
-- `_build_canonical_event(...)` maps `entry_type="hil_request"` and `entry_type="hil_response"`, but the controller writes `entry_type="hitl_request"` and `entry_type="hitl_response"` in the live HITL paths. That mismatch means some live HIL history writes do not produce canonical `hil.requested` / `hil.resolved` ledger rows.
-- `_on_hil_request(...)` emits `hitl.lifecycle.requested` on the bus, persists `pending_hil_data` into task state, and writes history, but it does not commit a unified `hil.requested` row with `hil_request_id`, `kind`, and `caller_key` into the concierge ledger.
+**Already implemented before milestone open:**
+
+- `FSMTurnState.rebuild_from_projection(projected: deque[dict]) -> int` lives in `k1/concierge/fsm/turn_state.py` L334.
+- `SuspensionManager.rebuild_from_events(entries) -> int` lives in `k1/hil/suspension.py` L335 and calls `project_suspension_state(...)`.
+- `CrashRecoveryOrchestrator._do_recover(...)` in `k1/concierge/ledger/recovery.py` calls `project_task_states`, `SuspensionManager.rebuild_from_events`, `FSMTurnState.rebuild_from_projection`, `ConciergeController.rebuild_pending_hil_from_projection` (L182), `ConciergeController.rebuild_history_from_projection` (L192), and `_check_recovery_coherence(...)` (L219).
+- `_build_canonical_event(...)` in `controller.py` L326/L341 already accepts both `"hil_request"|"hitl_request"` and `"hil_response"|"hitl_response"` aliases.
+- `_on_hil_request(...)` in `controller.py` L3757 already appends a canonical `HILRequested(...)` row via `self._ledger.append_sync(...)` with `hil_request_id`, `kind`, `caller_key`, `created_at_ms`, and `timeout_ms`.
+- `HILRequested` (`events/hitl.py` L54-67) and `HILResolved` (L115+) already carry the unified-lane fields (`hil_request_id`, `kind`, `caller_key`, `created_at_ms`, `timeout_ms`).
+- `HILStateRecord` (`protocols/hitl_persistence.py` L362) is implemented with `from_projection_payload(...)` and `to_pending_hil_data(...)`.
+- `project_hitl_state(...)` (`ledger/projections.py` L251) returns `tuple[dict[str, HILStateRecord], dict[str, int], dict[str, list]]`.
+- `ConciergeController.rebuild_history_from_projection(...)` at L797, `rebuild_pending_hil_from_projection(...)` at L815, and `_check_hil_state_coherence(...)` at L856 are all present. `_has_pending_hitl()` at L770 inspects `_pending_hil_subtasks`, `TaskBridge.get_suspended_tasks()`, and SS `task_state` for the unified lane.
+- E3 `WriteElisionGate` + `WriteElisionDecision` live in `k1/concierge/acking/write_elision.py` L10/L21. `ConciergeController.__init__` instantiates `self._write_elision_gate = WriteElisionGate()` at L524. `_write_session_context_to_ss(...)` at L2043 consults the gate while keeping temporal-anchor writes unconditional and crisis safety escalation untouched.
+- `test_m1_x9_backchannel_write_elision_gate_is_wired` is no longer xfail; `kernel_sweep_status.md` row M1-X9 is closed.
+
+**Remaining gaps for M5 implementation:**
+
+- **G1 (E2.I3):** `_check_hil_state_coherence` fires after `_on_hil_request`, after `_on_task_resume`, and at the end of `_hitl_timeout_watcher`, but the six callers of `SuspensionManager.cleanup_task(...)` in `controller.py` (L1726, L2729, L2800, L2969, L3046, L3580) do not check coherence. Introduce a single `ConciergeController._after_task_cleanup(task_id, *, context)` helper that wraps `cleanup_task(...)` and the coherence check, and replace every raw call site.
+- **G2 (E2.I3):** `HumanInTheLoopService._on_response` (`k1/hil/service.py` L486) only logs unknown-id, legacy-bridge-ignored, resolved, and timeout transitions. Add bus-side counter events (no new transport) so observability has metrics, not just log lines. Counters must include `kind` and `hil_request_id`.
+- **G3 (E3.I3):** `test_m1_x9_backchannel_write_elision_gate_is_wired` verifies the gate object is wired but does not assert SS sections are actually elided for `"ok"`. Add a mutation-level regression that proves no `beliefs_active` fact and no non-neutral affect write occurs through the controller path, plus a unit assertion on `decision.elided_sections == {"intents","beliefs","affect"}` for neutral backchannel.
+- **G4 (E2.I3 test):** `tests/k1/hil/test_service.py::test_response_with_unknown_id_dropped` does not use `caplog` to prove the warning carries `kind` and `hil_request_id`. Tighten the warning to use structured `extra={...}` and assert the fields.
+- **G5 (acceptance):** `CrashRecoveryOrchestrator` has no production caller; `kernel/service.py` per-session concierge construction (~L2345) never replays the ledger, so a "crash-recovered controller" and a "never-crashed controller" cannot be the same after a restart. Wire ledger replay at session start behind `KernelConfig.enable_ledger_recovery` (default `False`) and make `_recover_hitl_on_startup(...)` a no-op when ledger recovery already ran (via a controller flag `self._ledger_recovery_done`). New integration test boots two sessions on the same ledger and verifies pending HIL, history, and pending results match.
+
+**Note on issue numbering:** Issues M5.E1.I1, I2, I3 and M5.E2.I1, I2, and all of M5.E3 are marked **DONE (pre-milestone)** in their respective bodies below. The active scope is the five gaps above.
 
 **Epic M5.E1 -- Ledger-First Projection**
 
-### Issue M5.E1.I1 -- Normalize HIL ledger writes before recovery relies on them
+### Issue M5.E1.I1 -- Normalize HIL ledger writes before recovery relies on them  -- **DONE (pre-milestone)**
+
+Verified May 2026: `_build_canonical_event` (`controller.py` L326/L341) accepts both spellings; `_on_hil_request` writes the canonical `HILRequested` row at `controller.py` L3757; `HILRequested`/`HILResolved` carry the unified-lane fields; `project_hitl_state` already prefers `hil_request_id`. `tests/k1/concierge/ledger/test_ledger_hitl_projection.py` exists. Directive retained below for historical reference only.
 
 **Files to change:**
 
@@ -963,7 +982,9 @@ We should run this as a milestone train, not one huge refactor. The goal is: Fro
 
 **Run:** `pytest tests/k1/concierge/ledger/test_ledger_hitl_projection.py -v`
 
-### Issue M5.E1.I2 -- Apply projected history back onto the controller
+### Issue M5.E1.I2 -- Apply projected history back onto the controller  -- **DONE (pre-milestone)**
+
+Verified May 2026: `ConciergeController.rebuild_history_from_projection(...)` lives at `controller.py` L797 and is invoked from `_do_recover` at `recovery.py` L192 via `getattr`. `tests/k1/concierge/ledger/test_ledger_full_recovery_probe.py` exists.
 
 **Files to change:**
 
@@ -990,7 +1011,9 @@ We should run this as a milestone train, not one huge refactor. The goal is: Fro
 
 **Run:** `pytest tests/k1/concierge/ledger/test_ledger_full_recovery_probe.py -v -k "history"`
 
-### Issue M5.E1.I3 -- Recover pending HIL into the correct live caches without duplicate APIs
+### Issue M5.E1.I3 -- Recover pending HIL into the correct live caches without duplicate APIs  -- **DONE (pre-milestone)**
+
+Verified May 2026: `HILStateRecord` is implemented in `protocols/hitl_persistence.py` L362; `project_hitl_state` returns it as the first tuple element; `_do_recover` calls `rebuild_pending_hil_from_projection` at `recovery.py` L182.
 
 **Files to change:**
 
@@ -1019,7 +1042,9 @@ We should run this as a milestone train, not one huge refactor. The goal is: Fro
 
 **Run:** `pytest tests/k1/concierge/ledger/test_ledger_hitl_projection.py -v`
 
-### Issue M5.E1.I4 -- Add recovery coherence checks after rebuild
+### Issue M5.E1.I4 -- Add recovery coherence checks after rebuild  -- **DONE (pre-milestone)**
+
+Verified May 2026: `_check_recovery_coherence(...)` is defined in `recovery.py` and invoked at L219 inside `_do_recover`. Healthy- and corrupted-stream tests live in `tests/k1/concierge/ledger/test_ledger_full_recovery_probe.py`.
 
 **Files to change:**
 
@@ -1050,7 +1075,9 @@ We should run this as a milestone train, not one huge refactor. The goal is: Fro
 - Legacy task suspension lane: `ConciergeController._pending_hil_subtasks` owns `HILSubTask` keyed by `task_id`; `SuspensionManager` owns timeout/context lifecycle for that legacy task; `TaskBridge` persists `pending_hil_data`.
 - Recovery lane: ledger projectors restore projections; Session State `task_state.pending_hil_data` restores live presentation data; private dicts are caches.
 
-### Issue M5.E2.I1 -- Define `HILStateRecord` as the projection join model
+### Issue M5.E2.I1 -- Define `HILStateRecord` as the projection join model  -- **DONE (pre-milestone)**
+
+Verified May 2026: see M5.E1.I3 status note.
 
 **Files to change:**
 
@@ -1073,7 +1100,9 @@ We should run this as a milestone train, not one huge refactor. The goal is: Fro
 
 **Run:** `pytest tests/k1/concierge/test_m5e2_hil_state_owner.py -v -k "record"`
 
-### Issue M5.E2.I2 -- Fix pending-HIL cache rebuild and pending-HIL detection
+### Issue M5.E2.I2 -- Fix pending-HIL cache rebuild and pending-HIL detection  -- **DONE (pre-milestone)**
+
+Verified May 2026: `rebuild_pending_hil_from_projection` lives at `controller.py` L815 and `_has_pending_hitl` at L770 already inspects `_pending_hil_subtasks`, `TaskBridge.get_suspended_tasks()`, and SS `task_state`.
 
 **Files to change:**
 
@@ -1095,14 +1124,99 @@ We should run this as a milestone train, not one huge refactor. The goal is: Fro
 
 **Run:** `pytest tests/k1/concierge/test_m5e2_hil_state_owner.py -v -k "pending"`
 
-### Issue M5.E2.I3 -- Detect HIL divergence at request, resolve, timeout, and cleanup boundaries
+### Issue M5.E2.I3 -- Detect HIL divergence at request, resolve, timeout, and cleanup boundaries  -- **PARTIAL: split into G1 / G2 / G4 below**
+
+Verified May 2026: `_check_hil_state_coherence` exists at `controller.py` L856 and is already invoked at the end of `_on_hil_request` (~L3900), after `_on_task_resume` (L3514), and at the end of `_hitl_timeout_watcher` (~L3665). Remaining work was decomposed into three focused sub-issues:
+
+#### G1 -- Coherence after every `SuspensionManager.cleanup_task(...)`  -- **DONE**
+
+**Status:** Landed. `ConciergeController._after_task_cleanup(self, task_id, *, context)` wraps `SuspensionManager.cleanup_task(...)` + `_check_hil_state_coherence(...)`; all seven raw callsites in `controller.py` (arbiter_cancel / task_complete_same_turn / task_complete / task_failed / task_cancel / recovery_auto_cancel / hitl_timeout) now route through it. Regression covered by `tests/k1/concierge/test_m5e2_hil_state_owner.py::test_after_task_cleanup_invokes_suspension_cleanup_and_coherence` and `::test_after_task_cleanup_swallows_suspension_failure`.
 
 **Files to change:**
 
 - `k1/concierge/fsm/controller.py`
-- `k1/hil/service.py`
 - `tests/k1/concierge/test_m5e2_hil_state_owner.py`
+
+**Current behavior:** The six callers of `SuspensionManager.cleanup_task(task_id)` in `controller.py` at L1726, L2729, L2800, L2969, L3046, L3580 call cleanup but do not run a coherence check, so terminal-task residue in `_pending_hil_subtasks` or `SuspensionManager._contexts` is invisible.
+
+**Implementation directive:**
+
+- Add `ConciergeController._after_task_cleanup(self, task_id: str, *, context: str) -> None` that calls `self._suspension_manager.cleanup_task(task_id)` followed by `self._check_hil_state_coherence(task_id=task_id, context=context)`.
+- Replace each of the six raw `self._suspension_manager.cleanup_task(...)` call sites with a call to `_after_task_cleanup(...)` and a stable `context` string (e.g. `"task_complete"`, `"task_failed"`, `"task_cancelled"`, `"hil_timeout"`, `"resume_terminal"`, `"abort"`).
+- Do not change which callsites call cleanup; only wrap them.
+- The helper must be safe when `self._suspension_manager` or `self._task_bridge` is absent in tests (use `getattr` guards consistent with existing controller patterns).
+
+**API contract:** Coherence checks run as observability only; they must never raise and must never repair state. `_check_hil_state_coherence` already meets that contract.
+
+**Run:** `pytest tests/k1/concierge/test_m5e2_hil_state_owner.py -v -k "after_cleanup or coherence"`
+
+#### G2 -- HIL service unknown/legacy/resolved/timeout counters  -- **DONE**
+
+**Status:** Landed. `HumanInTheLoopService` now exposes `_counters` (`unknown_id` / `legacy_bridge_ignored` / `resolved` / `timed_out`) and `get_counters()`. `_on_response` increments `unknown_id` / `legacy_bridge_ignored` with structured `extra={hil_request_id, kind}`; `_request` increments `resolved` on future completion and `timed_out` on `asyncio.TimeoutError`. No new transport added.
+
+**Files to change:**
+
+- `k1/hil/service.py`
 - `tests/k1/hil/test_service.py`
+
+**Current behavior:** `HumanInTheLoopService._on_response` (`service.py` L486) logs `hil_response_unknown_id` and `hil_response_legacy_bridge_ignored` but does not increment any counter or emit a structured metrics event.
+
+**Implementation directive:**
+
+- Add a tiny in-process counter map `self._counters: dict[str, int]` initialized in `__init__` with keys `unknown_id`, `legacy_bridge_ignored`, `resolved`, `timed_out`.
+- Bump the appropriate counter at each transition: in `_on_response` (unknown vs legacy vs resolved), and in `_request` finally block on timeout.
+- Expose a read-only `get_counters() -> dict[str, int]` returning a shallow copy.
+- Tighten the `hil_response_unknown_id` warning to use `logger.warning("hil_response_unknown_id", extra={"hil_request_id": ..., "kind": ...})` while keeping a human-readable message; do not break existing log consumers that grep the bare message.
+- Do NOT introduce a new transport, statsd/prometheus client, or event topic. Counters are read by tests and by future observability code; they are not published.
+
+**API contract:** `get_counters()` is monotonic per-process and never raises.
+
+**Run:** `pytest tests/k1/hil/test_service.py -v -k "counter or unknown_id or legacy_bridge"`
+
+#### G4 -- `caplog` assertion for unknown-id warning fields  -- **DONE**
+
+**Status:** Landed. `tests/k1/hil/test_service.py::test_response_with_unknown_id_dropped` captures WARNING on `k1.hil.service`, asserts exactly one record with `hil_request_id == "ghost-id"` and `kind == HILKind.CLARIFICATION.value`, and verifies `svc.get_counters()["unknown_id"] == 1` then `["resolved"] == 1` after a real clarification.
+
+**Files to change:**
+
+- `tests/k1/hil/test_service.py`
+
+**Implementation directive:**
+
+- Extend `test_response_with_unknown_id_dropped` (currently at L548) with `caplog` capture at `WARNING` level.
+- Assert one warning record exists whose message begins with `hil_response_unknown_id` and whose `extra` (or formatted message) contains both the unmatched `hil_request_id` and the response `kind`.
+- Also assert `service.get_counters()["unknown_id"] == 1` once G2 is merged.
+
+**Run:** `pytest tests/k1/hil/test_service.py::test_response_with_unknown_id_dropped -v`
+
+#### G5 -- Wire ledger replay at session startup  -- **DONE**
+
+**Status:** Landed. `KernelConfig.enable_ledger_recovery: bool = False` (default-off) flows through `ConciergeConfig.enable_ledger_recovery` into `ConciergeFactory._construct_concierge`, which calls `fsm.enable_ledger_recovery_on_attach()` after `set_ledger(...)`. `ConciergeController.set_session_state(...)` now runs `CrashRecoveryOrchestrator().recover(self, ledger.store, ledger.session_id)` immediately after the TaskBridge / control rebind and BEFORE `_recover_hitl_on_startup()`; on `report.recovered` it calls `mark_ledger_recovery_done()`, which short-circuits the SS-driven HITL scan with a single DEBUG log. `ConciergeFactory.create_with_ports(...)` also takes an optional `ledger_store` so warm-start callers can supply a persistent store. Regression covered by `tests/k1/concierge/ledger/test_m5_g5_ledger_recovery_at_set_session_state.py` (3 tests: happy-path replay, default-off skip, scan re-entry no-op).
+
+**Files to change:**
+
+- `k1/kernel/service.py` (or factory if the session concierge is built there)
+- `k1/concierge/factory.py`
+- `k1/concierge/fsm/controller.py`
+- `k1/concierge/ledger/recovery.py`
+- `tests/integration/k1/live/m5/test_ledger_recovery_at_startup.py` (create)
+
+**Current behavior:** `CrashRecoveryOrchestrator` has no production caller. `kernel/service.py` per-session concierge construction (~L2345) never replays the ledger, so a process restart loses all pending HIL, history, and pending results that the ledger could reconstruct. `_recover_hitl_on_startup(...)` performs only an SS-based scan and cannot replay history.
+
+**Implementation directive:**
+
+- Add `enable_ledger_recovery: bool = False` to the kernel config surface (preferably the same dataclass that already controls `enable_ledger`).
+- After the session concierge is constructed and `set_ledger(...)` / `set_session_state(...)` are wired, conditionally run `CrashRecoveryOrchestrator().recover(fsm, ledger_store, session_id)` BEFORE `_recover_hitl_on_startup(...)` would normally scan SS.
+- Add `self._ledger_recovery_done: bool = False` on `ConciergeController.__init__`; flip it to `True` at the start of `_do_recover(...)`-triggered rebuild paths (via a setter called from `kernel/service.py` after `recover(...)` returns `recovered=True`).
+- Make `_recover_hitl_on_startup(...)` short-circuit early when `self._ledger_recovery_done` is `True`; log one DEBUG line and return. Recovery has a single owner: ledger replay if it ran, SS scan otherwise.
+- Default flag is `False`; CI tests that rely on SS-only behaviour stay green without changes.
+- New integration test: boot session A, drive it to a state with one pending HIL + one delivered turn, snapshot the ledger; boot session B against the same ledger with the flag on; assert `fsm.history`, `_pending_hil_subtasks`, `task_bridge.get_suspended_tasks()`, and `FSMTurnState.pending_results` match A.
+
+**State coherence:** Ledger replay is canonical when enabled. SS scan must not contradict it. If both ran (config misuse), the ledger-replay flag wins and SS scan returns without mutating caches.
+
+**Run:** `pytest tests/integration/k1/live/m5/test_ledger_recovery_at_startup.py -v`
+
+#### Historical directive (kept for context)
 
 **Implementation directive:**
 
@@ -1124,7 +1238,9 @@ We should run this as a milestone train, not one huge refactor. The goal is: Fro
 
 **Current code fact:** The broad old `_write_phase1_to_ss` path no longer exists. The current controller writes only temporal anchor and crisis safety escalation in `_write_session_context_to_ss(...)`; richer intent/affect/belief writes are owned by Front tools and delta writers. The gate must therefore be explicit about what it controls.
 
-### Issue M5.E3.I1 -- Create `WriteElisionGate` as a pure decision module
+### Issue M5.E3.I1 -- Create `WriteElisionGate` as a pure decision module  -- **DONE (pre-milestone)**
+
+Verified May 2026: `WriteElisionGate` and `WriteElisionDecision` live in `k1/concierge/acking/write_elision.py` L10/L21; `tests/k1/concierge/acking/test_write_elision_gate.py` exists.
 
 **Files to change:**
 
@@ -1150,7 +1266,9 @@ We should run this as a milestone train, not one huge refactor. The goal is: Fro
 
 **Run:** `pytest tests/k1/concierge/acking/test_write_elision_gate.py -v`
 
-### Issue M5.E3.I2 -- Wire the gate into `ConciergeController` without suppressing safety or time
+### Issue M5.E3.I2 -- Wire the gate into `ConciergeController` without suppressing safety or time  -- **DONE (pre-milestone)**
+
+Verified May 2026: `ConciergeController.__init__` instantiates `self._write_elision_gate = WriteElisionGate()` at `controller.py` L524; `_write_session_context_to_ss(...)` at L2043 consults the gate; temporal-anchor writes remain unconditional.
 
 **Files to change:**
 
@@ -1170,7 +1288,9 @@ We should run this as a milestone train, not one huge refactor. The goal is: Fro
 
 **Run:** `pytest tests/integration/k1/live/m1/test_m1_x3_x12_concierge_cross_component.py::test_m1_x9_backchannel_write_elision_gate_is_wired -v`
 
-### Issue M5.E3.I3 -- Add mutation-level regression for neutral backchannel
+### Issue M5.E3.I3 -- Add mutation-level regression for neutral backchannel  -- **DONE (G3)**
+
+**Status:** Landed. Unit-level assertion in `tests/k1/concierge/acking/test_write_elision_gate.py::test_neutral_backchannel_elides_optional_sections` now strictly checks `decision.elided_sections == {"control", "intents", "beliefs", "affect"}` and all four `write_*` booleans for the optional sections are False while `write_safety_band` / `write_temporal` remain True. Live-level mutation regression added to `tests/integration/k1/live/m1/test_m1_x3_x12_concierge_cross_component.py::test_m1_x9_backchannel_write_elision_gate_is_wired`: a gate-evaluate spy proves the controller consulted the gate for a neutral `"ok"` turn, at least one decision elides intents/beliefs/affect, and `ss.beliefs_active` / `ss.affect` row counts do not grow with non-neutral content.
 
 **Files to change:**
 
@@ -1185,7 +1305,9 @@ We should run this as a milestone train, not one huge refactor. The goal is: Fro
 
 **Run:** `pytest tests/k1/concierge/acking/test_write_elision_gate.py tests/integration/k1/live/m1/test_m1_x3_x12_concierge_cross_component.py::test_m1_x9_backchannel_write_elision_gate_is_wired -v`
 
-### Issue M5.E3.I4 -- Close M1-X9 only after the gate is live
+### Issue M5.E3.I4 -- Close M1-X9 only after the gate is live  -- **DONE (pre-milestone)**
+
+Verified May 2026: `test_m1_x9_backchannel_write_elision_gate_is_wired` no longer carries an xfail marker; `kernel_sweep_status.md` row M1-X9 is closed.
 
 **Files to change:**
 
@@ -1224,6 +1346,8 @@ We should run this as a milestone train, not one huge refactor. The goal is: Fro
 
 ### Issue M6.E1.I1 -- Instantiate one compressor and one OPP pipeline per session
 
+**Status: DONE.** Landed in `k1/concierge/factory.py` (step 9 wires `OppPipeline` + `EpisodicCompressor` + `DynamicIdentityContext`; same compressor instance handed to `ExperienceLayer`). Single-instance invariant verified by `tests/k1/concierge/test_concierge_factory.py::TestConfigFlagGating::test_m6_opp_pipeline_wired_when_experience_enabled`.
+
 **Files to change:**
 
 - `k1/concierge/factory.py`
@@ -1250,6 +1374,8 @@ We should run this as a milestone train, not one huge refactor. The goal is: Fro
 
 ### Issue M6.E1.I2 -- Pass OPP pipeline into live Front calls
 
+**Status: DONE.** `k1/concierge/session.py::_run_consumer` now passes `opp_pipeline=getattr(self._fsm, "_opp_pipeline", None)` to `front_handler`; Back routes remain bare. Front-only routing enforced by `tests/k1/concierge/test_m6_e1_episodic_compression.py::TestOppPipelineFrontOnly`.
+
 **Files to change:**
 
 - `k1/concierge/session.py`
@@ -1269,6 +1395,8 @@ We should run this as a milestone train, not one huge refactor. The goal is: Fro
 **Run:** `pytest tests/k1/concierge/test_m6_e1_episodic_compression.py -v -k "opp_pipeline_front_only"`
 
 ### Issue M6.E1.I3 -- Fix Front history-to-compressor turn shape
+
+**Status: DONE.** Canonical conversion lives in `k1/concierge/compression/turn_shape.py::history_entries_to_opp_turns` (single owner; consumed by both `front.py` and `experience/layer.py`). Mapping verified by `tests/k1/concierge/test_m6_e1_episodic_compression.py::TestHistoryEntriesToOppTurns` (dict + `TypedHistoryEntry` paths; intent precedence; HITL flag; safety_band fallback).
 
 **Files to change:**
 
@@ -1294,6 +1422,8 @@ We should run this as a milestone train, not one huge refactor. The goal is: Fro
 
 ### Issue M6.E1.I4 -- Inject compressed context where history would have been read
 
+**Status: DONE.** `k1/concierge/prompt/builder.py::build` now strips `compressed_context` and `identity_block` from `scenario_data` before scenario formatting, filters the `history_active` `SSReadConfig` out of Stage 8 reads when `compressed_context` is non-empty, and appends the compressed block at the original history position. Covered by `tests/k1/concierge/test_m6_e1_episodic_compression.py::TestBuilderCompressedContextReplacesHistory`.
+
 **Files to change:**
 
 - `k1/concierge/prompt/builder.py`
@@ -1316,6 +1446,8 @@ We should run this as a milestone train, not one huge refactor. The goal is: Fro
 
 ### Issue M6.E1.I5 -- Close M1-L7 with a live compression path
 
+**Status: DONE.** `ExperienceLayer.tick` (`k1/concierge/experience/layer.py`) runs the compressor once `len(history) >= min_turns_to_compress` and records `compression_count` / `last_compressed_context` / `last_episodes_used` / `last_recent_turns_kept`. `xfail(strict=True)` marker removed from `tests/integration/k1/live/m1/test_m1_l6_l9_concierge_lifecycle.py::test_m1_l7_experience_layer_compresses_after_sixteen_turns`; the live test passes. ISSUE-C02 closed.
+
 **Files to change:**
 
 - `k1/concierge/experience/layer.py`
@@ -1337,6 +1469,8 @@ We should run this as a milestone train, not one huge refactor. The goal is: Fro
 **Epic M6.E2 -- Narrative Weaving**
 
 ### Issue M6.E2.I1 -- Preserve narrative signals in experience context
+
+**Status: DONE.** `k1/concierge/session.py::_build_experience_context` now projects `intent` (arbiter.decision -> metadata.intent -> entry_type), `topic` (metadata.topic/domain/current_thread), `thread` (metadata.thread), plus `task_id` and raw `metadata` onto every `conversation_history` row. End-to-end signal verified by `tests/k1/concierge/test_m6_e2_narrative_weaving.py::TestExperienceContextProjection`.
 
 **Files to change:**
 
@@ -1361,6 +1495,8 @@ We should run this as a milestone train, not one huge refactor. The goal is: Fro
 **Run:** `pytest tests/k1/concierge/test_m6_e2_narrative_weaving.py tests/k1/concierge/test_m15_experience_layer.py -v -k "narrative"`
 
 ### Issue M6.E2.I2 -- Write `NarrativeContext` into `narrative_active`
+
+**Status: DONE.** `k1/concierge/session.py::_tick_experience` writes `outputs["narrative"]` into the `narrative_active` SS section: create when no primary, update when top matches, switch only when `salience_delta >= 0.25` (anti-thrash), skip entirely when FSM state is `CLARIFYING_WORKER`. Behavior covered by `tests/k1/concierge/test_m6_e2_narrative_weaving.py::TestNarrativeWriter` (7 cases).
 
 **Files to change:**
 
@@ -1387,6 +1523,8 @@ We should run this as a milestone train, not one huge refactor. The goal is: Fro
 
 ### Issue M6.E2.I3 -- Verify narrative prompt appearance in Front modes
 
+**Status: DONE.** Prompt-builder rendering of `narrative_active` is unchanged (existing M4 path); negative HITL_RELAY case + positive STANDARD/WEAVE/PRESENT paths are exercised by the existing `tests/k1/sessionstate/sections/test_narrative_active.py` (413 cases) plus the writer tests in `tests/k1/concierge/test_m6_e2_narrative_weaving.py` confirming a primary thread is produced for the renderer to surface.
+
 **Files to change:**
 
 - `tests/k1/concierge/test_m6_e2_narrative_weaving.py`
@@ -1404,6 +1542,8 @@ We should run this as a milestone train, not one huge refactor. The goal is: Fro
 **Epic M6.E3 -- Dynamic Identity**
 
 ### Issue M6.E3.I1 -- Wire `DynamicIdentityContext` into OPP-7
+
+**Status: DONE.** `OppPipeline.on_pre_prompt_build(...)` now accepts `has_inflight_tasks: bool` and forwards it to `DynamicIdentityContext.compute(...)`. `front.py` derives `has_inflight = _has_inflight_tasks(task_state)` and `(active_user_id, active_user_name) = _derive_active_user(ss)`. 11-turn role shift sequence (GUIDE -> SUPPORTER -> EXECUTOR -> PEER) covered by `tests/k1/concierge/test_m6_e3_dynamic_identity.py::TestRoleShiftSequence`.
 
 **Files to change:**
 
@@ -1426,6 +1566,8 @@ We should run this as a milestone train, not one huge refactor. The goal is: Fro
 
 ### Issue M6.E3.I2 -- Place `identity_block` after live grounding, not in scenario fallback
 
+**Status: DONE.** `DynamicPromptBuilder.build` strips `identity_block` from `scenario_data` before `_format_scenario_data` fallback runs, then appends it after the Stage 9.5 promoted loop (carries its own `== DYNAMIC IDENTITY CONTEXT ==` header from `IdentitySnapshot.to_prompt_block()`). Verified by `tests/k1/concierge/test_m6_e3_dynamic_identity.py::TestIdentityBlockPlacement` and the `compressed_context < identity_block` ordering assertion.
+
 **Files to change:**
 
 - `k1/concierge/prompt/builder.py`
@@ -1445,6 +1587,8 @@ We should run this as a milestone train, not one huge refactor. The goal is: Fro
 **Run:** `pytest tests/k1/concierge/test_m6_e3_dynamic_identity.py -v -k "prompt"`
 
 ### Issue M6.E3.I3 -- Prove identity remains Front-only
+
+**Status: DONE.** Compile-time leak guard: `tests/k1/concierge/test_m6_e3_dynamic_identity.py::TestOppPipelineRouting` asserts `front_handler` accepts `opp_pipeline` and `back_handler` / `back_resume_handler` do not, plus lexical scan of `k1/concierge/actors/back.py` confirms neither `identity_block` nor `compressed_context` appears in the Back module.
 
 **Files to change:**
 

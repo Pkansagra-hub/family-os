@@ -32,11 +32,19 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Protocol
 
-from k1.fabric.core.context_budget import BudgetResult, ContextBudget, ContextBudgetConfig
+from k1.fabric.core.context_budget import (
+    BudgetResult,
+    ContextBudget,
+    ContextBudgetConfig,
+)
 from k1.fabric.metrics import get_default_metrics
 from k1.fabric.types import CapabilityContract, ExecutionContext
 
 logger = logging.getLogger(__name__)
+
+_DEPRECATED_GROUNDING_OVERRIDE_KEYS = frozenset(
+    {"now", "place", "time", "temporal", "spatial", "grounding"}
+)
 
 
 # ---------------------------------------------------------------------------
@@ -69,18 +77,18 @@ class IPromptSystemPort(Protocol):
     Fabric only defines this port interface.
     """
 
-    def resolve(self, template_name: str) -> Optional[Dict[str, Any]]:
+    def resolve(self, template_name: str) -> Optional[Any]:
         """
         Resolve a prompt template by name.
 
         Returns:
-            Template dict with at least ``{"text": str}`` key, or None.
+            Prompt template object or raw template representation, or None.
         """
         ...  # pragma: no cover
 
     def compile(
         self,
-        template: Dict[str, Any],
+        template: Any,
         variables: Dict[str, Any],
     ) -> str:
         """
@@ -210,16 +218,18 @@ class ContextBuilder:
         context = result.context  # ExecutionContext (frozen)
     """
 
-    __slots__ = ("_state_reader", "_prompt_system", "_budget", "_config")
+    __slots__ = ("_state_reader", "_prompt_system", "_grounding_port", "_budget", "_config")
 
     def __init__(
         self,
         state_reader: Optional[ISessionStateReader] = None,
         prompt_system: Optional[IPromptSystemPort] = None,
+        grounding_port: Optional[Any] = None,
         config: Optional[ContextBuilderConfig] = None,
     ) -> None:
         self._state_reader = state_reader
         self._prompt_system = prompt_system
+        self._grounding_port = grounding_port
         self._config: ContextBuilderConfig = config or ContextBuilderConfig()
         self._budget = ContextBudget(self._config.budget_config)
 
@@ -242,6 +252,20 @@ class ContextBuilder:
         """Whether a prompt system port is connected."""
         return self._prompt_system is not None
 
+    @property
+    def has_grounding_port(self) -> bool:
+        """Whether a grounding port is connected for invocation metadata."""
+        return self._grounding_port is not None
+
+    @property
+    def grounding_port(self) -> Optional[Any]:
+        """The attached grounding port, if any."""
+        return self._grounding_port
+
+    def set_grounding_port(self, grounding_port: Optional[Any]) -> None:
+        """Attach or clear the session grounding port after construction."""
+        self._grounding_port = grounding_port
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -254,6 +278,7 @@ class ContextBuilder:
         trace_id: str = "",
         prompt_template_name: Optional[str] = None,
         prompt_variables: Optional[Dict[str, Any]] = None,
+        context_override: Optional[Dict[str, Any]] = None,
     ) -> ContextBuildResult:
         """
         Assemble an ``ExecutionContext`` for the given contract.
@@ -265,6 +290,8 @@ class ContextBuilder:
             trace_id: Tracing identifier from the originating request.
             prompt_template_name: Optional prompt template to resolve.
             prompt_variables: Variables for prompt compilation.
+            context_override: Optional non-authoritative prompt/profile
+                metadata to preserve under ``session_sections["context_override"]``.
 
         Returns:
             ContextBuildResult with the packaged ExecutionContext and
@@ -274,9 +301,20 @@ class ContextBuilder:
             ContextAssemblyError: If a fatal error prevents assembly.
         """
         t0 = time.perf_counter()
-        params = params or {}
+        params = dict(params or {})
         session_id = session_id or self._config.default_session_id
-        prompt_variables = prompt_variables or {}
+        override_section = self._build_context_override_section(
+            contract=contract,
+            prompt_template_name=prompt_template_name,
+            context_override=context_override,
+        )
+        selected_prompt_template = prompt_template_name or contract.prompt_template
+        prompt_variables = self._build_prompt_variables(
+            contract=contract,
+            params=params,
+            prompt_variables=prompt_variables,
+            context_override=override_section,
+        )
 
         # ----- Step 1: Read contract context requirements -----
         required_sections: List[str] = list(contract.required_context)
@@ -320,6 +358,9 @@ class ContextBuilder:
                 len(missing_required),
             )
 
+        if override_section:
+            session_data["context_override"] = override_section
+
         # ----- Step 3: Inject request params -----
         # params are passed through directly; no transformation needed.
 
@@ -327,20 +368,23 @@ class ContextBuilder:
         compiled_prompt: Optional[str] = None
         prompt_resolved = False
 
-        if prompt_template_name and self._prompt_system is not None:
+        if selected_prompt_template and self._prompt_system is not None:
             try:
-                template = self._prompt_system.resolve(prompt_template_name)
+                template = self._prompt_system.resolve(str(selected_prompt_template))
                 if template is not None:
                     compiled_prompt = self._prompt_system.compile(template, prompt_variables)
                     prompt_resolved = True
                 else:
-                    logger.warning("Prompt template '%s' not found", prompt_template_name)
+                    logger.warning("Prompt template '%s' not found", selected_prompt_template)
             except Exception:
                 logger.warning(
                     "Prompt resolution failed for '%s'",
-                    prompt_template_name,
+                    selected_prompt_template,
                     exc_info=True,
                 )
+        elif not selected_prompt_template and contract.tool_instructions:
+            compiled_prompt = contract.tool_instructions
+            prompt_resolved = True
 
         # ----- Step 5: Apply token budget -----
         budget_result = self._budget.apply(
@@ -373,6 +417,128 @@ class ContextBuilder:
             assembly_ms=assembly_ms,
             prompt_resolved=prompt_resolved,
         )
+
+    async def build_async(
+        self,
+        contract: CapabilityContract,
+        params: Optional[Dict[str, Any]] = None,
+        session_id: Optional[str] = None,
+        trace_id: str = "",
+        prompt_template_name: Optional[str] = None,
+        prompt_variables: Optional[Dict[str, Any]] = None,
+        context_override: Optional[Dict[str, Any]] = None,
+    ) -> ContextBuildResult:
+        """Async build path used when invocation grounding is available."""
+        effective_override = dict(context_override or {})
+        if "grounding_invocation" not in effective_override:
+            grounding_invocation = await self._build_grounding_invocation(
+                session_id=session_id or self._config.default_session_id,
+                trace_id=trace_id,
+            )
+            if grounding_invocation:
+                effective_override["grounding_invocation"] = grounding_invocation
+
+        return self.build(
+            contract=contract,
+            params=params,
+            session_id=session_id,
+            trace_id=trace_id,
+            prompt_template_name=prompt_template_name,
+            prompt_variables=prompt_variables,
+            context_override=effective_override or context_override,
+        )
+
+    async def _build_grounding_invocation(
+        self,
+        *,
+        session_id: str,
+        trace_id: str,
+    ) -> Dict[str, Any] | None:
+        if self._grounding_port is None or not session_id:
+            return None
+        try:
+            from k1.grounding.service.invocation_metadata import (
+                build_invocation_metadata,
+            )
+
+            envelope = await self._grounding_port.create_envelope(
+                session_id,
+                "tool",
+                trace_id=trace_id,
+            )
+            projection = await self._grounding_port.build_projection(envelope, "tool")
+            return build_invocation_metadata(projection)
+        except Exception:
+            logger.warning(
+                "Failed to build grounding invocation metadata (session=%s, trace=%s)",
+                session_id,
+                trace_id,
+                exc_info=True,
+            )
+            return None
+
+    @staticmethod
+    def _build_context_override_section(
+        *,
+        contract: CapabilityContract,
+        prompt_template_name: Optional[str],
+        context_override: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        section: Dict[str, Any] = {}
+
+        if contract.activity_profile:
+            section["activity_profile"] = contract.activity_profile
+
+        if isinstance(context_override, dict):
+            section.update(
+                {
+                    key: value
+                    for key, value in context_override.items()
+                    if key != "prompt_template" and key not in _DEPRECATED_GROUNDING_OVERRIDE_KEYS
+                }
+            )
+
+        selected_prompt_template = prompt_template_name or contract.prompt_template
+        if selected_prompt_template:
+            section["prompt_template"] = selected_prompt_template
+
+        if contract.tool_instructions and "tool_instructions" not in section:
+            section["tool_instructions"] = contract.tool_instructions
+
+        return section
+
+    @staticmethod
+    def _build_prompt_variables(
+        *,
+        contract: CapabilityContract,
+        params: Dict[str, Any],
+        prompt_variables: Optional[Dict[str, Any]],
+        context_override: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        variables = ContextBuilder._prompt_variable_defaults(contract.prompt_variables_schema)
+        variables.update(params)
+
+        if isinstance(prompt_variables, dict):
+            variables.update(prompt_variables)
+
+        override_vars = context_override.get("prompt_variables")
+        if isinstance(override_vars, dict):
+            variables.update(override_vars)
+
+        return variables
+
+    @staticmethod
+    def _prompt_variable_defaults(schema: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        if not isinstance(schema, dict):
+            return {}
+        properties = schema.get("properties")
+        if not isinstance(properties, dict):
+            return {}
+        defaults: Dict[str, Any] = {}
+        for name, spec in properties.items():
+            if isinstance(name, str) and isinstance(spec, dict) and "default" in spec:
+                defaults[name] = spec["default"]
+        return defaults
 
     def build_minimal(
         self,

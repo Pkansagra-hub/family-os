@@ -21,7 +21,6 @@ from tests.integration.k1.live.m6.helpers import cleanup_service as _cleanup_ser
 from tests.integration.k1.live.m6.helpers import recipe_a as _recipe_a
 from tests.integration.k1.live.m7.helpers import PseudoK0Handle
 from tests.integration.k1.live.m7.helpers import memory_write_payload as _memory_write_payload
-from tests.integration.k1.live.m7.helpers import pseudo_k0_server
 from tests.integration.k1.live.m7.helpers import recipe_c_pseudo_k0 as _recipe_c_pseudo_k0
 from tests.integration.k1.live.m7.helpers import wait_for_sse_subscriber as _wait_for_sse_subscriber
 from tests.integration.k1.live.m7.helpers import wait_until as _wait_until

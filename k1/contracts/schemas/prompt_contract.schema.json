@@ -15,9 +15,12 @@
         "domain",
         "description",
         "variables",
-        "template_file",
         "max_tokens",
         "output_format"
+      ],
+      "anyOf": [
+        { "required": ["template_file"] },
+        { "required": ["template"] }
       ],
       "additionalProperties": false,
       "properties": {
@@ -47,6 +50,11 @@
           "maxLength": 512,
           "description": "Human-readable description used for semantic retrieval embedding"
         },
+        "activity_profile": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*\\.v[0-9]+$",
+          "description": "Activity profile id associated with this prompt template (e.g. calendar.v1)."
+        },
         "intent_match": {
           "type": "array",
           "items": {
@@ -63,7 +71,12 @@
         "template_file": {
           "type": "string",
           "minLength": 1,
-          "description": "Path to the prompt template file (e.g. k1/prompts/agents/invitation_drafter_v1.txt)"
+          "description": "Canonical production path to the prompt template file (e.g. k1/prompts/agents/invitation_drafter_v1.txt)"
+        },
+        "template": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Inline prompt template text. Compatibility-only for tests, transitional fixtures, and emergency migration. Production prompt contracts should use template_file."
         },
         "max_tokens": {
           "type": "integer",
@@ -87,7 +100,7 @@
           "type": "array",
           "items": {
             "type": "string",
-            "pattern": "^tool\\.(execute|read|write|delete)\\.[a-z][a-z0-9_]+$"
+            "pattern": "^tool\\.(execute|read|write|delete)(\\.[a-z][a-z0-9_]+)+$"
           },
           "description": "Tool capability names compatible with this prompt"
         },

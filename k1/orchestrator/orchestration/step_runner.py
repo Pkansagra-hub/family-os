@@ -181,8 +181,9 @@ class StepRunner:
         """Build CapabilityRequest from PlanStep and resolved params.
 
         Timeout uses step.timeout_ms if set, else policies.step_timeout_default_ms.
-        tools_granted passed via context_override (CapabilityRequest has no
-        dedicated field; Fabric ContextBuilder extracts from context_override).
+        tools_granted and activity_profile are passed via context_override
+        (CapabilityRequest has no dedicated fields for them; Fabric
+        ContextBuilder extracts from context_override).
 
         Args:
             step: PlanStep with capability definition.
@@ -195,8 +196,12 @@ class StepRunner:
         timeout_ms = step.timeout_ms or self._policies.step_timeout_default_ms
 
         context_override = None
-        if step.tools_granted:
-            context_override = {"tools_granted": list(step.tools_granted)}
+        if step.tools_granted or step.activity_profile:
+            context_override = {}
+            if step.tools_granted:
+                context_override["tools_granted"] = list(step.tools_granted)
+            if step.activity_profile:
+                context_override["activity_profile"] = step.activity_profile
 
         # Propagate PlanStep.safety_band_min to the CapabilityRequest so the
         # Fabric resolver permits providers whose minimum band exceeds GREEN.

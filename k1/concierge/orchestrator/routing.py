@@ -106,6 +106,19 @@ def _orchestrator_context(task: TaskDispatch) -> dict[str, Any]:
     session_id = getattr(task, "session_id", "")
     if session_id:
         context["session_id"] = session_id
+    grounding = getattr(task, "grounding", None)
+    if grounding:
+        context["grounding"] = grounding
+    for key in (
+        "grounding_envelope_id",
+        "temporal_anchor_id",
+        "spatial_context_id",
+        "resolved_temporal_refs",
+        "resolved_spatial_refs",
+    ):
+        value = getattr(task, key, None)
+        if value is not None:
+            context[key] = value
     return context
 
 
@@ -192,6 +205,7 @@ def _route_medium_sync(task: TaskDispatch) -> DispatchRecord:
         budget=Budget(max_fabric_calls=_get_fabric_budget(ComplexityTier.MEDIUM)),
         session_id=getattr(task, "session_id", ""),
         trace_id=getattr(task, "trace_id", f"trace-{task.task_id}"),
+        grounding=getattr(task, "grounding", None),
     )
     return DispatchRecord(
         tier=ComplexityTier.MEDIUM,
@@ -213,6 +227,7 @@ def _route_high_sync(task: TaskDispatch) -> DispatchRecord:
         ),
         session_id=getattr(task, "session_id", ""),
         trace_id=getattr(task, "trace_id", f"trace-{task.task_id}"),
+        grounding=getattr(task, "grounding", None),
     )
     return DispatchRecord(
         tier=ComplexityTier.HIGH,

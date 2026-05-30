@@ -31,31 +31,32 @@ AnticipatoryResponder can be LLM-based using history + beliefs sections.
 
 ---
 
-## ISSUE-C02 — EpisodicCompressor compression strategy is ignored; `ExperienceLayer` never calls it
+## ISSUE-C02 — EpisodicCompressor compression strategy is ignored; `ExperienceLayer` never calls it ✅ CLOSED
 
-**Severity:** Medium
-**Location:** `k1/concierge/experience/episodic_compressor.py`, `k1/concierge/experience/experience_layer.py`
+**Severity:** Medium — RESOLVED (M6.E1, plan reference `docs/plans/k1/conceriege_strengthning_plan.md`)
+**Location:** `k1/concierge/compression/episodic_compressor.py`, `k1/concierge/experience/layer.py`
 
-> **CORRECTION (May 2026):** Original description said `compress_segment()` was a stub
-> (first-sentence extractive only). **This is wrong.** `compress_segment()` at
-> `episodic_compressor.py:~210-252` is a full key-facts extractive implementation
-> that extracts salient sentences by frequency scoring.
->
-> The actual gaps are:
->
-> 1. `compression_strategy` field on `EpisodicCompressor` is accepted but **ignored**
->    — the strategy enum has no effect on which algorithm runs.
-> 2. `EpisodicCompressor` is **never called from `ExperienceLayer`** — the two classes
->    are completely decoupled. No call site connects them.
+**Resolution (M6.E1.I1 + I5):**
 
-**Failure mode:** Even though compression is implemented, it is never invoked. Session
-history grows indefinitely without compression. After 50+ turns, the LLM's effective
-context becomes large and expensive.
+1. `ConciergeFactory` (step 9, `k1/concierge/factory.py`) now instantiates one
+   `EpisodicCompressor`, `DynamicIdentityContext`, and `OppPipeline` per session
+   and shares the **same** compressor instance with `ExperienceLayer` via the
+   new `ExperienceLayer(episodic_compressor=...)` parameter.
+2. `ExperienceLayer.tick(...)` (`k1/concierge/experience/layer.py`) calls
+   `episodic_compressor.compress_all(...)` once `len(conversation_history) >=
+   min_turns_to_compress` and records telemetry on `self.compression_count`,
+   `self.last_compressed_context`, `self.last_episodes_used`, and
+   `self.last_recent_turns_kept`. Prompt-side substitution is owned by
+   `OppPipeline.on_pre_prompt_build(...)` (OPP-6) via the canonical
+   `k1/concierge/compression/turn_shape.py::history_entries_to_opp_turns`
+   converter.
+3. Live integration probe
+   `tests/integration/k1/live/m1/test_m1_l6_l9_concierge_lifecycle.py::test_m1_l7_experience_layer_compresses_after_sixteen_turns`
+   no longer carries `xfail(strict=True)`; it passes against the wired path.
 
-**Fix:**
-
-1. Wire `EpisodicCompressor` into `ExperienceLayer.process_turn()` (call on every Nth turn).
-2. Implement strategy dispatch: `LLM_BASED` → `_compress_with_llm()`, `EXTRACTIVE` → current key-facts path.
+`compression_strategy` field dispatch is out of scope for M6 (still ignored;
+the extractive path is the only live algorithm). Reopen as a separate issue
+if an `LLM_BASED` strategy is required.
 
 ---
 

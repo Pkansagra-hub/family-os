@@ -35,6 +35,7 @@ def _step(
     timeout_ms: Optional[int] = None,
     prompt_template: Optional[str] = None,
     tools_granted: Optional[list[str]] = None,
+    activity_profile: Optional[str] = None,
     output_schema: Optional[Dict[str, Any]] = None,
 ) -> PlanStep:
     return PlanStep(
@@ -44,6 +45,7 @@ def _step(
         timeout_ms=timeout_ms,
         prompt_template=prompt_template,
         tools_granted=tools_granted,
+        activity_profile=activity_profile,
         output_schema=output_schema,
     )
 
@@ -150,6 +152,41 @@ class TestRequestShape:
         await runner.run(step, {}, {}, "trace-1")
 
         assert fabric.call_log[0].context_override == {"tools_granted": ["search", "calc"]}
+
+    @pytest.mark.asyncio
+    async def test_activity_profile_maps_to_context_override(self) -> None:
+        _, runner, fabric = await _svc()
+        step = _step("s1", "cap.s1", activity_profile="calendar.v1")
+
+        await runner.run(step, {}, {}, "trace-1")
+
+        assert fabric.call_log[0].context_override == {"activity_profile": "calendar.v1"}
+
+    @pytest.mark.asyncio
+    async def test_activity_profile_and_tools_granted_share_context_override(self) -> None:
+        _, runner, fabric = await _svc()
+        step = _step(
+            "s1",
+            "cap.s1",
+            tools_granted=["search", "calc"],
+            activity_profile="calendar.v1",
+        )
+
+        await runner.run(step, {}, {}, "trace-1")
+
+        assert fabric.call_log[0].context_override == {
+            "tools_granted": ["search", "calc"],
+            "activity_profile": "calendar.v1",
+        }
+
+    @pytest.mark.asyncio
+    async def test_context_override_absent_without_tools_or_activity_profile(self) -> None:
+        _, runner, fabric = await _svc()
+        step = _step("s1", "cap.s1")
+
+        await runner.run(step, {}, {}, "trace-1")
+
+        assert fabric.call_log[0].context_override is None
 
 
 class TestRetryPolicy:

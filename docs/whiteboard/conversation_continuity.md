@@ -532,7 +532,7 @@ The kernel direction should be option 1 plus option 2 as graceful degradation.
 
 The user concern is valid: Back already has the right universal execution loop -- find capability, inspect schema, ask the human if required details are missing, execute, verify, and submit. The missing layer is not necessarily a new Fabric agent for every domain. The missing layer is a bounded way to inject domain-specific operating guidance into Back for the current task.
 
-Call this a **Back Execution Profile** or **Activity Prompt Pack**.
+Call this a **Back Execution Profile**. At contract and metadata boundaries, use `activity_profile` for the durable profile identifier and `execution_profiles` for selected task metadata. Older labels are deprecated.
 
 This sits between generic Back execution and full Fabric meta-agent creation:
 
@@ -554,20 +554,24 @@ Fabric Meta-Agent
 
 #### Current Code Reality
 
-The current code is close to supporting this, but the profile object does not exist yet.
+The current code has the first Back profile implementation in [k1/concierge/prompt/back_profiles.py](../../k1/concierge/prompt/back_profiles.py). The remaining gap is extending the same prompt/profile metadata through Fabric, Planner, Orchestrator, KernelService, family tools, MCP, and WASM.
 
 Existing hooks:
 
 - `TaskIntent.domain` already exists as an optional domain hint in [k1/concierge/task/intent.py](../../k1/concierge/task/intent.py).
 - Front's `dispatch_task` schema already lets each intent include `domain` in [k1/concierge/tools/schemas_front.py](../../k1/concierge/tools/schemas_front.py).
 - `execute_dispatch_task()` normalizes intents, derives tier, builds `TaskDispatch`, and preserves `reference_context` in [k1/concierge/tools/implementations.py](../../k1/concierge/tools/implementations.py).
-- `TaskDispatch` carries `reference_context` and `context_snapshot`, but no explicit `execution_profile` field yet in [k1/concierge/task/dispatch.py](../../k1/concierge/task/dispatch.py).
+- `TaskDispatch` now carries optional `execution_profiles` alongside `reference_context` and `context_snapshot` in [k1/concierge/task/dispatch.py](../../k1/concierge/task/dispatch.py). Back can reuse that metadata during HITL resume; the profiles remain guidance, not authority.
 - `back_handler()` reads one SessionState snapshot, computes budget, and calls `build_back_prompt()` once before entering the ReAct loop in [k1/concierge/actors/back.py](../../k1/concierge/actors/back.py).
 - `build_back_prompt()` is a simple template-substitution path, not the Front `DynamicPromptBuilder`; this makes it a clean insertion point for a small selected profile block in [k1/concierge/prompt/back_prompt.py](../../k1/concierge/prompt/back_prompt.py).
 - Back already has the right generic tools: `discover_capabilities`, `invoke_capability`, `batch_invoke_capabilities`, and `submit_result` in [k1/concierge/tools/schemas_back.py](../../k1/concierge/tools/schemas_back.py).
 - `discover_capabilities` already returns ranked contracts with domains and prompt schemas, and caches capability contracts by name in [k1/concierge/tools/implementations.py](../../k1/concierge/tools/implementations.py).
 - `invoke_capability` already checks the contract for missing required params and returns a structured recovery/HIL contract before executing when inputs are incomplete.
-- Fabric `CapabilityRequest.context_override` exists in [k1/fabric/types.py](../../k1/fabric/types.py), but current `CapabilityFabric._build_context()` does not pass it into `ContextBuilder.build()` in [k1/fabric/fabric.py](../../k1/fabric/fabric.py). So the first version should not depend on Fabric context override for profile propagation.
+- Fabric `CapabilityRequest.context_override` now reaches `ContextBuilder`, and provider paths receive prompt/profile metadata through their reserved metadata channels. Back profile rendering still stays separate from capability binding: profile guidance is procedure, not authority.
+
+M8 status: concrete profile assets are now attached to real contracts. Calendar actions carry `calendar.v1` / `calendar_activity_v1`; Tasks actions carry `tasks.v1` / `tasks_activity_v1`; user-invokable Reminders actions carry `reminders.v1` / `reminders_activity_v1`; Chores actions carry `chores.v1` / `chores_activity_v1`; Shopping actions carry `shopping.v1` / `shopping_activity_v1`; representative MCP and WASM contracts carry generic provider profiles. Finance, health, and future verticals still fall back to generic system-of-record behavior until they have reviewed prompt assets and explicit contract metadata.
+
+M9 status: profile selection is now observable. Back logs selected profile IDs, confidence, evidence sources, fallback reason, task ID, and trace ID for both initial execution and HITL resume; metrics flow through the real `ToolContext.metrics_collector` path when configured. The rollout matrix is focused and real-component based; Back handler profile tests exercise the actual ReAct loop, bus, SessionState, dispatcher, and schema guard path.
 
 Implication: the lowest-risk implementation is to select a profile before Back prompt construction, inject a small `execution_profile_block` into Back's system prompt, and continue using Fabric discovery/schema/HIL as the authority boundary.
 
@@ -617,98 +621,27 @@ Equivalent profiles can exist for:
 - `email.v1`: draft before send unless user explicitly asked to send, preserve recipients/subject, never impersonate, ask before external send.
 - `finance.v1`: require permissioned data access, explain uncertainty, no money movement/purchase/cancellation without explicit confirmation.
 - `health.v1`: no diagnosis, use records/tools as evidence, route regulated uncertainty to HIL or professional-care guidance.
-- `connectors.generic.v1`: check connector availability/auth, inspect schema, respect side-effect policy, verify after mutation.
+- `chores.v1`: respect parent/guardian gates, chore occurrence state, points, skips, and reopen actions.
+- `shopping.v1`: use shopping-list records from `tool.read.shopping.*`; child-added items remain pending until explicit parent/guardian approval via `tool.execute.shopping.approve_item`.
+- `system_of_record.generic.v1`: check connector or capability availability, inspect schema, respect side-effect policy, verify after mutation.
 
 These profiles are not capability names and must not contain hardcoded capability slugs as execution authority. They are procedure, not registry truth.
 
-#### Back Profile Selector
+#### Back Profile Selection
 
-The selector is the hardest part because a wrong profile can steer Back toward the wrong workflow. It must be deterministic, explainable, and conservative.
+Back profile selection must not become a second capability binder or a hardcoded domain keyword router. The current implementation is intentionally conservative and metadata-driven:
 
-Inputs:
+1. Reuse existing `task.execution_profiles` for resume and binder continuity.
+2. Accept explicit `activity_profile`, `execution_profile`, or `profile_id` metadata when it resolves to a prompt-contract-backed profile.
+3. Accept exact structured intent `domain` metadata only when it maps to a loaded prompt contract's primary domain.
+4. Otherwise render the generic `system_of_record.generic.v1` profile with `discovery_required` evidence and let Back discover/bind through the normal registry path.
 
-```yaml
-BackProfileSelectionInput:
-  task_id: str
-  tier: LOW | MEDIUM | HIGH
-  intents:
-    - action: str
-      domain: str | null
-      params: dict
-  reference_context: dict
-  workframe_summary: dict | null
-  known_capability_bindings: list | null
-  prior_failure_frame: dict | null
-```
+Back does not scan action text, parameter names, reference context, or capability-name prefixes to infer profile identity. Moving cue lists into YAML would still be a rule-based router; profile identity should come from binder/planner metadata, contract metadata, or exact structured domain compatibility.
 
-Future optional input after binding/discovery:
-
-```yaml
-  discovered_capabilities:
-    - name: tool.execute.calendar.create_event
-      domains: [PRODUCTIVITY, calendar]
-      schema:
-        capabilities: [write, adapter:calendar]
-        required_inputs: [...]
-```
-
-Output:
-
-```yaml
-BackProfileSelection:
-  selected_profiles:
-    - profile_id: calendar.v1
-      intent_indexes: [1]
-      confidence: 0.86
-      evidence:
-        - source: intent.domain
-          value: calendar
-        - source: action_lexicon
-          value: "add event to calendar"
-  fallback_profile: system_of_record.generic.v1
-  ambiguity: none | low | high
-  prompt_block: str
-```
-
-Selector scoring should prefer authoritative evidence over language guesses:
-
-| Evidence | Weight | Notes |
-| --- | ---: | --- |
-| Existing canonical capability binding | highest | If a bound capability domain/adapter exists, use it. |
-| Discovered capability contract domain/adapter marker | highest | Registry evidence beats Front's domain guess. |
-| `TaskIntent.domain` from dispatch | high | Useful but still LLM-provided. |
-| WorkFrame prior route / previous successful capability | high | Strong for retries/follow-ups. |
-| Action/entity lexical match | medium | "calendar", "event", "invite", "task", "remind". |
-| `reference_context` keys | low-medium | Helpful for artifacts like `event_id`, `task_id`, `assignee`. |
-| Global conversation domain | low | Too broad; should not dominate. |
-
-Conservative thresholds:
-
-```yaml
-if top_score >= 0.75 and score_gap >= 0.20:
-  select top profile
-elif bundled task has <= 2 clear profiles:
-  select per-intent profiles and label them by intent index
-elif top_score >= 0.45:
-  select generic system_of_record profile plus weak domain hint
-else:
-  select no domain profile; use generic Back prompt only
-```
-
-For bundled requests, profile selection should be per intent, not per whole task. Example: "move Riley's task to 8 PM and add a calendar event" should select:
-
-```yaml
-selected_profiles:
-  - profile_id: tasks.v1
-    intent_indexes: [0]
-  - profile_id: calendar.v1
-    intent_indexes: [1]
-```
-
-The rendered prompt block must stay compact:
+The rendered prompt block stays compact:
 
 ```text
-== ACTIVITY EXECUTION PROFILES ==
+== EXECUTION PROFILES ==
 Intent 0 uses tasks.v1.
 Required discipline: read/list existing task before update; disambiguate if multiple matches; verify final task state.
 
@@ -718,21 +651,21 @@ Required discipline: check duplicates; require date/time/timezone/calendar; veri
 Registry schemas and tool recovery contracts override these profiles.
 ```
 
-#### Two-Stage Selection
+#### Discovery Confirmation
 
-There are two different selector moments.
+There are two different moments, but only one authority boundary.
 
-Stage A: pre-discovery selector.
+Stage A: pre-discovery metadata rendering.
 
 ```text
-dispatch_task result
+dispatch_task result / binder metadata
   -> normalized TaskIntent list
-  -> BackProfileSelector.select_from_task(...)
+  -> profile metadata reuse or exact structured-domain compatibility
   -> TaskDispatch carries selected profile summary
   -> back_handler builds Back prompt with execution_profile_block
 ```
 
-This helps Back choose the right discovery query and workflow from the first iteration.
+This gives Back a compact starting procedure from the first iteration.
 
 Stage B: post-discovery confirmation.
 
@@ -743,30 +676,18 @@ Back calls discover_capabilities
   -> if discovery contradicts the selected profile, Back follows registry evidence
 ```
 
-In a later version, Stage B could emit a `BackControlEvent(event_type="profile_update")` into the running loop, because the ReAct loop already supports control events. But MVP does not need that. The first version can be simple: profile is a starting procedure; registry contracts are authority.
+In a later version, Stage B could emit a `BackControlEvent(event_type="profile_update")` into the running loop, because the ReAct loop already supports control events. But MVP does not need that. The current rule is simple: profile guidance is a starting procedure; registry contracts and binder output are authority.
 
-#### Code Insertion Plan
+#### MVP Code Insertion Status
 
 MVP, lowest blast radius:
 
-1. Add `k1/concierge/prompt/back_profiles.py` with:
-   - `BackExecutionProfile` dataclass;
-   - static profile registry;
-   - deterministic `select_back_execution_profiles(task, reference_context, workframe_summary=None)`;
-   - `render_execution_profile_block(selection)`.
-2. Extend `build_back_prompt()` to accept `execution_profile_block: str = ""` and inject it after the generic ReAct protocol but before tool usage rules.
-3. In `back_handler()` and `back_resume_handler()`, compute the selection from the task payload before calling `build_back_prompt()`.
-4. Preserve selected profile metadata in `task.reference_context._execution_profiles` or add a first-class `execution_profiles` field to `TaskDispatch`.
-   - Fast path: store under `reference_context` because it already survives serialization.
-   - Better path: add an explicit `execution_profiles` field to `TaskDispatch` and make `to_dict()` / `from_dict()` preserve it.
-5. Add selector unit tests with synthetic tasks:
-   - calendar create/check;
-   - task update;
-   - reminder schedule;
-   - email draft/send;
-   - ambiguous "schedule" task with no domain;
-   - bundled task+calendar request.
-6. Add Back prompt tests proving only the selected profile is injected and the block stays below a fixed token/character budget.
+1. `k1/concierge/prompt/back_profiles.py` now contains `BackExecutionProfile`, a prompt-contract-backed profile registry, metadata-driven `select_back_execution_profiles(...)`, and `render_back_execution_profile_block(...)`.
+2. `build_back_prompt()` now accepts `execution_profile_block: str = ""` and injects it after the generic ReAct protocol but before Step 1 orientation.
+3. `back_handler()` and `back_resume_handler()` now compute or reuse profile selection from the task payload before calling `build_back_prompt()`.
+4. `TaskDispatch` now preserves first-class `execution_profiles`; new work should not hide profile metadata under `reference_context`.
+5. Selector tests should keep proving explicit profile metadata, exact structured domain compatibility, resume reuse, generic fallback, and no free-text cue selection.
+6. Back prompt tests should keep proving only the selected profile is injected and the block stays below a fixed token/character budget.
 7. Add one integration regression for Riley task update + calendar check to prove the profile helps Back choose task/calendar discovery without making the MEDIUM routing bug worse.
 
 Longer-term, once `WorkFrame` exists:
@@ -774,7 +695,7 @@ Longer-term, once `WorkFrame` exists:
 ```text
 WorkFrame.intent_bundle
   -> CapabilityBinder binds candidates
-  -> BackProfileSelector uses bindings + domains + prior lineage
+  -> profile resolver consumes bound profile ids, contract domains, and prior lineage
   -> TaskContinuationContext carries selected profile ids and evidence
   -> Back prompt receives compact profile block
 ```

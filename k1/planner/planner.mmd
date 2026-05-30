@@ -111,7 +111,7 @@
 %%   V1 REMOVED: token_budget_max, cost_budget_max_usd (no upstream data -- PLAN-07 DEFERRED)
 %%   Validation: plan_id/request_id non-empty, steps non-empty, deps form DAG (Kahn's)
 %%
-%%   PlanStep (14 fields) {              (SOURCE OF TRUTH: k1/orchestrator/types.py)
+%%   PlanStep (15 fields) {              (SOURCE OF TRUTH: k1/orchestrator/types.py)
 %%     -- Fabric-aligned fields (1-6) --
 %%     id: string,                        (required, e.g., "s1", "s2")
 %%     capability: string,                (required, e.g., "tool.execute.send_message")
@@ -119,7 +119,7 @@
 %%     deps: List[str],                   (step IDs this depends on)
 %%     prompt_template: string | null,    (template name reference)
 %%     tools_granted: List[str] | null,   (FAB-07: scoped tool list for agent steps)
-%%     -- Orchestrator extension fields (7-14) --
+%%     -- Orchestrator extension fields (7-15) --
 %%     output_schema: Dict | null,        (JSON Schema, OutputSchemaGuard validates)
 %%     condition: ConditionExpr | null,   (structured expr, NOT raw JSONPath string)
 %%     is_optional: bool = false,         (true = failure does NOT fail the plan)
@@ -127,7 +127,8 @@
 %%     compensation: string | null,       (capability to call on rollback if has_side_effects)
 %%     timeout_ms: int | null,            (per-step timeout, seeded from Fabric estimated_duration_ms)
 %%     required_context: List[str] | null,(SessionState sections needed before execution)
-%%     safety_band_min: string | null     (minimum safety band for this step)
+%%     safety_band_min: string | null,    (minimum safety band for this step)
+%%     activity_profile: string | null    (exact validated profile metadata)
 %%   }
 %%   V1 REMOVED: token_budget per step (no upstream data -- PLAN-07 DEFERRED)
 %%
@@ -241,6 +242,7 @@ subgraph PIPELINE["4-Stage Planning Pipeline"]
     S2_DISCOVER["discover_capabilities(specific_tools)<br/>Refine Top-K for each step"]:::tool_fabric
     S2_FIND_PROMPTS["find_relevant_prompts(intent, domain)<br/>Semantic Top-K from Prompt Registry"]:::tool_fabric
     S2_LLM["LLM: Expand and parameterize<br/>Input: sketch + refined capabilities + prompts<br/>Output: expanded_plan{steps with params, prompts, deps}<br/>Budget: {max_tokens: 1024, timeout_ms: 5000}"]:::llm
+    S2_PROMPT_BIND["Prompt Binding Validation<br/>Preserve exact discovered/inventory prompt names<br/>Clear unverified prompt_template values<br/>No domain or capability-text substitution"]:::engine
     S2_OUTPUT["ExpandedPlan<br/>steps[] with capability, params, prompt_template,<br/>deps, token_budget, output_schema, tools_granted"]:::step
   end
 
@@ -611,7 +613,8 @@ S2_ENTRY -->|"refine caps"| S2_DISCOVER
 S2_ENTRY -->|"find prompts"| S2_FIND_PROMPTS
 S2_DISCOVER -->|"refined capabilities[]"| S2_LLM
 S2_FIND_PROMPTS -->|"prompt templates[]"| S2_LLM
-S2_LLM -->|"expanded plan"| S2_OUTPUT
+S2_LLM -->|"expanded plan"| S2_PROMPT_BIND
+S2_PROMPT_BIND -->|"validated prompt/profile metadata"| S2_OUTPUT
 S2_OUTPUT -->|"ExpandedPlan"| S3_ENTRY
 
 %% Stage 3 internal flow

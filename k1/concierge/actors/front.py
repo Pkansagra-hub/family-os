@@ -30,7 +30,6 @@ import re
 import time
 import uuid
 from dataclasses import replace
-from pathlib import Path
 from typing import Any
 
 from k1.bus.envelope import Envelope
@@ -48,7 +47,9 @@ from k1.concierge.actors.shared import never_cancel as _never_cancel
 from k1.concierge.actors.shared import parse_envelope_payload as _parse_payload
 from k1.concierge.actors.shared import safe_get_section as _safe_get_section
 from k1.concierge.bus.builders import (
+    SYNTHETIC_ID_START,
     build_final_response,
+    build_hil_presented,
     build_hil_response,
     build_response_stream,
     build_task_cancel,
@@ -65,11 +66,85 @@ from k1.concierge.prompt.mode import PromptMode, determine_mode
 from k1.concierge.react.loop import ReactResult, react_loop
 from k1.concierge.task.complexity import ComplexityTier, budget_for_tier
 from k1.concierge.tools.dispatcher import ToolDispatcher
+from k1.diagnostics.prompt_dumps import PROMPT_DUMP_ROOT, prompt_dump_dir
+from k1.hil.config import HILConfig
+from k1.hil.types import HILKind, HILPresentedEnvelope
 from k1.model_hub.ports import IModelHubPort
 
 logger = logging.getLogger(__name__)
 
-_PROMPT_DUMP_DIR = Path(__file__).resolve().parents[3] / "data" / "prompt_dumps"
+# GAP-HIL-007 / GAP-HIL-009 -- default HIL config used by Front to gate
+# the fast-path and emit presentation acks. Production wiring may swap
+# this for a process-wide instance; the values here mirror the dataclass
+# defaults so behaviour is deterministic when not explicitly configured.
+_FRONT_HIL_CFG: HILConfig = HILConfig()
+
+
+def _publish_hil_presented(
+    *,
+    bus: IBus,
+    hil_envelope: dict[str, Any] | None,
+    scenario_data: dict[str, Any],
+    parent_id: int,
+    trace_id: str,
+    channel: str = "front_chat",
+) -> None:
+    """Emit ``TOPIC_HIL_PRESENTED`` for the HIL request Front just rendered.
+
+    Best-effort: missing ``hil_request_id`` skips the publish (the service
+    cannot correlate without one). Unknown kinds map to NEEDS_HUMAN so the
+    envelope still validates.
+    """
+    if not isinstance(hil_envelope, dict):
+        # Some callers (legacy bridge / synthetic frames) only carry the
+        # scenario_data path. Fall back to it.
+        hil_envelope = {}
+    hil_request_id = str(
+        hil_envelope.get("hil_request_id") or scenario_data.get("pending_hil_id") or ""
+    )
+    if not hil_request_id:
+        return
+    raw_kind = str(
+        hil_envelope.get("kind") or scenario_data.get("hil_type") or HILKind.NEEDS_HUMAN.value
+    )
+    try:
+        kind = HILKind(raw_kind)
+    except ValueError:
+        kind = HILKind.NEEDS_HUMAN
+    inner_payload = hil_envelope.get("payload") if isinstance(hil_envelope, dict) else None
+    task_id = ""
+    if isinstance(inner_payload, dict):
+        task_id = str(inner_payload.get("task_id", "") or "")
+    if not task_id:
+        task_id = str(scenario_data.get("task_id", "") or "")
+    presented = HILPresentedEnvelope(
+        hil_request_id=hil_request_id,
+        task_id=task_id,
+        kind=kind,
+        presented_at_ms=int(time.time() * 1000),
+        presentation_channel=channel,
+        trace_id=str(trace_id or ""),
+    )
+    try:
+        bus.publish(build_hil_presented(payload=presented.to_dict(), parent_id=parent_id))
+    except Exception:  # noqa: BLE001
+        logger.warning("front_handler: hil_presented publish failed", exc_info=True)
+
+
+_PROMPT_DUMP_DIR = PROMPT_DUMP_ROOT
+
+
+def _dump_tool_schema(tool: Any) -> dict[str, Any]:
+    """Serialize a Front tool schema exactly as the model receives it."""
+    return {
+        "name": getattr(tool, "name", ""),
+        "description": getattr(tool, "description", ""),
+        "parameters": getattr(tool, "parameters", {}) or {},
+        "returns": getattr(tool, "returns", None),
+        "actor": getattr(tool, "actor", None),
+        "category": getattr(tool, "category", None),
+        "side_effects": bool(getattr(tool, "side_effects", False)),
+    }
 
 
 def _correlate_envelope(env: Envelope, source: Envelope, trace_id: str) -> Envelope:
@@ -80,6 +155,13 @@ def _correlate_envelope(env: Envelope, source: Envelope, trace_id: str) -> Envel
         session_id=source.session_id,
         request_id=source.request_id,
     )
+
+
+def _response_parent_id(envelope: Envelope) -> int:
+    """Return the bus-visible parent for Front-emitted response events."""
+    if envelope.envelope_id >= SYNTHETIC_ID_START:
+        return envelope.parent_id
+    return envelope.envelope_id
 
 
 def _bind_tool_context(tool_dispatcher: ToolDispatcher, *, trace_id: str, session_id: str) -> None:
@@ -120,14 +202,21 @@ def _write_runtime_prompt_dump(
 ) -> None:
     """Persist the exact Front prompt payload for postmortem debugging."""
     try:
-        _PROMPT_DUMP_DIR.mkdir(parents=True, exist_ok=True)
+        dump_dir = prompt_dump_dir(
+            _PROMPT_DUMP_DIR,
+            session_id=envelope.session_id,
+            actor="front",
+        )
+        dump_dir.mkdir(parents=True, exist_ok=True)
         timestamp_ms = int(time.time() * 1000)
         payload = {
             "timestamp_ms": timestamp_ms,
+            "actor": "front",
             "topic": envelope.topic,
             "envelope_id": envelope.envelope_id,
             "parent_id": envelope.parent_id,
             "trace_id": trace_id,
+            "session_id": envelope.session_id,
             "mode": mode.value,
             "domain": domain,
             "tier": tier,
@@ -135,6 +224,7 @@ def _write_runtime_prompt_dump(
             "affect_band": context.affect_band,
             "max_iterations": context.max_iterations,
             "tool_names": [t.name for t in context.tools],
+            "tools": [_dump_tool_schema(t) for t in context.tools],
             "messages": [
                 {
                     "role": m.role,
@@ -145,8 +235,8 @@ def _write_runtime_prompt_dump(
             "system_prompt": context.system_prompt,
         }
         stem = f"front_prompt_env{envelope.envelope_id}_{timestamp_ms}"
-        stamped_path = _PROMPT_DUMP_DIR / f"{stem}.json"
-        latest_path = _PROMPT_DUMP_DIR / "front_prompt_latest.json"
+        stamped_path = dump_dir / f"{stem}.json"
+        latest_path = dump_dir / "front_prompt_latest.json"
         serialized = json.dumps(payload, ensure_ascii=False, indent=2)
         stamped_path.write_text(serialized, encoding="utf-8")
         latest_path.write_text(serialized, encoding="utf-8")
@@ -227,13 +317,6 @@ def _strip_leaked_reasoning(text: str) -> str:
             )
         return clean
     return text
-
-
-def _build_dispatch_ack(dispatches: list[dict[str, Any]]) -> str:
-    """Return a deterministic in-progress acknowledgement for dispatched work."""
-    if len(dispatches) > 1:
-        return "I'm working on those now."
-    return "I'm working on that now."
 
 
 # Patterns matching raw system/HIL blocks that LLMs sometimes pass through
@@ -585,8 +668,6 @@ def _extract_family_context(ss: Any) -> dict[str, Any]:
 
         if family_data:
             lines_family.append(f"Family: {family_data.get('family_name', '?')}")
-            lines_family.append(f"Location: {family_data.get('location', '?')}")
-            lines_family.append(f"Timezone: {family_data.get('timezone', '?')}")
 
             members = family_data.get("members", [])
             for m in members:
@@ -865,6 +946,48 @@ def _task_field(task: Any, key: str, default: Any = None) -> Any:
     return getattr(task, key, default)
 
 
+# Terminal task statuses -- task_state.py L74-89 contract.
+_TASK_TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
+
+
+def _has_inflight_tasks(task_state_dict: dict[str, Any]) -> bool:
+    """True when at least one task is NOT in a terminal status.
+
+    M6.E3.I1 forwards this to OppPipeline.on_pre_prompt_build so that
+    DynamicIdentityContext can select the EXECUTOR role for the active
+    user when Back is busy.
+    """
+    for task in task_state_dict.get("tasks", []) or []:
+        status = str(_task_field(task, "status", "") or "").lower()
+        if status and status not in _TASK_TERMINAL_STATUSES:
+            return True
+    return False
+
+
+def _history_entries_to_opp_turns(history_active: Any) -> list[dict[str, Any]]:
+    """M6.E1.I3 thin wrapper -- delegates to the single owner module.
+
+    See :mod:`k1.concierge.compression.turn_shape` for the canonical
+    conversion. Kept here as a private alias so existing call sites in
+    this file (and any future tests that import the private name) keep
+    a stable surface.
+    """
+    from k1.concierge.compression.turn_shape import history_entries_to_opp_turns
+
+    return history_entries_to_opp_turns(history_active)
+
+
+def _derive_active_user(ss: Any) -> tuple[str, str]:
+    """Return (active_user_id, active_user_name) from persona; empty fallbacks."""
+    persona = _safe_get_section(ss, "persona")
+    if persona is None:
+        return ("", "")
+    prefs = getattr(persona, "_preferences", {}) or {}
+    active_member = str(prefs.get("active_member", "") or "")
+    # No separate id field exists in persona -- reuse the display name as id.
+    return (active_member, active_member)
+
+
 def _task_has_status(task: Any, status: str) -> bool:
     return str(_task_field(task, "status", "")).upper() == status.upper()
 
@@ -877,6 +1000,30 @@ def _task_pending_hil_payload(task: Any) -> dict[str, Any]:
     if isinstance(pending_hil, dict):
         return pending_hil
     return {}
+
+
+_GROUNDING_PROPAGATION_FIELDS = (
+    "grounding_envelope_id",
+    "temporal_anchor_id",
+    "spatial_context_id",
+    "resolved_temporal_refs",
+    "resolved_spatial_refs",
+)
+
+
+def _sync_dispatch_reference_context(dispatch_payload: dict[str, Any]) -> None:
+    reference_context = dict(dispatch_payload.get("reference_context") or {})
+    grounding_context = dict(reference_context.get("grounding") or {})
+    for key in _GROUNDING_PROPAGATION_FIELDS:
+        value = dispatch_payload.get(key)
+        if value is None:
+            continue
+        reference_context[key] = value
+        grounding_context[key] = value
+    if grounding_context:
+        reference_context["grounding"] = grounding_context
+    if reference_context:
+        dispatch_payload["reference_context"] = reference_context
 
 
 def _get_fsm_state(ss: Any) -> str:
@@ -1004,6 +1151,9 @@ async def front_handler(
     all_tool_schemas: list[Any] | None = None,
     fsm_state: str | None = None,
     opp_pipeline: Any | None = None,
+    temporal: Any = None,
+    spatial: Any = None,
+    grounding: Any = None,
     self_model: Any = None,
 ) -> ReactResult:
     """Front handler with mode-driven prompt assembly.
@@ -1027,6 +1177,16 @@ async def front_handler(
     Returns:
         ReactResult from the ReAct loop execution.
     """
+    effective_session_id = (
+        envelope.session_id
+        or getattr(grounding, "session_id", "")
+        or getattr(spatial, "session_id", "")
+        or getattr(temporal, "session_id", "")
+        or ""
+    )
+    if effective_session_id and envelope.session_id != effective_session_id:
+        envelope = replace(envelope, session_id=effective_session_id)
+
     trace_id = (
         envelope.cognitive_trace_id or envelope.request_id or f"front-{uuid.uuid4().hex[:12]}"
     )
@@ -1110,14 +1270,79 @@ async def front_handler(
 
     # 6. Build scenario data
     scenario_data = _extract_scenario_data(mode, envelope, ss)
+    envelope_payload = _parse_payload(envelope)
+
+    front_grounding_projection: Any = None
+    grounding_dispatch_metadata: dict[str, Any] = {}
+    grounding_projection_payload: dict[str, Any] | None = None
+    if grounding is not None:
+        device_id = str(envelope_payload.get("device_id") or "") or None
+        installation_id = device_id
+        try:
+            grounding_envelope = await grounding.refresh_turn(
+                envelope.session_id or None,
+                consumer="front",
+                turn_id=str(envelope.envelope_id),
+                trace_id=trace_id,
+                device_id=device_id,
+                installation_id=installation_id,
+            )
+            effective_session_id = (
+                getattr(grounding_envelope, "session_id", None) or envelope.session_id
+            )
+            if effective_session_id and envelope.session_id != effective_session_id:
+                envelope = replace(envelope, session_id=effective_session_id)
+                _bind_tool_context(
+                    tool_dispatcher,
+                    trace_id=trace_id,
+                    session_id=effective_session_id,
+                )
+            front_grounding_projection = await grounding.build_projection(
+                grounding_envelope,
+                consumer="front",
+            )
+            from k1.grounding.serialization import projection_to_dict
+            from k1.grounding.service.propagation import build_propagation_metadata
+
+            grounding_dispatch_metadata = build_propagation_metadata(front_grounding_projection)
+            grounding_projection_payload = projection_to_dict(front_grounding_projection)
+        except Exception:
+            logger.warning("front_handler: grounding refresh/projection failed", exc_info=True)
+    elif temporal is not None:
+        device_id = str(envelope_payload.get("device_id") or "") or None
+        installation_id = device_id
+        try:
+            snapshot = await temporal.refresh_turn(
+                envelope.session_id or None,
+                turn_id=str(envelope.envelope_id),
+                trace_id=trace_id,
+                device_id=device_id,
+                installation_id=installation_id,
+            )
+            effective_session_id = getattr(snapshot, "session_id", None) or envelope.session_id
+            if effective_session_id and envelope.session_id != effective_session_id:
+                envelope = replace(envelope, session_id=effective_session_id)
+                _bind_tool_context(
+                    tool_dispatcher,
+                    trace_id=trace_id,
+                    session_id=effective_session_id,
+                )
+            await temporal.build_projection(envelope.session_id or None, consumer="front")
+        except Exception:
+            logger.warning("front_handler: temporal refresh/projection failed", exc_info=True)
+
     if mode == PromptMode.WEAVE and (
         int(scenario_data.get("result_count", 0) or 0) == 0
         or not str(scenario_data.get("results_summary", "") or "").strip()
     ):
         logger.info("front_handler: WEAVE skipped because no concrete results are available")
-        _ack_env = build_final_response(
-            payload={"text": "", "is_ack": True},
-            parent_id=envelope.envelope_id,
+        _ack_env = _correlate_envelope(
+            build_final_response(
+                payload={"text": "", "is_ack": True, "trace_id": trace_id},
+                parent_id=_response_parent_id(envelope),
+            ),
+            envelope,
+            trace_id,
         )
         bus.publish(_ack_env)
         return ReactResult(status="skipped", text="", dispatched_tasks=[])
@@ -1157,20 +1382,28 @@ async def front_handler(
             )
 
     # 8. Assemble prompt via mode-driven builder
-    # OPP-6/OPP-7: Enrich prompt with episodic compression + dynamic identity
+    # OPP-6/OPP-7: Enrich prompt with episodic compression + dynamic identity.
+    # M6.E1.I3 + M6.E3.I1: use canonical compressor turn shape; forward
+    # has_inflight_tasks + active user fields so DynamicIdentityContext can
+    # choose EXECUTOR/SUPPORTER/etc. correctly. ``scenario_data`` only carries
+    # the two enriched strings as a transport channel -- DynamicPromptBuilder
+    # consumes them explicitly and strips them before scenario formatting so
+    # they never leak through the _format_scenario_data fallback.
     opp_enrichment = None
     if opp_pipeline is not None:
         try:
             history_active = _get_history_active(ss)
-            turns_for_opp = (
-                [{"role": e.get("role", ""), "text": e.get("text", "")} for e in history_active]
-                if history_active
-                else []
-            )
+            turns_for_opp = _history_entries_to_opp_turns(history_active)
+            task_state_dict = _get_task_state_dict(ss)
+            has_inflight = _has_inflight_tasks(task_state_dict)
+            active_user_id, active_user_name = _derive_active_user(ss)
             opp_enrichment = opp_pipeline.on_pre_prompt_build(
                 turns=turns_for_opp,
                 affect_band=affect_band,
                 active_domains=[domain] if domain else [],
+                active_user_id=active_user_id,
+                active_user_name=active_user_name,
+                has_inflight_tasks=has_inflight,
             )
             if opp_enrichment.compressed_context:
                 scenario_data["compressed_context"] = opp_enrichment.compressed_context
@@ -1181,7 +1414,11 @@ async def front_handler(
                 )
             if opp_enrichment.identity_block:
                 scenario_data["identity_block"] = opp_enrichment.identity_block
-                logger.info("front_handler: OPP-7 dynamic identity block injected")
+                logger.info(
+                    "front_handler: OPP-7 dynamic identity block injected "
+                    "(has_inflight_tasks=%s)",
+                    has_inflight,
+                )
         except Exception:
             logger.warning("front_handler: OPP prompt enrichment failed", exc_info=True)
 
@@ -1221,6 +1458,7 @@ async def front_handler(
         tier=tier,
         ss=ss,
         grounding_capsule=grounding_capsule,
+        grounding_projection=front_grounding_projection,
     )
     event_turn_text = _build_event_turn_text(mode, scenario_data)
     if event_turn_text:
@@ -1256,12 +1494,7 @@ async def front_handler(
     # timing chain to buffer those events indefinitely waiting for a parent
     # delivery that will never happen.  Fall back to the envelope's own
     # parent_id which DID go through the bus.
-    from k1.concierge.bus.builders import SYNTHETIC_ID_START
-
-    if envelope.envelope_id >= SYNTHETIC_ID_START:
-        parent_id = envelope.parent_id
-    else:
-        parent_id = envelope.envelope_id
+    parent_id = _response_parent_id(envelope)
 
     logger.info(
         "front_handler: LLM INPUT  prompt_len=%d messages=%d tools=%d max_iter=%d affect=%s",
@@ -1359,6 +1592,7 @@ async def front_handler(
         on_text_response=_on_text_response,
         cancellation_check=_never_cancel,
         trace_id=trace_id,
+        session_id=envelope.session_id,
         scenario=mode.value,
         validator=validator,
         on_stream=_on_stream,
@@ -1427,13 +1661,21 @@ async def front_handler(
         else:
             canonical_tier = "LOW"
         tier_enum = ComplexityTier(canonical_tier)
+        dispatch_payload = {
+            **task_spec,
+            "tier": canonical_tier,
+            "budget_hint": budget_for_tier(tier_enum),
+            "trace_id": trace_id,
+        }
+        if grounding_dispatch_metadata:
+            dispatch_payload.update(grounding_dispatch_metadata)
+            if grounding_projection_payload is not None:
+                dispatch_payload["grounding"] = grounding_projection_payload
+            _sync_dispatch_reference_context(dispatch_payload)
+        device_id = str(envelope_payload.get("device_id") or "") or None
+        installation_id = device_id
         env = build_task_dispatch(
-            payload={
-                **task_spec,
-                "tier": canonical_tier,
-                "budget_hint": budget_for_tier(tier_enum),
-                "trace_id": trace_id,
-            },
+            payload=dispatch_payload,
             parent_id=parent_id,
         )
         env = _correlate_envelope(env, envelope, trace_id)
@@ -1441,53 +1683,63 @@ async def front_handler(
 
     # 10c. Emit response.final AFTER all dispatches (correct FSM ordering)
     #      For STANDARD/PRESENT modes, emit stream chunks first (Epic 4.2).
+    #      All visible text comes from the LLM -- no deterministic acks, no
+    #      placeholder substitutions, no scripted filler. If the LLM produced
+    #      nothing we publish nothing.
     _final_text = result.text or ""
-    if mode == PromptMode.STANDARD and normal_dispatches:
-        _final_text = _build_dispatch_ack(normal_dispatches)
-        logger.info("front_handler: replaced post-dispatch text with deterministic ack")
-    # WEAVE degenerate guard: if the LLM produced the generic fallback
-    # ("Let me think about that for a moment.") during a WEAVE/proactive
-    # delivery, replace it with a deterministic summary built from the
-    # Back worker's final_answer.  This prevents useless "thinking" phrases
-    # leaking to the user after routine task completions.
-    if mode == PromptMode.WEAVE:
-        _degenerate_fallback = get_config().react.front_degenerate_fallback
-        if not _final_text or _final_text.strip() == _degenerate_fallback.strip():
-            _weave_payload = _parse_payload(envelope)
-            _weave_pending = _weave_payload.get("results") or []
-            _weave_lines: list[str] = []
-            for _r in _weave_pending:
-                _inner = _r.get("result", _r) if isinstance(_r, dict) else {}
-                _fa = _inner.get("final_answer", "") if isinstance(_inner, dict) else ""
-                if _fa:
-                    _action = (
-                        str(_inner.get("action", "") or "") if isinstance(_inner, dict) else ""
-                    )
-                    _weave_lines.append(
-                        _user_safe_failure_text(_action)
-                        if _looks_internal_failure_text(_fa)
-                        else _fa
-                    )
-            if _weave_lines:
-                _final_text = " ".join(_weave_lines)
-                logger.info(
-                    "front_handler: WEAVE degenerate suppressed, "
-                    "using Back final_answer (%d chars)",
-                    len(_final_text),
-                )
-            else:
-                # Nothing useful from Back either — suppress entirely.
-                _final_text = ""
-                logger.info("front_handler: WEAVE degenerate suppressed, no final_answer available")
+    # HITL_RELAY: if Front's LLM produced no rephrased question, fall back
+    # to the Back-LLM-generated question text verbatim. The question itself
+    # is already LLM output (from Back's submit_result(needs_human) call),
+    # so this preserves the "all visible text from an LLM" invariant. The
+    # only kernel-canned fallback we explicitly avoid is config-defined
+    # strings like react.front_degenerate_fallback.
+    _degen_fb = get_config().react.front_degenerate_fallback
+    _budget_fb = get_config().react.front_budget_fallback
     if mode == PromptMode.HITL_RELAY:
-        _degenerate_fallback = get_config().react.front_degenerate_fallback
-        if not _final_text or _final_text.strip() == _degenerate_fallback.strip():
-            _question = str(scenario_data.get("hil_question") or "").strip()
-            _final_text = _question if _question else ""
-            logger.info("front_handler: HITL_RELAY degenerate replaced with deterministic prompt")
-    if mode == PromptMode.HITL_RESOLVE and _final_text:
-        _final_text = "Got it. I'll keep going."
-        logger.info("front_handler: HITL_RESOLVE final text replaced with deterministic ack")
+        if not _final_text or _final_text == _degen_fb or _final_text == _budget_fb:
+            _hil_q = str(scenario_data.get("hil_question") or "").strip()
+            if _hil_q:
+                logger.info(
+                    "front_handler: HITL_RELAY Front LLM produced no text -- "
+                    "forwarding Back-LLM hil_question verbatim (len=%d)",
+                    len(_hil_q),
+                )
+                _final_text = _hil_q
+    # HITL_RESOLVE / WEAVE / PRESENT / ERROR: if the LLM produced only a
+    # kernel-canned fallback string, do NOT publish it -- mandate is
+    # "all visible text must be LLM-authored". Suppress the publish; the
+    # downstream auto-resume / task.complete chain will carry the real
+    # LLM-authored response when Back's result triggers PRESENT mode.
+    if mode in (
+        PromptMode.HITL_RESOLVE,
+        PromptMode.WEAVE,
+        PromptMode.PRESENT,
+        PromptMode.ERROR,
+        PromptMode.CANCEL,
+    ):
+        if _final_text in (_degen_fb, _budget_fb):
+            logger.info(
+                "front_handler: mode=%s -- suppressing kernel fallback "
+                "string '%s' (mandate: no deterministic visible text); "
+                "downstream chain will deliver LLM-authored response",
+                mode.value,
+                _final_text,
+            )
+            _final_text = ""
+    if mode == PromptMode.HITL_RELAY and _final_text:
+        # GAP-HIL-009 -- whenever Front actually delivered a HIL prompt to
+        # the user (whatever wording the LLM produced), tell the HIL service
+        # so it can arm the human-response timer.
+        try:
+            _publish_hil_presented(
+                bus=bus,
+                hil_envelope=scenario_data.get("_hil_envelope"),
+                scenario_data=scenario_data,
+                parent_id=parent_id,
+                trace_id=trace_id,
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("front_handler: HITL_RELAY hil_presented publish failed", exc_info=True)
     if _final_text:
         clean_text = _strip_leaked_reasoning(_final_text)
         clean_text = _strip_leaked_system_blocks(clean_text)

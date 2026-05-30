@@ -152,11 +152,11 @@ subgraph FABRIC["Capability Fabric -- Layer 2.5 (Resolution + Retrieval + Execut
     subgraph CONTRACT_TYPES["Contract Types (YAML in k1/contracts/)"]
       direction TB
 
-      TOOL_CONTRACTS["Tool Contracts<br/>k1/contracts/tools/*.yaml<br/>---<br/>name: tool.execute.* | tool.read.* | tool.write.* | tool.delete.*<br/>provider_type: MCP | WASM | BRIDGE<br/>required_inputs[], output schema<br/>required_context[], optional_context[]<br/>safety_band_min, cost_per_call, avg_latency_ms<br/>---<br/>15 implemented tools:<br/>tool.execute.send_message, .schedule_event, .set_reminder,<br/>  .run_diagnostic, .create_invitation, .reserve_table,<br/>  .set_thermostat, .order_groceries<br/>tool.read.weather, .contact_lookup, .calendar_events,<br/>  .recipe_search, .note_search<br/>tool.write.build_agent, .save_note"]:::contract
+      TOOL_CONTRACTS["Tool Contracts<br/>k1/contracts/tools/*.yaml<br/>---<br/>name: tool.execute.* | tool.read.* | tool.write.* | tool.delete.*<br/>provider_type: MCP | WASM | BRIDGE<br/>required_inputs[], output schema<br/>required_context[], optional_context[]<br/>prompt_template?, activity_profile?<br/>tool_instructions?, prompt_variables_schema?<br/>safety_band_min, cost_per_call, avg_latency_ms<br/>---<br/>15 implemented tools:<br/>tool.execute.send_message, .schedule_event, .set_reminder,<br/>  .run_diagnostic, .create_invitation, .reserve_table,<br/>  .set_thermostat, .order_groceries<br/>tool.read.weather, .contact_lookup, .calendar_events,<br/>  .recipe_search, .note_search<br/>tool.write.build_agent, .save_note"]:::contract
 
       AGENT_CONTRACTS["Agent Contracts<br/>k1/contracts/agents/*.yaml<br/>---<br/>name: agent.execute.* | agent.spawn.*<br/>prompt_template, tools_granted[]<br/>llm_budget_tokens, max_tool_calls<br/>max_execution_time_ms<br/>template_file reference<br/>---<br/>Known Agents:<br/>memory_writer, curiosity_agent,<br/>reminder_agent, gap_answer_writer,<br/>learning_extractor"]:::contract
 
-      PROMPT_CONTRACTS["Prompt Contracts<br/>k1/contracts/prompts/*.yaml<br/>---<br/>name, version, domain[]<br/>intent_match[] (retrieval triggers)<br/>variables[] (must be filled)<br/>template_file, max_tokens<br/>compatible_agents[], output_format"]:::contract
+      PROMPT_CONTRACTS["Prompt Contracts<br/>k1/contracts/prompts/*.yaml<br/>---<br/>name, version, domain[]<br/>intent_match[] (retrieval triggers)<br/>variables[] (must be filled)<br/>template_file -> k1/prompts/** markdown<br/>compatible_agents[], compatible_tools[], output_format"]:::contract
 
       WORKFLOW_CONTRACTS["Workflow Contracts<br/>k1/contracts/workflows/*.yaml<br/>---<br/>name: workflow.run.*<br/>source_plan_id (from CommittedPlan)<br/>trigger: cron | event | manual<br/>steps[] (frozen DAG)<br/>max_depth: 3, allows_sub_workflows"]:::contract
     end
@@ -272,9 +272,9 @@ subgraph FABRIC["Capability Fabric -- Layer 2.5 (Resolution + Retrieval + Execut
     subgraph PROVIDERS["Provider Implementations"]
       direction TB
 
-      MCP_PROVIDER["MCPProvider (mcp_provider.py)<br/>---<br/>Uses IMCPTransport (NOT Bridge routing)<br/>Direct: tool_call msg -> MCP server -> parse result<br/>---<br/>4 implemented MCP servers:<br/>calendar_mcp_server, weather_mcp_server,<br/>notes_mcp_server, recipes_mcp_server<br/>---<br/>CB per provider_id, timeout: local 10s, remote 15s"]:::provider
+      MCP_PROVIDER["MCPProvider (mcp_provider.py)<br/>---<br/>Uses IMCPTransport (NOT Bridge routing)<br/>Direct: tool_call msg -> MCP server -> parse result<br/>Prompt/profile metadata under reserved __metadata__<br/>---<br/>4 implemented MCP servers:<br/>calendar_mcp_server, weather_mcp_server,<br/>notes_mcp_server, recipes_mcp_server<br/>---<br/>CB per provider_id, timeout: local 10s, remote 15s"]:::provider
 
-      WASM_PROVIDER["WASMProvider (wasm_provider.py)<br/>---<br/>Uses IWASMRuntime (sandboxed computation)<br/>Memory: default 64MB, Timeout: default 5s<br/>No network access (pure computation)<br/>---<br/>2 implemented WASM modules:<br/>date_calc, unit_convert<br/>---<br/>CB per provider_id, timeout: 5s"]:::provider
+      WASM_PROVIDER["WASMProvider (wasm_provider.py)<br/>---<br/>Uses IWASMRuntime (sandboxed computation)<br/>Memory: default 64MB, Timeout: default 5s<br/>No network access (pure computation)<br/>Prompt/profile metadata under reserved __metadata__<br/>---<br/>2 implemented WASM modules:<br/>date_calc, unit_convert<br/>---<br/>CB per provider_id, timeout: 5s"]:::provider
 
       BRIDGE_PROVIDER["BridgeProvider (bridge_provider.py)<br/>---<br/>Uses IBridgePort -> Cross-Kernel Bridge -> K0<br/>Operations: memory.store, memory.recall,<br/>memory.delta, checkpoint, feedback.signal<br/>---<br/>Offline fallback: LOCAL COLD (K1 SQLite)<br/>CB per provider_id, timeout: 10s"]:::provider
 
@@ -293,7 +293,7 @@ subgraph FABRIC["Capability Fabric -- Layer 2.5 (Resolution + Retrieval + Execut
   subgraph CONTEXT_BUILDER_SYSTEM["Subsystem 7: Context Builder"]
     direction TB
 
-    CONTEXT_BUILDER["ContextBuilder (context_builder.py)<br/>SessionState -> ExecutionContext<br/>---<br/>Uses ISessionStateReader (multi-reader, lock-free)<br/>Uses IPromptSystemPort (template resolution)"]:::engine
+    CONTEXT_BUILDER["ContextBuilder (context_builder.py)<br/>SessionState + context_override -> ExecutionContext<br/>---<br/>Uses ISessionStateReader (multi-reader, lock-free)<br/>Uses IPromptSystemPort (template resolution)<br/>Preserves prompt/profile override metadata"]:::engine
 
     subgraph CONTEXT_PIPELINE["6-Step Context Assembly"]
       direction TB
@@ -302,9 +302,9 @@ subgraph FABRIC["Capability Fabric -- Layer 2.5 (Resolution + Retrieval + Execut
 
       CTX_FETCH_STATE["Step 2: Fetch From SessionState<br/>Multi-reader, lock-free reads via ISessionStateReader<br/>Optional missing: skip | Required missing: log warning"]:::step
 
-      CTX_INJECT_PARAMS["Step 3: Inject Request Params<br/>context.params = request.params<br/>context.intent = request.intent"]:::step
+      CTX_INJECT_PARAMS["Step 3: Inject Request Params<br/>context.params = request.params<br/>context_override preserved as metadata section"]:::step
 
-      CTX_RESOLVE_PROMPT["Step 4: Resolve Prompt Template + Schema Hint<br/>Via IPromptSystemPort: resolve -> version -> inject -> compile<br/>---<br/>Schema Hint Injection (ORCH-15):<br/>If request.schema_hint != null: append schema guidance<br/>If request.output_schema != null: append format guidance"]:::step
+      CTX_RESOLVE_PROMPT["Step 4: Resolve Prompt Template + Schema Hint<br/>Priority: request.prompt_template -> contract.prompt_template<br/>  -> tool_instructions fallback -> no prompt<br/>Variables: schema defaults + params + context_override.prompt_variables<br/>---<br/>Schema Hint Injection (ORCH-15):<br/>If request.schema_hint != null: append schema guidance<br/>If request.output_schema != null: append format guidance"]:::step
 
       CTX_APPLY_BUDGET["Step 5: Apply Token Budget<br/>Ceiling: 128K tokens (FAB-08)<br/>---<br/>Compression strategy if > 80%:<br/>1. Drop optional_context<br/>2. Truncate history (keep last 3)<br/>3. Summarize beliefs<br/>4. Emergency: drop WARM, keep only HOT"]:::step
 
@@ -616,7 +616,7 @@ subgraph TOUCHPOINTS["External Touchpoints (Fabric Interfaces)"]
     direction TB
 
     PROMPT_SYSTEM["Prompt System (Unified Entry Point)"]:::engine
-    PROMPT_TEMPLATE_STORE["Template Store<br/>k1/prompts/core/ + agents/"]:::registry
+    PROMPT_TEMPLATE_STORE["Template Store<br/>k1/prompts/activities/ + domain dirs<br/>---<br/>External markdown loaded by PromptSystemProdAdapter"]:::registry
     PROMPT_RESOLVER["Resolver + Version Controller"]:::engine
     PROMPT_VARIABLE_INJECTOR["Variable Injector<br/>SessionState -> Template Vars"]:::engine
     PROMPT_COMPILER["Prompt Compiler<br/>Template + Context -> Final Prompt"]:::engine
@@ -763,8 +763,8 @@ CTX_RESOLVE_PROMPT -->|"IPromptSystemPort"| PROMPT_SYSTEM
 
 %% Execute via CB (step 5)
 CAPABILITY_FABRIC -->|"5. execute via CB + provider"| PROVIDER_INTERFACE
-PROVIDER_INTERFACE -->|"MCP"| MCP_PROVIDER
-PROVIDER_INTERFACE -->|"WASM"| WASM_PROVIDER
+PROVIDER_INTERFACE -->|"MCP + __metadata__"| MCP_PROVIDER
+PROVIDER_INTERFACE -->|"WASM + __metadata__"| WASM_PROVIDER
 PROVIDER_INTERFACE -->|"Bridge"| BRIDGE_PROVIDER
 PROVIDER_INTERFACE -->|"Agent"| AGENT_PROVIDER
 PROVIDER_INTERFACE -->|"Workflow"| WORKFLOW_PROVIDER

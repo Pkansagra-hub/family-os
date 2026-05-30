@@ -34,9 +34,14 @@ flowchart TB
 %%
 %% TIER INVOLVEMENT:
 %%   LOW    -> NO  (Concierge uses LLM tool loop; action tools invoke_capability/spawn_via_fabric/execute_workflow route to Fabric)
-%%   MEDIUM -> YES (TaskEnvelope, 1-2 Fabric calls, no planning)
+%%   MEDIUM -> YES (TaskEnvelope, 1-2 Fabric calls, no planning; capability names must already be exact)
 %%   HIGH   -> YES (TaskEnvelope -> PlanRequest -> CommittedPlan -> DAG execution)
 %%   CRISIS -> NO  (Safety Agent handles immediately)
+%%
+%% M6 DIRECT-DISPATCH BINDING:
+%%   Conversational or guessed MEDIUM candidates are bound/degraded upstream in
+%%   Concierge Back before direct Fabric or Orchestrator dispatch. Orchestrator
+%%   does not infer, replace, or discover capability names in _dispatch_medium().
 %%
 %% MESSAGE ENVELOPES:
 %%   TaskEnvelope      : Concierge DISPATCHING -> Orchestrator Mailbox
@@ -324,7 +329,7 @@ subgraph ORCHESTRATOR["Orchestrator -- Adaptive Blind DAG Executor (L2 Pure Dete
 
     SVC_DAG["DAGExecutor<br/>execute(CommittedPlan) -> AggregatedResult<br/>build_waves(steps[], deps) -> Wave[]<br/>execute_wave(wave, ctx) -> WaveResult<br/>resolve_params(params, results) -> ResolvedParams<br/>evaluate_conditions(step, deps, results) -> bool (ORCH-16)<br/>validate_output(result, schema) -> SchemaResult (ORCH-15)<br/>check_quality(result) -> QualityDecision<br/>check_discoveries(wave_results) -> Discovery[] (ORCH-13)<br/>cancel_dependents(failed_step, deps) -> CancelledSteps<br/>compensate(completed_with_effects[]) -> CompensationResult<br/>---<br/>Adaptive topological walk: schema guard, conditional edges,<br/>quality gate, token budget, micro-replan, retry, saga.<br/>~120 tests"]:::service
 
-    SVC_STEP["StepRunner<br/>run(step, context, attempt) -> CapabilityResult<br/>retry(step, last_result, attempt) -> CapabilityResult<br/>retry_with_schema_hint(step, schema) -> CapabilityResult<br/>retry_with_quality_hint(step) -> CapabilityResult<br/>should_retry(result) -> bool<br/>build_request(step, resolved_params) -> CapabilityRequest<br/>---<br/>Single step execution with retry policy.<br/>Schema retry + quality retry (separate budgets).<br/>Uses IFabricGatewayPort.execute() per step.<br/>~55 tests"]:::service
+    SVC_STEP["StepRunner<br/>run(step, context, attempt) -> CapabilityResult<br/>retry(step, last_result, attempt) -> CapabilityResult<br/>retry_with_schema_hint(step, schema) -> CapabilityResult<br/>retry_with_quality_hint(step) -> CapabilityResult<br/>should_retry(result) -> bool<br/>build_request(step, resolved_params) -> CapabilityRequest<br/>---<br/>Single step execution with retry policy.<br/>Forwards activity_profile via context_override.<br/>Schema retry + quality retry (separate budgets).<br/>Uses IFabricGatewayPort.execute() per step.<br/>~55 tests"]:::service
 
     SVC_CONSTRAINT["ConstraintResolver<br/>validate(CommittedPlan) -> ValidationResult<br/>check_capabilities(steps[]) -> CapabilityCheck[]<br/>find_alternatives(missing_cap) -> Alternative[]<br/>resolve_cycle(cycle_num, issues[]) -> ResolutionResult<br/>trigger_hil(unresolved[]) -> HILRequest<br/>receive_hil_response(FallbackResponse) -> ResolutionResult<br/>---<br/>Max 3 cycles. Fabric-aware. HIL fallback.<br/>Fallback response via k1.hil.fallback_response.v1<br/>~40 tests"]:::service
 

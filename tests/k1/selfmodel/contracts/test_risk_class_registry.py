@@ -10,6 +10,7 @@ from k1.selfmodel.contracts.policy import RiskClass
 from k1.selfmodel.contracts.risk_class_registry import (
     RISK_CLASS_BY_TOOL,
     get_risk_class,
+    lookup_tool_risk,
     register_tool_risk,
     reset_unknown_warnings,
 )
@@ -26,6 +27,15 @@ def test_known_concierge_tools_have_declared_risk() -> None:
 @pytest.mark.parametrize("name", sorted(RISK_CLASS_BY_TOOL))
 def test_get_risk_class_returns_declared_value(name: str) -> None:
     assert get_risk_class(name) == RISK_CLASS_BY_TOOL[name]
+
+
+def test_canonical_fabric_prefixes_fall_back_to_legacy_names_without_warning(caplog) -> None:
+    reset_unknown_warnings()
+    with caplog.at_level(logging.WARNING, logger="k1.selfmodel.contracts.risk_class_registry"):
+        assert get_risk_class("tool.read.tasks.list_tasks") == RiskClass.LOW
+        assert get_risk_class("tool.execute.tasks.create_task") == RiskClass.MEDIUM
+    assert not [r for r in caplog.records if "tool.read.tasks.list_tasks" in r.getMessage()]
+    assert lookup_tool_risk("tool.read.tasks.list_tasks") == RiskClass.LOW
 
 
 def test_unknown_tool_defaults_fail_open_with_one_warning(caplog) -> None:

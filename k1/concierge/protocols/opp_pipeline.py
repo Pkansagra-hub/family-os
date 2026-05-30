@@ -349,6 +349,7 @@ class OppPipeline:
         active_domains: list[str] | None = None,
         active_user_id: str = "",
         active_user_name: str = "",
+        has_inflight_tasks: bool = False,
     ) -> PromptEnrichment:
         """Enrich prompt context with compressed history and dynamic identity.
 
@@ -411,6 +412,7 @@ class OppPipeline:
                     domain=(active_domains or [""])[0] if active_domains else "",
                     user_id=active_user_id,
                     user_name=active_user_name,
+                    has_inflight_tasks=has_inflight_tasks,
                 )
                 if hasattr(snapshot, "to_prompt_block"):
                     result.identity_block = snapshot.to_prompt_block()
@@ -456,7 +458,10 @@ class OppPipeline:
             return LlmParamOverrides()
 
         try:
-            from k1.concierge.prompt.affect import AFFECT_MODIFIERS, apply_affect_hard_constraints
+            from k1.concierge.prompt.affect import (
+                AFFECT_MODIFIERS,
+                apply_affect_hard_constraints,
+            )
 
             modifiers = AFFECT_MODIFIERS.get(affect_band)
             if modifiers is None:
@@ -754,7 +759,10 @@ class OppPipeline:
             return PacingResult()
 
         try:
-            from k1.concierge.protocols.weave_policy import PacingStrategy, compute_pacing_plan
+            from k1.concierge.protocols.weave_policy import (
+                PacingStrategy,
+                compute_pacing_plan,
+            )
 
             # Choose strategy based on batch size
             if batch_count >= 4:

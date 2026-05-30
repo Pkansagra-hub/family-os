@@ -44,34 +44,207 @@ from k1.concierge.task.parallel_safety import classify_tool_batch
 from k1.concierge.tools.dispatcher import ToolDispatcher, hash_tool_arguments
 from k1.concierge.tools.recovery_contract import ask_human_recovery_from_tool_data
 from k1.concierge.tools.result_protocol import ToolResult
+from k1.diagnostics.prompt_dumps import (
+    PROMPT_DUMP_ROOT,
+    prompt_dump_dir,
+    prompt_dump_segment,
+)
 from k1.model_hub.ports import IModelHubPort
 from k1.model_hub.types import (
     CapabilityType,
     ChatPayload,
     ChatResult,
-)
-from k1.model_hub.types import FinishReason as K1FinishReason
-from k1.model_hub.types import (
     HubChunk,
     HubRequest,
     HubResponse,
-)
-from k1.model_hub.types import Message as K1Message
-from k1.model_hub.types import (
     ReasonResult,
     RequestConstraints,
     ResponseMetadata,
     StructuredResult,
     TokenUsage,
     ToolCallPayload,
-)
-from k1.model_hub.types import ToolCallResult as K1ToolCallResult
-from k1.model_hub.types import (
     ToolCallResultSet,
 )
+from k1.model_hub.types import FinishReason as K1FinishReason
+from k1.model_hub.types import Message as K1Message
+from k1.model_hub.types import ToolCallResult as K1ToolCallResult
 from k1.model_hub.types import ToolDefinition as K1ToolDefinition
 
 logger = logging.getLogger(__name__)
+
+_PROMPT_DUMP_DIR = PROMPT_DUMP_ROOT
+
+
+def _dump_k1_message(message: K1Message) -> dict[str, Any]:
+    """Serialize a hub-canonical message for prompt/request probes."""
+    payload: dict[str, Any] = {
+        "role": message.role,
+        "content": message.content,
+    }
+    if message.tool_call_id:
+        payload["tool_call_id"] = message.tool_call_id
+    if message.name:
+        payload["name"] = message.name
+    if message.tool_calls:
+        payload["tool_calls"] = [
+            {
+                "id": call.id,
+                "name": call.name,
+                "arguments": call.arguments,
+            }
+            for call in message.tool_calls
+        ]
+    return payload
+
+
+def _dump_k1_tool(tool: K1ToolDefinition) -> dict[str, Any]:
+    """Serialize a hub-canonical tool definition for prompt/request probes."""
+    return {
+        "name": tool.name,
+        "description": tool.description,
+        "parameters": tool.parameters,
+    }
+
+
+def _dump_hub_payload(payload: Any) -> dict[str, Any]:
+    """Serialize the HubRequest payload sent to Model Hub."""
+    if isinstance(payload, ToolCallPayload):
+        return {
+            "type": "ToolCallPayload",
+            "system_prompt": payload.system_prompt or "",
+            "messages": [_dump_k1_message(message) for message in payload.messages],
+            "tools": [_dump_k1_tool(tool) for tool in payload.tools],
+            "tool_choice": payload.tool_choice,
+            "parallel_tool_calls": payload.parallel_tool_calls,
+        }
+    if isinstance(payload, ChatPayload):
+        return {
+            "type": "ChatPayload",
+            "system_prompt": payload.system_prompt or "",
+            "messages": [_dump_k1_message(message) for message in payload.messages],
+        }
+    return {"type": type(payload).__name__, "repr": repr(payload)}
+
+
+def _provider_mapping_preview(payload: Any) -> dict[str, Any]:
+    """Describe how the hub payload maps into Gemini/Vertex fields."""
+    preview = {
+        "provider_family": "vertex/google-genai",
+        "system_prompt": "GenerateContentConfig.system_instruction",
+        "messages": "client.models.generate_content(..., contents=[...])",
+        "max_tokens": "GenerateContentConfig.max_output_tokens",
+        "temperature": "GenerateContentConfig.temperature",
+    }
+    if isinstance(payload, ToolCallPayload):
+        preview.update(
+            {
+                "tools": "GenerateContentConfig.tools[].function_declarations",
+                "tool_choice": "GenerateContentConfig.tool_config.function_calling_config",
+            }
+        )
+    return preview
+
+
+def _resolve_reasoning_effort(actor: str, override: str | None) -> str | None:
+    if override is None:
+        return None
+    if override != "auto":
+        return override
+    if actor == "back":
+        return "medium"
+    if actor == "front":
+        return "low"
+    return None
+
+
+def _write_llm_request_dump(
+    *,
+    actor: str,
+    scenario: str,
+    iteration: int,
+    request: HubRequest,
+    use_streaming: bool,
+    force_text: bool,
+) -> None:
+    """Persist the exact HubRequest before it reaches Model Hub."""
+    if actor not in {"front", "back"}:
+        return
+    try:
+        dump_dir = prompt_dump_dir(
+            _PROMPT_DUMP_DIR,
+            session_id=request.session_id,
+            actor=actor,
+        )
+        dump_dir.mkdir(parents=True, exist_ok=True)
+        timestamp_ms = int(time.time() * 1000)
+        payload = {
+            "timestamp_ms": timestamp_ms,
+            "actor": actor,
+            "scenario": scenario,
+            "iteration": iteration,
+            "trace_id": request.trace_id,
+            "request_id": request.request_id,
+            "session_id": request.session_id,
+            "capability": request.capability.value,
+            "use_streaming": use_streaming,
+            "force_text": force_text,
+            "constraints": {
+                "max_tokens": request.constraints.max_tokens,
+                "timeout_ms": request.constraints.timeout_ms,
+                "priority": request.constraints.priority.value,
+                "temperature": request.constraints.temperature,
+                "provider_preference": request.constraints.provider_preference,
+                "consumer_id": request.constraints.consumer_id,
+                "reasoning_effort": request.constraints.reasoning_effort,
+            },
+            "payload": _dump_hub_payload(request.payload),
+            "provider_mapping_preview": _provider_mapping_preview(request.payload),
+        }
+        trace_slug = prompt_dump_segment(request.trace_id or actor, default=actor)
+        stem = f"{actor}_llm_request_iter{iteration}_{trace_slug}_{timestamp_ms}"
+        stamped_path = dump_dir / f"{stem}.json"
+        latest_path = dump_dir / f"{actor}_llm_request_latest.json"
+        serialized = json.dumps(payload, ensure_ascii=False, indent=2)
+        stamped_path.write_text(serialized, encoding="utf-8")
+        latest_path.write_text(serialized, encoding="utf-8")
+        if actor == "front" and iteration == 0:
+            first_stem = f"front_llm_first_call_{trace_slug}_{timestamp_ms}"
+            (dump_dir / f"{first_stem}.json").write_text(serialized, encoding="utf-8")
+            (dump_dir / "front_llm_first_call_latest.json").write_text(
+                serialized,
+                encoding="utf-8",
+            )
+        logger.info(
+            "react_loop: %s LLM request dump written iter=%d file=%s latest=%s",
+            actor,
+            iteration,
+            stamped_path,
+            latest_path,
+        )
+    except Exception:
+        logger.warning("react_loop: LLM request dump failed", exc_info=True)
+
+
+def _write_front_llm_first_call_dump(
+    *,
+    actor: str,
+    scenario: str,
+    iteration: int,
+    request: HubRequest,
+    use_streaming: bool,
+    force_text: bool,
+) -> None:
+    """Compatibility wrapper for the original first-Front probe."""
+    if actor != "front" or iteration != 0:
+        return
+    _write_llm_request_dump(
+        actor=actor,
+        scenario=scenario,
+        iteration=iteration,
+        request=request,
+        use_streaming=use_streaming,
+        force_text=force_text,
+    )
 
 
 # =========================================================================
@@ -172,6 +345,8 @@ def _unwrap_chunk(hub_chunk: HubChunk) -> StreamChunk:
         tool_calls = hub_chunk.tool_calls or []
         if tool_calls:
             result: Any = ToolCallResultSet(text=hub_chunk.content, tool_calls=tool_calls)
+        elif hub_chunk.thought:
+            result = ReasonResult(text=hub_chunk.content, thinking=hub_chunk.thought)
         else:
             result = ChatResult(text=hub_chunk.content)
         metadata = hub_chunk.metadata
@@ -192,6 +367,9 @@ def _unwrap_chunk(hub_chunk: HubChunk) -> StreamChunk:
             )
         hub_resp = HubResponse(result=result, metadata=metadata)
         return StreamChunk(chunk_type="done", response=_unwrap_response(hub_resp))
+
+    if hub_chunk.thought:
+        return StreamChunk(chunk_type="thought_delta", thought_text=hub_chunk.thought)
 
     if hub_chunk.tool_calls:
         tc = hub_chunk.tool_calls[0]
@@ -275,9 +453,9 @@ class ReactResult:
                             Back: submit_result(result_type="complete") called.
       - "suspended":        Back only: submit_result(result_type="needs_human").
                             HITL pending.
-      - "cancelled":        cancellation_check() returned True between iterations.
-      - "budget_exhausted": max_iterations reached without termination.
-            - "loop_degenerate":  repeated loop pattern triggered terminal guard.
+            - "cancelled":        cancellation_check() returned True between iterations.
+            - "budget_exhausted": max_iterations reached without termination.
+            - "loop_degenerate":  empty/malformed output triggered terminal guard.
             - "missing_submit_result": Back exhausted without submit_result.
     """
 
@@ -352,6 +530,23 @@ def _has_discovery_candidates(payload: dict[str, Any]) -> bool:
     return (isinstance(count, int) and count > 0) or bool(capabilities)
 
 
+def _authority_payload_succeeded(payload: dict[str, Any]) -> bool:
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    if payload.get("error") or data.get("error"):
+        return False
+    status = str(data.get("status") or "").lower()
+    if status in {"error", "failed", "failure"}:
+        return False
+    total = data.get("total")
+    succeeded = data.get("succeeded")
+    failed = data.get("failed")
+    if isinstance(total, int) and total > 0:
+        return isinstance(succeeded, int) and succeeded > 0
+    if isinstance(failed, int) and failed > 0 and not succeeded:
+        return False
+    return True
+
+
 def _seed_back_capability_state(messages: list[ModelMessage]) -> tuple[bool, bool]:
     candidates_seen = False
     authority_attempted = False
@@ -364,7 +559,9 @@ def _seed_back_capability_state(messages: list[ModelMessage]) -> tuple[bool, boo
                 _json_object(message.content)
             )
         elif name in _BACK_AUTHORITY_TOOL_NAMES:
-            authority_attempted = True
+            authority_attempted = authority_attempted or _authority_payload_succeeded(
+                _json_object(message.content)
+            )
     return candidates_seen, authority_attempted
 
 
@@ -384,6 +581,13 @@ class _CollectionMutationPlan:
     output_field: str
     id_param: str
     record_id_field: str = "id"
+
+
+@dataclass(frozen=True)
+class _CollectionReadPlan:
+    adapter: str
+    read_capability: str
+    output_field: str
 
 
 @dataclass(frozen=True)
@@ -534,6 +738,39 @@ def _build_collection_mutation_plans(
     return plans
 
 
+def _build_collection_read_plans(
+    discovery_payloads: list[dict[str, Any]],
+) -> list[_CollectionReadPlan]:
+    capabilities = _discovered_capabilities(discovery_payloads)
+    reads_by_adapter: dict[str, dict[str, Any]] = {}
+
+    for capability in capabilities:
+        adapter = _adapter_key(capability)
+        if not adapter:
+            continue
+        kinds = _capability_kinds(capability)
+        output_fields = _array_output_fields(capability)
+        if "read" not in kinds or _required_input_names(capability) or not output_fields:
+            continue
+        current = reads_by_adapter.get(adapter)
+        if current is None or _score(capability) > _score(current):
+            reads_by_adapter[adapter] = capability
+
+    plans: list[_CollectionReadPlan] = []
+    for adapter, read in reads_by_adapter.items():
+        output_fields = _array_output_fields(read)
+        if not output_fields:
+            continue
+        plans.append(
+            _CollectionReadPlan(
+                adapter=adapter,
+                read_capability=str(read.get("name") or ""),
+                output_field=output_fields[0],
+            )
+        )
+    return plans
+
+
 def _records_from_list_result(result: ToolResult, output_field: str) -> list[dict[str, Any]]:
     if not result.is_ok():
         return []
@@ -567,6 +804,83 @@ def _collection_plan_answer(plan_results: list[dict[str, Any]]) -> str:
     if failed:
         return f"Processed {succeeded} of {total} {label}; {failed} failed."
     return f"Processed {succeeded} {label}."
+
+
+def _collection_read_answer(plan_results: list[dict[str, Any]]) -> str:
+    total = sum(int(result.get("count", 0)) for result in plan_results)
+    failed = sum(1 for result in plan_results if result.get("status") != "success")
+    labels = sorted({str(result.get("adapter") or "records") for result in plan_results})
+    label = ", ".join(labels) if labels else "records"
+    if failed:
+        return f"Fetched live {label}; {failed} read request(s) failed."
+    if total == 0:
+        return f"No matching live {label} were found."
+    return f"Fetched {total} live {label}."
+
+
+async def _execute_collection_read_plan(
+    *,
+    discovery_payloads: list[dict[str, Any]],
+    tool_dispatcher: ToolDispatcher,
+    messages: list[ModelMessage],
+    trace_id: str,
+) -> _ContractPlanExecution | None:
+    plans = _build_collection_read_plans(discovery_payloads)
+    if not plans:
+        return None
+
+    tool_calls = 0
+    plan_results: list[dict[str, Any]] = []
+    for plan in plans[:4]:
+        read_call = ToolCallResult(
+            id=f"kernel-plan-read-{uuid.uuid4().hex[:8]}",
+            name="invoke_capability",
+            arguments={"capability_name": plan.read_capability, "params": {}},
+        )
+        read_result = await tool_dispatcher.dispatch(read_call)
+        tool_calls += 1
+        messages.append(_tool_result_to_msg(read_call, _result_to_dict(read_result)))
+        records = _records_from_list_result(read_result, plan.output_field)
+        data = read_result.data if isinstance(read_result.data, dict) else {}
+        plan_results.append(
+            {
+                "adapter": plan.adapter.replace("_", " "),
+                "read_capability": plan.read_capability,
+                "output_field": plan.output_field,
+                "status": "success" if read_result.is_ok() else "error",
+                "count": len(records),
+                "result": data.get("result") if isinstance(data.get("result"), dict) else data,
+                "error": read_result.error or "",
+            }
+        )
+
+    submit_args = {
+        "result_type": "complete",
+        "final_answer": _collection_read_answer(plan_results),
+        "results": plan_results,
+        "artifacts_created": [],
+    }
+    submit_call = ToolCallResult(
+        id=f"kernel-plan-submit-{uuid.uuid4().hex[:8]}",
+        name="submit_result",
+        arguments=submit_args,
+    )
+    submit_result = await tool_dispatcher.dispatch(submit_call)
+    tool_calls += 1
+    messages.append(_tool_result_to_msg(submit_call, _result_to_dict(submit_result)))
+    if submit_result.is_error():
+        logger.warning(
+            "react_loop: contract read plan submit failed error=%s trace=%s",
+            submit_result.error,
+            trace_id[:8] if trace_id else "",
+        )
+        return None
+    logger.info(
+        "react_loop: contract read plan executed plans=%d trace=%s",
+        len(plan_results),
+        trace_id[:8] if trace_id else "",
+    )
+    return _ContractPlanExecution(submit_args=submit_args, tool_calls=tool_calls)
 
 
 async def _execute_collection_mutation_plan(
@@ -691,6 +1005,18 @@ async def _streaming_generate(
     Falls back to model.execute() if stream_execute() is not available
     or raises an error.
     """
+
+    async def _execute_fallback() -> ConciergeModelResponse:
+        fallback_response = _unwrap_response(await model.execute(request))
+        if fallback_response.thought_text:
+            await on_stream(
+                StreamChunk(
+                    chunk_type="thought_delta",
+                    thought_text=fallback_response.thought_text,
+                )
+            )
+        return fallback_response
+
     try:
         response: ConciergeModelResponse | None = None
         async for hub_chunk in model.stream_execute(request):
@@ -702,16 +1028,16 @@ async def _streaming_generate(
 
         if response is None:
             logger.warning("stream_execute ended without done chunk, falling back")
-            return _unwrap_response(await model.execute(request))
+            return await _execute_fallback()
 
         return response
 
     except (NotImplementedError, AttributeError):
         logger.info("stream_execute not available, falling back to execute()")
-        return _unwrap_response(await model.execute(request))
+        return await _execute_fallback()
     except Exception as exc:
         logger.warning("stream_execute failed (%s), falling back to execute()", exc)
-        return _unwrap_response(await model.execute(request))
+        return await _execute_fallback()
 
 
 # =========================================================================
@@ -730,12 +1056,14 @@ async def react_loop(
     on_text_response: Callable[[str], Awaitable[None]],
     cancellation_check: Callable[[], Awaitable[bool]],
     trace_id: str = "",
+    session_id: str = "",
     scenario: str = "",
     validator: LLMOutputValidator | None = None,
     on_stream: Callable[[StreamChunk], Awaitable[None]] | None = None,
     control_queue: asyncio.Queue[BackControlEvent] | None = None,
     completed_tool_call_ids: set[str] | None = None,
     completed_tool_arg_keys: set[str] | None = None,
+    reasoning_effort: str | None = "auto",
 ) -> ReactResult:
     """Shared ReAct loop for both Front and Back actors.
 
@@ -763,6 +1091,7 @@ async def react_loop(
             compatibility. front_handler calls it after task dispatches.
         cancellation_check: Check if task/turn is cancelled.
         trace_id: End-to-end trace ID for observability.
+        session_id: Session scope for prompt/request diagnostics.
         scenario: Mode/scenario label for observability.
 
     Returns:
@@ -788,8 +1117,10 @@ async def react_loop(
     _loop_events: list[dict[str, Any]] = []
     _completed_tool_call_ids = set(completed_tool_call_ids or set())
     _completed_tool_arg_keys = set(completed_tool_arg_keys or set())
+    _request_reasoning_effort = _resolve_reasoning_effort(actor, reasoning_effort)
     _retryable_error_counts: dict[str, int] = {}
-    _repeated_tool_counts: dict[str, int] = {}
+    _tool_name_counts: dict[str, int] = {}  # name-only spin guard (Front)
+    _back_capability_spin_nudge_sent = False
     _empty_response_count = 0
     _invalid_schema_count = 0
     effective_max_iterations = max_iterations
@@ -849,11 +1180,33 @@ async def react_loop(
             "not allowed",
             "budget exhausted",
             "invalid arguments",
+            "capability_binding_",
+            "batch_invoke_all_failed",
             "side-effect tools blocked",
             "submit_result(complete) rejected",
             "needs_human_without_authority_attempt",
         )
         return bool(error) and not any(marker in error for marker in terminal)
+
+    def _capability_binding_repair_message(result: ToolResult) -> str:
+        data = result.data if isinstance(result.data, dict) else {}
+        candidates = data.get("candidates") or []
+        names = [
+            str(candidate.get("name") or "")
+            for candidate in candidates
+            if isinstance(candidate, dict) and candidate.get("name")
+        ]
+        recovery = data.get("recovery") if isinstance(data.get("recovery"), dict) else {}
+        rejected = str(recovery.get("rejected_name") or "") if recovery else ""
+        rejected_text = f" Rejected name: {rejected}." if rejected else ""
+        candidate_text = ", ".join(names[:8]) if names else "none returned"
+        return (
+            "The last capability invocation failed during registry binding."
+            f"{rejected_text} Do not retry the same capability name with the "
+            "same parameters. Use an exact capability name from the registry "
+            f"candidates if one fits: {candidate_text}. If no candidate fits, "
+            "call submit_result with result_type='needs_human'."
+        )
 
     def _control_message(event: BackControlEvent) -> ModelMessage:
         payload = event.to_dict()
@@ -875,8 +1228,9 @@ async def react_loop(
                     "Discovery returned viable capability candidates, but you have not "
                     "invoked an authority capability yet. Inspect the discovered schemas "
                     "and call invoke_capability or batch_invoke_capabilities with the "
-                    "exact registry-owned name. Ask the user only if every candidate is "
-                    "unsuitable or required inputs are missing."
+                    "exact registry-owned name. Do NOT call discover_capabilities or "
+                    "recall_memory again for the same task. Ask the user only if every "
+                    "candidate is unsuitable or required inputs are missing."
                 )
             return (
                 "Discovery returned no viable capability candidates for this live or "
@@ -1140,14 +1494,28 @@ async def react_loop(
             capability=_cap,
             payload=_payload,
             constraints=RequestConstraints(
-                max_tokens=65536,
+                max_tokens=65535,
                 consumer_id=f"concierge.{actor}",
+                reasoning_effort=_request_reasoning_effort,
             ),
             trace_id=trace_id or f"concierge-{actor}-{iteration}",
+            session_id=session_id,
         )
 
-        # ---- LLM CALL (streaming on all Front iterations when on_stream provided) ----
-        use_streaming = on_stream is not None and actor == "front" and not force_text
+        # ---- LLM CALL (streaming whenever a stream sink is provided) ----
+        # Front's final answer is usually force_text=True, so streaming must
+        # stay enabled for CHAT requests too; otherwise the user sees the
+        # reasoning and final text arrive as one lump.
+        use_streaming = on_stream is not None
+
+        _write_llm_request_dump(
+            actor=actor,
+            scenario=scenario,
+            iteration=iteration,
+            request=request,
+            use_streaming=use_streaming,
+            force_text=force_text,
+        )
 
         try:
             if use_streaming:
@@ -1162,6 +1530,13 @@ async def react_loop(
                         timeout=_iter_timeout_s,
                     )
                 )
+                if response.thought_text and on_stream is not None:
+                    await on_stream(
+                        StreamChunk(
+                            chunk_type="thought_delta",
+                            thought_text=response.thought_text,
+                        )
+                    )
         except asyncio.TimeoutError:
             logger.error(
                 "react_loop: LLM call TIMED OUT on iter=%d actor=%s "
@@ -1282,16 +1657,24 @@ async def react_loop(
                 iteration,
             )
             if iteration < effective_max_iterations - 1:
+                if actor == "back":
+                    malformed_nudge = (
+                        "Your previous function call had invalid JSON and was rejected before "
+                        "execution. Retry the next appropriate tool call with valid JSON. If you "
+                        "were invoking capabilities, use the exact discovered capability names and "
+                        "simple JSON arguments. Do not call submit_result until the required "
+                        "capability work has been invoked or a tool result says human input is needed."
+                    )
+                else:
+                    malformed_nudge = (
+                        "Your previous function call had invalid JSON and was rejected before "
+                        "execution. Retry with a simpler valid JSON tool call, or respond directly "
+                        "if no tool is needed."
+                    )
                 messages.append(
                     ModelMessage(
                         role="user",
-                        content=(
-                            "Your function call had invalid JSON and was rejected. "
-                            "Call submit_result now. Keep the results array simple: "
-                            "use plain strings instead of nested objects. "
-                            "Summarize each web result as a single string like "
-                            "'Title - URL - Snippet'."
-                        ),
+                        content=malformed_nudge,
                     )
                 )
                 logger.info(
@@ -1328,16 +1711,45 @@ async def react_loop(
                 # return empty output. Forcing text-only on the retry
                 # guarantees we get a real answer.
                 if iteration < effective_max_iterations - 1:
+                    # Context-aware nudge: HITL_RELAY / hitl_resolve / weave
+                    # modes never call tools, so the "synthesize from tools
+                    # above" wording confuses the model and we get a second
+                    # empty turn. Use a mode-appropriate nudge instead.
+                    scenario_lower = (scenario or "").lower()
+                    if scenario_lower == "hitl_resolve":
+                        nudge_text = (
+                            "The user just answered your earlier clarifying "
+                            "question. Acknowledge their answer warmly in ONE "
+                            "short sentence and confirm you are proceeding "
+                            "with that detail. Do NOT call tools. Do NOT "
+                            "include reasoning. Output ONLY the message."
+                        )
+                    elif scenario_lower == "hitl_relay":
+                        nudge_text = (
+                            "A background task needs the user's input. Ask "
+                            "the pending question naturally and briefly in "
+                            "ONE sentence. Do NOT call tools. Do NOT include "
+                            "reasoning. Output ONLY the question."
+                        )
+                    elif scenario_lower in ("weave", "present"):
+                        nudge_text = (
+                            "Respond now in one short, natural user-facing "
+                            "message based on the prior context. Do NOT call "
+                            "tools. Do NOT include reasoning. Output ONLY "
+                            "the message."
+                        )
+                    else:
+                        nudge_text = (
+                            "Now respond directly to the user. Synthesize "
+                            "everything you learned from the tools above "
+                            "into a helpful, natural response. Do NOT call "
+                            "any more tools. Do NOT include your reasoning "
+                            "or analysis -- output ONLY the user-facing message."
+                        )
                     messages.append(
                         ModelMessage(
                             role="user",
-                            content=(
-                                "Now respond directly to the user. Synthesize "
-                                "everything you learned from the tools above "
-                                "into a helpful, natural response. Do NOT call "
-                                "any more tools. Do NOT include your reasoning "
-                                "or analysis -- output ONLY the user-facing message."
-                            ),
+                            content=nudge_text,
                         )
                     )
                     logger.info(
@@ -1471,48 +1883,6 @@ async def react_loop(
 
             # Back termination (L2): submit_result
             if tc.name == "submit_result":
-                if (
-                    actor == "back"
-                    and tc.arguments.get("result_type") == "needs_human"
-                    and _back_capability_candidates_seen
-                    and not _back_authority_tool_attempted
-                ):
-                    plan_execution = await _execute_collection_mutation_plan(
-                        discovery_payloads=_back_discovery_payloads,
-                        tool_dispatcher=tool_dispatcher,
-                        messages=messages,
-                        trace_id=trace_id,
-                    )
-                    if plan_execution is not None:
-                        _sequential_count += plan_execution.tool_calls
-                        _iter_dur = int((time.monotonic() - _iter_start) * 1000)
-                        _iteration_durations.append(_iter_dur)
-                        return _make_result("complete", data=plan_execution.submit_args)
-                    logger.warning(
-                        "react_loop: rejected model-authored needs_human after "
-                        "capability discovery without authority attempt. trace=%s",
-                        trace_id[:8] if trace_id else "",
-                    )
-                    messages.append(
-                        ModelMessage(
-                            role="tool",
-                            content=json.dumps(
-                                {
-                                    "error": "needs_human_without_authority_attempt",
-                                    "hint": (
-                                        "Discovery returned capability candidates. Inspect "
-                                        "their schemas and invoke the appropriate read/write "
-                                        "capabilities. Ask the user only when a tool returns "
-                                        "a structured recovery contract or discovery returns "
-                                        "no viable candidates."
-                                    ),
-                                }
-                            ),
-                            tool_call_id=getattr(tc, "id", None),
-                            name="submit_result",
-                        )
-                    )
-                    break
                 result = await tool_dispatcher.dispatch(tc)
                 if result.status == "error":
                     # Schema validation or execution failed -- feed
@@ -1593,23 +1963,8 @@ async def react_loop(
 
         for idx, (tc, result) in enumerate(paired_results):
             tool_key = _tool_key(tc)
-            _repeated_tool_counts[tool_key] = _repeated_tool_counts.get(tool_key, 0) + 1
-            if _repeated_tool_counts[tool_key] >= 3:
-                _record_loop_event(
-                    "degenerate_loop",
-                    iteration,
-                    {
-                        "reason": "repeated_tool_call",
-                        "tool_name": getattr(tc, "name", ""),
-                        "args_hash": hash_tool_arguments(getattr(tc, "arguments", {}) or {}),
-                    },
-                )
-                _iter_dur = int((time.monotonic() - _iter_start) * 1000)
-                _iteration_durations.append(_iter_dur)
-                return _make_result(
-                    "loop_degenerate",
-                    data={"error_code": "REACT_LOOP_DEGENERATE"},
-                )
+            _tool_name = getattr(tc, "name", "") or ""
+            _tool_name_counts[_tool_name] = _tool_name_counts.get(_tool_name, 0) + 1
             if result.is_ok():
                 call_id = str(getattr(tc, "id", "") or "")
                 if call_id:
@@ -1647,7 +2002,7 @@ async def react_loop(
                     if (isinstance(count, int) and count > 0) or bool(capabilities):
                         _back_capability_candidates_seen = True
                         _back_discovery_payloads.append(data)
-                elif tool_name in _BACK_AUTHORITY_TOOL_NAMES:
+                elif tool_name in _BACK_AUTHORITY_TOOL_NAMES and result.is_ok():
                     _back_authority_tool_attempted = True
 
             # Collect dispatch_task calls (L3)
@@ -1675,6 +2030,14 @@ async def react_loop(
 
             # Append tool result as observation (ReAct pattern)
             messages.append(_tool_result_to_msg(tc, _result_to_dict(result)))
+            if (
+                actor == "back"
+                and result.is_error()
+                and str(result.error or "").startswith("capability_binding_")
+            ):
+                messages.append(
+                    ModelMessage(role="user", content=_capability_binding_repair_message(result))
+                )
 
         if actor == "front" and not dispatched_tasks:
             if context_read_gap_requires_dispatch(paired_results):
@@ -1683,6 +2046,77 @@ async def react_loop(
                     _iter_dur = int((time.monotonic() - _iter_start) * 1000)
                     _iteration_durations.append(_iter_dur)
                     return policy_result
+
+            # Front spin guard: inject a synthesis nudge when recall_memory
+            # has been called 3+ times across iterations without the model
+            # producing a response. Identical completed calls are already
+            # de-duplicated by _is_completed_duplicate(); varied queries need
+            # a name-level nudge rather than a terminal loop kill.
+            _spin_recall = _tool_name_counts.get("recall_memory", 0)
+            if _spin_recall >= 3 and iteration < effective_max_iterations - 2:
+                messages.append(
+                    ModelMessage(
+                        role="user",
+                        content=(
+                            "You have queried memory multiple times and have enough context. "
+                            "Now respond directly to the user using the information above. "
+                            "If the task needs a background action, call dispatch_task once. "
+                            "Do NOT call recall_memory again."
+                        ),
+                    )
+                )
+                logger.info(
+                    "react_loop: front spin guard — recall_memory called %d times "
+                    "without response, injecting synthesis nudge iter=%d trace=%s",
+                    _spin_recall,
+                    iteration,
+                    trace_id[:8] if trace_id else "",
+                )
+                _record_loop_event(
+                    "front_spin_nudge",
+                    iteration,
+                    {"recall_count": _spin_recall},
+                )
+
+        if (
+            actor == "back"
+            and _back_capability_candidates_seen
+            and not _back_authority_tool_attempted
+            and not _back_capability_spin_nudge_sent
+        ):
+            _back_spin_count = (
+                _tool_name_counts.get("discover_capabilities", 0)
+                + _tool_name_counts.get("recall_memory", 0)
+                + _tool_name_counts.get("summarize_context", 0)
+            )
+            if _back_spin_count >= 2 and iteration < effective_max_iterations - 1:
+                messages.append(
+                    ModelMessage(
+                        role="user",
+                        content=(
+                            "You have already discovered viable capability candidates and "
+                            "checked enough context. Do NOT call discover_capabilities, "
+                            "recall_memory, or summarize_context again for this same task. "
+                            "Use invoke_capability or batch_invoke_capabilities with an exact "
+                            "registry-owned capability name and schema-valid params. If a "
+                            "required input is missing, call submit_result with "
+                            "result_type='needs_human' and ask only for that missing detail."
+                        ),
+                    )
+                )
+                _back_capability_spin_nudge_sent = True
+                logger.info(
+                    "react_loop: back capability spin guard — observed %d discovery/context "
+                    "tools without authority invocation, injecting nudge iter=%d trace=%s",
+                    _back_spin_count,
+                    iteration,
+                    trace_id[:8] if trace_id else "",
+                )
+                _record_loop_event(
+                    "back_capability_spin_nudge",
+                    iteration,
+                    {"tool_count": _back_spin_count},
+                )
 
         if actor == "back":
             for _, result in paired_results:
@@ -1758,13 +2192,35 @@ async def react_loop(
         if actor == "front" and any(
             tc.name == "dispatch_task" and result.is_ok() for tc, result in paired_results
         ):
+            # If the model already produced text alongside the dispatch tool
+            # call, surface it immediately. Otherwise, inject a synthesis
+            # nudge and continue the loop so the LLM (not the kernel) crafts
+            # the user-facing acknowledgement. No deterministic ACK text is
+            # ever emitted by the kernel.
+            if last_text_with_tools:
+                logger.info(
+                    "react_loop: front dispatched task(s) on iter=%d -- "
+                    "using mixed-response text from LLM",
+                    iteration,
+                )
+                _iter_dur = int((time.monotonic() - _iter_start) * 1000)
+                _iteration_durations.append(_iter_dur)
+                return _make_result("complete", text=last_text_with_tools)
+            messages.append(
+                ModelMessage(
+                    role="user",
+                    content=(
+                        "You have dispatched the background task. Now write a brief, "
+                        "natural acknowledgement to the user confirming you are working "
+                        "on their request. Do NOT call any more tools. Respond with text only."
+                    ),
+                )
+            )
             logger.info(
-                "react_loop: front dispatched task(s) on iter=%d -- ending turn for ack",
+                "react_loop: front dispatched task(s) on iter=%d -- "
+                "no text yet, looping for LLM ack",
                 iteration,
             )
-            _iter_dur = int((time.monotonic() - _iter_start) * 1000)
-            _iteration_durations.append(_iter_dur)
-            return _make_result("complete", text=last_text_with_tools or "")
 
         # Per-iteration timing for the tool-execution branch
         _iter_dur = int((time.monotonic() - _iter_start) * 1000)

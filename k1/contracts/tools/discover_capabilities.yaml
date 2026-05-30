@@ -30,6 +30,10 @@ tool_contract:
     - "no_state_mutation"
     - "max_top_k_25"
 
+  context_precision:
+    temporal: "anchor"
+    spatial: "hidden"
+
   required_inputs:
     - name: "intent"
       type: "STRING"
@@ -85,6 +89,25 @@ tool_contract:
 
   provider_type: "MCP"
   provider_id: "discover_capabilities_handler"
+  prompt_template: "mcp_generic_activity_v1"
+  activity_profile: "mcp.generic.v1"
+  tool_instructions: >
+    Use this tool only to discover registered capability contracts. Return exact
+    capability names, schema evidence, and safety metadata; do not treat discovery
+    output as authority to execute, grant tools, or bypass validation.
+  prompt_variables_schema:
+    type: "object"
+    properties:
+      intent:
+        type: "string"
+      domain:
+        type: "array"
+        items:
+          type: "string"
+      top_k:
+        type: "number"
+      safety_band:
+        type: "string"
   safety_band_min: "GREEN"
   risk_class: "low"
   cost_per_call: 0.0

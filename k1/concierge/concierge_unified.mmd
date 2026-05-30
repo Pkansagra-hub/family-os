@@ -230,20 +230,13 @@ subgraph CONCIERGE["🧠 Concierge — Conversation Conductor (K1's Only User-Fa
       SIGNAL_LIBRARY["Signal Library<br/>Pronouns/conflicts/multi-entities/time vagueness"]:::engine
     end
 
-    subgraph TIME_RESOLUTION["Temporal Resolution Engine"]
+    subgraph TIME_RESOLUTION["Grounding Signal Extraction"]
       TIME_PARSER["Time Parser<br/>NER TIME/DATE/DURATION → parsed"]:::engine
       TIME_RESOLVER["Time Resolver<br/>Relative → Absolute<br/>'9' → '09:00' or '21:00'?"]:::engine
       TIMEZONE_CONTEXT["Timezone Context<br/>User TZ from device/profile"]:::engine
-      TEMPORAL_ANCHOR["Temporal Anchor<br/>now, today, this_week"]:::engine
     end
 
-    subgraph SPATIAL_RESOLUTION["Spatial Context Engine (ADR-0085/0085a)"]
-      LOCATION_INGRESS["Location Ingress<br/>GPS, BLE, Wi-Fi, IP → raw signal"]:::engine
-      LOCATION_RESOLVER["Location Resolver<br/>Raw coords → semantic place"]:::engine
-      PLACE_REGISTRY["Place Registry<br/>Learned places + geofences"]:::engine
-      MOTION_CLASSIFIER["Motion Classifier<br/>STATIONARY, WALKING, IN_VEHICLE"]:::engine
-      SPATIAL_ANCHOR["Spatial Anchor<br/>current_place, last_transition, dwell_time"]:::engine
-    end
+    SPATIAL_RUNTIME_REF["Spatial/Temporal/Grounding runtime<br/>See architecture_diagrams/k1/temporal_spatial_grounding/"]:::engine
 
     subgraph CONTEXT_INFERENCE["Context Inference & Validation"]
       CTX_INFERENCE["Context Inference<br/>SessionState fill + entity resolution"]:::engine
@@ -335,6 +328,7 @@ subgraph CONCIERGE["🧠 Concierge — Conversation Conductor (K1's Only User-Fa
     direction TB
 
     BACK_HANDLER["BackHandler<br/>ReAct Agent — Precise, tool-focused, no personality<br/>NEVER talks to user, NEVER streams text"]:::back
+    BACK_PROFILE_SELECTOR["BackExecutionProfile Renderer<br/>prompt-contract-backed metadata selection<br/>render bounded operating hints"]:::builder
 
     subgraph BACK_SUBSCRIBES["Subscribes To (4 topics)"]
       direction LR
@@ -362,11 +356,12 @@ subgraph CONCIERGE["🧠 Concierge — Conversation Conductor (K1's Only User-Fa
       subgraph BT_READ["Read (2)"]
         TOOL_RECALL_B["recall_memory()<br/>Task-specific history"]:::tool_read
         TOOL_DISCOVER["discover_capabilities()<br/>Fabric Registry search"]:::tool_read
+        TOOL_BINDER["bind_capability()<br/>Exact registry name or typed degrade"]:::adapter
       end
 
       subgraph BT_ACTION["Action (4) — The Real Work"]
-        TOOL_INVOKE["invoke_capability()<br/>UNIVERSAL EXECUTOR<br/>Any registered Fabric capability"]:::tool_action
-        TOOL_BATCH_INVOKE["batch_invoke_capabilities()<br/>Multi-capability in one call"]:::tool_action
+        TOOL_INVOKE["invoke_capability()<br/>Strict exact Fabric capability"]:::tool_action
+        TOOL_BATCH_INVOKE["batch_invoke_capabilities()<br/>Strict exact Fabric capabilities"]:::tool_action
         TOOL_SPAWN["spawn_via_fabric()<br/>Dynamic specialist agents"]:::tool_action
         TOOL_WORKFLOW["execute_workflow()<br/>Multi-step DAG execution"]:::tool_action
       end
@@ -702,7 +697,7 @@ subgraph CONCIERGE["🧠 Concierge — Conversation Conductor (K1's Only User-Fa
   subgraph TIERS["Complexity Tiers & Task Model"]
     direction TB
 
-    TASK_DISPATCH_TYPE["TaskDispatch: task_id, intents[], tier,<br/>budget_hint, reference_context, safety_band,<br/>depends_on, context_snapshot"]:::task
+    TASK_DISPATCH_TYPE["TaskDispatch: task_id, intents[], tier,<br/>budget_hint, reference_context, safety_band,<br/>depends_on, context_snapshot,<br/>execution_profiles"]:::task
 
     subgraph TIER_PATHS["Tier Routing"]
       LOW_PATH["LOW (<2s): Front → dispatch → Back → invoke → submit<br/>Budget: 4 tool calls, 500 tokens"]:::tier_low
@@ -964,13 +959,9 @@ CONTRACT_SIGNAL_GAPS --> SIGNAL_LIBRARY
 ULTRABERT_NER -->|"TIME/DATE"| TIME_PARSER
 TIME_PARSER --> TIME_RESOLVER
 TIME_RESOLVER --> TIMEZONE_CONTEXT
-TIME_RESOLVER --> TEMPORAL_ANCHOR
 TIME_RESOLVER --> CTX_INFERENCE
-ULTRABERT_NER -->|"LOC"| LOCATION_RESOLVER
-LOCATION_INGRESS --> LOCATION_RESOLVER
-LOCATION_RESOLVER --> PLACE_REGISTRY
-LOCATION_RESOLVER --> SPATIAL_ANCHOR
-MOTION_CLASSIFIER --> SPATIAL_ANCHOR
+ULTRABERT_NER -->|"LOC conversational evidence"| CTX_INFERENCE
+SPATIAL_RUNTIME_REF --> CTX_INFERENCE
 ULTRABERT_NER -->|"entities"| CTX_INFERENCE
 ULTRABERT_RELATIONS --> CTX_INFERENCE
 CTX_INFERENCE --> TINY_SANITY_ARBITER
@@ -982,7 +973,7 @@ ENTROPY_QUESTION_PLANNER -->|"question_plan"| ST_CLARIFY_USER
 ULTRABERT_EMOTIONS --> WRITE_ELISION_GATE
 ULTRABERT_NER --> WRITE_ELISION_GATE
 TIME_RESOLVER --> WRITE_ELISION_GATE
-SPATIAL_ANCHOR --> WRITE_ELISION_GATE
+SPATIAL_RUNTIME_REF --> WRITE_ELISION_GATE
 ULTRABERT_SAFETY --> WRITE_ELISION_GATE
 ULTRABERT_INTENT --> WRITE_ELISION_GATE
 ULTRABERT_INGRESS --> WRITE_ELISION_GATE
@@ -1072,8 +1063,10 @@ ST_DELIVERING -->|"user.ack"| ST_LISTENING
 ST_INTERRUPT -->|"re-classify"| ST_DISPATCHING
 
 %% --- Back Tools → Fabric (via IDispatchPort) ---
-TOOL_INVOKE -->|"dispatch_direct"| PORT_DISPATCH
-TOOL_BATCH_INVOKE -->|"dispatch_direct (batch)"| PORT_DISPATCH
+TOOL_INVOKE -->|"active Back task"| TOOL_BINDER
+TOOL_BATCH_INVOKE -->|"active Back task"| TOOL_BINDER
+TOOL_BINDER -->|"bound exact + prompt/profile context"| PORT_DISPATCH
+TOOL_BINDER -->|"invalid/ambiguous/not_found"| TOOL_SUBMIT
 TOOL_DISCOVER -->|"search"| PORT_DISPATCH
 TOOL_SPAWN -->|"create agent"| PORT_DISPATCH
 TOOL_WORKFLOW -->|"run DAG"| PORT_DISPATCH
@@ -1086,6 +1079,7 @@ PORT_MEMORY -->|"recall"| BRIDGE_CLIENT
 
 %% --- Prompt Assembly ---
 DYN_PROMPT_BUILDER -->|"build context"| FRONT_HANDLER
+BACK_PROFILE_SELECTOR -->|"execution_profile_block"| BACK_PROMPT_BUILDER
 BACK_PROMPT_BUILDER -->|"build context"| BACK_HANDLER
 DYN_PROMPT_BUILDER -.->|"read SS"| PORT_STATE
 DYN_PROMPT_BUILDER -->|"determine_mode"| PROMPT_MODES

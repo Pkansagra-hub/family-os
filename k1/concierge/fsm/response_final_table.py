@@ -62,6 +62,7 @@ def decide_response_final(
     has_active_tasks: bool,
     is_fallback: bool,
     weave_flush_running: bool,
+    pending_hitl: bool = False,
 ) -> ResponseFinalDecision:
     """Pure function: given FSM state + conditions, return the decision.
 
@@ -216,7 +217,12 @@ def decide_response_final(
 
     # -- CLARIFYING_WORKER ---------------------------------------------
     if fsm_state == ConciergeState.CLARIFYING_WORKER:
-        if has_active_tasks:
+        # GAP-HIL-006 -- the FSM must STAY whenever HIL state is still
+        # pending, even if the original worker task has already exited
+        # (e.g. needs_human resolved by HumanInTheLoopService before the
+        # response.final arrived). Keying STAY on active tasks alone
+        # collapsed the turn before the user could answer.
+        if pending_hitl or has_active_tasks:
             # Branch 11: HITL question delivered; stay open for the user's answer.
             return ResponseFinalDecision(
                 action=ResponseFinalAction.STAY,

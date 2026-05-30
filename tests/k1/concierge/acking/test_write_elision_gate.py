@@ -17,7 +17,14 @@ def test_neutral_backchannel_elides_optional_sections() -> None:
 
     assert decision.write_safety_band is True
     assert decision.write_temporal is True
-    assert {"intents", "beliefs", "affect"}.issubset(decision.elided_sections)
+    # M5 G3: neutral backchannel must elide every optional section. Safety
+    # band and temporal anchor stay unconditional; only `control`,
+    # `intents`, `beliefs`, and `affect` get elided.
+    assert decision.elided_sections == {"control", "intents", "beliefs", "affect"}
+    assert decision.write_control is False
+    assert decision.write_intents is False
+    assert decision.write_beliefs is False
+    assert decision.write_affect is False
 
 
 def test_task_request_with_beliefs_writes_semantic_sections() -> None:

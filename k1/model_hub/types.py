@@ -88,6 +88,7 @@ class FinishReason(str, Enum):
     LENGTH = "length"
     ERROR = "error"
     SAFETY = "safety"
+    MALFORMED_TOOL_CALL = "malformed_tool_call"
 
 
 class HealthStatus(str, Enum):
@@ -253,7 +254,7 @@ class RequestConstraints:
       REALTIME=10000, INTERACTIVE=30000, BACKGROUND=60000.
     """
 
-    max_tokens: int = 65536
+    max_tokens: int = 65535
     timeout_ms: int = 30000
     priority: Priority = Priority.INTERACTIVE
     temperature: float = 0.7
@@ -261,6 +262,7 @@ class RequestConstraints:
     provider_preference: Optional[str] = None
     cost_limit: Optional[float] = None
     consumer_id: str = ""
+    reasoning_effort: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.max_tokens <= 0:
@@ -270,6 +272,15 @@ class RequestConstraints:
         if not 0.0 <= self.temperature <= 2.0:
             raise ValueError(
                 f"RequestConstraints.temperature must be in [0.0, 2.0], got {self.temperature}"
+            )
+        if self.reasoning_effort is not None and self.reasoning_effort not in (
+            "low",
+            "medium",
+            "high",
+        ):
+            raise ValueError(
+                "RequestConstraints.reasoning_effort must be low|medium|high, "
+                f"got {self.reasoning_effort}"
             )
 
 
@@ -347,6 +358,7 @@ class HubChunk:
     """
 
     content: str = ""
+    thought: str = ""
     done: bool = False
     metadata: Optional[ResponseMetadata] = None
     tool_calls: Optional[List[ToolCallResult]] = None

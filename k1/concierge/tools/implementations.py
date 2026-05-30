@@ -112,8 +112,9 @@ class ToolContext:
     # capability gate (E3). `active_task_id` is preserved for telemetry /
     # future per-task observability use.
     active_task_id: str | None = None  # M6 E6.1.3: task_id for per-task L2 checks
+    active_execution_profiles: list[dict[str, Any]] | None = None
     session_id: str = ""  # bound session id -- fallback for invoke_capability
-    safety_band: str = "AMBER"  # bound task safety band for Fabric CapabilityRequest
+    safety_band: str = "GREEN"  # bound task safety band for Fabric CapabilityRequest
     dispatch: IDispatchPort | None = None  # P4B.3: typed IDispatchPort (Fabric + Orchestrator)
     recall_fn: Callable | None = None
     capability_cache: dict | None = None  # Per-session cache for discover_capabilities results
@@ -156,18 +157,18 @@ _TASK_SAFETY_BANDS = frozenset({"GREEN", "AMBER", "RED"})
 def _normalize_safety_band(
     value: Any,
     *,
-    default: str = "AMBER",
+    default: str = "GREEN",
     allowed: frozenset[str] = _FABRIC_SAFETY_BANDS,
 ) -> str:
     band = str(value or "").upper()
     if band in allowed:
         return band
-    fallback = str(default or "AMBER").upper()
-    return fallback if fallback in allowed else "AMBER"
+    fallback = str(default or "GREEN").upper()
+    return fallback if fallback in allowed else "GREEN"
 
 
 def _context_safety_band(ctx: ToolContext) -> str:
-    return _normalize_safety_band(getattr(ctx, "safety_band", "AMBER"), default="AMBER")
+    return _normalize_safety_band(getattr(ctx, "safety_band", "GREEN"), default="GREEN")
 
 
 def _member_id_alias(value: Any) -> Any:
@@ -205,17 +206,31 @@ def _normalize_capability_params(capability_name: str, params: Any) -> dict[str,
                 if normalized.get(title_key):
                     normalized["title"] = normalized[title_key]
                     break
+        if normalized.get("assigned_to"):
+            normalized["assigned_to"] = _member_id_alias(normalized["assigned_to"])
         if not normalized.get("assigned_to") and normalized.get("assignee"):
             normalized["assigned_to"] = _member_id_alias(normalized["assignee"])
         if not normalized.get("assigned_to"):
             assignee = _task_text_assignee_alias(normalized.get("title"))
             if assignee:
                 normalized["assigned_to"] = assignee
+    if capability_name in {
+        "tool.execute.reminders.create_reminder",
+        "tool.read.reminders.list_reminders",
+    }:
+        if normalized.get("recipient"):
+            normalized["recipient"] = _member_id_alias(normalized["recipient"])
     return normalized
 
 
 def _contract_cache_key(capability_name: str) -> tuple[str, str]:
     return ("capability_contract", capability_name)
+
+
+def _contract_name(contract: Any) -> str:
+    if isinstance(contract, dict):
+        return str(contract.get("name") or "")
+    return str(getattr(contract, "name", "") or "")
 
 
 def _input_specs_to_prompt_schema(specs: Any) -> list[dict[str, Any]]:
@@ -246,13 +261,10 @@ def _capability_prompt_schema(contract: Any) -> dict[str, Any]:
 
 
 async def _lookup_capability_contract(ctx: ToolContext, capability_name: str) -> Any | None:
-    if not capability_name:
-        return None
-    if ctx.capability_cache is None:
-        ctx.capability_cache = {}
-    cached = ctx.capability_cache.get(_contract_cache_key(capability_name))
-    if cached is not None:
-        return cached
+    exact = await _lookup_capability_contract_exact(ctx, capability_name)
+    if exact is not None:
+        return exact
+
     dispatch = ctx.dispatch
     if dispatch is None or not hasattr(dispatch, "discover_capabilities"):
         return None
@@ -261,7 +273,7 @@ async def _lookup_capability_contract(ctx: ToolContext, capability_name: str) ->
             intent=capability_name,
             domain=None,
             top_k=25,
-            safety_band="AMBER",
+            safety_band=_context_safety_band(ctx),
         )
     except Exception:
         logger.debug("capability schema lookup failed for %s", capability_name, exc_info=True)
@@ -271,10 +283,156 @@ async def _lookup_capability_contract(ctx: ToolContext, capability_name: str) ->
         return None
     for scored in capabilities:
         contract = getattr(scored, "contract", None)
-        if getattr(contract, "name", "") == capability_name:
+        if _contract_name(contract) == capability_name:
             ctx.capability_cache[_contract_cache_key(capability_name)] = contract
             return contract
     return None
+
+
+async def _lookup_capability_contract_exact(
+    ctx: ToolContext,
+    capability_name: str,
+) -> Any | None:
+    if not capability_name:
+        return None
+    if ctx.capability_cache is None:
+        ctx.capability_cache = {}
+    cached = ctx.capability_cache.get(_contract_cache_key(capability_name))
+    if cached is not None and _contract_name(cached) == capability_name:
+        return cached
+    dispatch = ctx.dispatch
+    if dispatch is None:
+        return None
+    for lookup_name in ("lookup_capability", "lookup"):
+        lookup = getattr(dispatch, lookup_name, None)
+        if not callable(lookup):
+            continue
+        try:
+            contract = lookup(capability_name)
+            if _inspect.isawaitable(contract):
+                contract = await contract
+        except Exception:
+            logger.debug(
+                "capability exact lookup failed via %s for %s",
+                lookup_name,
+                capability_name,
+                exc_info=True,
+            )
+            continue
+        if _contract_name(contract) == capability_name:
+            ctx.capability_cache[_contract_cache_key(capability_name)] = contract
+            return contract
+    return None
+
+
+async def _bind_capability_for_back_action(
+    *,
+    ctx: ToolContext,
+    action: str,
+    domain: Any,
+    capability_name: str,
+    params: dict[str, Any],
+    session_id: str,
+) -> CapabilityBindingResult | None:
+    from k1.concierge.react.capability_routing import (
+        CapabilityBindingRequest,
+        bind_capability,
+    )
+
+    dispatch = ctx.dispatch
+    if (
+        ctx.actor != "back"
+        or not ctx.active_task_id
+        or dispatch is None
+        or not hasattr(dispatch, "discover_capabilities")
+    ):
+        return None
+
+    binding = await bind_capability(
+        CapabilityBindingRequest(
+            action=action or capability_name,
+            domain=str(domain) if domain else None,
+            params=params,
+            candidate_capability_name=capability_name,
+            session_id=session_id,
+            trace_id=_tool_trace_id(ctx),
+            safety_band=_context_safety_band(ctx),
+            actor=ctx.actor,
+        ),
+        dispatch.discover_capabilities,
+        lambda name: _lookup_capability_contract_exact(ctx, name),
+    )
+    if binding.status == "needs_discovery" and not binding.candidates:
+        return None
+    return binding
+
+
+def _binding_failure_payload(
+    binding: CapabilityBindingResult,
+    *,
+    duration_ms: int,
+) -> dict[str, Any]:
+    return {
+        "duration_ms": duration_ms,
+        "status": binding.status,
+        "capability_name": binding.capability_name,
+        "params": dict(binding.params),
+        "candidates": [dict(candidate) for candidate in binding.candidates],
+        "recovery": dict(binding.recovery) if binding.recovery else None,
+        "binding": binding.to_dict(),
+        "retryable": False,
+    }
+
+
+def _binding_failure_tool_result(
+    tool_name: str,
+    binding: CapabilityBindingResult,
+    *,
+    duration_ms: int,
+) -> ToolResult:
+    return ToolResult(
+        tool_name=tool_name,
+        status="error",
+        error=f"capability_binding_{binding.status}",
+        data=_binding_failure_payload(binding, duration_ms=duration_ms),
+    )
+
+
+def _optional_metadata_str(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _request_prompt_metadata(
+    *,
+    binding: CapabilityBindingResult | None,
+    contract: Any | None,
+    params: dict[str, Any],
+    ctx: ToolContext,
+) -> tuple[str | None, dict[str, Any] | None]:
+    prompt_template = binding.prompt_template if binding is not None else None
+    activity_profile = binding.activity_profile if binding is not None else None
+    context_override = dict(binding.context_override) if binding is not None else {}
+
+    if prompt_template is None and contract is not None:
+        prompt_template = _optional_metadata_str(getattr(contract, "prompt_template", None))
+    if activity_profile is None and contract is not None:
+        activity_profile = _optional_metadata_str(getattr(contract, "activity_profile", None))
+    if activity_profile:
+        context_override.setdefault("activity_profile", activity_profile)
+
+    execution_profiles = getattr(ctx, "active_execution_profiles", None)
+    if execution_profiles:
+        context_override.setdefault(
+            "execution_profiles",
+            [dict(profile) for profile in execution_profiles if isinstance(profile, dict)],
+        )
+
+    if prompt_template or context_override:
+        context_override.setdefault("prompt_variables", dict(params))
+    return prompt_template, context_override or None
 
 
 # =========================================================================
@@ -1076,8 +1234,8 @@ def execute_dispatch_task(args: dict, ctx: ToolContext) -> ToolResult:
     reference_context = args.get("reference_context", {})
     depends_on = args.get("depends_on")
     safety_band = _normalize_safety_band(
-        args.get("safety_band", "AMBER"),
-        default="AMBER",
+        args.get("safety_band", "GREEN"),
+        default="GREEN",
         allowed=_TASK_SAFETY_BANDS,
     )
 
@@ -1250,7 +1408,7 @@ async def execute_discover_capabilities(args: dict, ctx: ToolContext) -> ToolRes
                     intent=intent,
                     domain=domain_filter,
                     top_k=10,
-                    safety_band="AMBER",
+                    safety_band=_context_safety_band(ctx),
                 )
                 for sc in retrieval.capabilities:
                     contract = sc.contract
@@ -1269,6 +1427,16 @@ async def execute_discover_capabilities(args: dict, ctx: ToolContext) -> ToolRes
                         "score": sc.score,
                     }
                     if contract is not None:
+                        cap_dict["prompt_template"] = str(
+                            getattr(contract, "prompt_template", "") or ""
+                        )
+                        cap_dict["activity_profile"] = str(
+                            getattr(contract, "activity_profile", "") or ""
+                        )
+                        cap_dict["tool_instructions"] = str(
+                            getattr(contract, "tool_instructions", "") or ""
+                        )
+                        cap_dict["limitations"] = list(getattr(contract, "limitations", ()) or ())
                         cap_dict["schema"] = _capability_prompt_schema(contract)
                     caps.append(cap_dict)
 
@@ -1373,6 +1541,25 @@ async def execute_invoke_capability(args: dict, ctx: ToolContext) -> ToolResult:
                 ),
             )
 
+    binding = await _bind_capability_for_back_action(
+        ctx=ctx,
+        action=str(args.get("action") or args.get("intent") or capability_name),
+        domain=args.get("domain"),
+        capability_name=capability_name,
+        params=params,
+        session_id=session_id or "",
+    )
+    if binding is not None:
+        if binding.status != "bound" or not binding.capability_name:
+            duration = int(time.time() * 1000) - start_ms
+            return _binding_failure_tool_result(
+                "invoke_capability",
+                binding,
+                duration_ms=duration,
+            )
+        capability_name = binding.capability_name
+        params = _normalize_capability_params(capability_name, binding.params)
+
     contract = await _lookup_capability_contract(ctx, capability_name)
     if contract is not None:
         recovery = recovery_for_unsatisfied_contract(
@@ -1404,9 +1591,17 @@ async def execute_invoke_capability(args: dict, ctx: ToolContext) -> ToolResult:
     # M2: K1 Fabric port path (preferred)
     if ctx.dispatch is not None:
         try:
+            prompt_template, context_override = _request_prompt_metadata(
+                binding=binding,
+                contract=contract,
+                params=params,
+                ctx=ctx,
+            )
             k1_request = CapabilityRequest(
                 capability_name=capability_name,
                 params=params,
+                prompt_template=prompt_template,
+                context_override=context_override,
                 session_id=session_id or "",
                 trace_id=_tool_trace_id(ctx),
                 caller="concierge",
@@ -1515,6 +1710,7 @@ async def execute_batch_invoke_capabilities(args: dict, ctx: ToolContext) -> Too
                     "status": "error",
                     "error": "capability_name is required",
                     "result": None,
+                    "retryable": False,
                 }
             )
             failed += 1
@@ -1522,11 +1718,49 @@ async def execute_batch_invoke_capabilities(args: dict, ctx: ToolContext) -> Too
 
         start_ms = int(time.time() * 1000)
 
+        binding = await _bind_capability_for_back_action(
+            ctx=ctx,
+            action=str(inv.get("action") or inv.get("intent") or cap_name),
+            domain=inv.get("domain"),
+            capability_name=cap_name,
+            params=params,
+            session_id=session_id,
+        )
+        if binding is not None:
+            if binding.status != "bound" or not binding.capability_name:
+                duration = int(time.time() * 1000) - start_ms
+                results.append(
+                    {
+                        "capability_name": cap_name,
+                        "status": "error",
+                        "error": f"capability_binding_{binding.status}",
+                        "duration_ms": duration,
+                        "binding": binding.to_dict(),
+                        "candidates": [dict(candidate) for candidate in binding.candidates],
+                        "recovery": dict(binding.recovery) if binding.recovery else None,
+                        "retryable": False,
+                    }
+                )
+                failed += 1
+                continue
+            cap_name = binding.capability_name
+            params = _normalize_capability_params(cap_name, binding.params)
+
+        contract = await _lookup_capability_contract(ctx, cap_name)
+        prompt_template, context_override = _request_prompt_metadata(
+            binding=binding,
+            contract=contract,
+            params=params,
+            ctx=ctx,
+        )
+
         if ctx.dispatch is not None:
             try:
                 k1_request = CapabilityRequest(
                     capability_name=cap_name,
                     params=params,
+                    prompt_template=prompt_template,
+                    context_override=context_override,
                     session_id=session_id,
                     trace_id=_tool_trace_id(ctx),
                     caller="concierge",
@@ -1545,6 +1779,11 @@ async def execute_batch_invoke_capabilities(args: dict, ctx: ToolContext) -> Too
                             if not k1_result.success
                             else ""
                         ),
+                        "retryable": bool(
+                            getattr(k1_result.error, "retriable", False)
+                            if k1_result.error
+                            else False
+                        ),
                         "duration_ms": duration,
                     }
                 )
@@ -1560,6 +1799,7 @@ async def execute_batch_invoke_capabilities(args: dict, ctx: ToolContext) -> Too
                         "status": "error",
                         "error": str(e),
                         "duration_ms": duration,
+                        "retryable": True,
                     }
                 )
                 failed += 1
@@ -1576,14 +1816,21 @@ async def execute_batch_invoke_capabilities(args: dict, ctx: ToolContext) -> Too
             )
             succeeded += 1
 
+    all_failed = failed > 0 and succeeded == 0
     return ToolResult(
         tool_name="batch_invoke_capabilities",
-        status="ok",
+        status="error" if all_failed else "ok",
+        error="batch_invoke_all_failed" if all_failed else None,
         data={
             "results": results,
             "total": len(invocations),
             "succeeded": succeeded,
             "failed": failed,
+            "retryable": any(
+                bool(result.get("retryable"))
+                for result in results
+                if isinstance(result, dict) and result.get("status") == "error"
+            ),
         },
     )
 

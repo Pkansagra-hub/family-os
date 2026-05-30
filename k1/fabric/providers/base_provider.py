@@ -32,7 +32,7 @@ from __future__ import annotations
 import logging
 import time
 from abc import ABC, abstractmethod
-from typing import List, Protocol
+from typing import Any, Dict, List, Protocol
 
 from k1.fabric.types import (
     CapabilityRequest,
@@ -44,6 +44,60 @@ from k1.fabric.types import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def build_provider_metadata(
+    request: CapabilityRequest,
+    context: ExecutionContext,
+) -> Dict[str, Any]:
+    """Build reserved prompt/profile metadata for provider transports."""
+
+    metadata: Dict[str, Any] = {}
+    if context.prompt:
+        metadata["__system_instructions__"] = context.prompt
+
+    override: Dict[str, Any] = {}
+    raw_override = (context.session_sections or {}).get("context_override")
+    if isinstance(raw_override, dict):
+        override = raw_override
+
+    activity_profile = override.get("activity_profile")
+    if isinstance(activity_profile, str) and activity_profile:
+        metadata["__activity_profile__"] = activity_profile
+
+    prompt_template = override.get("prompt_template") or request.prompt_template
+    if prompt_template:
+        metadata["__prompt_template__"] = prompt_template
+
+    grounding_invocation = override.get("grounding_invocation")
+    if isinstance(grounding_invocation, dict) and grounding_invocation:
+        metadata["__grounding_invocation__"] = dict(grounding_invocation)
+
+    return metadata
+
+
+def attach_provider_metadata(
+    params: Dict[str, Any],
+    metadata: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Attach reserved provider metadata without mutating the request params."""
+
+    out = dict(params)
+    if not metadata:
+        return out
+
+    existing = out.get("__metadata__")
+    if isinstance(existing, dict):
+        merged_metadata = dict(existing)
+        merged_metadata.update(metadata)
+    elif existing is not None:
+        merged_metadata = {"__original_metadata__": existing}
+        merged_metadata.update(metadata)
+    else:
+        merged_metadata = dict(metadata)
+
+    out["__metadata__"] = merged_metadata
+    return out
 
 
 # ---------------------------------------------------------------------------

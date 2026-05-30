@@ -30,6 +30,9 @@ component that calls Fabric capabilities.
 - No concurrent DAGs in V1 (`max_concurrent_dags=1`).
 - No `PAUSE` interrupt type in V1 (deferred to V2).
 - `save_workflow()` plan-lookup from WAL is not implemented in V1 (deferred to M4).
+- No conversational capability binding. MEDIUM envelopes must already contain
+    exact registry capability names; Back/Concierge bind or degrade guessed names
+    before direct Fabric or Orchestrator dispatch.
 
 ---
 
@@ -223,7 +226,7 @@ class CommittedPlan:
     metadata: Dict[str, Any] = {}
 ```
 
-### `PlanStep` (ORCH-010 — 14-field extension of Fabric's 6-field base)
+### `PlanStep` (ORCH-010 — 15-field extension of Fabric's 6-field base)
 
 ```python
 @dataclass(frozen=True)
@@ -238,8 +241,11 @@ class PlanStep:
     condition: Optional[ConditionExpr] = None
     output_schema: Optional[Dict[str, Any]] = None
     safety_band_min: str = "GREEN"
-    # ... 4 additional fields
+    activity_profile: Optional[str] = None
+    # ... additional execution metadata fields
 ```
+
+`activity_profile` is advisory execution metadata copied from Planner-validated contract or prompt evidence. Orchestrator does not infer profiles and does not use them to grant tools or authorize side effects. `StepRunner` forwards the value through `CapabilityRequest.context_override["activity_profile"]` when present.
 
 ### `ProcessResult`
 

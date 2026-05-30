@@ -25,10 +25,15 @@ actors:
     history_window: 5
 
     # Default safety band when control section is absent
-    default_safety_band: "AMBER"
+    default_safety_band: "GREEN"
 
-    # HITL suspension timeout in seconds
-    hitl_timeout_s: 60
+    # HITL suspension timeout in seconds.
+    # MUST exceed llm.default_timeout_ms (120s) plus user-think margin so
+    # that an in-flight Front HITL_RESOLVE LLM call has time to complete
+    # before HIL service fires its watchdog timeout. Previous value of 60s
+    # raced the 120s Front LLM iter timeout and stranded CLARIFYING_WORKER
+    # turns when the LLM call stalled. See logs.txt 19:44:44 -> 19:45:44.
+    hitl_timeout_s: 300
 
     # Observability summarisation truncation limits
     summarize_args_max_len: 200
@@ -215,19 +220,19 @@ kernel:
 
 llm:
   # Fallback model when selection table has no match (model_selection.py)
-  default_model: "gemini-3-flash-preview"
+  default_model: "gemini-2.5-flash"
 
   # Max concurrent requests in generate_batch() (gemini_adapter.py)
   batch_max_concurrency: 5
 
   # Hint string -> model name overrides (model_selection.py)
   model_hint_overrides:
-    fast: "gemini-3-flash-preview"
-    smart: "gemini-3-flash-preview"
-    cheap: "gemini-3-flash-preview"
-    thinking: "gemini-3.1-pro-preview"
-    pro: "gemini-3.1-pro-preview"
-    flash: "gemini-3-flash-preview"
+    fast: "gemini-2.5-flash"
+    smart: "gemini-2.5-flash"
+    cheap: "gemini-2.5-flash-lite"
+    thinking: "gemini-2.5-flash"
+    pro: "gemini-2.5-pro"
+    flash: "gemini-2.5-flash"
 
   # Default max output tokens for LLM requests (llm/types.py)
   default_max_tokens: 65536
@@ -240,25 +245,25 @@ llm:
 
   # Capability + actor -> model routing table (model_selection.py)
   # Nested as capability -> actor -> model
-  # Routing: Gemini 3 Flash preview for tool/structured work, 3.1 Pro
-  # preview for heavy reasoning/planning, and 3.1 Flash-Lite preview for
-  # fast chat+stream paths.
+  # Routing: stable Gemini 2.5 Flash for production family workflows.
+  # Preview Gemini 3 models are available in the Vertex manifest, but remain
+  # opt-in because some are global-endpoint only.
   model_selection_table:
     CHAT:
-      front: "gemini-3-flash-preview"          # front conversational path
-      back: "gemini-3.1-pro-preview"           # back internal reports
+      front: "gemini-2.5-flash"                # front conversational path
+      back: "gemini-2.5-flash"                 # back internal reports
     TOOL_CALL:
-      front: "gemini-3-flash-preview"          # tool selection / dispatch planning
-      back: "gemini-3.1-pro-preview"           # capability execution planning
-      planner: "gemini-3.1-pro-preview"        # strongest planning path
+      front: "gemini-2.5-flash"                # tool selection / dispatch planning
+      back: "gemini-2.5-flash"                 # capability execution planning
+      planner: "gemini-2.5-flash"              # planner reasoning path
     STRUCTURED:
-      front: "gemini-3-flash-preview"          # dispatch intent parsing
-      back: "gemini-3.1-pro-preview"           # structured result formatting
+      front: "gemini-2.5-flash"                # dispatch intent parsing
+      back: "gemini-2.5-flash"                 # structured result formatting
     REASON:
-      front: "gemini-3-flash-preview"          # complex reasoning / weave
-      back: "gemini-3.1-pro-preview"           # multi-step planning
+      front: "gemini-2.5-flash"                # complex reasoning / weave
+      back: "gemini-2.5-flash"                 # multi-step planning
     STREAM:
-      front: "gemini-3-flash-preview"          # speed-first streaming
+      front: "gemini-2.5-flash"                # speed-first streaming
 
 
 # ── orchestrator/ ───────────────────────────────────────────────────────
@@ -290,6 +295,15 @@ prompt:
   context_window: 128000
   safety_margin: 0.80
   chars_per_token: 4
+
+  # M4 Front deloading -- hide cognitive SessionState write tools from Front.
+  # Set false only for rollback/comparison while schemas remain registered.
+  front_deload_cognitive_tools: true
+
+  # M4.I11 Front Situation Frame iteration. "v1" keeps == NOW == / == PLACE ==
+  # blocks. "v2" promotes the typed GroundingProjection into == GROUNDING ==,
+  # == TIME ==, and == PLACE AND DEVICE == blocks with no fallback chain.
+  front_prompt_iteration: v1
 
   # prompt/mode.py -- per-mode iteration budgets
   max_iterations:
@@ -556,9 +570,13 @@ sessionstate:
     - task_state
     - task_artifacts
     - meta
+    - temporal
+    - spatial
+    - grounding
     - history_active
     - beliefs_history
     - history_recent
+    - place_registry
     - persona
     - telemetry
     - artifacts_warm

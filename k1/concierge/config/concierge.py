@@ -34,6 +34,10 @@ class ConciergeConfig:
     allow_dispatch_passthrough: bool = False
     auto_start_consumer: bool = True
     enable_ledger: bool = True
+    # M5 G5: opt-in ledger-driven crash recovery at session create.
+    # Default False to preserve cold-start semantics; flip True via
+    # KernelConfig.enable_ledger_recovery for production warm-start.
+    enable_ledger_recovery: bool = True
     enable_dead_letter_consumer: bool = True
     session_id: str | None = None
     seed_memories: list[dict[str, Any]] = field(default_factory=list)
@@ -60,6 +64,7 @@ class ConciergeConfig:
             allow_dispatch_passthrough=getattr(kc, "allow_dispatch_passthrough", False),
             auto_start_consumer=getattr(kc, "auto_start_consumer", True),
             enable_ledger=getattr(kc, "enable_ledger", True),
+            enable_ledger_recovery=getattr(kc, "enable_ledger_recovery", False),
             enable_dead_letter_consumer=getattr(kc, "enable_dead_letter_consumer", True),
             session_id=getattr(kc, "session_id", None),
             seed_memories=getattr(kc, "seed_memories", []),

@@ -2,9 +2,9 @@
 k1.planner.stages.expand_service -- ExpandService (Epic 3.2).
 
 Stage 2 of the planner pipeline: transforms SketchResult into a fully
-parameterised ExpandedPlan (14-field PlanStep objects) via agentic
-tool-calling loop, deterministic post-LLM enrichment of infrastructure
-fields, and fallback-capable error recovery.
+parameterised ExpandedPlan (15-field PlanStep objects) via agentic
+tool-calling loop, post-LLM enrichment of infrastructure fields, prompt
+binding validation, and fallback-capable error recovery.
 
 Design
 ------
@@ -26,8 +26,8 @@ AGENTIC TOOL-USE DESIGN:
 - 4 tools: discover_capabilities, get_capability_schema, find_prompts,
   query_session_context.
 - The LLM calls tools as needed, then produces the final plan JSON.
-- Post-LLM enrichment fills 6 infrastructure fields from
-  CapabilityContract metadata (not LLM-generated).
+- Post-LLM enrichment fills infrastructure fields from CapabilityContract
+    metadata and validates prompt/profile bindings (not LLM-generated).
 
 ToolCallRouter is referenced via the ToolCallRouterLike protocol from
 sketch_service -- same protocol extended with get_schema() for EXPAND.
@@ -60,8 +60,18 @@ from __future__ import annotations
 
 import json
 import logging
-import re
-from typing import Any, Dict, List, Optional, Protocol, Tuple, runtime_checkable
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
+from typing import (
+    Any,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Protocol,
+    Tuple,
+    runtime_checkable,
+)
 
 from k1.orchestrator.types import PlanRequest, PlanStep, StepResult
 from k1.planner.ports.llm_port import ILLMPort
@@ -80,11 +90,206 @@ log = logging.getLogger(__name__)
 # Maximum number of agentic tool-calling rounds before forcing final answer.
 _MAX_TOOL_ROUNDS = 6
 
-# Regex for valid step IDs.
-_STEP_ID_RE = re.compile(r"^s[0-9]+$")
-
 # Default timeout_ms when no contract metadata is available.
 _DEFAULT_TIMEOUT_MS = 10000
+
+PromptBindingState = Literal["valid", "cleared", "missing_inventory"]
+
+
+@dataclass(frozen=True)
+class PromptBindingResult:
+    """Validated binding for an LLM-proposed prompt template."""
+
+    state: PromptBindingState
+    resolved_name: Optional[str] = None
+    reason: str = ""
+
+
+@dataclass(frozen=True)
+class _PromptDescriptor:
+    """Small prompt contract view used by EXPAND validation."""
+
+    name: str
+    domains: Tuple[str, ...] = ()
+    activity_profile: Optional[str] = None
+    compatible_agents: Tuple[str, ...] = ()
+    compatible_tools: Tuple[str, ...] = ()
+    score: float = 0.0
+
+
+def validate_prompt_binding(
+    *,
+    requested_template: str | None,
+    capability_name: str,
+    discovered_prompts: List[Dict[str, Any]],
+    prompt_inventory: set[str],
+) -> PromptBindingResult:
+    """Validate an LLM-proposed prompt template against registry evidence."""
+    requested = _clean_optional_str(requested_template)
+    if requested is None:
+        return PromptBindingResult(
+            state="valid",
+            resolved_name=None,
+            reason="no_prompt_template_requested",
+        )
+
+    descriptors = _prompt_descriptors_from_items(discovered_prompts)
+    discovered_names = {descriptor.name for descriptor in descriptors if descriptor.name}
+
+    if requested in discovered_names:
+        return PromptBindingResult(
+            state="valid",
+            resolved_name=requested,
+            reason="discovered_prompt_match",
+        )
+
+    if requested in prompt_inventory:
+        return PromptBindingResult(
+            state="missing_inventory",
+            resolved_name=requested,
+            reason="prompt_inventory_match_without_discovery",
+        )
+
+    return PromptBindingResult(
+        state="cleared",
+        resolved_name=None,
+        reason="prompt_not_discovered_or_in_inventory",
+    )
+
+
+def _clean_optional_str(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _prompt_descriptors_from_results(results: Any) -> List[_PromptDescriptor]:
+    descriptors: List[_PromptDescriptor] = []
+    for result in results or []:
+        descriptors.extend(_prompt_descriptors_from_result(result))
+    return descriptors
+
+
+def _prompt_descriptors_from_result(result: Any) -> List[_PromptDescriptor]:
+    if result is None:
+        return []
+
+    if isinstance(result, Mapping):
+        for key in ("capabilities", "prompts", "templates", "results"):
+            raw_items = result.get(key)
+            if isinstance(raw_items, list):
+                return _prompt_descriptors_from_items(raw_items)
+        descriptor = _prompt_descriptor_from_value(result)
+        return [descriptor] if descriptor is not None else []
+
+    capabilities = getattr(result, "capabilities", None)
+    if capabilities is not None:
+        return _prompt_descriptors_from_items(list(capabilities))
+
+    descriptor = _prompt_descriptor_from_value(result)
+    return [descriptor] if descriptor is not None else []
+
+
+def _prompt_descriptors_from_items(items: Iterable[Any]) -> List[_PromptDescriptor]:
+    descriptors: List[_PromptDescriptor] = []
+    for item in items:
+        descriptor = _prompt_descriptor_from_value(item)
+        if descriptor is not None:
+            descriptors.append(descriptor)
+    return descriptors
+
+
+def _prompt_descriptor_from_value(value: Any) -> Optional[_PromptDescriptor]:
+    if isinstance(value, _PromptDescriptor):
+        return value
+
+    score = _safe_float(_mapping_or_attr(value, "score"), default=0.0)
+    contract = _mapping_or_attr(value, "contract")
+    source = contract if contract is not None else value
+
+    name = _clean_optional_str(_mapping_or_attr(source, "name"))
+    if name is None:
+        return None
+
+    return _PromptDescriptor(
+        name=name,
+        domains=_string_tuple(_mapping_or_attr(source, "domain")),
+        activity_profile=_clean_optional_str(_mapping_or_attr(source, "activity_profile")),
+        compatible_agents=_string_tuple(_mapping_or_attr(source, "compatible_agents")),
+        compatible_tools=_string_tuple(_mapping_or_attr(source, "compatible_tools")),
+        score=score,
+    )
+
+
+def _mapping_or_attr(value: Any, key: str) -> Any:
+    if isinstance(value, Mapping):
+        return value.get(key)
+    return getattr(value, key, None)
+
+
+def _string_tuple(value: Any) -> Tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, Iterable):
+        return tuple(str(item) for item in value if item)
+    return ()
+
+
+def _safe_float(value: Any, *, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _render_planning_grounding_block(grounding: Mapping[str, Any] | None) -> str:
+    """Render typed grounding for the EXPAND user prompt."""
+    if not grounding:
+        return ""
+    try:
+        from k1.grounding.serialization import dict_to_projection
+        from k1.grounding.service.prompt_block_renderer import (
+            render_planning_grounding_block,
+        )
+
+        return render_planning_grounding_block(dict_to_projection(dict(grounding)))
+    except Exception:
+        log.warning("expand: failed to render planning grounding block", exc_info=True)
+        return ""
+
+
+def _coerce_prompt_inventory(
+    prompt_inventory: Mapping[str, Any] | Iterable[Any],
+) -> Dict[str, _PromptDescriptor]:
+    if isinstance(prompt_inventory, Mapping):
+        coerced: Dict[str, _PromptDescriptor] = {}
+        for name, value in prompt_inventory.items():
+            source = dict(value) if isinstance(value, Mapping) else value
+            if isinstance(source, dict) and "name" not in source:
+                source["name"] = name
+            descriptor = _prompt_descriptor_from_value(source)
+            if descriptor is None:
+                descriptor = _PromptDescriptor(name=str(name))
+            coerced[descriptor.name or str(name)] = descriptor
+        return coerced
+
+    coerced = {}
+    for value in prompt_inventory:
+        descriptor = _prompt_descriptor_from_value(value)
+        if descriptor is None and isinstance(value, str):
+            descriptor = _PromptDescriptor(name=value)
+        if descriptor is not None:
+            coerced[descriptor.name] = descriptor
+    return coerced
+
+
+def _is_step_id(value: Any) -> bool:
+    if not isinstance(value, str) or len(value) < 2 or value[0] != "s":
+        return False
+    return value[1:].isdigit()
 
 
 # ---------------------------------------------------------------------------
@@ -104,8 +309,9 @@ EXPAND_OUTPUT_SCHEMA: Dict[str, Any] = {
                 "properties": {
                     "id": {
                         "type": "string",
-                        "pattern": "^s[0-9]+$",
-                        "description": ("Unique step identifier (e.g. 's1', 's2')."),
+                        "description": (
+                            "Unique step identifier: 's' followed by digits " "(e.g. 's1', 's2')."
+                        ),
                     },
                     "capability": {
                         "type": "string",
@@ -314,7 +520,7 @@ EXPAND_TOOL_DEFINITIONS: Tuple[Dict[str, Any], ...] = (
                         "description": (
                             "Which sections to read. Available: "
                             "'beliefs_active', 'persona', 'temporal', "
-                            "'control', 'history_recent'."
+                            "'history_recent'."
                         ),
                     },
                 },
@@ -338,8 +544,8 @@ class ExpandToolRouterLike(Protocol):
     Extends the base ToolCallRouterLike (SKETCH) with get_schema()
     for exact-name capability contract lookup (Section 7.2.2).
 
-    Section 11.5: deterministic router mapping 5 abstract tool names
-    to 4 backend ports. Monotonic call counter per plan.
+    Section 11.5: router mapping 5 abstract tool names to 4 backend
+    ports. Monotonic call counter per plan.
     """
 
     @property
@@ -407,7 +613,7 @@ class ExpandService:
     """Stage 2 EXPAND: SketchResult -> ExpandedPlan (Section 7).
 
     Transforms a SketchResult (rough steps with capability hints) into
-    a fully parameterised ExpandedPlan with 14-field PlanStep objects
+    a fully parameterised ExpandedPlan with 15-field PlanStep objects
     ready for DAG execution.
 
     The full execute() pipeline is:
@@ -439,18 +645,22 @@ class ExpandService:
     __slots__ = (
         "_llm_port",
         "_tool_router",
+        "_prompt_inventory",
     )
 
     def __init__(
         self,
         llm_port: ILLMPort,
         tool_router: ExpandToolRouterLike,
+        prompt_inventory: Mapping[str, Any] | Iterable[Any] | None = None,
     ) -> None:
         """Construct ExpandService with injected dependencies.
 
         Args:
             llm_port: LLM gateway for structured/chat completions.
-            tool_router: Deterministic tool call dispatcher (Section 11).
+            tool_router: Tool call dispatcher (Section 11).
+            prompt_inventory: Optional prompt-contract inventory used to
+                validate LLM-selected prompt_template names.
 
         Raises:
             TypeError: If any dependency is None.
@@ -462,6 +672,9 @@ class ExpandService:
 
         self._llm_port = llm_port
         self._tool_router = tool_router
+        self._prompt_inventory = (
+            {} if prompt_inventory is None else _coerce_prompt_inventory(prompt_inventory)
+        )
 
     # ------------------------------------------------------------------
     # Read-only property accessors
@@ -596,13 +809,12 @@ class ExpandService:
             safety_band = request.constraints.get("safety_band")
             if safety_band and safety_band != "GREEN":
                 constraint_lines.append(f"Safety restriction: {safety_band}")
-            temporal = request.constraints.get("temporal", {})
-            if isinstance(temporal, dict):
-                now = temporal.get("now")
-                if now:
-                    constraint_lines.append(f"Current time: {now}")
             if constraint_lines:
                 parts.append("\n[Constraints: " + ", ".join(constraint_lines) + "]")
+
+        grounding_block = _render_planning_grounding_block(request.grounding)
+        if grounding_block:
+            parts.append("\n" + grounding_block)
 
         # Arbiter feedback (revise loop).
         if arbiter_feedback:
@@ -758,7 +970,8 @@ class ExpandService:
         Validates:
           - Valid JSON
           - steps array non-empty
-          - Each step has id (^s[0-9]+$), capability (non-empty), params (object)
+                    - Each step has an id of 's' followed by digits, capability
+                        (non-empty), params (object)
           - dependencies map present
           - rationale non-empty
 
@@ -803,9 +1016,9 @@ class ExpandService:
 
         for i, step in enumerate(raw_steps):
             step_id = step.get("id", "")
-            if not _STEP_ID_RE.match(step_id):
+            if not _is_step_id(step_id):
                 raise ExpandFailedError(
-                    f"Step {i} has invalid id '{step_id}' (must match ^s[0-9]+$)",
+                    f"Step {i} has invalid id '{step_id}' (must be s followed by digits)",
                     stage="EXPAND",
                 )
             cap = step.get("capability", "")
@@ -843,11 +1056,12 @@ class ExpandService:
         llm_steps: List[Dict[str, Any]],
         accumulated_results: Dict[str, Any],
     ) -> List[PlanStep]:
-        """Deterministically enrich LLM steps with infrastructure fields.
+        """Enrich LLM steps with infrastructure fields from contract evidence.
 
-        The LLM produces 8 fields. This method fills the remaining 6
-        from CapabilityContract metadata discovered during the agentic
-        loop.
+        The LLM produces 8 fields. This method fills infrastructure
+        fields from CapabilityContract metadata discovered during the
+        agentic loop and validates prompt_template against discovered
+        prompts or the prompt inventory.
 
         Args:
             llm_steps: Parsed step dicts from the LLM.
@@ -858,6 +1072,23 @@ class ExpandService:
         """
         # Build a contract lookup from accumulated tool results.
         contracts = self._build_contract_lookup(accumulated_results)
+        prompt_descriptors = _prompt_descriptors_from_results(
+            accumulated_results.get("prompts", [])
+        )
+        discovered_prompt_items = [
+            {
+                "name": descriptor.name,
+                "domain": list(descriptor.domains),
+                "activity_profile": descriptor.activity_profile,
+                "compatible_agents": list(descriptor.compatible_agents),
+                "compatible_tools": list(descriptor.compatible_tools),
+                "score": descriptor.score,
+            }
+            for descriptor in prompt_descriptors
+        ]
+        prompt_descriptors_by_name: Dict[str, _PromptDescriptor] = {
+            descriptor.name: descriptor for descriptor in prompt_descriptors if descriptor.name
+        }
 
         enriched: List[PlanStep] = []
         for step_dict in llm_steps:
@@ -870,6 +1101,7 @@ class ExpandService:
             timeout_ms = _DEFAULT_TIMEOUT_MS
             required_context: Optional[List[str]] = None
             safety_band_min: Optional[str] = None
+            activity_profile: Optional[str] = None
 
             if contract is not None:
                 has_side_effects = bool(getattr(contract, "has_side_effects", False))
@@ -881,6 +1113,31 @@ class ExpandService:
                 if rc:
                     required_context = list(rc)
                 safety_band_min = getattr(contract, "safety_band_min", None)
+                activity_profile = _clean_optional_str(getattr(contract, "activity_profile", None))
+
+            prompt_binding = validate_prompt_binding(
+                requested_template=step_dict.get("prompt_template"),
+                capability_name=cap_name,
+                discovered_prompts=discovered_prompt_items,
+                prompt_inventory=set(self._prompt_inventory.keys()),
+            )
+            if prompt_binding.state == "cleared":
+                log.warning(
+                    "EXPAND prompt binding %s: step=%s capability=%s requested=%r resolved=%r reason=%s",
+                    prompt_binding.state,
+                    step_dict.get("id", ""),
+                    cap_name,
+                    step_dict.get("prompt_template"),
+                    prompt_binding.resolved_name,
+                    prompt_binding.reason,
+                )
+
+            if activity_profile is None and prompt_binding.resolved_name is not None:
+                descriptor = prompt_descriptors_by_name.get(
+                    prompt_binding.resolved_name,
+                ) or self._prompt_inventory.get(prompt_binding.resolved_name)
+                if descriptor is not None:
+                    activity_profile = descriptor.activity_profile
 
             # Meta-agent: build_agent always has side effects.
             if cap_name == "tool.meta.build_agent":
@@ -898,7 +1155,7 @@ class ExpandService:
                 capability=cap_name,
                 params=step_dict.get("params", {}),
                 deps=step_dict.get("deps", []),
-                prompt_template=step_dict.get("prompt_template"),
+                prompt_template=prompt_binding.resolved_name,
                 tools_granted=step_dict.get("tools_granted"),
                 output_schema=output_schema,
                 condition=None,  # V1: always None
@@ -908,6 +1165,14 @@ class ExpandService:
                 timeout_ms=timeout_ms,
                 required_context=required_context,
                 safety_band_min=safety_band_min,
+                activity_profile=activity_profile,
+            )
+            log.debug(
+                "EXPAND step=%s capability=%s prompt_template=%r activity_profile=%r",
+                plan_step.id,
+                plan_step.capability,
+                plan_step.prompt_template,
+                plan_step.activity_profile,
             )
             enriched.append(plan_step)
 

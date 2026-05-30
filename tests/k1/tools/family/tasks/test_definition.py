@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from k1.fabric.manifest_translator import build_contract
 from k1.tools.family.tasks.definition import TASKS_DEFINITION
 
 _EXPECTED_ACTIONS = {
@@ -21,6 +22,8 @@ _EXPECTED_ACTIONS = {
 def test_definition_basics() -> None:
     assert TASKS_DEFINITION.adapter_id == "tasks"
     assert TASKS_DEFINITION.category == "coordination"
+    assert TASKS_DEFINITION.activity_profile == "tasks.v1"
+    assert set(TASKS_DEFINITION.domain_tags) >= {"task_management", "delegation", "deadline"}
 
 
 def test_all_ten_actions_present() -> None:
@@ -58,3 +61,19 @@ def test_sse_topics_format() -> None:
                 assert parts[0] == "family", f"bad topic prefix: {topic}"
                 assert parts[1] == "tasks", f"bad adapter in topic: {topic}"
                 assert parts[-1] == "v1", f"missing version suffix: {topic}"
+
+
+def test_all_task_actions_reference_activity_prompt_template() -> None:
+    for action in TASKS_DEFINITION.actions:
+        assert action.prompt_template == "tasks_activity_v1", action.name
+
+
+def test_task_contracts_inherit_activity_profile_metadata() -> None:
+    action = TASKS_DEFINITION.find_action("update_task")
+    assert action is not None
+
+    contract = build_contract(TASKS_DEFINITION, action)
+
+    assert contract.activity_profile == "tasks.v1"
+    assert contract.prompt_template == "tasks_activity_v1"
+    assert "task_management" in contract.domain

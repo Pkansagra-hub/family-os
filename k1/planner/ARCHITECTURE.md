@@ -352,7 +352,7 @@ All stages are Layer 4. They import Layer 0 types + Layer 1 ports only. Stages N
 ```json
 {
   "steps": [{
-    "id": "^s[0-9]+$", "capability": "str", "params": {}, "deps?": ["str"],
+    "id": "s<digits>", "capability": "str", "params": {}, "deps?": ["str"],
     "prompt_template?": "str", "tools_granted?": ["str"],
     "output_schema?": {}, "is_optional?": "bool"
   }],
@@ -361,7 +361,9 @@ All stages are Layer 4. They import Layer 0 types + Layer 1 ports only. Stages N
 }
 ```
 
-**Post-LLM Enrichment** (_enrich_steps): Fills 6 infrastructure fields from CapabilityContract metadata: `has_side_effects`, `compensation`, `timeout_ms`, `required_context`, `safety_band_min`, `output_schema`.
+**Post-LLM Enrichment** (_enrich_steps): Fills infrastructure fields from CapabilityContract metadata: `has_side_effects`, `compensation`, `timeout_ms`, `required_context`, `safety_band_min`, `output_schema`, and contract-backed `activity_profile`.
+
+**Prompt binding validation**: `prompt_template` is preserved only when it exactly matches a name returned by `find_prompts` or an injected prompt inventory. Invalid names are cleared and logged. EXPAND does not select replacements from domain text, prompt scores, compatible metadata, or capability-name tokens.
 
 **Degraded plan fallback**: PlanStep with `capability=UNRESOLVED`, `params={}`, `timeout_ms=10000`.
 

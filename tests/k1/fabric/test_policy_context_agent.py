@@ -186,11 +186,15 @@ def _make_request(
     params: Optional[Dict[str, Any]] = None,
     session_id: str = SESSION_ID,
     safety_band: str = SafetyBand.GREEN.value,
+    prompt_template: Optional[str] = None,
+    context_override: Optional[Dict[str, Any]] = None,
 ) -> CapabilityRequest:
     """Build a CapabilityRequest with session_id for policy+context reads."""
     return CapabilityRequest(
         capability_name=capability_name,
         params=params or {"query": "Plan a birthday party for Alice"},
+        prompt_template=prompt_template,
+        context_override=context_override,
         tier=Tier.MEDIUM.value,
         caller="test-policy-ctx-agent",
         session_id=session_id,
@@ -638,7 +642,9 @@ class TestContextBuilderReadsForAgent:
             session_id=SESSION_ID,
         )
 
-        assert result.context.session_sections == {}
+        assert result.context.session_sections == {
+            "context_override": {"prompt_template": "test_prompt_v1"}
+        }
         assert "beliefs_active" in result.missing_required
         assert "persona" in result.missing_required
 
@@ -943,8 +949,8 @@ class TestAgentExecutionWithContext:
         prompt_sys = TestPromptSystemAdapter()
         prompt_sys.add_template(
             "test_prompt_v1",
-            "Context: {context}\nTask: {task}",
-            variables=["context", "task"],
+            "Task: {query}",
+            variables=["query"],
         )
         builder = _make_context_builder(reader, prompt_system=prompt_sys)
         gw = TestModelGatewayAdapter(
@@ -966,6 +972,36 @@ class TestAgentExecutionWithContext:
         # LLM was called (output contains response)
         assert "response" in result.output
         assert result.tokens_used > 0
+        assert "Task: Plan a birthday party for Alice" in gw.get_handles()[0].prompts[0]
+
+    @pytest.mark.asyncio
+    async def test_execute_uses_request_prompt_template_override(self) -> None:
+        """Request prompt_template overrides the AgentContract prompt_template."""
+        reader = _make_state_reader(beliefs=BELIEFS_ACTIVE, persona=PERSONA)
+        prompt_sys = TestPromptSystemAdapter()
+        prompt_sys.add_template("test_prompt_v1", "Contract: {query}", variables=["query"])
+        prompt_sys.add_template("request_prompt_v1", "Request: {query}", variables=["query"])
+        builder = _make_context_builder(reader, prompt_system=prompt_sys)
+        gw = TestModelGatewayAdapter(default_responses=["Done."])
+        contract = _make_agent_contract()
+        factory = _make_agent_factory(
+            state_reader=reader,
+            context_builder=builder,
+            model_gateway=gw,
+            contract=contract,
+        )
+        request = _make_request(
+            params={"query": "Override prompt"},
+            prompt_template="request_prompt_v1",
+        )
+        fallback_ctx = ExecutionContext(trace_id="tr-llm-override")
+
+        result = await factory.spawn_and_execute(request, fallback_ctx, "tr-llm-override")
+
+        assert result.success is True
+        prompt = gw.get_handles()[0].prompts[0]
+        assert "Request: Override prompt" in prompt
+        assert "Contract: Override prompt" not in prompt
 
     @pytest.mark.asyncio
     async def test_missing_contract_returns_failure(self) -> None:
@@ -2028,7 +2064,9 @@ class TestEdgeCases:
             session_id=SESSION_ID,
         )
 
-        assert result.context.session_sections == {}
+        assert result.context.session_sections == {
+            "context_override": {"prompt_template": "test_prompt_v1"}
+        }
         assert len(result.missing_required) == 2
 
     @pytest.mark.asyncio
@@ -2066,7 +2104,9 @@ class TestEdgeCases:
             session_id="wrong-session-id",
         )
 
-        assert result.context.session_sections == {}
+        assert result.context.session_sections == {
+            "context_override": {"prompt_template": "test_prompt_v1"}
+        }
         assert len(result.missing_required) == 2
 
     @pytest.mark.asyncio

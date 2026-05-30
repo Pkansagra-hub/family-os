@@ -236,7 +236,13 @@ Front Actor (front_handler)
   ├─ Back ToolContext is rebound from the inbound envelope before ReAct
   │   (cognitive_trace_id, session_id, active_task_id) so dispatch_direct()
   │   capability calls carry the same turn correlation as task.dispatch.v1
-  ├─ back_prompt built (system prompt with task context + SS snapshot)
+  ├─ _execution_profile_block_for_task(task)
+  │     ├─ reuse task.execution_profiles when present (HITL resume stability)
+  │     ├─ otherwise select prompt-contract-backed metadata from explicit profile
+  │     │  fields or exact structured domain metadata
+  │     └─ render a bounded execution_profile_block and preserve selected metadata
+  ├─ back_prompt built (system prompt with task context + SS snapshot
+  │   + execution_profile_block before STEP 1)
   ├─ Tools filtered by tier (LOW=3, MEDIUM/HIGH=6)
   ├─ CancellationToken wired (polls cancel_token.is_cancelled() each iteration)
   ├─ ILLMPort.execute(HubRequest)            [non-streaming, structured JSON]
@@ -343,6 +349,10 @@ Phase1Pipeline (shared UltraBERT | StubPhase1Pipeline)
 
 FabricDispatchAdapter (session fabric + shared orchestrator)
   └─ IDispatchPort       → Back ReAct tool calls
+      └─ Active Back direct invoke/batch first calls bind_capability()
+         via discover_capabilities; bound results carry exact names plus
+         prompt/profile context, and invalid/ambiguous/not_found candidates
+         return typed degradation payloads before Fabric dispatch.
 
 BridgeClient (shared, may be None)
   └─ RecallMemoryAdapter → IMemoryPort → Front recall tool

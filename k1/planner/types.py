@@ -126,14 +126,15 @@ class ExpandedPlan:
 
     Flows: ExpandService -> PipelineController -> ValidateService -> CommitService.
 
-    Contains fully parameterised PlanStep instances (14 fields each from
+    Contains fully parameterised PlanStep instances (15 fields each from
     k1/orchestrator/types.py) plus a dependency graph and tool mappings.
 
     Fields
     ------
     steps : List[PlanStep]
         Fully parameterised plan steps.  Must be non-empty.
-        7 fields LLM-generated, 7 deterministically enriched by ExpandService.
+        8 fields LLM-generated, prompt/profile bindings validated, and
+        infrastructure fields deterministically enriched by ExpandService.
     dependencies : Dict[str, List[str]]
         step_id -> list of predecessor step_ids.  Must form a DAG.
         Keys must be a subset of step IDs.

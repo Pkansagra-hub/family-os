@@ -29,7 +29,7 @@ from typing import Any, Optional
 from k1.selfmodel.contracts.policy import RiskClass
 from k1.selfmodel.contracts.risk_class_registry import (
     FAIL_CLOSED_DEFAULT,
-    RISK_CLASS_BY_TOOL,
+    lookup_tool_risk,
 )
 from k1.selfmodel.events.topics import TOPIC_RISK_FALLBACK
 from k1.selfmodel.ports.risk_catalog import IRiskCatalogPort
@@ -68,6 +68,7 @@ def _publish_fallback(bus: Any, capability_name: str, source: str) -> None:
 
 # Map fabric YAML strings → RiskClass enum members.
 _RISK_BY_STRING: dict[str, RiskClass] = {
+    "benign": RiskClass.LOW,
     "low": RiskClass.LOW,
     "medium": RiskClass.MEDIUM,
     "high": RiskClass.HIGH,
@@ -121,7 +122,7 @@ class FabricRiskCatalog(IRiskCatalogPort):
             if declared is not None:
                 return declared
 
-        legacy = RISK_CLASS_BY_TOOL.get(capability_name)
+        legacy = lookup_tool_risk(capability_name)
         if legacy is not None:
             return legacy
 
@@ -185,7 +186,7 @@ class StaticRiskCatalog(IRiskCatalogPort):
     def get_risk(self, capability_name: str) -> RiskClass:
         if not isinstance(capability_name, str) or not capability_name:
             return FAIL_CLOSED_DEFAULT
-        risk = self._extra.get(capability_name) or RISK_CLASS_BY_TOOL.get(capability_name)
+        risk = self._extra.get(capability_name) or lookup_tool_risk(capability_name)
         if risk is not None:
             return risk
         with self._lock:

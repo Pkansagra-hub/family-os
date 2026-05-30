@@ -13,8 +13,6 @@ Test count target: ~35 tests.
 from __future__ import annotations
 
 from k1.concierge.config import get_config, reset_config
-from k1.sessionstate.factory import SessionStateFactory
-from k1.sessionstate.ports.writer import MutationRequest, RejectionCategory
 from k1.concierge.tools.implementations import (
     ToolContext,
     execute_promote_belief,
@@ -24,6 +22,8 @@ from k1.concierge.tools.implementations import (
     execute_update_narrative,
     execute_update_scoreboard,
 )
+from k1.sessionstate.factory import SessionStateFactory
+from k1.sessionstate.ports.writer import MutationRequest, RejectionCategory
 
 # =========================================================================
 # Helpers
@@ -112,20 +112,24 @@ class TestLlmWritableConfig:
         assert set(cfg.sessionstate.llm_writable_sections) == expected
 
     def test_system_owned_sections_present(self) -> None:
-        """get_config().sessionstate.system_owned_sections returns 10 sections."""
+        """get_config().sessionstate.system_owned_sections returns 14 sections."""
         cfg = get_config()
-        assert len(cfg.sessionstate.system_owned_sections) == 10
+        assert len(cfg.sessionstate.system_owned_sections) == 14
 
     def test_system_owned_sections_content(self) -> None:
-        """The 10 system-owned sections are correct."""
+        """The 14 system-owned sections are correct."""
         expected = {
             "control",
             "task_state",
             "task_artifacts",
             "meta",
+            "temporal",
+            "spatial",
+            "grounding",
             "history_active",
             "beliefs_history",
             "history_recent",
+            "place_registry",
             "persona",
             "telemetry",
             "artifacts_warm",
@@ -134,7 +138,7 @@ class TestLlmWritableConfig:
         assert set(cfg.sessionstate.system_owned_sections) == expected
 
     def test_allowlist_plus_system_equals_all_sections(self) -> None:
-        """LLM-writable + system-owned = ALL 15 sections (no gaps)."""
+        """LLM-writable + system-owned = ALL SessionState sections (no gaps)."""
         from k1.sessionstate.sizetracker import ALL_SECTIONS
 
         cfg = get_config()
@@ -548,7 +552,7 @@ class TestRuntimeSectionGuard:
                 )
 
     def test_tool_write_to_all_system_sections_rejected(self) -> None:
-        """tool:front is rejected for all 10 system-owned sections."""
+        """tool:front is rejected for all system-owned sections."""
         ss = _make_ss()
         writer = _make_writer(ss)
         cfg = get_config()

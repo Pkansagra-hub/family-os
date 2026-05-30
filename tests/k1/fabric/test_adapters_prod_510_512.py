@@ -67,6 +67,38 @@ prompt_contract:
   template: "Just a simple template."
 """
 
+TEMPLATE_FILE_PROMPT_YAML = (
+    "prompt_contract:\n"
+    "  name: file_template_v1\n"
+    '  version: "1.0.0"\n'
+    "  domain:\n"
+    "    - test\n"
+    "  description: A prompt backed by a separate template file\n"
+    "  template_file: template.md\n"
+    "  variables:\n"
+    "    - name: name\n"
+    "      type: STRING\n"
+    "      required: true\n"
+    "      description: Person to greet\n"
+    "  max_tokens: 100\n"
+    "  output_format: TEXT\n"
+    "  compatible_tools:\n"
+    "    - tool.execute.calendar.create_event\n"
+)
+
+MISSING_TEMPLATE_FILE_PROMPT_YAML = (
+    "prompt_contract:\n"
+    "  name: missing_file_template_v1\n"
+    '  version: "1.0.0"\n'
+    "  domain:\n"
+    "    - test\n"
+    "  description: A prompt with a missing template file\n"
+    "  template_file: missing.md\n"
+    "  variables: []\n"
+    "  max_tokens: 100\n"
+    "  output_format: TEXT\n"
+)
+
 NO_NAME_YAML = """\
 prompt_contract:
   template: "Template without a name."
@@ -166,6 +198,22 @@ class TestPromptSystemResolve:
         assert result.name == "minimal"
         assert result.template == "Just a simple template."
 
+    def test_resolve_template_file_relative_to_contract(self, tmp_path: Any) -> None:
+        (tmp_path / "template.md").write_text(
+            "Hello {name}, this came from a template file.", encoding="utf-8"
+        )
+        _write_yaml(str(tmp_path), "file_template.yaml", TEMPLATE_FILE_PROMPT_YAML)
+        adapter = PromptSystemProdAdapter(tmp_path)
+        result = adapter.resolve("file_template_v1")
+        assert result is not None
+        assert result.name == "file_template_v1"
+        assert result.template == "Hello {name}, this came from a template file."
+        assert result.variables == ["name"]
+        assert result.metadata["template_file"] == "template.md"
+        assert result.metadata["template_source"] == "template_file"
+        assert result.metadata["template_file_resolved"].endswith("template.md")
+        assert result.metadata["compatible_tools"] == ["tool.execute.calendar.create_event"]
+
     def test_skips_no_name_yaml(self, tmp_path: Any) -> None:
         _write_yaml(str(tmp_path), "bad.yaml", NO_NAME_YAML)
         adapter = PromptSystemProdAdapter(tmp_path)
@@ -241,6 +289,12 @@ class TestPromptSystemEdgeCases:
         _write_yaml(str(tmp_path), "bad.yaml", ": : :\n  - [invalid")
         adapter = PromptSystemProdAdapter(tmp_path)
         assert adapter.template_count == 0
+
+    def test_missing_template_file_skips_template(self, tmp_path: Any) -> None:
+        _write_yaml(str(tmp_path), "missing.yaml", MISSING_TEMPLATE_FILE_PROMPT_YAML)
+        adapter = PromptSystemProdAdapter(tmp_path)
+        assert adapter.template_count == 0
+        assert adapter.resolve("missing_file_template_v1") is None
 
     def test_reload(self, tmp_path: Any) -> None:
         adapter = PromptSystemProdAdapter(tmp_path)

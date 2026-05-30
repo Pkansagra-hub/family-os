@@ -238,6 +238,48 @@ class HILEnvelope:
 
 
 @dataclass(frozen=True, slots=True)
+class HILPresentedEnvelope:
+    """GAP-HIL-009: presentation acknowledgement on TOPIC_HIL_PRESENTED.
+
+    Published by the Front actor (or any HIL presenter) once an answerable
+    prompt has been rendered to a user surface. The HumanInTheLoopService
+    uses this signal to arm the per-kind human-response timer *after*
+    presentation rather than at request publish.
+
+    Fields are intentionally minimal -- this is a lifecycle marker, not
+    a content payload.
+    """
+
+    hil_request_id: str
+    task_id: str
+    kind: HILKind
+    presented_at_ms: int
+    presentation_channel: str  # "front_chat" | "widget" | "voice" | ...
+    trace_id: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "hil_request_id": self.hil_request_id,
+            "task_id": self.task_id,
+            "kind": self.kind.value,
+            "presented_at_ms": self.presented_at_ms,
+            "presentation_channel": self.presentation_channel,
+            "trace_id": self.trace_id,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> HILPresentedEnvelope:
+        return cls(
+            hil_request_id=str(d["hil_request_id"]),
+            task_id=str(d.get("task_id", "")),
+            kind=HILKind(d["kind"]),
+            presented_at_ms=int(d.get("presented_at_ms", 0)),
+            presentation_channel=str(d.get("presentation_channel", "")),
+            trace_id=str(d.get("trace_id", "")),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class HILResponseEnvelope:
     """Inbound envelope on TOPIC_HIL_RESPONSE."""
 

@@ -29,6 +29,7 @@ import logging
 import queue as _queue_mod
 import threading as _threading_mod
 import time
+from pathlib import Path
 from typing import Any, AsyncIterator, Dict, List, Optional
 from uuid import uuid4
 
@@ -50,6 +51,166 @@ from k1.model_hub.types import (
 )
 
 logger = logging.getLogger(__name__)
+_PROMPT_DUMP_DIR = Path(__file__).resolve().parents[3] / "data" / "prompt_dumps"
+_FRONT_PROVIDER_REQUEST_DUMPED: set[str] = set()
+
+
+def _dump_provider_message(message: Message) -> dict[str, Any]:
+    """Serialize a normalized message before Gemini SDK conversion."""
+    payload: dict[str, Any] = {"role": message.role, "content": message.content}
+    if message.tool_call_id:
+        payload["tool_call_id"] = message.tool_call_id
+    if message.name:
+        payload["name"] = message.name
+    if message.tool_calls:
+        payload["tool_calls"] = [
+            {
+                "id": call.id,
+                "name": call.name,
+                "arguments": call.arguments,
+            }
+            for call in message.tool_calls
+        ]
+    return payload
+
+
+def _dump_gemini_contents_preview(messages: list[Message]) -> list[dict[str, Any]]:
+    """Show the Gemini Content roles/parts produced from normalized messages."""
+    contents: list[dict[str, Any]] = []
+    for message in messages:
+        if message.role == "user":
+            contents.append(
+                {
+                    "role": "user",
+                    "parts": [{"text": message.content}],
+                }
+            )
+        elif message.role == "assistant":
+            if message.content:
+                contents.append(
+                    {
+                        "role": "model",
+                        "parts": [{"text": message.content}],
+                    }
+                )
+        elif message.role == "tool":
+            try:
+                response = json.loads(message.content)
+            except (json.JSONDecodeError, TypeError):
+                response = {"result": message.content}
+            contents.append(
+                {
+                    "role": "user",
+                    "parts": [
+                        {
+                            "function_response": {
+                                "name": message.name or "unknown_tool",
+                                "response": response,
+                            }
+                        }
+                    ],
+                }
+            )
+    return contents
+
+
+def _dump_gemini_tool_config_preview(tool_choice: str | None) -> dict[str, Any] | None:
+    """Show the FunctionCallingConfig implied by tool_choice."""
+    if not tool_choice:
+        return None
+    mode_map = {"auto": "AUTO", "required": "ANY", "none": "NONE"}
+    mode = mode_map.get(tool_choice, "AUTO")
+    config: dict[str, Any] = {"mode": mode}
+    if tool_choice not in mode_map:
+        config["mode"] = "ANY"
+        config["allowed_function_names"] = [tool_choice]
+    return {"function_calling_config": config}
+
+
+def _dump_gemini_config_preview(request: NormalizedRequest) -> dict[str, Any]:
+    """Show the GenerateContentConfig fields built for Gemini/Vertex."""
+    config: dict[str, Any] = {
+        "system_instruction": request.system_prompt or "",
+        "temperature": request.temperature,
+        "max_output_tokens": min(request.max_tokens, _GEMINI_MAX_OUTPUT_TOKENS),
+    }
+    if request.tools:
+        config["tools"] = [{"function_declarations": request.tools}]
+        tool_config = _dump_gemini_tool_config_preview(request.tool_choice)
+        if tool_config is not None:
+            config["tool_config"] = tool_config
+    if request.reasoning_effort and _supports_thinking_config(request.model_id):
+        config["thinking_config"] = {
+            "thinking_budget": _THINKING_BUDGET_MAP.get(request.reasoning_effort, 8192),
+            "include_thoughts": True,
+        }
+    if request.output_schema:
+        config["response_mime_type"] = "application/json"
+        config["response_json_schema"] = request.output_schema
+    if request.extra.get("code_execution"):
+        config.setdefault("tools", []).append({"code_execution": True})
+    if request.extra.get("google_search"):
+        config.setdefault("tools", []).append({"google_search": True})
+    return config
+
+
+def _write_front_provider_request_dump(
+    *,
+    provider_id: str,
+    request: NormalizedRequest,
+    model_id: str,
+    stream: bool,
+) -> None:
+    """Persist the first Front provider request for each trace id."""
+    if request.consumer_id != "concierge.front":
+        return
+    trace_key = f"{provider_id}:{request.trace_id or 'no-trace'}"
+    if trace_key in _FRONT_PROVIDER_REQUEST_DUMPED:
+        return
+    _FRONT_PROVIDER_REQUEST_DUMPED.add(trace_key)
+    try:
+        _PROMPT_DUMP_DIR.mkdir(parents=True, exist_ok=True)
+        timestamp_ms = int(time.time() * 1000)
+        payload = {
+            "timestamp_ms": timestamp_ms,
+            "provider_id": provider_id,
+            "model_id": model_id,
+            "trace_id": request.trace_id,
+            "consumer_id": request.consumer_id,
+            "capability": request.capability.value,
+            "stream": stream,
+            "normalized_request": {
+                "system_prompt": request.system_prompt or "",
+                "messages": [_dump_provider_message(message) for message in request.messages],
+                "tools": request.tools or [],
+                "tool_choice": request.tool_choice,
+                "output_schema": request.output_schema,
+                "max_tokens": request.max_tokens,
+                "timeout_ms": request.timeout_ms,
+                "temperature": request.temperature,
+                "reasoning_effort": request.reasoning_effort,
+            },
+            "gemini_generate_content": {
+                "model": model_id,
+                "contents": _dump_gemini_contents_preview(request.messages),
+                "config": _dump_gemini_config_preview(request),
+            },
+        }
+        trace_slug = (request.trace_id or "front").replace("/", "_").replace("\\", "_")
+        stem = f"front_provider_request_{provider_id}_{trace_slug}_{timestamp_ms}"
+        stamped_path = _PROMPT_DUMP_DIR / f"{stem}.json"
+        latest_path = _PROMPT_DUMP_DIR / "front_provider_request_latest.json"
+        serialized = json.dumps(payload, ensure_ascii=False, indent=2)
+        stamped_path.write_text(serialized, encoding="utf-8")
+        latest_path.write_text(serialized, encoding="utf-8")
+        logger.info(
+            "GooglePlugin: first Front provider request dump written file=%s latest=%s",
+            stamped_path,
+            latest_path,
+        )
+    except Exception:
+        logger.warning("GooglePlugin: provider request dump failed", exc_info=True)
+
 
 # ---------------------------------------------------------------------------
 # Lazy import of google.genai -- only this module touches it
@@ -84,7 +245,7 @@ _FINISH_MAP: Dict[str, FinishReason] = {
     "BLOCKLIST": FinishReason.SAFETY,
     "PROHIBITED_CONTENT": FinishReason.SAFETY,
     "SPII": FinishReason.SAFETY,
-    "MALFORMED_FUNCTION_CALL": FinishReason.ERROR,
+    "MALFORMED_FUNCTION_CALL": FinishReason.MALFORMED_TOOL_CALL,
 }
 
 
@@ -105,6 +266,15 @@ _THINKING_BUDGET_MAP: Dict[str, int] = {
     "high": 24576,
 }
 
+# Vertex/Gemini accepts max_output_tokens in [1, 65536) -- exclusive upper bound.
+# Passing 65536 yields HTTP 400 INVALID_ARGUMENT.
+_GEMINI_MAX_OUTPUT_TOKENS: int = 65535
+
+
+def _supports_thinking_config(model_id: str) -> bool:
+    normalized = model_id.lower()
+    return "gemini-2.5" in normalized or "gemini-3" in normalized
+
 
 class GooglePlugin:
     """Google Gemini provider plugin implementing IProviderPlugin.
@@ -115,6 +285,8 @@ class GooglePlugin:
     Supports: CHAT, TOOL_CALL, STRUCTURED, REASON, EMBED, VISION,
     WEB_SEARCH, CODE_EXEC, TOKEN_COUNT.
     """
+
+    provider_id = "google"
 
     def __init__(self) -> None:
         self._manifest: Optional[ProviderManifest] = None
@@ -135,13 +307,25 @@ class GooglePlugin:
         """Create the genai.Client lazily once api_key is available."""
         if self._client is None:
             genai, _ = _ensure_genai()
-            if not self._api_key:
+            if self._requires_api_key() and not self._api_key:
                 raise ProviderError(
                     "Google API key not set. Call set_api_key() first.",
-                    provider_id="google",
+                    provider_id=self.provider_id,
                 )
-            self._client = genai.Client(api_key=self._api_key)
+            self._client = self._create_client(genai, _)
         return self._client
+
+    def _requires_api_key(self) -> bool:
+        """Whether this provider requires API-key auth before client creation."""
+        return True
+
+    def _create_client(self, genai: Any, types: Any) -> Any:
+        """Create the SDK client for the Gemini Developer API."""
+        return genai.Client(api_key=self._api_key)
+
+    def _resolve_model_id(self, request: NormalizedRequest) -> str:
+        """Return the provider model id for this request."""
+        return request.model_id
 
     def supports(self, capability: CapabilityType) -> bool:
         return capability in self._capabilities
@@ -157,34 +341,39 @@ class GooglePlugin:
 
         contents = self._to_genai_contents(request, types)
         config = self._build_config(request, types)
+        model_id = self._resolve_model_id(request)
+        _write_front_provider_request_dump(
+            provider_id=self.provider_id,
+            request=request,
+            model_id=model_id,
+            stream=False,
+        )
 
-        start_ms = _now_ms()
         try:
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
                 None,
                 lambda: client.models.generate_content(
-                    model=request.model_id,
+                    model=model_id,
                     contents=contents,
                     config=config,
                 ),
             )
         except Exception as exc:
-            elapsed = _now_ms() - start_ms
             exc_str = str(exc)
             if "RESOURCE_EXHAUSTED" in exc_str or "429" in exc_str:
                 raise RateLimitError(
                     f"Gemini rate limited: {exc_str}",
-                    provider_id="google",
+                    provider_id=self.provider_id,
                     request_id=request.trace_id,
                 )
             raise ProviderError(
                 f"Gemini API error: {exc_str}",
-                provider_id="google",
+                provider_id=self.provider_id,
                 request_id=request.trace_id,
             )
 
-        return self._normalize_response(response, request)
+        return self._normalize_response(response, request, model_id=model_id)
 
     async def stream_execute(self, request: NormalizedRequest) -> AsyncIterator[ProviderChunk]:
         client = self._ensure_client()
@@ -192,6 +381,13 @@ class GooglePlugin:
 
         contents = self._to_genai_contents(request, types)
         config = self._build_config(request, types)
+        model_id = self._resolve_model_id(request)
+        _write_front_provider_request_dump(
+            provider_id=self.provider_id,
+            request=request,
+            model_id=model_id,
+            stream=True,
+        )
 
         # Bridge the synchronous google-genai streaming iterator into async
         # using a thread + queue so chunks are yielded progressively.
@@ -201,7 +397,7 @@ class GooglePlugin:
         def _produce() -> None:
             try:
                 for raw_chunk in client.models.generate_content_stream(
-                    model=request.model_id,
+                    model=model_id,
                     contents=contents,
                     config=config,
                 ):
@@ -225,12 +421,12 @@ class GooglePlugin:
                 if "RESOURCE_EXHAUSTED" in exc_str or "429" in exc_str:
                     raise RateLimitError(
                         f"Gemini rate limited: {exc_str}",
-                        provider_id="google",
+                        provider_id=self.provider_id,
                         request_id=request.trace_id,
                     )
                 raise ProviderError(
                     f"Gemini stream error: {exc_str}",
-                    provider_id="google",
+                    provider_id=self.provider_id,
                     request_id=request.trace_id,
                 )
             chunk = item
@@ -376,8 +572,9 @@ class GooglePlugin:
         # Temperature
         config_kwargs["temperature"] = request.temperature
 
-        # Max output tokens
-        config_kwargs["max_output_tokens"] = request.max_tokens
+        # Max output tokens (Vertex/Gemini accepts 1..65535 inclusive; 65536 is rejected with
+        # INVALID_ARGUMENT. Cap defensively in case an upstream caller passes a higher value.)
+        config_kwargs["max_output_tokens"] = min(request.max_tokens, _GEMINI_MAX_OUTPUT_TOKENS)
 
         # Tools
         gemini_tools = self._to_genai_tools(request, types)
@@ -391,7 +588,7 @@ class GooglePlugin:
                 )
 
         # Thinking config
-        if request.reasoning_effort:
+        if request.reasoning_effort and _supports_thinking_config(request.model_id):
             budget = _THINKING_BUDGET_MAP.get(request.reasoning_effort, 8192)
             config_kwargs["thinking_config"] = types.ThinkingConfig(
                 thinking_budget=budget,
@@ -493,6 +690,8 @@ class GooglePlugin:
         self,
         response: Any,
         request: NormalizedRequest,
+        *,
+        model_id: str | None = None,
     ) -> ProviderResponse:
         """Convert Gemini SDK response to ProviderResponse."""
         text = ""
@@ -546,7 +745,7 @@ class GooglePlugin:
             tool_calls=tool_calls if tool_calls else None,
             prompt_tokens=tokens_in,
             completion_tokens=tokens_out,
-            model_id=request.model_id,
+            model_id=model_id or request.model_id,
             finish_reason=finish_reason,
             raw_response=raw,
         )

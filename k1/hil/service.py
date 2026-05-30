@@ -29,7 +29,12 @@ from k1.hil.ledger import HILLedgerAdapter
 from k1.hil.ports import IEventPort, ILLMPort
 from k1.hil.safety import SafetyBandPolicy, SafetyDecision
 from k1.hil.suspension import SuspensionManager
-from k1.hil.topics import TOPIC_HIL_AUDIT, TOPIC_HIL_REQUEST, TOPIC_HIL_RESPONSE
+from k1.hil.topics import (
+    TOPIC_HIL_AUDIT,
+    TOPIC_HIL_PRESENTED,
+    TOPIC_HIL_REQUEST,
+    TOPIC_HIL_RESPONSE,
+)
 from k1.hil.types import (
     ApprovalRequest,
     ApprovalResponse,
@@ -40,6 +45,7 @@ from k1.hil.types import (
     GateOutcome,
     HILEnvelope,
     HILKind,
+    HILPresentedEnvelope,
     HILResponseEnvelope,
     NeedsHumanRequest,
     NeedsHumanResponse,
@@ -65,10 +71,13 @@ class HumanInTheLoopService:
         "_suspension_mgr",
         "_config",
         "_pending",
+        "_pending_presentation",
         "_round_budget",
         "_response_subscription",
+        "_presentation_subscription",
         "_lock",
         "_shutdown",
+        "_counters",
     )
 
     def __init__(
@@ -88,10 +97,24 @@ class HumanInTheLoopService:
         self._suspension_mgr = suspension_mgr
         self._config = config
         self._pending: dict[str, asyncio.Future[HILResponseEnvelope]] = {}
+        self._pending_presentation: dict[str, asyncio.Future[HILPresentedEnvelope]] = {}
         self._round_budget: dict[str, int] = {}
         self._lock = asyncio.Lock()
         self._shutdown = False
+        self._counters: dict[str, int] = {
+            "unknown_id": 0,
+            "legacy_bridge_ignored": 0,
+            "resolved": 0,
+            "timed_out": 0,
+            "presentation_timed_out": 0,
+            "presented": 0,
+        }
         self._response_subscription = event_port.subscribe(TOPIC_HIL_RESPONSE, self._on_response)
+        # GAP-HIL-009: subscribe to presentation acks so we can arm the
+        # human-response timer *after* the question reached the user.
+        self._presentation_subscription = event_port.subscribe(
+            TOPIC_HIL_PRESENTED, self._on_presented
+        )
 
     # ------------------------------------------------------------------
     # Public methods (one per HILKind)
@@ -343,6 +366,14 @@ class HumanInTheLoopService:
         # any in-flight request for the same caller_key (planner LC hook).
         self._round_budget.pop(caller_key, None)
 
+    def get_counters(self) -> dict[str, int]:
+        """Return a shallow copy of the in-process HIL boundary counters.
+
+        Keys: ``unknown_id``, ``legacy_bridge_ignored``, ``resolved``, ``timed_out``.
+        Monotonic per-process. Read by tests and observability; not published.
+        """
+        return dict(self._counters)
+
     async def shutdown(self) -> None:
         """Unsubscribe and cancel all pending futures."""
         if self._shutdown:
@@ -352,6 +383,8 @@ class HumanInTheLoopService:
             unsub = getattr(self._event_port, "unsubscribe", None)
             if unsub is not None and self._response_subscription is not None:
                 unsub(self._response_subscription)
+            if unsub is not None and self._presentation_subscription is not None:
+                unsub(self._presentation_subscription)
         except Exception as exc:  # noqa: BLE001
             logger.warning("hil_unsubscribe_failed error=%s", exc)
         async with self._lock:
@@ -359,6 +392,10 @@ class HumanInTheLoopService:
                 if not fut.done():
                     fut.cancel()
             self._pending.clear()
+            for pfut in list(self._pending_presentation.values()):
+                if not pfut.done():
+                    pfut.cancel()
+            self._pending_presentation.clear()
 
     # ------------------------------------------------------------------
     # Internals
@@ -384,8 +421,16 @@ class HumanInTheLoopService:
         )
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[HILResponseEnvelope] = loop.create_future()
+        # GAP-HIL-009: presentation future is created up-front so a
+        # PRESENTED ack that races ahead of our `await` is captured.
+        presentation_fut: asyncio.Future[HILPresentedEnvelope] | None = None
+        require_ack = bool(getattr(self._config, "require_presentation_ack", False))
+        if require_ack:
+            presentation_fut = loop.create_future()
         async with self._lock:
             self._pending[hil_id] = fut
+            if presentation_fut is not None:
+                self._pending_presentation[hil_id] = presentation_fut
 
         self._ledger.write_requested(env)
         await self._maybe_audit(
@@ -420,7 +465,47 @@ class HumanInTheLoopService:
         )
 
         try:
+            # GAP-HIL-009 / GAP-HIL-003: two-phase wait. Phase 1 waits for the
+            # presenter to ack via TOPIC_HIL_PRESENTED. Phase 2 then arms the
+            # full human-response timer. When ``require_presentation_ack`` is
+            # False the original single-timer behaviour is preserved.
+            if presentation_fut is not None:
+                presentation_timeout_s = (
+                    getattr(self._config, "presentation_timeout_ms", 5_000) / 1000.0
+                )
+                try:
+                    await asyncio.wait_for(presentation_fut, timeout=presentation_timeout_s)
+                except asyncio.TimeoutError:
+                    self._counters["presentation_timed_out"] = (
+                        self._counters.get("presentation_timed_out", 0) + 1
+                    )
+                    expired = HILResponseEnvelope(
+                        hil_request_id=hil_id,
+                        kind=kind,
+                        responded_at_ms=_now_ms(),
+                        payload={"reason": "presentation_timeout"},
+                        timed_out=True,
+                    )
+                    self._ledger.write_timed_out(env)
+                    await self._maybe_audit(
+                        {
+                            "event": "presentation_timed_out",
+                            "hil_request_id": hil_id,
+                            "kind": kind.value,
+                            "caller_key": caller_key,
+                            "presentation_timeout_ms": int(presentation_timeout_s * 1000),
+                            "timestamp_ms": expired.responded_at_ms,
+                        }
+                    )
+                    logger.warning(
+                        "hil_presentation_timed_out hil_request_id=%s kind=%s caller_key=%s",
+                        hil_id,
+                        kind.value,
+                        caller_key,
+                    )
+                    return expired
             resp = await asyncio.wait_for(fut, timeout=timeout_ms / 1000.0)
+            self._counters["resolved"] = self._counters.get("resolved", 0) + 1
             self._ledger.write_resolved(env, resp)
             await self._maybe_audit(
                 {
@@ -433,6 +518,7 @@ class HumanInTheLoopService:
             )
             return resp
         except asyncio.TimeoutError:
+            self._counters["timed_out"] = self._counters.get("timed_out", 0) + 1
             timeout_resp = HILResponseEnvelope(
                 hil_request_id=hil_id,
                 kind=kind,
@@ -461,6 +547,38 @@ class HumanInTheLoopService:
         finally:
             async with self._lock:
                 self._pending.pop(hil_id, None)
+                self._pending_presentation.pop(hil_id, None)
+
+    async def _on_presented(self, topic: str, data: dict[str, Any]) -> None:
+        """Resolve the presentation future for an in-flight HIL request.
+
+        GAP-HIL-009 -- arms the per-kind human-response timer after the
+        question is actually visible to the user. Unknown ids are simply
+        logged at debug; they are not errors (the request may have already
+        resolved/timed-out).
+        """
+        try:
+            env = HILPresentedEnvelope.from_dict(data)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "hil_presented_decode_failed topic=%s error=%s data_keys=%s",
+                topic,
+                exc,
+                list(data.keys()) if isinstance(data, dict) else type(data).__name__,
+            )
+            return
+        self._counters["presented"] = self._counters.get("presented", 0) + 1
+        async with self._lock:
+            pfut = self._pending_presentation.pop(env.hil_request_id, None)
+        if pfut is None:
+            logger.debug(
+                "hil_presented_unknown_id hil_request_id=%s kind=%s",
+                env.hil_request_id,
+                env.kind.value,
+            )
+            return
+        if not pfut.done():
+            pfut.set_result(env)
 
     async def _on_response(self, topic: str, data: dict[str, Any]) -> None:
         try:
@@ -477,16 +595,28 @@ class HumanInTheLoopService:
             fut = self._pending.get(resp.hil_request_id)
         if fut is None:
             if bool(resp.payload.get("legacy_bridge")):
+                self._counters["legacy_bridge_ignored"] = (
+                    self._counters.get("legacy_bridge_ignored", 0) + 1
+                )
                 logger.debug(
                     "hil_response_legacy_bridge_ignored hil_request_id=%s kind=%s",
                     resp.hil_request_id,
                     resp.kind.value,
+                    extra={
+                        "hil_request_id": resp.hil_request_id,
+                        "kind": resp.kind.value,
+                    },
                 )
                 return
+            self._counters["unknown_id"] = self._counters.get("unknown_id", 0) + 1
             logger.warning(
                 "hil_response_unknown_id hil_request_id=%s kind=%s",
                 resp.hil_request_id,
                 resp.kind.value,
+                extra={
+                    "hil_request_id": resp.hil_request_id,
+                    "kind": resp.kind.value,
+                },
             )
             return
         if not fut.done():

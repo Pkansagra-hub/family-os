@@ -92,7 +92,7 @@ def build_dispatches(
     classification: IntentClassification,
     tier: ComplexityTier = ComplexityTier.MEDIUM,
     reference_context: dict[str, str] | None = None,
-    safety_band: str = "AMBER",
+    safety_band: str = "GREEN",
     context_snapshot: dict[str, Any] | None = None,
 ) -> list[TaskDispatch]:
     """Build TaskDispatch(es) from classified intents.

@@ -1,0 +1,17 @@
+prompt_contract:
+  name: system_of_record_generic_v1
+  version: "1.0.0"
+  domain:
+    - system_of_record
+    - records
+    - family
+  description: Generic system-of-record execution guidance for schema-led read and write operations.
+  activity_profile: system_of_record.generic.v1
+  intent_match:
+    - update authoritative record
+    - read authoritative record
+    - reconcile structured data
+  variables: []
+  template_file: k1/prompts/activities/system_of_record_generic_v1.md
+  max_tokens: 800
+  output_format: TEXT

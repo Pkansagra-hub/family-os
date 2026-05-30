@@ -1,0 +1,123 @@
+# Gemini Enterprise Agent Platform Provider Manifest
+# Uses Google Cloud billing and the Agent Platform / aiplatform endpoint family.
+
+provider_id: vertex
+display_name: Gemini Enterprise Agent Platform
+plugin_class: k1.model_hub.plugins.vertex_plugin.VertexPlugin
+api_base: https://aiplatform.googleapis.com/v1
+
+auth:
+  # Optional GOOGLE_API_KEY is supported for Google Cloud API-key testing.
+  # With no key, the SDK uses ADC/service-account credentials.
+  type: none
+  credential_key: GOOGLE_API_KEY
+
+capabilities:
+  - CHAT
+  - TOOL_CALL
+  - STRUCTURED
+  - REASON
+  - EMBED
+  - VISION
+  - AUDIO_IN
+  - WEB_SEARCH
+  - TOKEN_COUNT
+  - CACHE_PROMPT
+  - CODE_EXEC
+
+models:
+  - id: gemini-2.5-flash
+    capabilities: [CHAT, TOOL_CALL, STRUCTURED, REASON, VISION, AUDIO_IN, WEB_SEARCH, TOKEN_COUNT, CACHE_PROMPT, CODE_EXEC]
+    cost_per_1m_input: 0.30
+    cost_per_1m_output: 2.50
+    max_context: 1048576
+    max_output: 65536
+    supports_streaming: true
+    tier: FAST
+
+  - id: gemini-2.5-flash-lite
+    capabilities: [CHAT, TOOL_CALL, STRUCTURED, REASON, VISION, AUDIO_IN, WEB_SEARCH, TOKEN_COUNT, CACHE_PROMPT, CODE_EXEC]
+    cost_per_1m_input: 0.10
+    cost_per_1m_output: 0.40
+    max_context: 1048576
+    max_output: 65536
+    supports_streaming: true
+    tier: FAST
+
+  - id: gemini-3.1-flash-lite
+    capabilities: [CHAT, TOOL_CALL, STRUCTURED, REASON, VISION, AUDIO_IN, WEB_SEARCH, TOKEN_COUNT, CACHE_PROMPT, CODE_EXEC]
+    cost_per_1m_input: 0.10
+    cost_per_1m_output: 0.40
+    max_context: 1048576
+    max_output: 65535
+    supports_streaming: true
+    tier: FAST
+
+  # Preview Gemini 3 models are available on the global Agent Platform endpoint.
+  # Keep stable Gemini 2.5 models above them so regional deployments such as
+  # us-central1 do not select preview/global-only models by default.
+  - id: gemini-3-flash-preview
+    capabilities: [CHAT, TOOL_CALL, STRUCTURED, REASON, VISION, AUDIO_IN, WEB_SEARCH, TOKEN_COUNT, CACHE_PROMPT, CODE_EXEC]
+    cost_per_1m_input: 0.10
+    cost_per_1m_output: 0.40
+    max_context: 1048576
+    max_output: 65536
+    supports_streaming: true
+    tier: FAST
+
+  - id: gemini-2.5-pro
+    capabilities: [CHAT, TOOL_CALL, STRUCTURED, REASON, VISION, AUDIO_IN, WEB_SEARCH, TOKEN_COUNT, CACHE_PROMPT, CODE_EXEC]
+    cost_per_1m_input: 1.25
+    cost_per_1m_output: 10.00
+    max_context: 1048576
+    max_output: 65536
+    supports_streaming: true
+    tier: PREMIUM
+
+  - id: gemini-3.1-pro-preview
+    capabilities: [CHAT, TOOL_CALL, STRUCTURED, REASON, VISION, AUDIO_IN, WEB_SEARCH, TOKEN_COUNT, CACHE_PROMPT, CODE_EXEC]
+    cost_per_1m_input: 1.25
+    cost_per_1m_output: 10.00
+    max_context: 1048576
+    max_output: 65536
+    supports_streaming: true
+    tier: PREMIUM
+
+  - id: gemini-3.1-pro-preview-customtools
+    capabilities: [CHAT, TOOL_CALL, STRUCTURED, REASON, VISION, AUDIO_IN, WEB_SEARCH, TOKEN_COUNT, CACHE_PROMPT, CODE_EXEC]
+    cost_per_1m_input: 1.25
+    cost_per_1m_output: 10.00
+    max_context: 1048576
+    max_output: 65536
+    supports_streaming: true
+    tier: PREMIUM
+
+  - id: gemini-embedding-001
+    capabilities: [EMBED]
+    cost_per_1m_input: 0.15
+    cost_per_1m_output: 0.0
+    max_context: 8192
+    supports_streaming: false
+    embedding_dimensions: 3072
+    tier: STANDARD
+
+circuit_breaker:
+  failure_threshold: 3
+  failure_window_s: 60
+  cooldown_s: 30
+
+health_check:
+  endpoint: https://aiplatform.googleapis.com/v1
+  interval_s: 30
+  timeout_s: 5
+
+concurrency:
+  max_concurrent: 50
+
+rate_limits:
+  rpm: 360
+  tpm: 1000000
+  headroom_pct: 0.80
+
+placement:
+  type: remote

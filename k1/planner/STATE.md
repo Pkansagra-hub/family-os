@@ -107,6 +107,8 @@ All fields are reset by `reset()` at the start of every `execute()` or `micro_re
 `ToolCallRouter._tool_call_count` is shared — `PipelineController.reset()` calls
 `tool_router.reset()` which zeroes it.
 
+`ExpandService._prompt_inventory` is constructor-injected and read-only during plan execution. It is used only to preserve exact prompt template names that were not returned by `find_prompts`; invalid names are cleared during enrichment and do not become `PlanStep.prompt_template`.
+
 ---
 
 ## 5. Cancel checkpoint state

@@ -111,7 +111,7 @@ def _build_constraints(raw: Optional[Dict[str, Any]]) -> RequestConstraints:
         priority = Priority.INTERACTIVE
 
     return RequestConstraints(
-        max_tokens=raw.get("max_tokens", 65536),
+        max_tokens=raw.get("max_tokens", 65535),
         timeout_ms=raw.get("timeout_ms", 30000),
         priority=priority,
         temperature=raw.get("temperature", 0.7),

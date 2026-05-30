@@ -21,6 +21,13 @@ TOPIC_HIL_RESPONSE = "k1.hil.response.v1"
 # Optional observability stream (requested / resolved / timed_out / blocked)
 TOPIC_HIL_AUDIT = "k1.hil.audit.v1"
 
+# Presentation acknowledgement (GAP-HIL-009). Published by the Front actor
+# (or any HIL presenter) once an answerable prompt has been rendered to a
+# user surface. Payload shape: HILPresentedEnvelope.to_dict() in k1.hil.types.
+# The HumanInTheLoopService subscribes and uses this signal to arm the
+# human-response timeout *after* presentation, not at request publish.
+TOPIC_HIL_PRESENTED = "k1.hil.presented.v1"
+
 
 # Caller-key namespaces (convention, not enforced):
 #   planner:<plan_id>          -- planner SKETCH / VALIDATE

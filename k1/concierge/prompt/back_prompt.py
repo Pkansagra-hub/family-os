@@ -17,6 +17,7 @@ Template variables:
   {persona_prefs}      -- User preferences as JSON
   {max_tool_calls}     -- Budget (tier-driven)
   {execution_profile_block} -- Optional activity-specific execution hints
+  {execution_grounding_block} -- Optional task grounding projection
 """
 
 from __future__ import annotations
@@ -57,7 +58,7 @@ Built-in knowledge:
 - You have broad general-world knowledge and reasoning. Use it when the
   dispatch explicitly asks for general context, wording, synthesis, or notes.
 - Native knowledge is NOT authority over live records, current availability,
-  prices, account data, schedules, family-specific facts, or institution-owned
+  prices, account data, schedules, domain-specific private facts, or institution-owned
   instructions. Those require capabilities, memory, or Session State.
 - When you use native knowledge as content in a capability write/update,
   mark provenance and authority in semantic_context/artifact semantic data:
@@ -80,12 +81,14 @@ You operate in a Think-Act-Observe loop. Each iteration:
 
 PARALLEL TOOL CALLS:
   Call multiple tools in a single response when they are independent.
-  Example: recall_memory("agenda") + recall_memory("family schedule")
+  Example: recall_memory("agenda") + recall_memory("known constraints")
   can be called together. The system runs them concurrently.
 
 Follow this mandatory sequence. Do not skip steps.
 
 {execution_profile_block}
+
+{execution_grounding_block}
 
 STEP 1 -- ORIENT:
   Read the task dispatch below: intents, params, reference_context.
@@ -186,9 +189,9 @@ STEP 5 -- SAFETY CHECK:
         discovered a payment sub-step not mentioned) -> request approval.
   3. side_effects == false: Execute freely.
 
-  PRACTICAL RULE: If the user said "send notification to Nana Liz",
-  "start the washing machine", "add to grocery list", or any explicit
-  action verb -- that IS the approval. Execute it. Do NOT ask again.
+  PRACTICAL RULE: If the user explicitly asked you to send, start, add,
+  update, create, book, configure, or otherwise perform the action in the
+  dispatch, that IS the approval. Execute it. Do NOT ask again.
 
 STEP 6 -- INVOKE:
   If you have 2+ capabilities to invoke:
@@ -212,7 +215,7 @@ STEP 6 -- INVOKE:
          -- batch multiple fetches in ONE response if possible.
       4. Synthesize the fetched page content into your final_answer.
     Example final_answer (GOOD):
-      "Found 3 Indian restaurants in Denton. Maharaja (4.5 stars, $$,
+      "Found 3 matching Indian restaurants. Maharaja (4.5 stars, $$,
        menu includes tikka masala, biryani, naan). Tandoori Grill (4.2
        stars, lunch buffet $12.99, open until 10pm). Curry House (4.0
        stars, $, delivery available via DoorDash)."
@@ -248,13 +251,11 @@ CAPABILITY NAMING (registry-owned, NOT inferred by you):
   use that exact name; do NOT rewrite it as a calendar capability.
 
 DOMAIN HINTS for discover_capabilities(domain=...):
-  Use a short, lower-case domain label that describes the area of
-  responsibility, e.g. ``tasks``, ``reminders``, ``chores``,
-  ``calendar``, ``messaging``, ``shopping``, ``household``, ``health``,
-  ``transport``, ``finance``, ``travel``, ``search``, ``iot``.
-  Domain labels are HINTS for ranking; the authoritative match comes
-  from the registry's response. If a domain returns nothing, retry
-  with a different label or omit the domain.
+  Use a short, lower-case label derived from the dispatch's requested area of
+  responsibility. Domain labels are HINTS for ranking; the authoritative match
+  comes from the registry's response. Never hard-code vertical-specific routing
+  assumptions. If a domain returns nothing, retry with a different neutral label
+  or omit the domain.
 
 WEB SEARCH WORKFLOW (when discover returns a web-search capability):
   After invoking the web-search capability you MUST follow up by
@@ -413,10 +414,12 @@ def build_back_prompt(
     referents: dict[str, Any] | None = None,
     task_state: str = "",
     task_artifacts: str = "",
-    safety_band: str = "AMBER",
+    safety_band: str = "GREEN",
     persona_prefs: dict[str, Any] | None = None,
     max_tool_calls: int | None = None,
     execution_profile_block: str = "",
+    execution_grounding_block: str = "",
+    resolved_temporal_refs: dict[str, Any] | None = None,
 ) -> str:
     """Build Back system prompt with task-specific context injection.
 
@@ -434,6 +437,8 @@ def build_back_prompt(
         persona_prefs: User preferences dict (payment, dietary, accessibility).
         max_tool_calls: Budget (tier-driven max iterations). None = config default.
         execution_profile_block: Optional selected activity guidance for Back.
+        execution_grounding_block: Optional execution grounding projection block.
+        resolved_temporal_refs: Optional typed temporal refs from dispatch.
 
     Returns:
         Fully assembled system prompt string.
@@ -441,6 +446,11 @@ def build_back_prompt(
     if max_tool_calls is None:
         max_tool_calls = get_config().prompt.back_max_tool_calls
     prefs = persona_prefs or {}
+    resolved_temporal_refs = resolved_temporal_refs or _task_resolved_temporal_refs(task)
+    execution_grounding_block = _with_resolved_temporal_refs(
+        execution_grounding_block,
+        resolved_temporal_refs=resolved_temporal_refs,
+    )
 
     # Determine tier from task to generate available-tools note
     tier = "LOW"
@@ -481,6 +491,7 @@ def build_back_prompt(
         max_tool_calls=max_tool_calls,
         available_tools_note=available_tools_note,
         execution_profile_block=execution_profile_block.strip(),
+        execution_grounding_block=execution_grounding_block.strip(),
     )
     task_action = (
         task.get("action", task.get("intents", [{}])[0].get("action", "unknown"))
@@ -496,3 +507,46 @@ def build_back_prompt(
         len(prompt),
     )
     return prompt
+
+
+def _task_resolved_temporal_refs(task: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(task, dict):
+        return None
+    refs = task.get("resolved_temporal_refs")
+    return refs if isinstance(refs, dict) else None
+
+
+def _with_resolved_temporal_refs(
+    execution_grounding_block: str,
+    *,
+    resolved_temporal_refs: dict[str, Any] | None,
+) -> str:
+    block = execution_grounding_block.strip()
+    if not resolved_temporal_refs:
+        return block
+    lines = block.splitlines() if block else ["== EXECUTION GROUNDING =="]
+    lines.append("resolved_temporal_refs_typed:")
+    for raw_text, value in resolved_temporal_refs.items():
+        lines.append(f"- {raw_text}: {_render_temporal_ref(value)}")
+    return "\n".join(lines)
+
+
+def _render_temporal_ref(value: Any) -> str:
+    if not isinstance(value, dict):
+        return str(value)
+    label = str(value.get("normalized_label") or value.get("raw_text") or "resolved")
+    kind = str(value.get("resolution_kind") or "")
+    if value.get("needs_clarification"):
+        return f"{label} ({kind or 'ambiguous'})"
+    window = value.get("window")
+    if isinstance(window, dict):
+        compact = {
+            key: window.get(key)
+            for key in ("start_local", "end_local", "start_utc", "end_utc", "timezone")
+            if window.get(key) is not None
+        }
+        return f"{label} ({kind or 'window'}) {json.dumps(compact, sort_keys=True)}"
+    instant = value.get("instant_local")
+    if instant:
+        return f"{label} ({kind or 'instant'}) {instant}"
+    return json.dumps(value, sort_keys=True)

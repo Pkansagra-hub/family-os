@@ -50,7 +50,7 @@ class ExperienceLayer:
         it only calls the method and collects the output.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, episodic_compressor: object | None = None) -> None:
         self.emotional_processor = EmotionalProcessor()
         self.affective_mirror = AffectiveMirror()
         self.narrative_weaver = NarrativeWeaver()
@@ -58,8 +58,18 @@ class ExperienceLayer:
         self.proactive_agent = ProactiveAgent()
         self.rhythm_controller = RhythmController()
         self.turn_count = 0
+        # OPP-6 / M6.E1 compression boundary state. Same compressor object
+        # is shared with OppPipeline so Front prompt path and ExperienceLayer
+        # tick path observe a single source of truth.
+        self.episodic_compressor = episodic_compressor
+        self.compression_count: int = 0
+        self.last_compressed_context: str = ""
+        self.last_episodes_used: int = 0
+        self.last_recent_turns_kept: int = 0
         logger.info(
-            "ExperienceLayer initialized (6 components: EP, AM, NW, AR, PA, RC)",
+            "ExperienceLayer initialized (6 components: EP, AM, NW, AR, PA, RC; "
+            "episodic_compressor=%s)",
+            "attached" if episodic_compressor is not None else "none",
         )
 
     async def tick(self, fsm_state: str, context: dict) -> dict:
@@ -155,6 +165,51 @@ class ExperienceLayer:
             context.get("user_cadence", {}),
         )
         envelopes["timing"] = timing
+
+        # ---- EpisodicCompressor: M6.E1.I5 compression boundary ----
+        # Runs every tick after the components but is INERT until both
+        # (a) a compressor is attached (factory wiring) and
+        # (b) conversation_history has reached ``min_turns_to_compress``.
+        # Telemetry-only: stores last result on ``self.last_*`` and
+        # increments ``compression_count``. Does NOT mutate Session State
+        # and does NOT replace ``context['conversation_history']`` -- the
+        # Front prompt path owns prompt-side substitution via OppPipeline.
+        if self.episodic_compressor is not None:
+            try:
+                history = context.get("conversation_history", []) or []
+                min_turns = int(
+                    getattr(
+                        self.episodic_compressor.config,
+                        "min_turns_to_compress",
+                        15,
+                    )
+                )
+                if len(history) >= min_turns:
+                    from k1.concierge.compression.turn_shape import (
+                        history_entries_to_opp_turns,
+                    )
+
+                    turns = history_entries_to_opp_turns(history)
+                    episodes, recent = self.episodic_compressor.compress_all(turns)
+                    if episodes:
+                        self.compression_count += 1
+                        self.last_compressed_context = (
+                            self.episodic_compressor.build_compressed_context(episodes, recent)
+                        )
+                        self.last_episodes_used = len(episodes)
+                        self.last_recent_turns_kept = len(recent)
+                        logger.debug(
+                            "ExperienceLayer.tick: episodic_compressor produced "
+                            "%d episodes / %d recent (count=%d)",
+                            len(episodes),
+                            len(recent),
+                            self.compression_count,
+                        )
+            except Exception:
+                logger.warning(
+                    "ExperienceLayer.tick: episodic compression failed",
+                    exc_info=True,
+                )
 
         logger.debug(
             "ExperienceLayer.tick: turn=%d fired=%s",

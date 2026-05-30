@@ -22,6 +22,7 @@ cleared implicitly by `shutdown()`.
 | `_self_model_bundle` | `SelfModelServiceBundle \| None` | S2.6 | `bundle.shutdown()` in shutdown |
 | `_bridge` | `SinkBridgeAdapter \| OfflineBridgeAdapter` | S4 | `bridge.disconnect()` in shutdown |
 | `_session_routing_reader` | `SessionRoutingStateReader` | pre-S3 | (not explicitly closed) |
+| `_prompt_system` | `PromptSystemProdAdapter \| None` | S3 | cleared during cleanup/shutdown |
 | `_shared_fabric` | `CapabilityFabric` | S3 | `fabric.shutdown()` in shutdown |
 | `_orchestrator` | `OrchestratorService` | S5 | `orchestrator.shutdown()` in shutdown |
 | `_orch_storage` | `WorkflowStorageAdapter \| None` | S5 | `orch_storage.close()` in shutdown |
@@ -183,6 +184,14 @@ state and can be started again (though factory state from partial teardown may d
    and every per-session Concierge. Mutations to HIL state are globally visible.
 7. `bridge_client` (`bridge.get_client()`) is the same object shared across all per-session
    adapters. It is not session-scoped; all sessions write to the same bridge outbox.
+8. `_prompt_system` is the verified production prompt adapter for `k1/contracts/prompts`.
+   Startup logs its template count. Empty prompt inventory warns by default and only
+   fails startup when `enable_activity_profiles_strict=True`; native family tools still
+   register when the prompt inventory is absent or empty.
+9. Per-session Fabric reuses the shared CapabilityRegistry and the verified prompt
+   adapter. Family tool `CapabilityContract.prompt_template` and `activity_profile`
+   metadata is therefore visible through session Fabric discovery without being copied
+   into business params.
 
 ---
 

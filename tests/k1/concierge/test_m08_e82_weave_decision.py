@@ -791,8 +791,8 @@ class TestWeaveDecidedTopicWiring:
         assert TOPIC_WEAVE_DECIDED not in STRICT_TOPICS
 
     def test_all_topics_count(self) -> None:
-        """ALL_TOPICS has 47 topics after E8.5.1 + E11.x + M6 E6.4."""
-        assert len(ALL_TOPICS) == 47
+        """ALL_TOPICS has 49 topics after section-update lifecycle events."""
+        assert len(ALL_TOPICS) == 49
 
     def test_relaxed_topics_count(self) -> None:
         """RELAXED_TOPICS has 10 topics after E8.5.1 + E11.x."""

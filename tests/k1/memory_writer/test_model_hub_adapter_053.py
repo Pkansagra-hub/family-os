@@ -6,7 +6,8 @@ Covers I-0.5.3.1 + I-0.5.3.2:
   - Message dict -> Message object translation
   - System prompt extraction
   - Token budget mapping (MW-06: 2000)
-  - model_hint -> provider_preference mapping
+    - concrete model_hint -> model_preference mapping
+    - provider model_hint -> provider_preference mapping
   - Token usage extraction from ResponseMetadata
   - Priority.BACKGROUND for extraction work
   - trace_id propagation
@@ -24,9 +25,19 @@ from typing import AsyncIterator, Dict, List
 from k1.memory_writer.adapters.model_hub_adapter import ModelHubAdapter
 from k1.memory_writer.ports.model_hub_port import IModelHubPort
 from k1.memory_writer.types import ChatResponse
-from k1.model_hub.types import CapabilityType, HubChunk, HubHealthReport, HubRequest, HubResponse
+from k1.model_hub.types import (
+    CapabilityType,
+    HubChunk,
+    HubHealthReport,
+    HubRequest,
+    HubResponse,
+)
 from k1.model_hub.types import ModelInfo as HubModelInfo
-from k1.model_hub.types import Priority, ResponseMetadata, TokenUsage
+from k1.model_hub.types import (
+    Priority,
+    ResponseMetadata,
+    TokenUsage,
+)
 
 # ---------------------------------------------------------------------------
 # Fake K1 IModelHubPort
@@ -251,6 +262,19 @@ class TestRequestConstraints:
         )
         req = hub.execute_calls[0]
         assert req.constraints.provider_preference == "anthropic"
+
+    async def test_model_hint_concrete_model_sets_model_preference(self) -> None:
+        hub = FakeK1Hub()
+        adapter = ModelHubAdapter(hub, trace_id="t-9b")
+        await adapter.chat(
+            messages=[{"role": "user", "content": "x"}],
+            budget_tokens=2000,
+            model_hint="gemini-2.5-flash",
+        )
+        req = hub.execute_calls[0]
+        assert req.constraints.provider_preference is None
+        assert req.constraints.model_preference is not None
+        assert req.constraints.model_preference.preferred_model == "gemini-2.5-flash"
 
     async def test_consumer_id_default(self) -> None:
         hub = FakeK1Hub()

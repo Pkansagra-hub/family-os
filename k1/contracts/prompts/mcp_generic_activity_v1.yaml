@@ -1,0 +1,21 @@
+prompt_contract:
+  name: mcp_generic_activity_v1
+  version: "1.0.0"
+  domain:
+    - mcp
+    - external_tool
+    - system_of_record
+  description: Generic MCP activity execution guidance.
+  activity_profile: mcp.generic.v1
+  intent_match:
+    - call external tool contract
+    - inspect MCP capability result
+    - use registered MCP server
+  variables: []
+  template_file: k1/prompts/activities/mcp_generic_activity_v1.md
+  max_tokens: 800
+  output_format: TEXT
+  compatible_tools:
+    - tool.read.find_prompts
+    - tool.read.discover_capabilities
+    - tool.write.build_agent

@@ -144,6 +144,16 @@ class EpisodicCompressor:
             self._config.compression_strategy,
         )
 
+    @property
+    def config(self) -> CompressionConfig:
+        """Public read-only view of the compressor's configuration.
+
+        Exposed so callers (e.g. ``ExperienceLayer``) can read tuning
+        knobs such as ``min_turns_to_compress`` without reaching into
+        the private ``_config`` slot.
+        """
+        return self._config
+
     def should_compress(self, total_turns: int) -> bool:
         """Check if compression should be triggered.
 

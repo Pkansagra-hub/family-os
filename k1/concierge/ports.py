@@ -117,9 +117,13 @@ class IDispatchPort(Protocol):
         intent: str,
         domain: Any = None,
         top_k: int = 5,
-        safety_band: str = "AMBER",
+        safety_band: str = "GREEN",
     ) -> RetrievalResult:
         """Find candidate capabilities with their contracts/input schemas."""
+        ...
+
+    async def lookup_capability(self, capability_name: str, version: str | None = None) -> Any:
+        """Return the exact registered capability contract, if present."""
         ...
 
     async def dispatch_direct(self, request: CapabilityRequest) -> CapabilityResult:

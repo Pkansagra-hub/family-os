@@ -17,9 +17,11 @@ V2 Design Ref: Section 15.4.C (Unified Metrics Emission Layer)
 
 from k1.concierge.obs.actor_metrics import (
     BackOutcome,
+    BackProfileSelectionOutcome,
     FrontOutcome,
     classify_budget_utilization,
     record_back_metrics,
+    record_back_profile_selection,
     record_front_metrics,
 )
 
@@ -53,8 +55,10 @@ __all__ = [
     "record_react_loop_metrics",
     "FrontOutcome",
     "BackOutcome",
+    "BackProfileSelectionOutcome",
     "record_front_metrics",
     "record_back_metrics",
+    "record_back_profile_selection",
     "classify_budget_utilization",
     # Stub submodules
     "AlertRule",

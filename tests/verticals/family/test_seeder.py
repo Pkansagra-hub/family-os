@@ -9,6 +9,7 @@ import pytest
 
 from k1.selfmodel.adapters.memory_projection_store import InMemoryProjectionStore
 from k1.selfmodel.contracts.space_graph import SpaceGraphSnapshot
+from k1.selfmodel.kernel import build_self_model_bundle, build_self_model_handle
 from k1.selfmodel.service.space_graph import SPACE_GRAPH_WRITER_ID
 from verticals.family.seeder import SpaceDataSeeder
 from verticals.family.smith import SMITH_PROFILE
@@ -74,6 +75,18 @@ class TestSeedSpaceProjection:
         assert len(parent_of) == 2
         assert ("alex", "riley", "parent_of") in edges
         assert ("jordan", "riley", "parent_of") in edges
+        # Reverse child_of edges so children see all parents in their view.
+        child_of = [e for e in edges if e[2] == "child_of"]
+        assert len(child_of) == 2
+        assert ("riley", "alex", "child_of") in edges
+        assert ("riley", "jordan", "child_of") in edges
+        # Symmetric coparent_of edges so each guardian sees the other.
+        coparent_of = [e for e in edges if e[2] == "coparent_of"]
+        assert len(coparent_of) == 2
+        assert ("alex", "jordan", "coparent_of") in edges
+        assert ("jordan", "alex", "coparent_of") in edges
+        # No sibling_of edges expected for one-child Smith profile.
+        assert not [e for e in edges if e[2] == "sibling_of"]
 
     def test_idempotent_skip_on_second_call(self):
         seeder = SpaceDataSeeder()
@@ -87,6 +100,60 @@ class TestSeedSpaceProjection:
         seeder = SpaceDataSeeder()
         with pytest.raises(ValueError):
             seeder.seed_space_projection(None, SMITH_PROFILE)
+
+
+class TestSeedSelfProjections:
+    def test_normalizes_roles_and_seeds_family_consent(self):
+        seeder = SpaceDataSeeder()
+        bundle = build_self_model_bundle(
+            space_id=SMITH_PROFILE.space_id,
+            publish_startup=False,
+        )
+
+        assert seeder.seed_self_projections(bundle, SMITH_PROFILE) == len(SMITH_PROFILE.members)
+
+        alex, _ = bundle.store.read_self("alex")
+        assert alex is not None
+        assert alex.L1_core["role"] == "guardian"
+        assert alex.L2_identity["role_in_family"] == "guardian"
+        assert alex.L2_identity["family_relation"] == "parent"
+        assert set(alex.L1_core["consent_posture"]["family"]) >= {
+            "display_name",
+            "role",
+            "age_band",
+        }
+
+    def test_seeded_selfmodel_renders_typed_space_and_guardian_conscience(self):
+        seeder = SpaceDataSeeder()
+        bundle = build_self_model_bundle(
+            space_id=SMITH_PROFILE.space_id,
+            publish_startup=False,
+        )
+        seeder.seed_space_projection(bundle, SMITH_PROFILE)
+        seeder.seed_self_projections(bundle, SMITH_PROFILE)
+        handle = build_self_model_handle(
+            bundle,
+            session_id="web-test",
+            actor_id="alex",
+            device_id="alex_phone",
+            situation_kind="caregiver_context_briefing",
+        )
+
+        frame = handle.current_frame()
+        capsule = handle.render_capsule()
+
+        assert frame.self_view is not None
+        assert frame.self_view.role == "guardian"
+        assert "riley" in frame.visibility.can_see_members
+        assert "jordan" in frame.visibility.can_see_members
+        assert any(other.member_id == "riley" for other in frame.relations.projected_others)
+        assert any(other.member_id == "jordan" for other in frame.relations.projected_others)
+        assert capsule is not None
+        assert capsule.space_graph_block.startswith("[space]")
+        assert "Riley" in capsule.space_graph_block
+        assert "Jordan" in capsule.space_graph_block
+        assert "must_ask=send_message" in capsule.conscience_block
+        assert "forbidden=prescribe_medication" in capsule.conscience_block
 
 
 class TestSeedK0Memories:

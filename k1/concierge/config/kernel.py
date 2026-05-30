@@ -62,13 +62,36 @@ class KernelConfig:
     # a ToolContext without an IDispatchPort and want the legacy POC
     # stub responses should set this to True.
     allow_dispatch_passthrough: bool = False
+    # Activity profile / tool prompt injection support. The prompt system
+    # remains advisory: missing prompt inventory warns by default and only
+    # fails startup when strict mode is explicitly enabled.
+    enable_activity_profiles: bool = True
+    enable_activity_profiles_strict: bool = False
     auto_start_consumer: bool = True
     # M1 E1.4.1: Create and inject LedgerWriter into FSM at boot
     enable_ledger: bool = True
+    # M5 G5: when True, run CrashRecoveryOrchestrator at session create
+    # to rebuild FSM protocol state from the ledger BEFORE the
+    # controller's own ``_recover_hitl_on_startup`` runs. Default False
+    # to preserve current cold-start behavior; flip on for production
+    # warm-starts and the M5 ledger-replay integration test.
+    enable_ledger_recovery: bool = False
     # M2 E2.5.1: Create DeadLetterConsumer at boot
     enable_dead_letter_consumer: bool = True
     seed_memories: list[dict[str, Any]] = field(default_factory=list)
     delta_batch_window_ms: int = 500
+    # M4: hidden background SessionState maintenance after turn completion.
+    # Production component — when enabled, the worker always applies plans
+    # against SessionState via the writer port. There is no shadow / observe
+    # mode; ``section_update_worker_mode`` is retained for backwards
+    # compatibility but any non-disabled value is treated as ``background_apply``.
+    enable_section_update_worker: bool = False
+    section_update_worker_mode: str = "background_apply"  # off | background_apply
+    section_update_worker_timeout_ms: int = 75_000
+    section_update_worker_queue_max: int = 128
+    section_update_classifier_version: str = "section-update-v0"
+    section_update_provider: str = "vertex"
+    section_update_model: str = "gemini-2.5-flash-lite"
     dead_letter_enabled: bool = True
     poll_interval_s: float = 0.05
     dedup_cache_size: int = 4096
@@ -133,6 +156,12 @@ class KernelConfig:
     #   * RecallCitationWrapper around ToolContext.recall_fn
     # Defaults to False so existing kernel + session tests are unchanged.
     enable_self_model: bool = False
+    # Temporal/spatial/grounding are on by default after the M3 exit gate.
+    # Operators can still disable each slice explicitly for isolated tests
+    # or incident rollback.
+    enable_temporal: bool = True
+    enable_grounding: bool = True
+    enable_spatial: bool = True
     # Path to the SQLite projection store used by k1.selfmodel. When
     # empty / None the kernel falls back to an in-memory store
     # (suitable for tests + dev). Honored only when

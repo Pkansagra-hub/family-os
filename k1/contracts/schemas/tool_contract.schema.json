@@ -142,6 +142,20 @@
           "type": ["object", "null"],
           "description": "Optional JSON-schema fragment describing variables expected by prompt_template."
         },
+        "context_precision": {
+          "oneOf": [
+            { "$ref": "#/definitions/context_precision" },
+            { "type": "null" }
+          ],
+          "description": "Optional temporal/spatial precision policy requested by this tool."
+        },
+        "lease": {
+          "oneOf": [
+            { "$ref": "#/definitions/lease_policy" },
+            { "type": "null" }
+          ],
+          "description": "Optional grounding lease policy for tools that create or spawn agent work."
+        },
         "safety_band_min": {
           "type": "string",
           "enum": ["GREEN", "AMBER", "RED", "CRISIS"],
@@ -317,6 +331,35 @@
         },
         "default": {
           "description": "Default value if not provided"
+        }
+      }
+    },
+    "context_precision": {
+      "type": "object",
+      "required": ["temporal", "spatial"],
+      "additionalProperties": false,
+      "properties": {
+        "temporal": {
+          "type": "string",
+          "enum": ["anchor", "windows", "execution"]
+        },
+        "spatial": {
+          "type": "string",
+          "enum": ["hidden", "semantic", "approximate", "place_id", "raw"]
+        }
+      }
+    },
+    "lease_policy": {
+      "type": "object",
+      "required": ["ttl_seconds", "allow_refresh"],
+      "additionalProperties": false,
+      "properties": {
+        "ttl_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "allow_refresh": {
+          "type": "boolean"
         }
       }
     }

@@ -126,6 +126,7 @@ class TaskEnvelope:
     budget: Budget = field(default_factory=Budget)
     session_id: str = ""
     trace_id: str = field(default_factory=lambda: f"trace-{uuid.uuid4().hex[:8]}")
+    grounding: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if not self.intent:

@@ -134,6 +134,7 @@ class IContextBuilder(Protocol):
         trace_id: str = "",
         prompt_template_name: Optional[str] = None,
         prompt_variables: Optional[Dict[str, Any]] = None,
+        context_override: Optional[Dict[str, Any]] = None,
     ) -> Any: ...
 
 
@@ -596,7 +597,7 @@ class CapabilityFabric:
 
             # --- Step 3: Build context ---
             context_start = time.perf_counter()
-            context = self._build_context(request, contract)
+            context = await self._build_context_async(request, contract)
             context_ms = (time.perf_counter() - context_start) * 1000.0
             fabric_logger.context_build(
                 trace_id=trace_id,
@@ -957,8 +958,24 @@ class CapabilityFabric:
             session_id=request.session_id,
             trace_id=request.trace_id,
             prompt_template_name=request.prompt_template,
+            context_override=request.context_override,
         )
         return build_result.context
+
+    async def _build_context_async(self, request: CapabilityRequest, contract: Any) -> Any:
+        """Build execution context, using async grounding-aware builder when available."""
+        build_async = getattr(self._context_builder, "build_async", None)
+        if callable(build_async):
+            build_result = await build_async(
+                contract=contract,
+                params=request.params,
+                session_id=request.session_id,
+                trace_id=request.trace_id,
+                prompt_template_name=request.prompt_template,
+                context_override=request.context_override,
+            )
+            return build_result.context
+        return self._build_context(request, contract)
 
     # ==================================================================
     # Internal: Execution with CircuitBreaker
@@ -1630,6 +1647,7 @@ class Fabric:
     event_port: Any = None
     event_emitter: Optional[EventEmitter] = None
     gap_detector: Any = None
+    context_builder: Any = None
 
     # ------------------------------------------------------------------
     # Convenience delegates

@@ -100,6 +100,7 @@ CALENDAR_DEFINITION = ToolDefinition(
     ),
     entity_type="calendar_event",
     views=["month", "week", "day", "list"],
+    activity_profile="calendar.v1",
     filters=[
         FieldSpec(
             name="member",
@@ -122,6 +123,7 @@ CALENDAR_DEFINITION = ToolDefinition(
     ],
     can_reference=["task", "reminder", "shopping_item"],
     feature_flags=["m15_calendar"],
+    domain_tags=["scheduling", "availability", "external_calendar"],
     tables_sql=_CALENDAR_DDL,
     actions=[
         # ------------------------------------------------------------------
@@ -133,7 +135,8 @@ CALENDAR_DEFINITION = ToolDefinition(
             summary="Create a new calendar event.",
             label="New event",
             primary=True,
-            min_band="AMBER",
+            min_band="GREEN",
+            prompt_template="calendar_activity_v1",
             allowed_roles=["parent", "child", "guardian", "elder", "system"],
             idempotent=True,
             params=[
@@ -181,7 +184,7 @@ CALENDAR_DEFINITION = ToolDefinition(
                     "user mentions a fixed-time event with start and end on a date",
                 ],
                 avoid_when=[
-                    "user wants a recurring family chore -> use chores.create_chore",
+                    "user wants a recurring family chore -> use chores.create_template",
                     "user wants a one-off to-do without fixed time -> use tasks.create_task",
                     "user wants a time/location alert -> use reminders.create_reminder",
                 ],
@@ -200,7 +203,8 @@ CALENDAR_DEFINITION = ToolDefinition(
             kind="write",
             summary="Patch fields of an existing calendar event.",
             label="Update event",
-            min_band="AMBER",
+            min_band="GREEN",
+            prompt_template="calendar_activity_v1",
             allowed_roles=["parent", "child", "guardian", "elder", "system"],
             params=[
                 FieldSpec(name="event_id", type="string", required=True),
@@ -226,6 +230,10 @@ CALENDAR_DEFINITION = ToolDefinition(
             ],
             llm=LLMHints(
                 use_when=["user wants to reschedule or edit an existing event"],
+                examples=[
+                    "Move Riley's soccer game to Sunday 11am → get_event(event_id) first, then update_event(event_id, start, end)",
+                    "Add Jordan to the dentist appointment → update_event(event_id, attendees=[...existing..., jordan_id])",
+                ],
             ),
             sse=SSESpec(emits=["family.calendar.update_event.write.v1"]),
         ),
@@ -237,7 +245,8 @@ CALENDAR_DEFINITION = ToolDefinition(
             kind="delete",
             summary="Soft-delete a calendar event.",
             label="Delete event",
-            min_band="AMBER",
+            min_band="GREEN",
+            prompt_template="calendar_activity_v1",
             allowed_roles=["parent", "child", "guardian", "elder", "system"],
             params=[
                 FieldSpec(name="event_id", type="string", required=True),
@@ -246,7 +255,13 @@ CALENDAR_DEFINITION = ToolDefinition(
                 FieldSpec(name="success", type="boolean", required=True),
                 FieldSpec(name="event_id", type="string", required=True),
             ],
-            llm=LLMHints(use_when=["user wants to cancel or remove an event"]),
+            llm=LLMHints(
+                use_when=["user wants to cancel or remove an event"],
+                examples=[
+                    "Cancel Riley's dentist appointment → get_event(event_id) to confirm, then delete_event(event_id)",
+                    "Remove the school trip event → list_events(start, end) to find id, then delete_event(event_id)",
+                ],
+            ),
             sse=SSESpec(emits=["family.calendar.delete_event.delete.v1"]),
         ),
         # ------------------------------------------------------------------
@@ -258,6 +273,7 @@ CALENDAR_DEFINITION = ToolDefinition(
             summary="Return events in a time window, ACL-filtered for the caller.",
             label="List events",
             min_band="GREEN",
+            prompt_template="calendar_activity_v1",
             allowed_roles=["parent", "child", "guardian", "elder", "system", "guest"],
             params=[
                 FieldSpec(
@@ -295,6 +311,11 @@ CALENDAR_DEFINITION = ToolDefinition(
                     "user asks what's on the calendar for a day or week",
                     "planner needs to read existing events before scheduling",
                 ],
+                examples=[
+                    "What's on the calendar this weekend? → list_events(start=Friday, end=Sunday)",
+                    "Do we have anything Tuesday afternoon? → list_events(start=Tuesday 12:00, end=Tuesday 23:59)",
+                    "Check for duplicate events before creating → list_events(start=proposed_start-1d, end=proposed_start+1d)",
+                ],
             ),
         ),
         # ------------------------------------------------------------------
@@ -306,13 +327,20 @@ CALENDAR_DEFINITION = ToolDefinition(
             summary="Fetch a single event by id (ACL-filtered).",
             label="Get event",
             min_band="GREEN",
+            prompt_template="calendar_activity_v1",
             allowed_roles=["parent", "child", "guardian", "elder", "system", "guest"],
             params=[FieldSpec(name="event_id", type="string", required=True)],
             result=[
                 FieldSpec(name="success", type="boolean", required=True),
                 FieldSpec(name="event", type="object", required=True),
             ],
-            llm=LLMHints(use_when=["user asks about the details of a specific event"]),
+            llm=LLMHints(
+                use_when=["user asks about the details of a specific event"],
+                examples=[
+                    "Get the dentist appointment details → get_event(event_id)",
+                    "Read current state before updating → get_event(event_id) to retrieve version and fields",
+                ],
+            ),
         ),
         # ------------------------------------------------------------------
         # 6. respond_to_invite
@@ -323,6 +351,7 @@ CALENDAR_DEFINITION = ToolDefinition(
             summary="Record the caller's RSVP for an event they attend.",
             label="Respond to invite",
             min_band="GREEN",
+            prompt_template="calendar_activity_v1",
             allowed_roles=["parent", "child", "guardian", "elder", "system"],
             params=[
                 FieldSpec(name="event_id", type="string", required=True),
@@ -338,7 +367,13 @@ CALENDAR_DEFINITION = ToolDefinition(
                 FieldSpec(name="event_id", type="string", required=True),
                 FieldSpec(name="response", type="string", required=True),
             ],
-            llm=LLMHints(use_when=["user wants to RSVP yes/no/maybe to an event"]),
+            llm=LLMHints(
+                use_when=["user wants to RSVP yes/no/maybe to an event"],
+                examples=[
+                    "Accept the school play invite → get_event(event_id) first, then respond_to_invite(event_id, response='yes')",
+                    "Decline the work party → respond_to_invite(event_id, response='no')",
+                ],
+            ),
             sse=SSESpec(emits=["family.calendar.respond_to_invite.write.v1"]),
         ),
         # ------------------------------------------------------------------
@@ -350,8 +385,9 @@ CALENDAR_DEFINITION = ToolDefinition(
             summary="Change the visibility band of an existing event.",
             label="Change visibility",
             context=["entity_detail_gear"],
-            min_band="AMBER",
+            min_band="GREEN",
             min_role="parent",
+            prompt_template="calendar_activity_v1",
             allowed_roles=["parent", "guardian", "system"],
             params=[
                 FieldSpec(name="event_id", type="string", required=True),
@@ -376,6 +412,10 @@ CALENDAR_DEFINITION = ToolDefinition(
             llm=LLMHints(
                 use_when=["a parent wants to restrict who can see an event"],
                 avoid_when=["caller is a child -- the role gate will reject"],
+                examples=[
+                    "Make the surprise party private → set_visibility(event_id, visibility='private')",
+                    "Share the work trip only with adults → set_visibility(event_id, visibility='adults')",
+                ],
             ),
             sse=SSESpec(emits=["family.calendar.set_visibility.write.v1"]),
         ),
@@ -387,8 +427,9 @@ CALENDAR_DEFINITION = ToolDefinition(
             kind="write",
             summary="Bind an external calendar account (Google/Outlook/...).",
             label="Connect external calendar",
-            min_band="AMBER",
+            min_band="GREEN",
             min_role="parent",
+            prompt_template="calendar_activity_v1",
             allowed_roles=["parent", "guardian", "system"],
             idempotent=True,
             params=[
@@ -429,15 +470,21 @@ CALENDAR_DEFINITION = ToolDefinition(
             kind="write",
             summary="Remove a previously connected external feed binding.",
             label="Disconnect feed",
-            min_band="AMBER",
+            min_band="GREEN",
             min_role="parent",
+            prompt_template="calendar_activity_v1",
             allowed_roles=["parent", "guardian", "system"],
             params=[FieldSpec(name="feed_id", type="string", required=True)],
             result=[
                 FieldSpec(name="success", type="boolean", required=True),
                 FieldSpec(name="feed_id", type="string", required=True),
             ],
-            llm=LLMHints(use_when=["a parent wants to remove a connected feed"]),
+            llm=LLMHints(
+                use_when=["a parent wants to remove a connected feed"],
+                examples=[
+                    "Remove the Outlook feed → list_feeds() first, then disconnect_feed(feed_id)",
+                ],
+            ),
             sse=SSESpec(emits=["family.calendar.disconnect_feed.write.v1"]),
         ),
         # ------------------------------------------------------------------
@@ -449,6 +496,7 @@ CALENDAR_DEFINITION = ToolDefinition(
             summary="List currently-bound external feeds (ACL-filtered).",
             label="List feeds",
             min_band="GREEN",
+            prompt_template="calendar_activity_v1",
             allowed_roles=["parent", "guardian", "elder", "system"],
             params=[
                 FieldSpec(
@@ -463,7 +511,13 @@ CALENDAR_DEFINITION = ToolDefinition(
                 FieldSpec(name="feeds", type="array", required=True),
                 FieldSpec(name="count", type="integer", required=True),
             ],
-            llm=LLMHints(use_when=["user wants to see which external calendars are connected"]),
+            llm=LLMHints(
+                use_when=["user wants to see which external calendars are connected"],
+                examples=[
+                    "Which calendars are synced? → list_feeds()",
+                    "Check existing feeds before connecting a new one → list_feeds()",
+                ],
+            ),
         ),
     ],
 )

@@ -90,6 +90,20 @@ def _context(trace_id: str = "trace-1") -> ExecutionContext:
     return ExecutionContext(trace_id=trace_id)
 
 
+def _profile_context(trace_id: str = "trace-1") -> ExecutionContext:
+    """Build an ExecutionContext carrying M3 prompt/profile metadata."""
+    return ExecutionContext(
+        trace_id=trace_id,
+        prompt="Use the calculator sandbox procedure.",
+        session_sections={
+            "context_override": {
+                "activity_profile": "calculator.v1",
+                "prompt_template": "calculator_activity_v1",
+            }
+        },
+    )
+
+
 def _wasm_config(
     provider_id: str = "calc_wasm",
     module_path: str = "k1/wasm/calc.wasm",
@@ -381,6 +395,30 @@ class TestWASMProviderExecute:
         await provider.execute(req, _context(), "trace-1")
         assert len(runtime.executed_calls) == 1
         assert runtime.executed_calls[0]["params"] == {"a": 10, "b": 20}
+
+    async def test_execute_passes_prompt_profile_metadata(self) -> None:
+        """M3: prompt/profile metadata travels under reserved __metadata__."""
+        runtime = FakeWASMRuntime()
+        provider = WASMProvider(
+            _wasm_config(),
+            runtime=runtime,
+            capability_names=["tool.execute.calc"],
+        )
+
+        await provider.execute(
+            _request(params={"a": 10, "b": 20}),
+            _profile_context(),
+            "trace-profile",
+        )
+
+        params = runtime.executed_calls[0]["params"]
+        assert params["a"] == 10
+        assert params["b"] == 20
+        assert params["__metadata__"] == {
+            "__system_instructions__": "Use the calculator sandbox procedure.",
+            "__activity_profile__": "calculator.v1",
+            "__prompt_template__": "calculator_activity_v1",
+        }
 
     async def test_execute_uses_function_name(self) -> None:
         """execute() uses the configured function_name."""

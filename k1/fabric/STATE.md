@@ -16,6 +16,7 @@ who owns it, what threading guarantees apply, and what transitions are valid.
 | `FabricDispatcher` | In-flight counters + backpressure level | Mutable | `threading.RLock` + `asyncio.Semaphore` |
 | `AgentPool` | Live agent pool (per contract_name) | Mutable | `threading.RLock` |
 | `DeltaEmitter` (per agent) | Pending deltas (LWW dict) | Mutable | `threading.Lock` |
+| `PromptSystemProdAdapter` | PromptTemplate cache loaded from prompt contracts + markdown | Mutable via `reload()` | `threading.RLock` |
 | `ModuleLoader` | File-path→capability map + mtime cache | Mutable | `threading.RLock` |
 | `HealthChecker` | Per-provider check state + consecutive failures | Mutable | Async (single task) |
 | `FabricMetrics` | Prometheus metric objects (lazy-created) | Mutable | `threading.RLock` (creation only) |
@@ -26,6 +27,34 @@ All contract types (`CapabilityContract`, `AgentContract`, `PromptContract`, `Wo
 all request/result types (`CapabilityRequest`, `CapabilityResult`), and all
 execution-path types (`ExecutionContext`, `BudgetResult`, `ResolvedProvider`, `ScoredCandidate`)
 are **frozen dataclasses** — immutable once constructed.
+
+Prompt/profile metadata on `CapabilityContract` is immutable registry state. The fields
+`prompt_template`, `activity_profile`, `tool_instructions`, and `prompt_variables_schema`
+move with the contract through registration, lookup, and discovery. They are not copied into
+`ContractMetadata` hot metrics state and do not mutate provider routing, safety band state,
+or business `params`.
+
+At runtime, `ContextBuilder` materializes a per-call `context_override` section inside
+`ExecutionContext.session_sections`. This section is frozen with the `ExecutionContext`, may
+contain request-provided override keys, and may include contract-derived prompt/profile metadata
+for provider audit/debug. It is not SessionState and is never written back to SessionState.
+MCP/WASM providers mirror selected metadata under reserved `__metadata__`; native family tools
+mirror it under `WriteContext.extras["fabric_prompt_metadata"]`. These mirrors are per-call
+transport payloads, not Fabric-owned mutable state.
+
+`PromptSystemProdAdapter` owns a separate in-memory template cache keyed by prompt name. Each cached `PromptTemplate.template` contains either external markdown loaded from `template_file` or an inline compatibility template. `template_file` paths resolve from the repository root before falling back to the contract file directory. Failed prompt loads are skipped with a warning and do not mutate the capability registry.
+
+The M8 production prompt inventory includes reviewed family profiles for
+calendar, tasks, and reminders plus generic MCP/WASM provider profiles. The
+representative MCP tool contracts and the `date_calc` / `unit_convert` WASM
+contracts carry explicit `activity_profile` and `prompt_template` metadata;
+missing metadata is not inferred from names or free text.
+
+When Fabric is built by `KernelService`, the shared runtime receives a verified
+`PromptSystemProdAdapter("k1/contracts/prompts")`; per-session Fabric reuses
+that prompt adapter and the shared `CapabilityRegistry`. Session Fabric discovery
+therefore sees the same immutable `CapabilityContract.prompt_template` and
+`CapabilityContract.activity_profile` values that were registered at Tier 1.
 
 ---
 

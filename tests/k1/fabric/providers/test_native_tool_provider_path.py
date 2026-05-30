@@ -34,6 +34,7 @@ from k1.fabric.types import (
     ProviderConfig,
     ProviderStatus,
 )
+from k1.tools.family.definition import ActionSpec, FieldSpec, ToolDefinition
 from tests.k1.tools.family._stubs import PingToolService
 
 # ---------------------------------------------------------------------------
@@ -138,6 +139,41 @@ class TestNativeToolProviderPath:
         assert wctx.session_id == "sess-1"
         assert wctx.trace_id == request.trace_id
         assert wctx.band == "GREEN"
+
+    async def test_execute_carries_prompt_metadata_in_write_context_extras(
+        self,
+        provider: NativeToolProvider,
+        service: PingToolService,
+    ) -> None:
+        request = CapabilityRequest(
+            capability_name="tool.execute.ping.ping",
+            params={"message": "hello"},
+            caller="test-runner",
+            caller_id="user-42",
+            session_id="sess-1",
+        )
+        ctx = ExecutionContext(
+            trace_id=request.trace_id,
+            prompt="Use diagnostic procedure.",
+            session_sections={
+                "context_override": {
+                    "activity_profile": "diagnostic.v1",
+                    "prompt_template": "diagnostic_activity_v1",
+                }
+            },
+        )
+
+        result = await provider.execute(request, ctx, request.trace_id)
+
+        assert result.success is True
+        action_name, params, wctx = service.calls[0]
+        assert action_name == "ping"
+        assert params == {"message": "hello"}
+        assert wctx.extras["fabric_prompt_metadata"] == {
+            "__system_instructions__": "Use diagnostic procedure.",
+            "__activity_profile__": "diagnostic.v1",
+            "__prompt_template__": "diagnostic_activity_v1",
+        }
 
     async def test_execute_propagates_service_failure_envelope(
         self,
@@ -262,3 +298,34 @@ class TestFabricRegistryIntegration:
         listing = fabric_registry.lookup("tool.read.ping.list_pings")
         assert listing is not None
         assert "family" in listing.domain
+
+    def test_lookup_preserves_prompt_profile_metadata(self) -> None:
+        action = ActionSpec(
+            name="record_ping",
+            kind="write",
+            summary="Record a ping",
+            params=[FieldSpec(name="message", type="string", required=True)],
+            prompt_template="diagnostic_activity_v1",
+            tool_instructions="Record only the requested ping payload.",
+        )
+        definition = ToolDefinition(
+            adapter_id="diag_profile",
+            summary="Diagnostic profile adapter",
+            tables_sql=(
+                "CREATE TABLE IF NOT EXISTS diag_profile_schema_version "
+                "(version INTEGER PRIMARY KEY);"
+            ),
+            activity_profile="diagnostic.default.v1",
+            domain_tags=["diagnostic"],
+            actions=[action],
+        )
+        registry = CapabilityRegistry()
+
+        register_definition(definition, registry)
+        contract = registry.lookup("tool.execute.diag_profile.record_ping")
+
+        assert contract is not None
+        assert contract.prompt_template == "diagnostic_activity_v1"
+        assert contract.activity_profile == "diagnostic.default.v1"
+        assert contract.tool_instructions == "Record only the requested ping payload."
+        assert "diagnostic" in contract.domain

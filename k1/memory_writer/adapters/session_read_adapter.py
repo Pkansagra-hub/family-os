@@ -141,8 +141,14 @@ class SessionReadAdapter:
                 return data
         if isinstance(section_obj, dict):
             return section_obj
-        logger.warning(
-            "Section object %s has no snapshot dict method",
+        # M6 follow-up: several HOT sections (Clarifications/NarrativeActive/
+        # Scoreboard/TaskArtifacts/TaskState) intentionally do not expose a
+        # ``to_dict``/zero-arg ``get`` -- they are FlatBuffer-backed and the
+        # MW pipeline does not consume their contents directly. Demoted to
+        # debug so the live web log stops emitting one warning per snapshot
+        # per turn.
+        logger.debug(
+            "Section object %s has no snapshot dict method (skipped)",
             type(section_obj).__name__,
         )
         return None

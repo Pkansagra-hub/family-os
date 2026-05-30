@@ -81,6 +81,10 @@ def _make_contract(
     required_context: list[str] | None = None,
     optional_context: list[str] | None = None,
     required_inputs: list[str] | None = None,
+    prompt_template: str | None = None,
+    activity_profile: str | None = None,
+    tool_instructions: str | None = None,
+    prompt_variables_schema: dict[str, Any] | None = None,
 ) -> CapabilityContract:
     inputs = [InputSpec(name=n) for n in (required_inputs or [])]
     return CapabilityContract(
@@ -94,6 +98,10 @@ def _make_contract(
         required_inputs=inputs,
         required_context=required_context or [],
         optional_context=optional_context or [],
+        prompt_template=prompt_template,
+        activity_profile=activity_profile,
+        tool_instructions=tool_instructions,
+        prompt_variables_schema=prompt_variables_schema,
     )
 
 
@@ -337,6 +345,106 @@ class TestContextBuilder:
         )
         assert result.prompt_resolved is False
         assert result.context.prompt is None
+
+    def test_context_override_preserved_with_contract_metadata(self):
+        """M3: context_override carries prompt/profile metadata beside SessionState."""
+        contract = _make_contract(
+            prompt_template="tasks_activity_v1",
+            activity_profile="tasks.v1",
+            tool_instructions="Use task fields exactly.",
+        )
+        builder = ContextBuilder()
+
+        result = builder.build(
+            contract=contract,
+            context_override={
+                "profile_selection": {"source": "concierge"},
+                "prompt_variables": {"title": "Buy milk"},
+            },
+        )
+
+        override = result.context.session_sections["context_override"]
+        assert override["activity_profile"] == "tasks.v1"
+        assert override["prompt_template"] == "tasks_activity_v1"
+        assert override["tool_instructions"] == "Use task fields exactly."
+        assert override["profile_selection"] == {"source": "concierge"}
+        assert override["prompt_variables"] == {"title": "Buy milk"}
+
+    def test_prompt_variables_use_params_then_context_override(self):
+        """M3: prompt variables come from defaults, params, then override values."""
+        prompt_sys = InMemoryPromptSystem()
+        prompt_sys.add_template("tasks_v1", "Task {title} for {assignee} in {space}")
+        contract = _make_contract(
+            prompt_template="tasks_v1",
+            prompt_variables_schema={
+                "type": "object",
+                "properties": {
+                    "space": {"type": "string", "default": "home"},
+                    "title": {"type": "string", "default": "schema title"},
+                },
+            },
+        )
+        builder = ContextBuilder(prompt_system=prompt_sys)
+
+        result = builder.build(
+            contract=contract,
+            params={"title": "param title", "assignee": "Sam"},
+            context_override={"prompt_variables": {"title": "override title"}},
+        )
+
+        assert result.prompt_resolved is True
+        assert result.context.prompt == "Task override title for Sam in home"
+
+    def test_request_prompt_template_overrides_contract_prompt_template(self):
+        """M3: explicit request prompt wins over contract prompt metadata."""
+        prompt_sys = InMemoryPromptSystem()
+        prompt_sys.add_template("contract_v1", "contract {name}")
+        prompt_sys.add_template("request_v1", "request {name}")
+        contract = _make_contract(prompt_template="contract_v1")
+        builder = ContextBuilder(prompt_system=prompt_sys)
+
+        result = builder.build(
+            contract=contract,
+            params={"name": "Alice"},
+            prompt_template_name="request_v1",
+        )
+
+        assert result.context.prompt == "request Alice"
+        assert (
+            result.context.session_sections["context_override"]["prompt_template"] == "request_v1"
+        )
+
+    def test_context_override_prompt_template_does_not_select_prompt(self):
+        """M3: prompt selection uses request/contract fields, not context_override."""
+        prompt_sys = InMemoryPromptSystem()
+        prompt_sys.add_template("override_v1", "override {name}")
+        contract = _make_contract()
+        builder = ContextBuilder(prompt_system=prompt_sys)
+
+        result = builder.build(
+            contract=contract,
+            params={"name": "Alice"},
+            context_override={
+                "prompt_template": "override_v1",
+                "profile_selection": {"source": "test"},
+            },
+        )
+
+        override = result.context.session_sections["context_override"]
+        assert result.prompt_resolved is False
+        assert result.context.prompt is None
+        assert "prompt_template" not in override
+        assert override["profile_selection"] == {"source": "test"}
+
+    def test_tool_instructions_are_inline_prompt_fallback(self):
+        """M3: tool_instructions become the prompt when no template is selected."""
+        contract = _make_contract(tool_instructions="Use the read-only search procedure.")
+        builder = ContextBuilder()
+
+        result = builder.build(contract=contract)
+
+        assert result.prompt_resolved is True
+        assert result.context.prompt == "Use the read-only search procedure."
 
     def test_token_budget_applied(self):
         """Step 5: Token budget enforced."""

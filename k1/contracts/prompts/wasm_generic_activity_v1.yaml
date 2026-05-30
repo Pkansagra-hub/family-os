@@ -1,0 +1,20 @@
+prompt_contract:
+  name: wasm_generic_activity_v1
+  version: "1.0.0"
+  domain:
+    - wasm
+    - utility
+    - sandbox
+  description: Generic WASM activity execution guidance.
+  activity_profile: wasm.generic.v1
+  intent_match:
+    - run deterministic sandbox utility
+    - calculate date or conversion
+    - use registered WASM module
+  variables: []
+  template_file: k1/prompts/activities/wasm_generic_activity_v1.md
+  max_tokens: 700
+  output_format: TEXT
+  compatible_tools:
+    - tool.execute.date_calc
+    - tool.execute.unit_convert

@@ -17,7 +17,10 @@ import asyncio
 import json
 import logging
 import time
+from dataclasses import fields, is_dataclass
+from enum import Enum
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
@@ -234,6 +237,7 @@ async def get_session_state() -> dict:
         result["available"] = True
 
         section_details: dict = {}
+        section_payloads: dict = {}
         for section_name in list(result.get("sections", {})):
             try:
                 section = ss.get_section(section_name)
@@ -242,9 +246,12 @@ async def get_session_state() -> dict:
                     section_details[section_name] = {
                         k: (v.value if hasattr(v, "value") else v) for k, v in meta.items()
                     }
+                section_payloads[section_name] = _serialize_session_section(section)
             except Exception as e:
                 section_details[section_name] = {"error": str(e)}
+                section_payloads[section_name] = {"error": str(e), "data": None}
         result["section_details"] = section_details
+        result["section_payloads"] = section_payloads
 
         try:
             cold = ss.get_local_cold()
@@ -262,6 +269,111 @@ async def get_session_state() -> dict:
     except Exception as exc:
         logger.error("API /api/session/state failed: %s", exc, exc_info=True)
         return {"available": False, "error": str(exc)}
+
+
+_SECTION_ATTR_SKIP = {
+    "_cached_bytes",
+    "_cache_valid",
+    "_cache",
+    "_lock",
+    "_mutex",
+    "_logger",
+}
+
+
+def _serialize_session_section(section: Any) -> dict[str, Any]:
+    """Return safe, JSON-ready section content for the web inspector."""
+    serializer = "attributes"
+    try:
+        if hasattr(section, "to_dict") and callable(section.to_dict):
+            serializer = "to_dict"
+            data = section.to_dict()
+        else:
+            data = _section_object_attrs(section)
+        return {
+            "serializer": serializer,
+            "data": _safe_json_value(data),
+        }
+    except Exception as exc:
+        return {
+            "serializer": serializer,
+            "error": str(exc),
+            "data": None,
+        }
+
+
+def _section_object_attrs(section: Any) -> dict[str, Any]:
+    raw = vars(section) if hasattr(section, "__dict__") else {}
+    data: dict[str, Any] = {}
+    for name, value in raw.items():
+        if not _include_section_attr(name, value):
+            continue
+        key = name[1:] if name.startswith("_") else name
+        data[key] = value
+    return data
+
+
+def _include_section_attr(name: str, value: Any) -> bool:
+    if name in _SECTION_ATTR_SKIP or name.startswith("__"):
+        return False
+    lowered = name.lower()
+    if "cache" in lowered or "lock" in lowered or "callback" in lowered:
+        return False
+    if callable(value):
+        return False
+    return True
+
+
+def _safe_json_value(value: Any, *, depth: int = 0, seen: set[int] | None = None) -> Any:
+    if seen is None:
+        seen = set()
+    if isinstance(value, Enum):
+        return value.value
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return {"_type": "bytes", "size_bytes": len(value)}
+    if depth >= 8:
+        return repr(value)
+
+    obj_id = id(value)
+    if obj_id in seen:
+        return "<cycle>"
+    seen.add(obj_id)
+
+    if isinstance(value, dict):
+        return {
+            str(k): _safe_json_value(v, depth=depth + 1, seen=seen)
+            for k, v in list(value.items())[:200]
+        }
+    if isinstance(value, (list, tuple, set, frozenset)):
+        items = list(value)
+        result = [_safe_json_value(v, depth=depth + 1, seen=seen) for v in items[:200]]
+        if len(items) > 200:
+            result.append({"_truncated": len(items) - 200})
+        return result
+    if hasattr(value, "model_dump") and callable(value.model_dump):
+        try:
+            return _safe_json_value(value.model_dump(mode="json"), depth=depth + 1, seen=seen)
+        except Exception:
+            pass
+    if is_dataclass(value):
+        return {
+            field.name: _safe_json_value(getattr(value, field.name), depth=depth + 1, seen=seen)
+            for field in fields(value)
+        }
+    if hasattr(value, "to_dict") and callable(value.to_dict):
+        try:
+            return _safe_json_value(value.to_dict(), depth=depth + 1, seen=seen)
+        except Exception:
+            pass
+    if hasattr(value, "__dict__"):
+        return {
+            key.lstrip("_"): _safe_json_value(val, depth=depth + 1, seen=seen)
+            for key, val in vars(value).items()
+            if _include_section_attr(key, val)
+        }
+    return repr(value)
 
 
 @app.get("/api/session/control")
@@ -331,6 +443,11 @@ async def websocket_endpoint(ws: WebSocket) -> None:
 
             if msg_type == "message":
                 await _handle_user_message(coord, ws, msg)
+            elif msg_type == "device_context":
+                await coord._record_device_context(
+                    device=msg.get("device", _current_device),
+                    device_context=msg.get("device_context") or {},
+                )
             elif msg_type == "switch_member":
                 _handle_switch_member(msg)
                 await ws.send_text(
@@ -375,6 +492,14 @@ async def _handle_user_message(coord: UiCoordinator, ws: WebSocket, msg: dict) -
     member = msg.get("member", _current_member)
     device = msg.get("device", _current_device)
 
+    try:
+        await coord._record_device_context(
+            device=device,
+            device_context=msg.get("device_context") or {},
+        )
+    except Exception:
+        logger.debug("WEB: device context record failed", exc_info=True)
+
     _turn_counter += 1
     turn = _turn_counter
 
@@ -412,14 +537,19 @@ async def _handle_user_message(coord: UiCoordinator, ws: WebSocket, msg: dict) -
     )
 
     if coord.fsm is not None:
-        await ws.send_text(
-            json.dumps(
-                {
-                    "type": "fsm_current",
-                    "state": coord.fsm.state.name,
-                }
+        try:
+            await ws.send_text(
+                json.dumps(
+                    {
+                        "type": "fsm_current",
+                        "state": coord.fsm.state.name,
+                    }
+                )
             )
-        )
+        except RuntimeError as exc:
+            # Browser disconnected before response arrived (e.g. long LLM call).
+            # The response was already published to the bus; log and move on.
+            logger.warning("WEB: fsm_current send skipped — WebSocket closed: %s", exc)
 
 
 async def _handle_hil_response(coord: UiCoordinator, ws: WebSocket, msg: dict) -> None:

@@ -45,6 +45,8 @@ Fabric does **not**:
 | FAB-13 | Output validation is 3-tier: Structural (hard, always) → Schema (hard, for `success=True`) → Semantic (soft, only for AGENT/WORKFLOW). Structural failure immediately short-circuits. |
 | FAB-14 | Agents NEVER write SessionState directly. They emit `AgentDelta` objects via `DeltaEmitter` → K1 DeltaBus → K1 bus. |
 | FAB-15 | `CapabilityContract.social_act` is evaluated by the conscience gate before execution. If `IConsciencePort.get_digest().is_forbidden(social_act)` → abort with failure result. |
+| FAB-16 | `CapabilityContract` prompt/profile metadata is advisory. `prompt_template`, `activity_profile`, `tool_instructions`, and `prompt_variables_schema` never grant tools, authorize side effects, or change provider routing by themselves. |
+| FAB-17 | Direct execution remains exact-name only. Upstream binders may discover or degrade conversational candidates before calling Fabric, but `Fabric.execute()` still validates the supplied `CapabilityRequest.capability_name` against registry lookup and never guesses replacements. |
 
 ---
 
@@ -137,7 +139,13 @@ CapabilityRequest
     │       If denied: return CapabilityResult.failure_result("hil_denied")
     │
     ▼ (5) _build_context(request, contract)
-    │     context_builder.build(contract, params, session_id, trace_id)
+    │     context_builder.build(contract, params, session_id, trace_id,
+    │                           prompt_template_name=request.prompt_template,
+    │                           context_override=request.context_override)
+    │     Prompt priority: request.prompt_template -> contract.prompt_template
+    │       -> contract.tool_instructions -> no prompt
+    │     Prompt variables: schema defaults -> request.params
+    │       -> context_override["prompt_variables"]
     │     → ExecutionContext(session_sections, params, prompt, token_count, trace_id)
     │
     ▼ (6) Instantiate provider
@@ -237,7 +245,9 @@ OutputValidationPipeline.validate(result, contract, provider_type, ...):
 
 ## 9. `CapabilityContract` structure
 
-26 fields. Key policy fields:
+`CapabilityContract` is the in-memory representation for tool/native/MCP/WASM/Bridge capabilities. Prompt/profile metadata is carried on the contract so discovery, prompt compilation, providers, and docs can reason over the same surface.
+
+Key fields:
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
@@ -245,6 +255,10 @@ OutputValidationPipeline.validate(result, contract, provider_type, ...):
 | `version` | `str` | `""` | semver X.Y.Z |
 | `provider_type` | `str` | `""` | MCP/WASM/BRIDGE/AGENT/WORKFLOW/CONCIERGE/LOCAL_STUB |
 | `provider_id` | `str` | `""` | Key into ProviderRegistry |
+| `prompt_template` | `Optional[str]` | `None` | PromptContract name to compile when no request-level template overrides it. M2/M3 make production compilation active. |
+| `activity_profile` | `Optional[str]` | `None` | Durable activity profile id for execution guidance. Procedure only; never authority. |
+| `tool_instructions` | `Optional[str]` | `None` | Inline operating guidance fallback when no prompt template is selected. |
+| `prompt_variables_schema` | `Optional[Dict[str, Any]]` | `None` | JSON Schema describing compile-variable names/types. Property defaults may seed prompt compilation only; it never mutates `params`. |
 | `safety_band_min` | `str` | `GREEN` | Minimum caller band required |
 | `availability` | `str` | `ONLINE` | ONLINE/DEGRADED/OFFLINE |
 | `requires_human_confirmation` | `Optional[bool]` | `None` | HIL gate trigger |
@@ -255,6 +269,53 @@ OutputValidationPipeline.validate(result, contract, provider_type, ...):
 | `required_context` | `List[str]` | `[]` | SessionState sections needed |
 
 `AgentContract` extends with: `prompt_template`, `tools_granted`, `llm_budget_tokens`, `max_tool_calls`, `max_execution_time_ms`, `template_file`.
+
+### Prompt contract store
+
+Production prompt contracts live in `k1/contracts/prompts/*.yaml` and use `template_file` to point at reviewed prompt text under `k1/prompts/`. `PromptSystemProdAdapter` resolves `template_file` paths from the repository root first, then relative to the YAML contract directory, and stores the resolved markdown content in `PromptTemplate.template`.
+
+Inline `template` is schema-supported only for tests, transitional fixtures, and emergency compatibility. Production prompt inventory tests require external `template_file` usage.
+
+Initial activity templates:
+
+- `calendar_activity_v1`
+- `mcp_generic_activity_v1`
+- `tasks_activity_v1`
+- `reminders_activity_v1`
+- `system_of_record_generic_v1`
+- `wasm_generic_activity_v1`
+
+Prompt template text is procedural guidance only. It never grants tools, authorizes side effects, raises safety bands, bypasses HIL, or overrides schema inspection.
+
+### Tool contract prompt/profile metadata
+
+`k1/contracts/schemas/tool_contract.schema.json` accepts these optional fields for MCP, WASM, Bridge, `LOCAL_STUB`, and YAML-loaded tool contracts:
+
+- `prompt_template`
+- `activity_profile`
+- `tool_instructions`
+- `prompt_variables_schema`
+
+Family/native tools declare the same concepts through `ActionSpec` and `ToolDefinition`; `k1/fabric/manifest_translator.py` copies them into `CapabilityContract`. `ToolDefinition.domain_tags` are folded into contract domains for retrieval. `ActionSpec.llm.examples` are folded into `tool_instructions` only when the action has no explicit `tool_instructions`.
+
+M8 representative YAML-loaded tool contracts declare generic provider profiles:
+`find_prompts`, `discover_capabilities`, and `build_agent` use `mcp.generic.v1` /
+`mcp_generic_activity_v1`; `date_calc` and `unit_convert` use `wasm.generic.v1` /
+`wasm_generic_activity_v1`.
+
+### Runtime prompt/profile flow
+
+`CapabilityFabric._build_context()` forwards `CapabilityRequest.context_override` to `ContextBuilder`. `ContextBuilder` preserves it under `ExecutionContext.session_sections["context_override"]` and adds non-authoritative contract metadata such as `activity_profile`, selected `prompt_template`, and `tool_instructions`.
+
+Prompt selection priority is request template, contract template, inline `tool_instructions`, then no prompt. Prompt compile variables are built from schema defaults, request `params`, and `context_override["prompt_variables"]`, in that order. Business `params` are passed through unchanged.
+
+Provider metadata is deliberately reserved:
+
+- MCP arguments carry prompt/profile metadata under `__metadata__` when metadata exists.
+- WASM params carry prompt/profile metadata under `__metadata__` when metadata exists.
+- Native family tools keep business params clean and expose provider metadata only through `WriteContext.extras["fabric_prompt_metadata"]` for audit/debug.
+
+Reserved metadata keys are `__system_instructions__`, `__activity_profile__`, and `__prompt_template__`.
 
 ---
 

@@ -25,8 +25,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-# Issue 2.4.3: Default timeout for component teardown (seconds).
-_TEARDOWN_TIMEOUT: float = 10.0
 from bridge.bus_guard import BridgeAwareLocalBus
 
 # Issue 2.3.5: MemoryWriter factory + adapters (per-session)
@@ -45,6 +43,12 @@ from k1.concierge.adapters.ssm_state import SSMStateAdapter
 from k1.concierge.config.concierge import ConciergeConfig
 from k1.concierge.config.kernel import KernelConfig
 from k1.concierge.factory import ConciergeFactory, PortBundle
+from k1.concierge.section_update import (
+    DeterministicSectionUpdateClassifier,
+    LLMSectionUpdateClassifier,
+    SectionUpdateBackgroundWorker,
+    SectionUpdateWorkerConfig,
+)
 from k1.fabric.adapters.bridge_connection import BridgeConnectionAdapter
 from k1.fabric.adapters.delta_bus_prod import DeltaBusProdAdapter
 from k1.fabric.adapters.event_port_prod import EventPortProdAdapter
@@ -55,6 +59,8 @@ from k1.fabric.adapters.prompt_system_prod import PromptSystemProdAdapter
 from k1.fabric.adapters.sessionstate_reader import SessionStateReaderAdapter
 from k1.fabric.circuit_breaker.breaker import CircuitBreaker, CircuitBreakerConfig
 from k1.fabric.factory import FabricFactory
+from k1.grounding.kernel.bootstrap import GroundingServiceBundle, build_grounding_bundle
+from k1.grounding.kernel.handle import GroundingHandle, build_grounding_handle
 
 # E7.M1.1: Unified HIL service + adapters
 from k1.hil.adapters import KernelHILEventAdapter
@@ -63,6 +69,7 @@ from k1.hil.ledger import HILLedgerAdapter
 from k1.hil.safety import SafetyBandPolicy
 from k1.hil.service import HumanInTheLoopService
 from k1.kernel.adapters.bridge_adapter import OfflineBridgeAdapter, SinkBridgeAdapter
+from k1.kernel.adapters.device_context import InMemoryDeviceContextPort
 
 # Issue 2.2.6: Planner adapters + factory
 from k1.kernel.adapters.model_hub_llm_bus import ModelHubRequestBus
@@ -141,6 +148,15 @@ from k1.sessionstate.adapters.sqlite_storage import SQLiteStorageAdapter
 from k1.sessionstate.adapters.standalone_lifecycle import StandaloneLifecycle
 from k1.sessionstate.async_bridge import AsyncSSMBridge
 from k1.sessionstate.factory import SessionStateFactory
+from k1.spatial.adapters import SpatialDeviceContextAdapter
+from k1.spatial.kernel.bootstrap import SpatialServiceBundle, build_spatial_bundle
+from k1.spatial.kernel.handle import SpatialHandle, build_spatial_handle
+from k1.temporal.adapters.device_context_adapter import DeviceContextAdapter
+from k1.temporal.kernel.bootstrap import TemporalServiceBundle, build_temporal_bundle
+from k1.temporal.kernel.handle import TemporalHandle, build_temporal_handle
+
+# Issue 2.4.3: Default timeout for component teardown (seconds).
+_TEARDOWN_TIMEOUT: float = 10.0
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +223,7 @@ class KernelService:
         self._router: Any | None = None  # IMailboxRouter
         self._model_hub: Any | None = None  # ModelHub
         self._shared_fabric: Any | None = None  # Fabric
+        self._prompt_system: Any | None = None  # PromptSystemProdAdapter
         self._bridge: Any | None = None  # IBridgeClient | None
         self._tool_sse_task: asyncio.Task[Any] | None = None
         self._orchestrator: Any | None = None  # OrchestratorService
@@ -228,12 +245,35 @@ class KernelService:
         # store / signature validator.
         self._self_model_bundle: SelfModelServiceBundle | None = None
 
+        # M1: shared temporal bundle. Built at S2.7 when
+        # ``KernelConfig.enable_temporal`` is True. Per-session
+        # ``TemporalHandle`` instances (built at P3.6) bind the shared
+        # clock/policy stack to session-local state.
+        self._temporal_bundle: TemporalServiceBundle | None = None
+        self._device_context_port: Any | None = None
+
+        # M3: shared spatial bundle. Built at S2.8 when
+        # ``KernelConfig.enable_spatial`` is True, after Bridge exists
+        # and before Grounding so grounding can consume a real handle.
+        self._spatial_bundle: SpatialServiceBundle | None = None
+
+        # M1.5: shared grounding bundle. Built at transitional S2.9 when
+        # ``KernelConfig.enable_grounding`` is True. Per-session
+        # ``GroundingHandle`` instances (built at P3.8) bind the bundle to
+        # session-local temporal/spatial/identity/state surfaces.
+        self._grounding_bundle: GroundingServiceBundle | None = None
+
         # M15: Family-tools bundle (k1.tools.family). Built at S8 of
         # _startup_tier1 when KernelConfig.enable_family_tools is True.
         # Owns the K1FamilyStore SQLite connection, ToolRegistry,
         # IdempotencyStore, and NativeToolProvider registered into the
         # shared Fabric. Closed during shutdown / cleanup.
         self._family_tools: Any | None = None
+
+        # M4: optional hidden per-session SectionUpdateBackgroundWorker.
+        # The worker is disabled by default in KernelConfig and receives an
+        # injected classifier before sessions are created in shadow/apply mode.
+        self._section_update_classifier: Any | None = None
 
         # P1.1: Shared routing reader (resolves session_id → SSM)
         self._session_routing_reader: SessionRoutingStateReader | None = None
@@ -267,6 +307,10 @@ class KernelService:
     def config(self) -> KernelConfig:
         """The kernel configuration."""
         return self._config
+
+    def set_section_update_classifier(self, classifier: Any | None) -> None:
+        """Inject the classifier used by future per-session background workers."""
+        self._section_update_classifier = classifier
 
     @property
     def async_bus(self) -> Any | None:
@@ -315,6 +359,26 @@ class KernelService:
         """
         return self._self_model_bundle
 
+    @property
+    def temporal_bundle(self) -> TemporalServiceBundle | None:
+        """Shared :class:`TemporalServiceBundle`, or ``None`` if disabled."""
+        return self._temporal_bundle
+
+    @property
+    def device_context_port(self) -> Any | None:
+        """Shared installed-device context port used by temporal grounding."""
+        return self._device_context_port
+
+    @property
+    def spatial_bundle(self) -> SpatialServiceBundle | None:
+        """Shared :class:`SpatialServiceBundle`, or ``None`` if disabled."""
+        return self._spatial_bundle
+
+    @property
+    def grounding_bundle(self) -> GroundingServiceBundle | None:
+        """Shared :class:`GroundingServiceBundle`, or ``None`` if disabled."""
+        return self._grounding_bundle
+
     # ------------------------------------------------------------------
     # Diagnostics API (observability-only; no production code reads these)
     # ------------------------------------------------------------------
@@ -342,6 +406,9 @@ class KernelService:
             "shared_fabric": (
                 type(self._shared_fabric).__name__ if self._shared_fabric is not None else None
             ),
+            "prompt_system": (
+                type(self._prompt_system).__name__ if self._prompt_system is not None else None
+            ),
             "bridge": type(self._bridge).__name__ if self._bridge is not None else None,
             "orchestrator": (
                 type(self._orchestrator).__name__ if self._orchestrator is not None else None
@@ -353,6 +420,17 @@ class KernelService:
             "self_model_bundle": (
                 type(self._self_model_bundle).__name__
                 if self._self_model_bundle is not None
+                else None
+            ),
+            "temporal_bundle": (
+                type(self._temporal_bundle).__name__ if self._temporal_bundle is not None else None
+            ),
+            "spatial_bundle": (
+                type(self._spatial_bundle).__name__ if self._spatial_bundle is not None else None
+            ),
+            "grounding_bundle": (
+                type(self._grounding_bundle).__name__
+                if self._grounding_bundle is not None
                 else None
             ),
         }
@@ -369,6 +447,9 @@ class KernelService:
                 "memory_writer": (
                     type(sess.memory_writer).__name__ if sess.memory_writer is not None else None
                 ),
+                "temporal": type(sess.temporal).__name__ if sess.temporal is not None else None,
+                "spatial": type(sess.spatial).__name__ if sess.spatial is not None else None,
+                "grounding": type(sess.grounding).__name__ if sess.grounding is not None else None,
             }
 
         # Determine bridge mode from the runtime bridge object type name.
@@ -391,7 +472,7 @@ class KernelService:
         planner_mailbox = get_planner_mailbox() if callable(get_planner_mailbox) else None
         planner_port_mailbox = getattr(planner_port, "_mailbox", None)
 
-        tier1_ports: dict[str, str | None] = {
+        tier1_ports: dict[str, Any] = {
             "orchestrator.planner_port": (
                 type(planner_port).__name__ if planner_port is not None else None
             ),
@@ -400,6 +481,11 @@ class KernelService:
             ),
             "planner.mailbox": (
                 type(planner_mailbox).__name__ if planner_mailbox is not None else None
+            ),
+            "prompt_system.template_count": (
+                getattr(self._prompt_system, "template_count", None)
+                if self._prompt_system is not None
+                else None
             ),
         }
         port_identities: dict[str, bool | None] = {
@@ -441,6 +527,15 @@ class KernelService:
         """Append a lifecycle event to the internal log (diagnostics only)."""
         self._lifecycle_log.append({"phase": phase, "component": component, "ts": time.monotonic()})
 
+    def _log_grounding_feature_flags(self) -> None:
+        """Log the current temporal/spatial/grounding feature gates."""
+        logger.info(
+            "grounding feature flags: temporal=%s spatial=%s grounding=%s",
+            bool(getattr(self._config, "enable_temporal", False)),
+            bool(getattr(self._config, "enable_spatial", False)),
+            bool(getattr(self._config, "enable_grounding", False)),
+        )
+
     def _close_orchestrator_storage(self) -> None:
         """Close S5 workflow storage owned by the kernel construction root."""
         storage = self._orch_storage
@@ -468,6 +563,7 @@ class KernelService:
         """
         if self._running:
             raise RuntimeError("Already running")
+        self._log_grounding_feature_flags()
         try:
             await self._startup_tier1()
         except Exception:
@@ -589,6 +685,34 @@ class KernelService:
                 errors.append(exc)
                 logger.warning("shutdown: selfmodel bundle shutdown failed: %s", exc)
             self._self_model_bundle = None
+
+        if self._grounding_bundle is not None:
+            try:
+                self._grounding_bundle.shutdown()
+                self._log_lifecycle("S2.9_shutdown_complete", "GroundingServiceBundle")
+            except Exception as exc:
+                errors.append(exc)
+                logger.warning("shutdown: grounding bundle shutdown failed: %s", exc)
+            self._grounding_bundle = None
+
+        if self._spatial_bundle is not None:
+            try:
+                self._spatial_bundle.shutdown()
+                self._log_lifecycle("S2.8_shutdown_complete", "SpatialServiceBundle")
+            except Exception as exc:
+                errors.append(exc)
+                logger.warning("shutdown: spatial bundle shutdown failed: %s", exc)
+            self._spatial_bundle = None
+
+        if self._temporal_bundle is not None:
+            try:
+                self._temporal_bundle.shutdown()
+                self._log_lifecycle("S2.7_shutdown_complete", "TemporalServiceBundle")
+            except Exception as exc:
+                errors.append(exc)
+                logger.warning("shutdown: temporal bundle shutdown failed: %s", exc)
+            self._temporal_bundle = None
+        self._device_context_port = None
 
         if self._tool_sse_task is not None:
             try:
@@ -764,6 +888,33 @@ class KernelService:
         if session_count > 0:
             details["sessions"] = f"{session_count} active session(s)"
 
+        section_update_enabled = bool(
+            getattr(self._config, "enable_section_update_worker", False)
+        ) and str(
+            getattr(self._config, "section_update_worker_mode", "off") or "off"
+        ).strip().lower() not in {
+            "",
+            "off",
+            "disabled",
+            "none",
+        }
+        if section_update_enabled:
+            missing: list[str] = []
+            stopped: list[str] = []
+            for sid, session in self._sessions.items():
+                worker = getattr(session, "section_update_worker", None)
+                if worker is None:
+                    missing.append(sid)
+                elif not bool(getattr(worker, "is_running", False)):
+                    stopped.append(sid)
+            components["section_update_workers"] = not missing and not stopped
+            details["section_update_workers"] = (
+                f"active={session_count - len(missing) - len(stopped)} "
+                f"missing={len(missing)} stopped={len(stopped)}"
+            )
+        else:
+            components["section_update_workers"] = True
+
         healthy = all(components.values())
         return HealthStatus(
             healthy=healthy,
@@ -866,6 +1017,99 @@ class KernelService:
                     session_id,
                     exc,
                 )
+
+        grounding_handle = getattr(session, "grounding", None)
+        if grounding_handle is not None:
+            try:
+                grounding_handle.uninstall_from_session()
+            except Exception as exc:
+                errors.append(exc)
+                logger.warning(
+                    "destroy_session(%s): grounding uninstall failed: %s",
+                    session_id,
+                    exc,
+                )
+            try:
+                await asyncio.wait_for(
+                    grounding_handle.shutdown(),
+                    timeout=_TEARDOWN_TIMEOUT,
+                )
+            except Exception as exc:
+                errors.append(exc)
+                logger.warning(
+                    "destroy_session(%s): grounding shutdown failed: %s",
+                    session_id,
+                    exc,
+                )
+
+        spatial_handle = getattr(session, "spatial", None)
+        if spatial_handle is not None:
+            try:
+                spatial_handle.uninstall_from_session()
+            except Exception as exc:
+                errors.append(exc)
+                logger.warning(
+                    "destroy_session(%s): spatial uninstall failed: %s",
+                    session_id,
+                    exc,
+                )
+            try:
+                await asyncio.wait_for(
+                    spatial_handle.shutdown(),
+                    timeout=_TEARDOWN_TIMEOUT,
+                )
+            except Exception as exc:
+                errors.append(exc)
+                logger.warning(
+                    "destroy_session(%s): spatial shutdown failed: %s",
+                    session_id,
+                    exc,
+                )
+
+        temporal_handle = getattr(session, "temporal", None)
+        if temporal_handle is not None:
+            try:
+                temporal_handle.uninstall_from_session()
+            except Exception as exc:
+                errors.append(exc)
+                logger.warning(
+                    "destroy_session(%s): temporal uninstall failed: %s",
+                    session_id,
+                    exc,
+                )
+            try:
+                await asyncio.wait_for(
+                    temporal_handle.shutdown(),
+                    timeout=_TEARDOWN_TIMEOUT,
+                )
+            except Exception as exc:
+                errors.append(exc)
+                logger.warning(
+                    "destroy_session(%s): temporal shutdown failed: %s",
+                    session_id,
+                    exc,
+                )
+
+        # Reverse P5.5: stop section-update worker before MemoryWriter so any
+        # queued background apply cannot call writer_port during teardown.
+        section_update_worker = getattr(session, "section_update_worker", None)
+        if section_update_worker is not None and hasattr(section_update_worker, "stop"):
+            try:
+                await asyncio.wait_for(
+                    asyncio.to_thread(
+                        section_update_worker.stop,
+                        timeout_s=_TEARDOWN_TIMEOUT,
+                    ),
+                    timeout=_TEARDOWN_TIMEOUT,
+                )
+            except Exception as exc:
+                errors.append(exc)
+                logger.warning(
+                    "destroy_session(%s): SectionUpdateBackgroundWorker stop failed: %s",
+                    session_id,
+                    exc,
+                )
+            self._log_lifecycle("P5_5_teardown_complete", f"session:{session_id}")
 
         # Reverse P5: Stop MemoryWriter
         try:
@@ -1249,6 +1493,54 @@ class KernelService:
                 "PL-B1: agent.start() should run indefinitely."
             )
 
+    def _verify_activity_prompt_system(self, prompt_system: Any, *, scope: str) -> int:
+        """Log and optionally enforce activity prompt inventory visibility."""
+        raw_count = getattr(prompt_system, "template_count", 0)
+        try:
+            template_count = int(raw_count)
+        except (TypeError, ValueError):
+            template_count = 0
+
+        template_names: list[str] = []
+        list_names = getattr(prompt_system, "list_names", None)
+        if callable(list_names):
+            try:
+                template_names = [str(name) for name in list_names()]
+            except Exception:
+                logger.debug(
+                    "Activity profile prompt inventory name listing failed (scope=%s)",
+                    scope,
+                    exc_info=True,
+                )
+
+        enabled = bool(getattr(self._config, "enable_activity_profiles", True))
+        strict = bool(getattr(self._config, "enable_activity_profiles_strict", False))
+        if not enabled:
+            logger.info(
+                "Activity profiles disabled by config (scope=%s, templates=%d)",
+                scope,
+                template_count,
+            )
+            return template_count
+
+        if template_count <= 0:
+            message = (
+                "Activity profile prompt store is empty "
+                f"(scope={scope}, strict={strict}). Native family tools remain available."
+            )
+            if strict:
+                raise RuntimeError(message)
+            logger.warning(message)
+            return template_count
+
+        logger.info(
+            "Activity profile prompt store ready (scope=%s, templates=%d, names=%s)",
+            scope,
+            template_count,
+            template_names[:20],
+        )
+        return template_count
+
     def _verify_planner_orchestrator_crosswire(self) -> None:
         """Issue 2.1.9 (S6b): Verify Orchestrator↔Planner cross-wire.
 
@@ -1355,7 +1647,7 @@ class KernelService:
             }
             if self._config.model_mode == "hub":
                 self._model_hub, load_result = await ModelHubFactory.from_config(
-                    ProviderConfig.default(),
+                    ProviderConfig.from_env(),
                     ports=mh_ports,
                 )
                 logger.info(
@@ -1484,6 +1776,38 @@ class KernelService:
         if self._self_model_bundle is not None:
             self._log_lifecycle("S2.6_complete", "SelfModelServiceBundle")
 
+        self._device_context_port = InMemoryDeviceContextPort()
+
+        # ── S2.7: Temporal bundle (M1) ───────────────────────
+        if self._config.enable_temporal:
+            try:
+                self._temporal_bundle = build_temporal_bundle(
+                    bus=self._bus,
+                    device_context_port=DeviceContextAdapter(self._device_context_port),
+                )
+                logger.info("temporal: bundle ready")
+            except Exception:
+                if self._self_model_bundle is not None:
+                    try:
+                        self._self_model_bundle.shutdown()
+                    except Exception:
+                        pass
+                    self._self_model_bundle = None
+                if self._hil_service is not None:
+                    try:
+                        await self._hil_service.shutdown()
+                    except Exception:
+                        pass
+                self._bus.close()
+                self._router.close()
+                raise
+        else:
+            self._temporal_bundle = None
+            logger.debug("temporal: enable_temporal=False; skipping S2.7")
+            self._log_lifecycle("S2.7_skipped", "TemporalServiceBundle")
+        if self._temporal_bundle is not None:
+            self._log_lifecycle("S2.7_complete", "TemporalServiceBundle")
+
         # ── S4: Bridge (kernel-level IBridgePort) ─────────
         # S4 before S3 because Fabric needs a bridge adapter.
         # Three modes:
@@ -1531,6 +1855,48 @@ class KernelService:
             raise
         self._log_lifecycle("S4_complete", type(self._bridge).__name__)
 
+        # ── S2.8: Spatial bundle (M3) ───────────────────────
+        if self._config.enable_spatial:
+            try:
+                bridge_client = None
+                get_client = getattr(self._bridge, "get_client", None)
+                if callable(get_client):
+                    bridge_client = get_client()
+                self._spatial_bundle = build_spatial_bundle(
+                    bus=self._bus,
+                    device_context_port=SpatialDeviceContextAdapter(self._device_context_port),
+                    bridge_client=bridge_client,
+                )
+                logger.info("spatial: bundle ready")
+            except Exception:
+                await self._bridge.disconnect()
+                self._bus.close()
+                self._router.close()
+                raise
+        else:
+            self._spatial_bundle = None
+            logger.debug("spatial: enable_spatial=False; skipping S2.8")
+            self._log_lifecycle("S2.8_skipped", "SpatialServiceBundle")
+        if self._spatial_bundle is not None:
+            self._log_lifecycle("S2.8_complete", "SpatialServiceBundle")
+
+        # ── S2.9: Grounding bundle (M1.5 transitional) ─────
+        if self._config.enable_grounding:
+            try:
+                self._grounding_bundle = build_grounding_bundle(bus=self._bus)
+                logger.info("grounding: bundle ready")
+            except Exception:
+                await self._bridge.disconnect()
+                self._bus.close()
+                self._router.close()
+                raise
+        else:
+            self._grounding_bundle = None
+            logger.debug("grounding: enable_grounding=False; skipping S2.9")
+            self._log_lifecycle("S2.9_skipped", "GroundingServiceBundle")
+        if self._grounding_bundle is not None:
+            self._log_lifecycle("S2.9_complete", "GroundingServiceBundle")
+
         # ── P1.1/P1.4: SessionRoutingStateReader (shared by S3, S5, S6) ──
         session_routing_reader = SessionRoutingStateReader(
             session_lookup=lambda sid: (
@@ -1545,6 +1911,8 @@ class KernelService:
             delta_bus = DeltaBusProdAdapter(bus)
             model_gateway = ModelGatewayBridgeAdapter(hub=self._model_hub)
             prompt_system = PromptSystemProdAdapter(prompts_dir="k1/contracts/prompts")
+            self._verify_activity_prompt_system(prompt_system, scope="shared")
+            self._prompt_system = prompt_system
             bridge_client = self._bridge.get_client()
             bridge_adapter = BridgeConnectionAdapter(client=bridge_client)
 
@@ -1939,6 +2307,24 @@ class KernelService:
             except Exception:
                 pass
 
+        if self._grounding_bundle is not None:
+            try:
+                self._grounding_bundle.shutdown()
+            except Exception:
+                pass
+
+        if self._spatial_bundle is not None:
+            try:
+                self._spatial_bundle.shutdown()
+            except Exception:
+                pass
+
+        if self._temporal_bundle is not None:
+            try:
+                self._temporal_bundle.shutdown()
+            except Exception:
+                pass
+
         if self._shared_fabric is not None:
             try:
                 await self._shared_fabric.shutdown()
@@ -1990,6 +2376,7 @@ class KernelService:
         self._router = None
         self._model_hub = None
         self._shared_fabric = None
+        self._prompt_system = None
         self._bridge = None
         self._tool_sse_task = None
         self._orchestrator = None
@@ -1997,6 +2384,10 @@ class KernelService:
         self._planner = None
         self._hil_service = None  # E7.M1.1
         self._self_model_bundle = None  # M5.E3.I2
+        self._temporal_bundle = None  # M1
+        self._device_context_port = None
+        self._spatial_bundle = None  # M3
+        self._grounding_bundle = None  # M1.5
 
     def _on_planner_task_done(self, task: asyncio.Task[Any]) -> None:
         """Issue 2.4.3 #9: Watchdog callback for planner background task.
@@ -2156,7 +2547,13 @@ class KernelService:
             session_event_port = EventPortProdAdapter(session_bus)
             session_delta_bus = DeltaBusProdAdapter(session_bus)
             session_model_gw = ModelGatewayBridgeAdapter(hub=self._model_hub)
-            session_prompt_sys = PromptSystemProdAdapter(prompts_dir="k1/contracts/prompts")
+            session_prompt_sys = self._prompt_system or PromptSystemProdAdapter(
+                prompts_dir="k1/contracts/prompts"
+            )
+            self._verify_activity_prompt_system(
+                session_prompt_sys,
+                scope=f"session:{session_id}",
+            )
             session_bridge_client = self._bridge.get_client()
             session_bridge_adapter = BridgeConnectionAdapter(client=session_bridge_client)
 
@@ -2210,6 +2607,8 @@ class KernelService:
             session_router.close()
             raise
 
+        actor_id, device_meta = self._derive_session_actor(ssm, session_id, device_id)
+
         # ── P3.5: k1.selfmodel handle (M5.E3.I3) ──────────────
         # Built after P3 (per-session Fabric) and before P4 (Concierge)
         # so the Concierge factory can attach the handle's gate +
@@ -2220,7 +2619,14 @@ class KernelService:
         session_self_model: SelfModelHandle | None = None
         if self._self_model_bundle is not None:
             try:
-                actor_id, device_meta = self._derive_session_actor(ssm, session_id, device_id)
+                risk_catalog = None
+                risk_registry = getattr(session_fabric, "registry", None) or _shared_registry
+                if risk_registry is not None:
+                    from k1.selfmodel.adapters.fabric_risk_catalog import (
+                        FabricRiskCatalog,
+                    )
+
+                    risk_catalog = FabricRiskCatalog(risk_registry, bus=session_bus)
                 session_self_model = build_self_model_handle(
                     self._self_model_bundle,
                     session_id=session_id,
@@ -2228,6 +2634,7 @@ class KernelService:
                     device_id=device_meta,
                     situation_kind=self._config.selfmodel_situation_kind,
                     hil_service=session_hil_service,
+                    risk_catalog=risk_catalog,
                 )
                 logger.debug(
                     "selfmodel P3.5 wired session=%s actor=%s device=%s",
@@ -2244,6 +2651,122 @@ class KernelService:
                     exc_info=True,
                 )
                 session_self_model = None
+
+        # ── P3.6: Temporal handle (M1) ───────────────────────
+        session_temporal: TemporalHandle | None = None
+        if self._temporal_bundle is not None:
+            session_temporal = build_temporal_handle(
+                self._temporal_bundle,
+                session_id=session_id,
+                principal_id=actor_id,
+                device_id=device_meta or None,
+                installation_id=device_meta or None,
+                state_manager=ssm,
+            )
+            session_temporal.install_into_session()
+            try:
+                await session_temporal.refresh_turn(
+                    session_id,
+                    device_id=device_meta or None,
+                    installation_id=device_meta or None,
+                )
+            except Exception:
+                logger.warning(
+                    "temporal P3.6 refresh failed for session=%s; continuing with bound handle",
+                    session_id,
+                    exc_info=True,
+                )
+
+        # ── P3.7: Spatial handle (M3) ───────────────────────
+        session_spatial: SpatialHandle | None = None
+        if self._spatial_bundle is not None:
+            try:
+                session_spatial = build_spatial_handle(
+                    self._spatial_bundle,
+                    session_id=session_id,
+                    principal_id=actor_id,
+                    actor_id=actor_id,
+                    device_id=device_meta or None,
+                    installation_id=device_meta or None,
+                    state_manager=ssm,
+                    selfmodel_handle=session_self_model,
+                )
+                session_spatial.install_into_session()
+                try:
+                    await session_spatial.refresh_turn(
+                        session_id,
+                        consumer="front",
+                        device_id=device_meta or None,
+                        installation_id=device_meta or None,
+                    )
+                except Exception:
+                    logger.warning(
+                        "spatial P3.7 refresh failed for session=%s; continuing with bound handle",
+                        session_id,
+                        exc_info=True,
+                    )
+            except Exception:
+                logger.warning(
+                    "spatial P3.7 build failed for session=%s; continuing without handle",
+                    session_id,
+                    exc_info=True,
+                )
+                session_spatial = None
+
+        # ── P3.8: Grounding handle (M1.5 transitional) ──────
+        session_grounding: GroundingHandle | None = None
+        if self._grounding_bundle is not None:
+            try:
+                session_grounding = build_grounding_handle(
+                    self._grounding_bundle,
+                    session_id=session_id,
+                    principal_id=actor_id,
+                    actor_id=actor_id,
+                    device_id=device_meta or None,
+                    installation_id=device_meta or None,
+                    state_manager=ssm,
+                    temporal_handle=session_temporal,
+                    spatial_handle=session_spatial,
+                    selfmodel_handle=session_self_model,
+                )
+                session_grounding.install_into_session()
+                try:
+                    await session_grounding.refresh_turn(
+                        session_id,
+                        consumer="front",
+                        device_id=device_meta or None,
+                        installation_id=device_meta or None,
+                    )
+                except Exception:
+                    logger.warning(
+                        "grounding P3.8 refresh failed for session=%s; continuing with bound handle",
+                        session_id,
+                        exc_info=True,
+                    )
+                try:
+                    fabric_context_builder = getattr(session_fabric, "context_builder", None)
+                    if fabric_context_builder is None:
+                        fabric_context_builder = getattr(
+                            getattr(session_fabric, "facade", None),
+                            "_context_builder",
+                            None,
+                        )
+                    setter = getattr(fabric_context_builder, "set_grounding_port", None)
+                    if callable(setter):
+                        setter(session_grounding)
+                except Exception:
+                    logger.warning(
+                        "grounding P3.8 Fabric context binding failed for session=%s",
+                        session_id,
+                        exc_info=True,
+                    )
+            except Exception:
+                logger.warning(
+                    "grounding P3.8 build failed for session=%s; continuing without handle",
+                    session_id,
+                    exc_info=True,
+                )
+                session_grounding = None
 
         # ── P4: Concierge (per-session) ──────────────────────
         session_concierge = None
@@ -2270,6 +2793,9 @@ class KernelService:
                 state=session_state_port,
                 llm=self._model_hub,
                 dispatch=session_dispatch,
+                temporal=session_temporal,
+                spatial=session_spatial,
+                grounding=session_grounding,
                 # P5.2 / MS-3c: Wire recall through the typed paired-contract
                 # surface (``recall.request.v1`` / ``recall.response.v1``).
                 # ``build_recall_fn`` resolves the typed client out of the
@@ -2404,6 +2930,120 @@ class KernelService:
             session_router.close()
             raise
 
+        section_update_worker: SectionUpdateBackgroundWorker | None = None
+        section_update_mode = (
+            str(getattr(self._config, "section_update_worker_mode", "off") or "off").strip().lower()
+        )
+        section_update_enabled = bool(
+            getattr(self._config, "enable_section_update_worker", False)
+        ) and section_update_mode not in {"", "off", "disabled", "none"}
+        logger.info(
+            "P5.5: section_update worker gate session=%s enable_flag=%s mode=%s -> %s",
+            session_id,
+            bool(getattr(self._config, "enable_section_update_worker", False)),
+            section_update_mode,
+            "STARTING" if section_update_enabled else "SKIPPED",
+        )
+        if section_update_enabled:
+            try:
+                classifier = self._section_update_classifier
+                if classifier is None:
+                    # No external classifier wired. Production default is
+                    # the LLM-backed classifier (vertex/gemini by config).
+                    # Only fall back to the deterministic stub if the
+                    # ModelHub is unavailable, in which case the worker
+                    # will publish noop plans rather than crashing.
+                    if self._model_hub is not None:
+                        provider_id = (
+                            str(getattr(self._config, "section_update_provider", "") or "")
+                            or "vertex"
+                        )
+                        model_id = (
+                            str(getattr(self._config, "section_update_model", "") or "")
+                            or "gemini-2.5-flash-lite"
+                        )
+                        timeout_ms = int(
+                            getattr(self._config, "section_update_worker_timeout_ms", 75_000)
+                            or 75_000
+                        )
+                        classifier = LLMSectionUpdateClassifier(
+                            model_hub=self._model_hub,
+                            provider_id=provider_id,
+                            model_id=model_id,
+                            timeout_ms=timeout_ms,
+                        )
+                        logger.info(
+                            "P5.5: no external section_update classifier wired; "
+                            "auto-wired LLMSectionUpdateClassifier "
+                            "(session=%s, mode=%s, provider=%s, model=%s, timeout_ms=%d)",
+                            session_id,
+                            section_update_mode,
+                            provider_id,
+                            model_id,
+                            timeout_ms,
+                        )
+                    else:
+                        classifier = DeterministicSectionUpdateClassifier()
+                        logger.warning(
+                            "P5.5: no external section_update classifier wired and "
+                            "ModelHub is unavailable; falling back to "
+                            "DeterministicSectionUpdateClassifier (session=%s, mode=%s) -- "
+                            "section updates will be no-ops",
+                            session_id,
+                            section_update_mode,
+                        )
+                section_update_worker = SectionUpdateBackgroundWorker(
+                    session_id=session_id,
+                    bus=session_bus,
+                    state_manager=ssm,
+                    writer_port=ss_writer,
+                    classifier=classifier,
+                    config=SectionUpdateWorkerConfig(
+                        mode=section_update_mode,
+                        timeout_ms=int(
+                            getattr(self._config, "section_update_worker_timeout_ms", 75_000)
+                            or 75_000
+                        ),
+                        queue_max=int(
+                            getattr(self._config, "section_update_worker_queue_max", 128) or 128
+                        ),
+                        classifier_version=str(
+                            getattr(
+                                self._config,
+                                "section_update_classifier_version",
+                                "section-update-v0",
+                            )
+                            or "section-update-v0"
+                        ),
+                        provider_id=str(getattr(self._config, "section_update_provider", "") or ""),
+                        model_id=str(getattr(self._config, "section_update_model", "") or ""),
+                    ),
+                )
+                section_update_worker.start()
+                logger.info(
+                    "P5.5: SectionUpdateBackgroundWorker started session=%s mode=%s classifier=%s timeout_ms=%s queue_max=%s",
+                    session_id,
+                    section_update_mode,
+                    type(classifier).__name__ if classifier is not None else "None",
+                    getattr(self._config, "section_update_worker_timeout_ms", 75_000),
+                    getattr(self._config, "section_update_worker_queue_max", 128),
+                )
+                self._log_lifecycle("P5_5_complete", f"session:{session_id}")
+            except Exception:
+                logger.exception(
+                    "P5.5: SectionUpdateBackgroundWorker start FAILED session=%s mode=%s",
+                    session_id,
+                    section_update_mode,
+                )
+                if section_update_worker is not None:
+                    await asyncio.to_thread(section_update_worker.stop)
+                await session_memory_writer.stop()
+                await session_concierge.stop()
+                ssm.stop()
+                session_bus.close()
+                session_router.close()
+                raise
+
         session = SessionInstance(
             session_id=session_id,
             member_id=None,
@@ -2424,12 +3064,16 @@ class KernelService:
             consumer_task=session_concierge.consumer_task,
             dead_letter_consumer=session_concierge.dead_letter_consumer,
             created_at=datetime.now(timezone.utc),
+            section_update_worker=section_update_worker,
             front_ctx=session_concierge.front_ctx,
             back_ctx=session_concierge.back_ctx,
             ledger=session_concierge.ledger,
             ledger_store=session_concierge.ledger_store,
             concierge_task=session_concierge.consumer_task,
             self_model=session_self_model,
+            temporal=session_temporal,
+            spatial=session_spatial,
+            grounding=session_grounding,
         )
         self._sessions[session_id] = session
         self._log_lifecycle("P6_complete", f"session:{session_id}")

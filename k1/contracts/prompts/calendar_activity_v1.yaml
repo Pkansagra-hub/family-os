@@ -1,0 +1,28 @@
+prompt_contract:
+  name: calendar_activity_v1
+  version: "1.0.0"
+  domain:
+    - calendar
+    - family
+    - coordination
+  description: Calendar activity execution guidance.
+  activity_profile: calendar.v1
+  intent_match:
+    - schedule family event
+    - reschedule calendar item
+    - review calendar availability
+  variables: []
+  template_file: k1/prompts/activities/calendar_activity_v1.md
+  max_tokens: 900
+  output_format: TEXT
+  compatible_tools:
+    - tool.read.calendar.list_events
+    - tool.read.calendar.get_event
+    - tool.read.calendar.list_feeds
+    - tool.execute.calendar.create_event
+    - tool.execute.calendar.update_event
+    - tool.execute.calendar.delete_event
+    - tool.execute.calendar.respond_to_invite
+    - tool.execute.calendar.set_visibility
+    - tool.execute.calendar.connect_feed
+    - tool.execute.calendar.disconnect_feed

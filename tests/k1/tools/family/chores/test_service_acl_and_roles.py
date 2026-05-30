@@ -11,7 +11,7 @@ from tests.k1.tools.family.chores.conftest import make_ctx
 
 async def test_create_template_blocked_for_child(svc):
     service, _, _ = svc
-    child_ctx = make_ctx(user_id="c1", role="child", band="AMBER")
+    child_ctx = make_ctx(user_id="c1", role="child", band="GREEN")
     out = await service.dispatch(
         "create_template",
         {"title": "Vacuum", "frequency": "weekly"},
@@ -23,7 +23,7 @@ async def test_create_template_blocked_for_child(svc):
 async def test_create_template_blocked_for_guardian(svc):
     """Guardian is below parent — cannot manage templates."""
     service, _, _ = svc
-    ctx = make_ctx(user_id="g1", role="guardian", band="AMBER")
+    ctx = make_ctx(user_id="g1", role="guardian", band="GREEN")
     out = await service.dispatch(
         "create_template",
         {"title": "Vacuum", "frequency": "weekly"},
@@ -34,11 +34,11 @@ async def test_create_template_blocked_for_guardian(svc):
 
 async def test_delete_template_blocked_for_elder(svc):
     service, _, _ = svc
-    parent_ctx = make_ctx(user_id="u1", role="parent", band="AMBER")
+    parent_ctx = make_ctx(user_id="u1", role="parent", band="GREEN")
     tmpl_res = await service.dispatch(
         "create_template", {"title": "Dishes", "frequency": "daily"}, parent_ctx
     )
-    elder_ctx = make_ctx(user_id="e1", role="elder", band="AMBER")
+    elder_ctx = make_ctx(user_id="e1", role="elder", band="GREEN")
     out = await service.dispatch(
         "delete_template", {"template_id": tmpl_res["template_id"]}, elder_ctx
     )
@@ -47,9 +47,9 @@ async def test_delete_template_blocked_for_elder(svc):
 
 async def test_reopen_blocked_for_child(svc):
     service, _, _ = svc
-    parent_ctx = make_ctx(user_id="u1", role="parent", band="AMBER")
+    parent_ctx = make_ctx(user_id="u1", role="parent", band="GREEN")
     occ_id = await _create_assigned_occ(service, parent_ctx, "riley")
-    riley_ctx = make_ctx(user_id="riley", role="child", band="AMBER")
+    riley_ctx = make_ctx(user_id="riley", role="child", band="GREEN")
     await service.dispatch("complete_chore", {"occurrence_id": occ_id}, riley_ctx)
 
     reopen = await service.dispatch("reopen_chore", {"occurrence_id": occ_id}, riley_ctx)
@@ -63,27 +63,27 @@ async def test_reopen_blocked_for_child(svc):
 
 async def test_complete_by_assignee_allowed(svc):
     service, _, _ = svc
-    parent_ctx = make_ctx(user_id="u1", role="parent", band="AMBER")
+    parent_ctx = make_ctx(user_id="u1", role="parent", band="GREEN")
     occ_id = await _create_assigned_occ(service, parent_ctx, "riley")
 
-    riley_ctx = make_ctx(user_id="riley", role="child", band="AMBER")
+    riley_ctx = make_ctx(user_id="riley", role="child", band="GREEN")
     out = await service.dispatch("complete_chore", {"occurrence_id": occ_id}, riley_ctx)
     assert out["success"] is True
 
 
 async def test_complete_by_unrelated_child_blocked(svc):
     service, _, _ = svc
-    parent_ctx = make_ctx(user_id="u1", role="parent", band="AMBER")
+    parent_ctx = make_ctx(user_id="u1", role="parent", band="GREEN")
     occ_id = await _create_assigned_occ(service, parent_ctx, "riley")
 
-    other_child = make_ctx(user_id="alex", role="child", band="AMBER")
+    other_child = make_ctx(user_id="alex", role="child", band="GREEN")
     out = await service.dispatch("complete_chore", {"occurrence_id": occ_id}, other_child)
     assert out["success"] is False
 
 
 async def test_skip_by_parent_allowed(svc):
     service, _, _ = svc
-    parent_ctx = make_ctx(user_id="u1", role="parent", band="AMBER")
+    parent_ctx = make_ctx(user_id="u1", role="parent", band="GREEN")
     occ_id = await _create_assigned_occ(service, parent_ctx, "riley")
 
     out = await service.dispatch(
@@ -99,11 +99,11 @@ async def test_skip_by_parent_allowed(svc):
 
 async def test_assign_chore_blocked_for_child(svc):
     service, _, _ = svc
-    parent_ctx = make_ctx(user_id="u1", role="parent", band="AMBER")
+    parent_ctx = make_ctx(user_id="u1", role="parent", band="GREEN")
     tmpl_res = await service.dispatch(
         "create_template", {"title": "Mop floor", "frequency": "weekly"}, parent_ctx
     )
-    child_ctx = make_ctx(user_id="c1", role="child", band="AMBER")
+    child_ctx = make_ctx(user_id="c1", role="child", band="GREEN")
     out = await service.dispatch(
         "assign_chore",
         {"template_id": tmpl_res["template_id"], "assigned_to": "c1"},
@@ -114,11 +114,11 @@ async def test_assign_chore_blocked_for_child(svc):
 
 async def test_assign_chore_allowed_for_guardian(svc):
     service, _, _ = svc
-    parent_ctx = make_ctx(user_id="u1", role="parent", band="AMBER")
+    parent_ctx = make_ctx(user_id="u1", role="parent", band="GREEN")
     tmpl_res = await service.dispatch(
         "create_template", {"title": "Mop floor", "frequency": "weekly"}, parent_ctx
     )
-    guardian_ctx = make_ctx(user_id="g1", role="guardian", band="AMBER")
+    guardian_ctx = make_ctx(user_id="g1", role="guardian", band="GREEN")
     out = await service.dispatch(
         "assign_chore",
         {"template_id": tmpl_res["template_id"], "assigned_to": "riley"},
@@ -147,10 +147,10 @@ async def test_band_crisis_blocks_create(svc):
 
 async def test_points_override_ignored_for_child(svc):
     service, _, _ = svc
-    parent_ctx = make_ctx(user_id="u1", role="parent", band="AMBER")
+    parent_ctx = make_ctx(user_id="u1", role="parent", band="GREEN")
     occ_id = await _create_assigned_occ(service, parent_ctx, "riley", base_points=5)
 
-    riley_ctx = make_ctx(user_id="riley", role="child", band="AMBER")
+    riley_ctx = make_ctx(user_id="riley", role="child", band="GREEN")
     out = await service.dispatch(
         "complete_chore",
         {"occurrence_id": occ_id, "points_override": 100},

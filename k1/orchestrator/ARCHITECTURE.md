@@ -190,6 +190,7 @@ mailbox_loop → dequeue → process(msg):
 `run(step, resolved_params, prior_results, trace_id) -> StepResult`
 
 - Builds `CapabilityRequest` from PlanStep
+- Copies `PlanStep.activity_profile` into `CapabilityRequest.context_override["activity_profile"]` when present
 - Retry loop: 2 normal retries + 1 schema retry (ORCH-06)
 - Output schema validation via `jsonschema.validate()` (Draft 2020-12)
 - Schema hint injection into params on retry

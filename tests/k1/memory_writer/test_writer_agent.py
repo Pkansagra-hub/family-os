@@ -13,10 +13,15 @@ from typing import Any, Dict, List
 import pytest
 
 from k1.memory_writer.config import MWConfig
-from k1.memory_writer.extraction.raw_extraction import PromptLoader, RawExtraction
+from k1.memory_writer.extraction.raw_extraction import PromptLoader
 from k1.memory_writer.extraction.writer_agent import MemoryWriterAgent
 from k1.memory_writer.invariants import InvariantViolation
-from k1.memory_writer.types import Affect, ChatResponse, CompressedTurn, ExtractionContext
+from k1.memory_writer.types import (
+    Affect,
+    ChatResponse,
+    CompressedTurn,
+    ExtractionContext,
+)
 
 # ===========================================================================
 # Helpers
@@ -212,7 +217,7 @@ class TestWriterAgentBudget:
     async def test_model_hint_from_config(self):
         agent, hub = _make_agent("[]")
         await agent.extract(_ctx(), "trace-001")
-        assert hub.last_model_hint == "cheapest"
+        assert hub.last_model_hint == "gemini-2.5-flash"
 
     @pytest.mark.asyncio
     async def test_response_token_usage_captured(self):

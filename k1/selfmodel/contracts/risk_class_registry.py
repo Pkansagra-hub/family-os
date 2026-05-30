@@ -28,6 +28,7 @@ from k1.selfmodel.contracts.policy import RiskClass
 
 __all__ = [
     "RISK_CLASS_BY_TOOL",
+    "lookup_tool_risk",
     "register_tool_risk",
     "get_risk_class",
     "reset_unknown_warnings",
@@ -63,6 +64,7 @@ RISK_CLASS_BY_TOOL: dict[str, RiskClass] = {
     # ---- Self-model / scoreboard / beliefs (low-impact self-writes) -
     "update_scoreboard": RiskClass.LOW,
     "update_beliefs": RiskClass.LOW,
+    "update_narrative": RiskClass.LOW,
     # ---- Concierge orchestration / discovery (medium) ---------------
     "dispatch_task": RiskClass.MEDIUM,
     "discover_capabilities": RiskClass.LOW,
@@ -70,7 +72,17 @@ RISK_CLASS_BY_TOOL: dict[str, RiskClass] = {
     "tasks.create_task": RiskClass.MEDIUM,
     "tasks.complete_task": RiskClass.LOW,
     "tasks.list_tasks": RiskClass.LOW,
+    "tasks.get_task": RiskClass.LOW,
     "tasks.update_task": RiskClass.MEDIUM,
+    # ---- Family read-only fabric tools (stripped of "tool.read." prefix) --
+    "calendar.list_events": RiskClass.LOW,
+    "calendar.get_event": RiskClass.LOW,
+    "reminders.list_reminders": RiskClass.LOW,
+    "reminders.get_reminder": RiskClass.LOW,
+    "chores.list_chores": RiskClass.LOW,
+    "chores.chore_summary": RiskClass.LOW,
+    "shopping.list_items": RiskClass.LOW,
+    "shopping.get_item": RiskClass.LOW,
     # ---- Cross-member writes (medium) -------------------------------
     "update_persona": RiskClass.MEDIUM,
     "assign_task": RiskClass.MEDIUM,
@@ -102,6 +114,22 @@ RISK_CLASS_BY_TOOL: dict[str, RiskClass] = {
 
 _lock = threading.Lock()
 _warned: set[str] = set()
+_FABRIC_TOOL_PREFIXES: tuple[str, ...] = ("tool.read.", "tool.execute.")
+
+
+def lookup_tool_risk(tool_name: str) -> RiskClass | None:
+    """Return a declared risk for canonical or legacy tool names without warning."""
+    if not isinstance(tool_name, str) or not tool_name:
+        return None
+    risk = RISK_CLASS_BY_TOOL.get(tool_name)
+    if risk is not None:
+        return risk
+    for prefix in _FABRIC_TOOL_PREFIXES:
+        if tool_name.startswith(prefix):
+            risk = RISK_CLASS_BY_TOOL.get(tool_name[len(prefix) :])
+            if risk is not None:
+                return risk
+    return None
 
 
 def register_tool_risk(tool_name: str, risk: RiskClass) -> None:
@@ -131,7 +159,7 @@ def get_risk_class(
     if not isinstance(tool_name, str) or not tool_name:
         return fallback
     with _lock:
-        risk = RISK_CLASS_BY_TOOL.get(tool_name)
+        risk = lookup_tool_risk(tool_name)
         if risk is not None:
             return risk
         if tool_name not in _warned:

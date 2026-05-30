@@ -217,3 +217,61 @@ class WebSocketRenderer:
                 "timestamp": time.time(),
             }
         )
+
+    def send_hil_presented(self, envelope: dict[str, Any]) -> None:
+        """GAP-HIL-009: notify the browser that a HIL question is now visible.
+
+        Emitted in response to TOPIC_HIL_PRESENTED. The browser uses this
+        to mark the chat input as the active answer channel (data-hil-active)
+        so free-text input is correlated with the open HIL request.
+        """
+        self._broadcast_sync(
+            {
+                "type": "hil_presented",
+                "hil_request_id": envelope.get("hil_request_id", ""),
+                "task_id": envelope.get("task_id", ""),
+                "kind": envelope.get("kind", ""),
+                "presentation_channel": envelope.get("presentation_channel", ""),
+                "presented_at_ms": envelope.get("presented_at_ms", 0),
+                "timestamp": time.time(),
+            }
+        )
+
+    def send_task_failed(
+        self,
+        task_id: str,
+        reason: str = "error",
+        error_message: str = "",
+        error_code: str = "",
+    ) -> None:
+        """Notify the browser that a Back task failed so the UI can unstick.
+
+        Emitted in response to ``TOPIC_TASK_FAILED`` envelopes. The browser
+        clears its streaming spinner, marks the active back-activity panel as
+        errored, and shows a brief in-chat fallback message so the user knows
+        the turn is over even when Front never produces a response.final.
+        """
+        connections = len(self._connections)
+        if connections == 0:
+            logger.warning(
+                "WEB: no active websocket connections for task_failed task_id=%s reason=%s",
+                task_id,
+                reason,
+            )
+        else:
+            logger.info(
+                "WEB: broadcasting task_failed task_id=%s reason=%s connections=%d",
+                task_id,
+                reason,
+                connections,
+            )
+        self._broadcast_sync(
+            {
+                "type": "task_failed",
+                "task_id": task_id,
+                "reason": reason,
+                "error_message": error_message,
+                "error_code": error_code,
+                "timestamp": time.time(),
+            }
+        )

@@ -91,6 +91,11 @@ TOPIC_TOOL_COMPLETED = "k1.tool.completed.v1"
 # ---------------------------------------------------------------------------
 TOPIC_HIL_REQUEST = "k1.hil.request.v1"
 TOPIC_HIL_RESPONSE = "k1.hil.response.v1"
+# GAP-HIL-009: presentation ack -- published by a HIL presenter (Front)
+# once an answerable prompt has been rendered to a user surface. The
+# HumanInTheLoopService consumes it to arm the per-kind human-response
+# timer after presentation. Mirrors k1.hil.topics.TOPIC_HIL_PRESENTED.
+TOPIC_HIL_PRESENTED = "k1.hil.presented.v1"
 
 # ---------------------------------------------------------------------------
 # M6 HITL Lifecycle topics -- observability events emitted by the FSM/
@@ -112,6 +117,8 @@ TOPIC_PLAN_READY = "k1.planner.plan.ready.v1"
 # ---------------------------------------------------------------------------
 TOPIC_WEAVE_BATCH = "k1.internal.weave.batch.v1"
 TOPIC_DEAD_LETTER = "k1.internal.dead_letter.v1"
+TOPIC_SECTION_UPDATE_REQUESTED = "k1.internal.section_update.requested.v1"
+TOPIC_SECTION_UPDATE_COMPLETED = "k1.internal.section_update.completed.v1"
 
 # ---------------------------------------------------------------------------
 # BackPool topics (prefix: k1.backpool -> STRICT) -- M7 E7.1.4
@@ -201,6 +208,8 @@ ALL_TOPICS: frozenset[str] = frozenset(
         TOPIC_PLAN_READY,
         TOPIC_WEAVE_BATCH,
         TOPIC_DEAD_LETTER,
+        TOPIC_SECTION_UPDATE_REQUESTED,
+        TOPIC_SECTION_UPDATE_COMPLETED,
         TOPIC_BACKPOOL_WORKER_ACQUIRED,
         TOPIC_BACKPOOL_WORKER_RELEASED,
         TOPIC_TASK_LEASED,
@@ -393,6 +402,7 @@ __all__ = [
     "TOPIC_TOOL_COMPLETED",
     "TOPIC_HIL_REQUEST",
     "TOPIC_HIL_RESPONSE",
+    "TOPIC_HIL_PRESENTED",
     "TOPIC_HITL_REQUESTED",
     "TOPIC_HITL_RESOLVED",
     "TOPIC_HITL_TIMED_OUT",
@@ -400,6 +410,8 @@ __all__ = [
     "TOPIC_PLAN_READY",
     "TOPIC_WEAVE_BATCH",
     "TOPIC_DEAD_LETTER",
+    "TOPIC_SECTION_UPDATE_REQUESTED",
+    "TOPIC_SECTION_UPDATE_COMPLETED",
     "TOPIC_BACKPOOL_WORKER_ACQUIRED",
     "TOPIC_BACKPOOL_WORKER_RELEASED",
     "TOPIC_TASK_LEASED",

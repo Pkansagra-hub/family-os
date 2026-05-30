@@ -153,6 +153,25 @@ class TestNormalizeToolCallPayload:
         nr = layer.normalize(req, "openai")
         assert len(nr.tools) == 2
 
+    def test_tool_call_inherits_reasoning_effort_from_constraints(
+        self, layer: NormalizationLayer
+    ) -> None:
+        msgs = [Message(role="user", content="schedule this")]
+        payload = ToolCallPayload(
+            messages=msgs,
+            tools=[ToolDefinition(name="schedule", description="schedule")],
+        )
+        req = HubRequest(
+            capability=CapabilityType.TOOL_CALL,
+            payload=payload,
+            trace_id="test-trace-001",
+            constraints=RequestConstraints(reasoning_effort="medium"),
+        )
+
+        nr = layer.normalize(req, "google")
+
+        assert nr.reasoning_effort == "medium"
+
 
 # ===========================================================================
 # normalize() -- STRUCTURED
@@ -187,6 +206,20 @@ class TestNormalizeReasonPayload:
         assert nr.capability == CapabilityType.REASON
         assert nr.reasoning_effort == "high"
         assert nr.messages == msgs
+
+    def test_reason_payload_overrides_constraint_reasoning(self, layer: NormalizationLayer) -> None:
+        msgs = [Message(role="user", content="Think step by step.")]
+        payload = ReasonPayload(messages=msgs, reasoning_effort="high")
+        req = HubRequest(
+            capability=CapabilityType.REASON,
+            payload=payload,
+            trace_id="test-trace-001",
+            constraints=RequestConstraints(reasoning_effort="low"),
+        )
+
+        nr = layer.normalize(req, "anthropic")
+
+        assert nr.reasoning_effort == "high"
 
 
 # ===========================================================================

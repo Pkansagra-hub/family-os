@@ -14,6 +14,7 @@ HOT CORE Sections (52KB total, always in memory):
 - affective_now.py  - 4KB, current mood
 - narrative_active.py - 4KB, current threads
 - meta.py           - 2KB, schema version
+- spatial.py        - 4KB, current spatial context/projection
 - task_state.py     - 4KB, NEVER EVICT, active tasks
 - task_artifacts.py - 4KB, task output artifacts
 
@@ -21,6 +22,7 @@ WARM TIER Sections (48KB total, evictable):
 - beliefs_history.py - 12KB, demoted beliefs
 - history_recent.py  - 16KB, demoted history
 - persona.py         - 8KB, stable traits
+- place_registry.py  - 8KB, known places/geofences
 - telemetry.py       - 4KB, metrics
 - artifacts_warm.py  - 8KB, demoted artifacts
 """
@@ -35,15 +37,20 @@ from .clarifications import ClarificationsSection
 
 # HOT CORE sections
 from .control import ControlSection
+from .grounding import GroundingSection
 from .history_active import HistoryActiveSection
 from .history_recent import HistoryRecentSection
 from .meta import MetaSection
 from .narrative_active import NarrativeActiveSection
 from .persona import PersonaSection
+from .place_registry import PlaceRegistrySection
 from .scoreboard import ScoreboardSection
+from .spatial import SpatialSection
 from .task_artifacts import ArtifactType, TaskArtifactEntry, TaskArtifactsSection
 from .task_state import TaskStateEntry, TaskStateSection, TaskStatus
 from .telemetry import TelemetrySection
+from .temporal import TemporalSection
+from .trust_level import TrustLevelSection
 
 __all__ = [
     # HOT CORE
@@ -55,6 +62,10 @@ __all__ = [
     "AffectiveNowSection",
     "NarrativeActiveSection",
     "MetaSection",
+    "TemporalSection",
+    "TrustLevelSection",
+    "SpatialSection",
+    "GroundingSection",
     "TaskStateSection",
     "TaskStateEntry",
     "TaskStatus",
@@ -65,6 +76,7 @@ __all__ = [
     "BeliefsHistorySection",
     "HistoryRecentSection",
     "PersonaSection",
+    "PlaceRegistrySection",
     "TelemetrySection",
     "ArtifactsWarmSection",
 ]

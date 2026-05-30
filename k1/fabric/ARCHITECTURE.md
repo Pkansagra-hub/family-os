@@ -110,6 +110,7 @@ Fabric exposes **6 hexagonal ports**, all implemented as `typing.Protocol` with 
 | 2 | `BridgeConnectionAdapter` | `IBridgePort` | `adapters/bridge_connection.py` | `RLock` | Config-driven: endpoint, timeout, reconnect. Starts LOCAL COLD (bridge client not yet built) |
 | 3 | `AutoDiscoveryMCPTransport` | `IMCPTransport` (provider-layer) | `adapters/auto_mcp_transport.py` | No lock (GIL/asyncio) | Auto-discovers MCP servers in `k1/tools/mcp_servers` |
 | 4 | `AutoDiscoveryWASMRuntime` | `IWASMRuntime` (provider-layer) | `adapters/auto_wasm_runtime.py` | No lock (GIL/asyncio) | Auto-discovers WASM modules in `k1/tools/wasm_modules` |
+| 5 | `PromptSystemProdAdapter` | `IPromptSystemPort` | `adapters/prompt_system_prod.py` | `RLock` | Loads `k1/contracts/prompts/*.yaml` and reads external `template_file` markdown from `k1/prompts/**` |
 
 **NOTE**: `AutoDiscoveryMCPTransport` and `AutoDiscoveryWASMRuntime` implement provider-layer protocols, NOT hexagonal Fabric ports.
 
@@ -136,10 +137,10 @@ Fabric exposes **6 hexagonal ports**, all implemented as `typing.Protocol` with 
 | `IEventPort` | ⚠️ `LocalEventAdapter` (dual-role) | ✅ `LocalEventAdapter` | Payload typed `Dict[str,Any]` (narrower than port's `Any`) — compatible |
 | `IBridgePort` | ✅ `BridgeConnectionAdapter` | ✅ `TestBridgeAdapter` | All 5 methods exact match |
 | `IModelGatewayPort` | ❌ **MISSING** | ✅ `TestModelGatewayAdapter` | Test adapter satisfies; no production path |
-| `IPromptSystemPort` | ❌ **MISSING** | ✅ `TestPromptSystemAdapter` | ⚠️ `compile()` param typed `Any` vs port's `str` — wider, compatible |
+| `IPromptSystemPort` | ✅ `PromptSystemProdAdapter` | ✅ `TestPromptSystemAdapter` | `compile()` accepts `Any` for raw strings, dicts, or `PromptTemplate`; external `template_file` markdown loads at adapter construction/reload |
 | `IDeltaBusPort` | ❌ **MISSING** (Bus side provides `FabricBusAdapter`) | ✅ `TestDeltaBusAdapter` | Exact match |
 
-**3 ports lack production adapters in this directory**: `IModelGatewayPort`, `IPromptSystemPort`, `IDeltaBusPort`. Production adapters live outside Fabric: Bus `FabricBusAdapter` satisfies both `IEventPort` and `IDeltaBusPort`; ModelHub and PromptSystem production adapters not yet built.
+**2 ports lack production adapters in this directory**: `IModelGatewayPort` and `IDeltaBusPort`. Production adapters live outside Fabric where applicable: Bus `FabricBusAdapter` satisfies both `IEventPort` and `IDeltaBusPort`; ModelHub production wiring is external to this adapter inventory.
 
 ---
 
@@ -154,6 +155,12 @@ Fabric is K1's **Layer 2.5** — the central resolution, retrieval, and executio
 | **Intelligent Retrieval** | Planner | `discover_capabilities()`, `find_relevant_prompts()` |
 | **Resolution + Execution** | Orchestrator, Concierge | `execute()`, `execute_batch()` |
 | **Agent Factory** | Orchestrator (via AgentProvider) | `spawn_and_execute()` |
+
+### 2.1.1 Prompt/Profile Metadata Surface
+
+M1 adds an advisory prompt/profile surface to tool capability contracts. `CapabilityContract` carries `prompt_template`, `activity_profile`, `tool_instructions`, and `prompt_variables_schema` for YAML MCP/WASM/Bridge contracts and for K1-native family tools translated through `manifest_translator.py`.
+
+The metadata is contract-plane state and M3 runtime input: it is loaded, validated, round-tripped, registered, discoverable, loadable through `PromptSystemProdAdapter`, and forwarded through `ContextBuilder`. It does not change exact-name lookup, provider selection, tool grants, HIL, conscience gates, or business `params`. Providers receive it only through reserved metadata surfaces: MCP/WASM `__metadata__`, native `WriteContext.extras`, or the agent compiled prompt.
 
 ### 2.2 Shared Type System (`types.py`, ~1600 lines)
 
@@ -184,7 +191,7 @@ Fabric is K1's **Layer 2.5** — the central resolution, retrieval, and executio
 
 | Contract | Fields | Extends |
 |----------|--------|---------|
-| `CapabilityContract` | 26 fields (identity, capabilities, inputs, context, output, provider, policy, audit, lifecycle) | — |
+| `CapabilityContract` | Identity, capabilities, inputs, context, output, provider, prompt/profile metadata, policy, audit, lifecycle | — |
 | `AgentContract` | +6 fields (prompt_template, tools_granted, llm_budget_tokens, max_tool_calls, max_execution_time_ms, template_file) | `CapabilityContract` |
 | `PromptContract` | 13 fields (identity, intent_match, variables, template, compatibility, audit) | — |
 | `WorkflowContract` | 17 fields (identity, plan, trigger, DAG steps, recursion limits, policy, audit) | — |
@@ -396,10 +403,12 @@ PENDING → WARMING → ACTIVE → IDLE (pool, 60s TTL)
 |------|--------|
 | 1 | Read contract context requirements (`required_context`, `optional_context`) |
 | 2 | Fetch sections from SessionState via `ISessionStateReader` |
-| 3 | Inject request params (pass-through) |
-| 4 | Resolve + compile prompt template via `IPromptSystemPort` |
+| 3 | Inject request params (pass-through) and preserve `context_override` as a non-SessionState section |
+| 4 | Resolve + compile prompt with priority request template -> contract template -> `tool_instructions` fallback |
 | 5 | Apply token budget via `ContextBudget` |
 | 6 | Package frozen `ExecutionContext` |
+
+Prompt variables are assembled from `prompt_variables_schema` defaults, request params, and `context_override["prompt_variables"]`. The assembled map is used only for prompt compilation and never mutates `CapabilityRequest.params`.
 
 #### Token Budget (`core/context_budget.py`)
 

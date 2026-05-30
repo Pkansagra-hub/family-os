@@ -18,7 +18,7 @@ Key invariants:
     - TaskDispatch.intents is non-empty (at least one intent required)
     - budget_hint auto-computed from tier if not explicitly set
     - depends_on must be a valid task ID (task-...) if provided
-    - safety_band defaults to AMBER (assume side effects need approval)
+    - safety_band defaults to GREEN (ordinary tasks stay no-friction)
     - TaskComplete.status is always "success"
     - TaskFailed.status is always "error"
 """
@@ -66,7 +66,7 @@ class TaskDispatch:
                            Back reads this in STEP 1 (ORIENT) to resolve references.
         safety_band:       GREEN / AMBER / RED. Copied from SS control.safety_band.
                            Back checks this in STEP 5 (SAFETY CHECK) before invoke.
-                           Default AMBER: assume side effects require approval.
+                   Default GREEN: ordinary tasks stay in the no-friction lane.
         depends_on:        Task ID this depends on (chained tasks, V2 Section 17.4).
                            None = independent task.
         context_snapshot:  Relevant SessionState sections at dispatch time.
@@ -81,10 +81,16 @@ class TaskDispatch:
     task_id: str = field(default_factory=lambda: f"task-{uuid.uuid4().hex[:8]}")
     budget_hint: int | None = None
     reference_context: dict[str, Any] | None = None
-    safety_band: str = "AMBER"
+    safety_band: str = "GREEN"
     depends_on: str | None = None
     context_snapshot: dict[str, Any] | None = None
     execution_profiles: list[dict[str, Any]] | None = None
+    grounding_envelope_id: str | None = None
+    temporal_anchor_id: str | None = None
+    spatial_context_id: str | None = None
+    resolved_temporal_refs: dict[str, Any] | None = None
+    resolved_spatial_refs: dict[str, Any] | None = None
+    grounding: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if not self.intents:
@@ -98,6 +104,7 @@ class TaskDispatch:
                 f"safety_band must be one of {sorted(_VALID_SAFETY_BANDS)}, "
                 f"got '{self.safety_band}'"
             )
+        self._mirror_grounding_into_reference_context()
 
     @property
     def is_bundled(self) -> bool:
@@ -138,6 +145,18 @@ class TaskDispatch:
             d["context_snapshot"] = self.context_snapshot
         if self.execution_profiles is not None:
             d["execution_profiles"] = self.execution_profiles
+        if self.grounding_envelope_id is not None:
+            d["grounding_envelope_id"] = self.grounding_envelope_id
+        if self.temporal_anchor_id is not None:
+            d["temporal_anchor_id"] = self.temporal_anchor_id
+        if self.spatial_context_id is not None:
+            d["spatial_context_id"] = self.spatial_context_id
+        if self.resolved_temporal_refs is not None:
+            d["resolved_temporal_refs"] = self.resolved_temporal_refs
+        if self.resolved_spatial_refs is not None:
+            d["resolved_spatial_refs"] = self.resolved_spatial_refs
+        if self.grounding is not None:
+            d["grounding"] = self.grounding
         return d
 
     @classmethod
@@ -149,11 +168,36 @@ class TaskDispatch:
             tier=ComplexityTier(data["tier"]),
             budget_hint=data.get("budget_hint"),
             reference_context=data.get("reference_context"),
-            safety_band=data.get("safety_band", "AMBER"),
+            safety_band=data.get("safety_band", "GREEN"),
             depends_on=data.get("depends_on"),
             context_snapshot=data.get("context_snapshot"),
             execution_profiles=data.get("execution_profiles"),
+            grounding_envelope_id=data.get("grounding_envelope_id"),
+            temporal_anchor_id=data.get("temporal_anchor_id"),
+            spatial_context_id=data.get("spatial_context_id"),
+            resolved_temporal_refs=data.get("resolved_temporal_refs"),
+            resolved_spatial_refs=data.get("resolved_spatial_refs"),
+            grounding=data.get("grounding"),
         )
+
+    def _mirror_grounding_into_reference_context(self) -> None:
+        metadata: dict[str, Any] = {}
+        for key in (
+            "grounding_envelope_id",
+            "temporal_anchor_id",
+            "spatial_context_id",
+            "resolved_temporal_refs",
+            "resolved_spatial_refs",
+        ):
+            value = getattr(self, key)
+            if value is not None:
+                metadata[key] = value
+        if not metadata:
+            return
+        reference_context = dict(self.reference_context or {})
+        reference_context.update(metadata)
+        reference_context["grounding"] = dict(metadata)
+        self.reference_context = reference_context
 
     @classmethod
     def from_payload(cls, payload: bytes) -> TaskDispatch:

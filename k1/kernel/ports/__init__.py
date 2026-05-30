@@ -1,7 +1,7 @@
 """
 k1.kernel.ports -- Hexagonal port interfaces for the Kernel.
 
-Defines all 8 port protocols that KernelService uses for external
+Defines the port protocols that KernelService uses for external
 communication. These are the hexagonal boundary: ALL Tier 1 and Tier 2
 lifecycle operations go through these ports.
 
@@ -45,25 +45,36 @@ Usage::
 
 from k1.kernel.ports.bridge_port import IBridgeRuntime
 from k1.kernel.ports.bus_port import IBusPort
+from k1.kernel.ports.device_context_port import IDeviceContextPort
 from k1.kernel.ports.fabric_port import IFabricPort
+from k1.kernel.ports.grounding_port import GroundingFreshness, IGroundingPort
 from k1.kernel.ports.hil_port import IHILPort
 from k1.kernel.ports.lifecycle_port import HealthStatus, ILifecyclePort
 from k1.kernel.ports.model_hub_port import IModelHubPort
 from k1.kernel.ports.orchestrator_port import IOrchestratorPort
 from k1.kernel.ports.planner_port import IPlannerPort
 from k1.kernel.ports.session_manager_port import ISessionManagerPort
+from k1.kernel.ports.spatial_port import ISpatialPort, LocationFix
+from k1.kernel.ports.temporal_port import ITemporalPort, TemporalAnchor
 
 __all__ = [
     # --- 8 Kernel Port Protocols ---
     "IBridgeRuntime",
     "IBusPort",
+    "IDeviceContextPort",
     "IFabricPort",
+    "IGroundingPort",
     "IHILPort",
     "ILifecyclePort",
     "IModelHubPort",
     "IOrchestratorPort",
     "IPlannerPort",
     "ISessionManagerPort",
+    "ISpatialPort",
+    "ITemporalPort",
     # --- Supporting types ---
+    "GroundingFreshness",
     "HealthStatus",
+    "LocationFix",
+    "TemporalAnchor",
 ]

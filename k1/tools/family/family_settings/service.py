@@ -68,6 +68,38 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _ui_interaction_metadata(params: dict[str, Any]) -> dict[str, Any]:
+    source = str(params.get("interaction_source") or "").strip()
+    if not source:
+        return {}
+    kind = str(params.get("interaction_kind") or "").strip()
+    stamp: dict[str, Any] = {"at": _now_iso(), "source": source}
+    if kind:
+        stamp["kind"] = kind
+    for key in ("target", "preset", "previous", "next"):
+        value = params.get(f"interaction_{key}")
+        if value is not None:
+            stamp[key] = value
+    return {"_last_ui_interaction": stamp}
+
+
+def _metadata_updates(params: dict[str, Any]) -> dict[str, Any]:
+    updates: dict[str, Any] = {}
+    if isinstance(params.get("metadata"), dict):
+        updates.update(params["metadata"])
+    updates.update(_ui_interaction_metadata(params))
+    return updates
+
+
+def _merged_metadata(existing: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
+    updates = _metadata_updates(params)
+    if not updates:
+        return dict(existing)
+    merged = dict(existing)
+    merged.update(updates)
+    return merged
+
+
 # ---------------------------------------------------------------------------
 # Rule key → default callable (order determines evaluation priority)
 # ---------------------------------------------------------------------------
@@ -99,16 +131,26 @@ _VALID_BANDS = frozenset({"family", "adults", "named", "private"})
 def _make_override_rule(key: str, band: str) -> VisibilityRule:
     """Return a visibility rule that pins ``key``-matched entities to ``band``."""
 
-    base = _RULE_BASE_CALLABLES[key]
-
     def _rule(entity: BaseEntity, role) -> Optional[str]:
-        # Reuse the base callable's match logic by checking for non-None.
-        matched = base(entity, role)
-        if matched is not None:
+        if _matches_rule_key(key, entity):
             return band
         return None
 
     return _rule
+
+
+def _matches_rule_key(key: str, entity: BaseEntity) -> bool:
+    if key == "google_work":
+        return entity.source == "google" and entity.source_label == "work"
+    if key == "google_personal":
+        return entity.source == "google" and entity.source_label == "personal"
+    if key == "outlook_default":
+        return entity.source == "outlook"
+    if key == "classroom":
+        return entity.source == "classroom"
+    if key == "native_default":
+        return entity.source == "native"
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +215,7 @@ class FamilySettingsService(BaseToolService):
                 space_id=ctx.space_id,
                 actor=ctx.user_id,
                 visibility="private",
+                metadata=_metadata_updates(params),
                 rules=dict(rules_override),
                 sensitive_keywords=list(new_keywords),
                 kid_capabilities=dict(kid_caps),
@@ -190,6 +233,7 @@ class FamilySettingsService(BaseToolService):
                     "rules": merged_rules,
                     "sensitive_keywords": merged_kws,
                     "kid_capabilities": merged_caps,
+                    "metadata": _merged_metadata(existing.metadata, params),
                 }
             )
             doc = doc.bump(ctx.user_id)
@@ -205,6 +249,7 @@ class FamilySettingsService(BaseToolService):
             "version": doc.version,
             "applied_rules": list(doc.rules.keys()),
             "sensitive_keyword_count": len(new_keywords),
+            "policy": doc.model_dump(mode="json"),
         }
 
     async def list_feature_flags(self, params: dict[str, Any], ctx: WriteContext) -> dict[str, Any]:
@@ -228,6 +273,7 @@ class FamilySettingsService(BaseToolService):
                 id=_new_id(),
                 space_id=ctx.space_id,
                 actor=ctx.user_id,
+                metadata=_metadata_updates(params),
                 flag_name=flag_name,
                 enabled=enabled,
                 description=params.get("description", ""),
@@ -242,6 +288,9 @@ class FamilySettingsService(BaseToolService):
                 updates["scope"] = params["scope"]
             if "target_member_id" in params and params["target_member_id"] is not None:
                 updates["target_member_id"] = params["target_member_id"]
+            metadata = _merged_metadata(existing.metadata, params)
+            if metadata != existing.metadata:
+                updates["metadata"] = metadata
             flag = existing.model_copy(update=updates).bump(ctx.user_id)
 
         self._upsert_flag(flag)
@@ -251,6 +300,7 @@ class FamilySettingsService(BaseToolService):
             "flag_id": flag.id,
             "flag_name": flag.flag_name,
             "enabled": flag.enabled,
+            "flag": flag.model_dump(mode="json"),
         }
 
     # ------------------------------------------------------------------ #

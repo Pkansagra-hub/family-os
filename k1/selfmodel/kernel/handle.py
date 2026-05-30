@@ -41,6 +41,7 @@ from k1.selfmodel.adapters.grounding_capsule_renderer import GroundingCapsuleRen
 from k1.selfmodel.adapters.recall_citation_wrapper import RecallCitationWrapper
 from k1.selfmodel.contracts.situation import SituationFrame
 from k1.selfmodel.kernel.bootstrap import SelfModelServiceBundle
+from k1.selfmodel.ports.risk_catalog import IRiskCatalogPort
 
 if TYPE_CHECKING:  # pragma: no cover
     from k1.concierge.tools.dispatcher import ToolDispatcher
@@ -211,6 +212,7 @@ def build_self_model_handle(
     current_tier_fn: Callable[[], int] | None = None,
     trace_id_fn: Callable[[], str] | None = None,
     approval_timeout_ms: int = 120_000,
+    risk_catalog: IRiskCatalogPort | None = None,
 ) -> SelfModelHandle:
     """Construct a per-session :class:`SelfModelHandle`.
 
@@ -245,6 +247,7 @@ def build_self_model_handle(
         current_tier_fn=current_tier_fn,
         trace_id_fn=trace_id_fn,
         approval_timeout_ms=approval_timeout_ms,
+        risk_catalog=risk_catalog,
     )
 
     # Renderer drives the prompt builder; same frame closure but

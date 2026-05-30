@@ -78,6 +78,7 @@ _POC_TO_HUB_FINISH: dict[str, HubFinishReason] = {
     "length": HubFinishReason.LENGTH,
     "error": HubFinishReason.ERROR,
     "safety": HubFinishReason.SAFETY,
+    "malformed_tool_call": HubFinishReason.MALFORMED_TOOL_CALL,
 }
 
 # ThinkingLevel mapping: ReasonPayload.reasoning_effort → POC ThinkingLevel
@@ -196,6 +197,12 @@ class ModelHubPOCBridge:
         elif isinstance(payload, ReasonPayload):
             messages = [self._k1_msg_to_poc(m) for m in payload.messages]
             thinking = _EFFORT_TO_THINKING.get(payload.reasoning_effort, ThinkingLevel.MEDIUM)
+
+        if thinking is None and constraints.reasoning_effort:
+            thinking = _EFFORT_TO_THINKING.get(
+                constraints.reasoning_effort,
+                ThinkingLevel.MEDIUM,
+            )
 
         # Consumer ID → actor (parse "concierge.front" → "front")
         actor = constraints.consumer_id
@@ -322,6 +329,9 @@ class ModelHubPOCBridge:
                     )
                 ],
             )
+
+        if chunk.chunk_type == "thought_delta" and chunk.thought_text:
+            return HubChunk(thought=chunk.thought_text)
 
         return HubChunk(content=chunk.text or "")
 

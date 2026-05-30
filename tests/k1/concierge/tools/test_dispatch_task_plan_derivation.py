@@ -28,6 +28,7 @@ class TestDispatchTaskPlanDerivation:
         assert result.status == "ok"
         assert result.data["_dispatch"]["plan"] is False
         assert result.data["_dispatch"]["tier"] == "LOW"
+        assert result.data["_dispatch"]["safety_band"] == "GREEN"
 
     def test_explicit_plan_true_routes_medium(self):
         result = execute_dispatch_task(
@@ -170,6 +171,20 @@ class TestBackDispatcherRebind:
             safety_band="RED",
         )
         assert ctx.safety_band == "RED"
+
+    def test_bind_tool_context_sets_active_execution_profiles(self):
+        from k1.concierge.actors.back import _bind_tool_context
+
+        ctx = self._ctx()
+        d = create_back_dispatcher(tier="simple", ctx=ctx)
+        _bind_tool_context(
+            d,
+            trace_id="trace-1",
+            session_id="sess-1",
+            task_id="task-1",
+            execution_profiles=[{"profile_id": "calendar.v1"}],
+        )
+        assert ctx.active_execution_profiles == [{"profile_id": "calendar.v1"}]
 
     def test_effective_task_safety_prefers_dispatch_payload(self):
         from k1.concierge.actors.back import _effective_task_safety_band

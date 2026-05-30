@@ -73,6 +73,20 @@ def _context(trace_id: str = "trace-1") -> ExecutionContext:
     return ExecutionContext(trace_id=trace_id)
 
 
+def _profile_context(trace_id: str = "trace-1") -> ExecutionContext:
+    """Build an ExecutionContext carrying M3 prompt/profile metadata."""
+    return ExecutionContext(
+        trace_id=trace_id,
+        prompt="Use the calendar activity procedure.",
+        session_sections={
+            "context_override": {
+                "activity_profile": "calendar.v1",
+                "prompt_template": "calendar_activity_v1",
+            }
+        },
+    )
+
+
 def _config(
     provider_id: str = "mcp-weather",
     provider_type: str = "MCP",
@@ -612,6 +626,55 @@ class TestMCPProviderExecute:
         assert mcp_req.arguments == {"city": "Paris"}
         assert mcp_req.timeout_ms == 5000
         assert mcp_req.trace_id == "trace-verify"
+
+    async def test_transport_receives_prompt_profile_metadata(self) -> None:
+        """M3: prompt/profile metadata travels under reserved __metadata__."""
+        transport = FakeTransport()
+        provider = MCPProvider(
+            _config(),
+            transport=transport,
+            capability_names=["tool.execute.weather"],
+        )
+
+        await provider.execute(
+            _request(capability_name="tool.execute.weather", params={"city": "Paris"}),
+            _profile_context(),
+            "trace-profile",
+        )
+
+        args = transport.sent_requests[0].arguments
+        assert args["city"] == "Paris"
+        assert args["__metadata__"] == {
+            "__system_instructions__": "Use the calendar activity procedure.",
+            "__activity_profile__": "calendar.v1",
+            "__prompt_template__": "calendar_activity_v1",
+        }
+
+    async def test_profile_selection_dict_does_not_become_activity_profile(self) -> None:
+        """M3: structured profile_selection is not serialized as a profile id."""
+        transport = FakeTransport()
+        provider = MCPProvider(
+            _config(),
+            transport=transport,
+            capability_names=["tool.execute.weather"],
+        )
+        context = ExecutionContext(
+            trace_id="trace-profile-selection",
+            session_sections={
+                "context_override": {
+                    "profile_selection": {"reason": "explicit_metadata"},
+                }
+            },
+        )
+
+        await provider.execute(
+            _request(capability_name="tool.execute.weather", params={"city": "Paris"}),
+            context,
+            "trace-profile-selection",
+        )
+
+        args = transport.sent_requests[0].arguments
+        assert args == {"city": "Paris"}
 
     async def test_tool_name_map_used(self) -> None:
         """When tool_name_map has a mapping, it is used instead of capability_name."""

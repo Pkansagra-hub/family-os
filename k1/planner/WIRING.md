@@ -155,6 +155,8 @@ Retry policy per tool (from `_RETRY_POLICY`):
 
 Retries do NOT increment PLAN-05 budget counter. `get_schema()` bypasses counter entirely.
 
+`ExpandService` may also receive an injected prompt inventory. EXPAND uses that inventory only to preserve exact `prompt_template` names when `find_prompts` was not called or did not return the exact name. If no inventory is injected, unverified prompt names are cleared; EXPAND does not read prompt-contract files or Fabric adapters directly.
+
 ---
 
 ## 5. `PlannerAgent.start()` — activation sequence

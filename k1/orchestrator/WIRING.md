@@ -135,6 +135,8 @@ StepRunner.__init__(
 )
 ```
 
+At execution time, `StepRunner._build_request()` forwards `PlanStep.prompt_template` unchanged and places advisory `PlanStep.activity_profile` under `CapabilityRequest.context_override["activity_profile"]`. Existing `tools_granted` context override behavior is preserved; Orchestrator does not resolve or infer profile names.
+
 ---
 
 ## 4. Guard assembly

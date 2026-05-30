@@ -123,9 +123,7 @@ class TestToolRequiredFieldsMissing:
     ]
 
     @pytest.mark.parametrize("field", REQUIRED_FIELDS)
-    def test_missing_field_produces_error(
-        self, validator: ContractValidator, field: str
-    ) -> None:
+    def test_missing_field_produces_error(self, validator: ContractValidator, field: str) -> None:
         data = _valid_tool()
         del data["tool_contract"][field]
         errors = validator.validate(data, "tool_contract")
@@ -174,9 +172,7 @@ class TestToolNameConvention:
             ("", "empty name"),
         ],
     )
-    def test_invalid_names(
-        self, validator: ContractValidator, name: str, reason: str
-    ) -> None:
+    def test_invalid_names(self, validator: ContractValidator, name: str, reason: str) -> None:
         data = _valid_tool()
         data["tool_contract"]["name"] = name
         errors = validator.validate(data, "tool_contract")
@@ -308,9 +304,7 @@ class TestToolRequiredInputs:
         assert rule05 == []
 
     @pytest.mark.parametrize("missing_field", ["name", "type", "description"])
-    def test_input_missing_field(
-        self, validator: ContractValidator, missing_field: str
-    ) -> None:
+    def test_input_missing_field(self, validator: ContractValidator, missing_field: str) -> None:
         data = _valid_tool()
         inp = {"name": "x", "type": "STRING", "description": "X"}
         del inp[missing_field]
@@ -486,10 +480,52 @@ class TestToolOptionalFields:
                 "avg_latency_ms": 50,
                 "max_latency_ms": 200,
                 "tags": ["social", "messaging"],
+                "prompt_template": "messaging_activity_v1",
+                "activity_profile": "messaging.v1",
+                "tool_instructions": "Verify recipient and message fields before sending.",
+                "prompt_variables_schema": {
+                    "type": "object",
+                    "properties": {
+                        "recipient": {"type": "string"},
+                        "message": {"type": "string"},
+                    },
+                    "required": ["recipient", "message"],
+                },
             }
         )
         errors = validator.validate(data, "tool_contract")
         assert errors == [], f"Unexpected errors with optional fields: {errors}"
+
+    @pytest.mark.parametrize("provider_type", ["MCP", "WASM"])
+    def test_prompt_profile_metadata_valid_for_mcp_and_wasm(
+        self, validator: ContractValidator, provider_type: str
+    ) -> None:
+        data = _valid_tool()
+        data["tool_contract"].update(
+            {
+                "provider_type": provider_type,
+                "provider_id": f"{provider_type.lower()}-provider",
+                "prompt_template": "generic_activity_v1",
+                "activity_profile": "system_of_record.generic.v1",
+                "tool_instructions": "Use exact contract schema fields; do not guess names.",
+                "prompt_variables_schema": {"type": "object"},
+            }
+        )
+
+        errors = validator.validate(data, "tool_contract")
+
+        assert errors == [], f"Unexpected errors for {provider_type}: {errors}"
+
+    @pytest.mark.parametrize("bad_schema", ["recipient", ["recipient"], 42])
+    def test_prompt_variables_schema_must_be_object_or_null(
+        self, validator: ContractValidator, bad_schema: Any
+    ) -> None:
+        data = _valid_tool()
+        data["tool_contract"]["prompt_variables_schema"] = bad_schema
+
+        errors = validator.validate(data, "tool_contract")
+
+        assert any("prompt_variables_schema" in error for error in errors)
 
     def test_with_registered_at_and_last_updated(self, validator: ContractValidator) -> None:
         data = _valid_tool()
