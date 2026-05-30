@@ -71,6 +71,36 @@ def _recipient_alias(value: Any, ctx: WriteContext) -> Any:
     return alias
 
 
+def _ui_interaction_metadata(params: dict[str, Any]) -> dict[str, Any]:
+    source = str(params.get("interaction_source") or "").strip()
+    kind = str(params.get("interaction_kind") or "").strip()
+    if not source and not kind:
+        return {}
+    stamp: dict[str, Any] = {"at": _now_iso()}
+    if source:
+        stamp["source"] = source[:80]
+    if kind:
+        stamp["kind"] = kind[:80]
+    return {"_last_ui_interaction": stamp}
+
+
+def _metadata_updates(params: dict[str, Any]) -> dict[str, Any]:
+    updates: dict[str, Any] = {}
+    if "metadata" in params and params["metadata"] is not None:
+        if not isinstance(params["metadata"], dict):
+            raise ValueError("reminder metadata must be an object")
+        updates.update(params["metadata"])
+    updates.update(_ui_interaction_metadata(params))
+    return updates
+
+
+def _merged_metadata(existing: Reminder, params: dict[str, Any]) -> dict[str, Any]:
+    updates = _metadata_updates(params)
+    if not updates:
+        return existing.metadata
+    return {**existing.metadata, **updates}
+
+
 class RemindersToolService(BaseToolService):
     """Family Reminders adapter service."""
 
@@ -138,13 +168,21 @@ class RemindersToolService(BaseToolService):
         if "trigger" in params and params["trigger"] is not None:
             raw = params["trigger"]
             updates["trigger"] = ReminderTrigger(**raw) if isinstance(raw, dict) else raw
+        metadata = _merged_metadata(existing, params)
+        if metadata is not existing.metadata:
+            updates["metadata"] = metadata
 
         if updates:
             existing = existing.model_copy(update=updates)
         reminder = existing.bump(ctx.user_id)
         self._upsert_reminder(reminder)
         self.emit_entity_write("update", reminder, ctx, action=action)
-        return {"success": True, "reminder_id": reminder.id, "version": reminder.version}
+        return {
+            "success": True,
+            "reminder_id": reminder.id,
+            "version": reminder.version,
+            "reminder": reminder.model_dump(mode="json"),
+        }
 
     async def snooze_reminder(self, params: dict[str, Any], ctx: WriteContext) -> dict[str, Any]:
         action = self._spec("snooze_reminder")
@@ -162,7 +200,12 @@ class RemindersToolService(BaseToolService):
         # fired_at may already be set (normal snooze); if not, stamp it now.
         fired_at = existing.fired_at or _now_iso()
         reminder = existing.model_copy(
-            update={"status": "snoozed", "snoozed_until": snooze_until, "fired_at": fired_at}
+            update={
+                "status": "snoozed",
+                "snoozed_until": snooze_until,
+                "fired_at": fired_at,
+                "metadata": _merged_metadata(existing, params),
+            }
         ).bump(ctx.user_id)
         self._upsert_reminder(reminder)
         self.emit_entity_write("update", reminder, ctx, action=action)
@@ -170,6 +213,8 @@ class RemindersToolService(BaseToolService):
             "success": True,
             "reminder_id": reminder.id,
             "snoozed_until": snooze_until,
+            "version": reminder.version,
+            "reminder": reminder.model_dump(mode="json"),
         }
 
     async def dismiss_reminder(self, params: dict[str, Any], ctx: WriteContext) -> dict[str, Any]:
@@ -183,18 +228,33 @@ class RemindersToolService(BaseToolService):
 
         # Idempotent: already dismissed.
         if existing.status == "dismissed":
-            return {"success": True, "reminder_id": reminder_id}
+            return {
+                "success": True,
+                "reminder_id": reminder_id,
+                "version": existing.version,
+                "reminder": existing.model_dump(mode="json"),
+            }
 
         # Actor gate: recipient, creator, or guardian+.
         self._assert_actor_gate(existing, ctx, action_name="dismiss")
 
         fired_at = existing.fired_at or _now_iso()
         reminder = existing.model_copy(
-            update={"status": "dismissed", "fired_at": fired_at, "snoozed_until": None}
+            update={
+                "status": "dismissed",
+                "fired_at": fired_at,
+                "snoozed_until": None,
+                "metadata": _merged_metadata(existing, params),
+            }
         ).bump(ctx.user_id)
         self._upsert_reminder(reminder)
         self.emit_entity_write("update", reminder, ctx, action=action)
-        return {"success": True, "reminder_id": reminder.id}
+        return {
+            "success": True,
+            "reminder_id": reminder.id,
+            "version": reminder.version,
+            "reminder": reminder.model_dump(mode="json"),
+        }
 
     async def fire_reminder(self, params: dict[str, Any], ctx: WriteContext) -> dict[str, Any]:
         """System-only — called by K1 scheduler when a trigger condition is met.

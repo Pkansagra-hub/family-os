@@ -240,6 +240,41 @@ async def test_points_override_by_parent(svc):
     assert done["points_awarded"] == 10
 
 
+async def test_chore_direct_interactions_record_metadata(svc):
+    service, _, _ = svc
+    ctx = make_ctx(user_id="u1", role="parent", band="GREEN")
+    occ_id = await _create_assigned_occurrence(service, ctx, "u1", base_points=5)
+
+    done = await service.dispatch(
+        "complete_chore",
+        {
+            "occurrence_id": occ_id,
+            "interaction_source": "chore_board",
+            "interaction_kind": "drag_complete",
+        },
+        ctx,
+    )
+
+    assert done["success"] is True
+    assert done["chore"]["status"] == "done"
+    assert done["chore"]["metadata"]["_last_ui_interaction"]["source"] == "chore_board"
+    assert done["chore"]["metadata"]["_last_ui_interaction"]["kind"] == "drag_complete"
+
+    reopen = await service.dispatch(
+        "reopen_chore",
+        {
+            "occurrence_id": occ_id,
+            "interaction_source": "chore_board",
+            "interaction_kind": "drag_reopen",
+        },
+        ctx,
+    )
+
+    assert reopen["success"] is True
+    assert reopen["chore"]["status"] == "pending"
+    assert reopen["chore"]["metadata"]["_last_ui_interaction"]["kind"] == "drag_reopen"
+
+
 async def test_due_before_filter(svc):
     service, _, _ = svc
     ctx = make_ctx(user_id="u1", role="parent", band="GREEN")

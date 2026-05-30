@@ -605,9 +605,15 @@ def _render_trust_level_full(section: Any, cfg: SSReadConfig) -> str:
         labels = [item for item in labels if item]
         if labels:
             lines.append("Recent signals: " + " -> ".join(labels))
-    lines.append(
-        "Guidance: low/guarded trust means be explicit and ask before assumptions; "
-        "steady/high trust means stay concise without skipping policy gates."
+    action_posture = _trust_action_posture(score, band, stance)
+    lines.extend(
+        [
+            f"Action posture: {action_posture}",
+            "Autonomy rule: use trust to tune friction, not safety. With steady/high trust, proceed on clear GREEN actions, live reads, and explicit user requests; do not ask redundant confirmations or preference questions.",
+            "Clarification rule: ask only for blocking missing fields. Put minor uncertainty in reference_context and keep moving.",
+            "Confirmation rule: do not re-ask for explicit permission when the user already asked for the action; use HITL/approval gates for AMBER side effects.",
+            "Repair rule: low/guarded/repairing trust means slow down, name assumptions, and ask before guessing ambiguous or user-corrected details.",
+        ]
     )
     return "\n".join(lines)
 
@@ -617,6 +623,25 @@ def _render_trust_level_slim(section: Any, cfg: SSReadConfig) -> str:
     score = getattr(section, "trust_score", 0.5)
     band = getattr(section, "band", "steady")
     return f"Trust: {score} ({band})"
+
+
+def _trust_action_posture(score: Any, band: str, stance: str) -> str:
+    """Translate trust into Front action friction guidance."""
+    try:
+        numeric = float(score)
+    except (TypeError, ValueError):
+        numeric = 0.5
+    normalized_band = str(band or "").strip().lower()
+    normalized_stance = str(stance or "").strip().lower()
+    if normalized_stance in {"repairing", "guarded"} or normalized_band in {"low", "guarded"}:
+        return "repairing - ask before assumptions; keep questions few and concrete"
+    if (
+        normalized_stance in {"trusted_autonomy", "autonomous"}
+        or numeric >= 0.75
+        or normalized_band == "high"
+    ):
+        return "trusted autonomy - act on clear requests; minimize redundant clarification"
+    return "steady autonomy - proceed on explicit intent; ask only for blocking gaps"
 
 
 # Control-section fields that are pure telemetry / storage bookkeeping

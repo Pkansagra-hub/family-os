@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from tests.k1.tools.family.reminders.conftest import make_ctx
 
 _TIME_TRIGGER = {"kind": "time", "fire_at": "2026-06-01T09:00:00Z"}
@@ -240,6 +238,36 @@ async def test_list_reminders_recipient_filter_accepts_display_name(svc):
     res = await service.dispatch("list_reminders", {"recipient": "Alex"}, ctx)
     assert res["count"] == 1
     assert res["reminders"][0]["recipient"] == "alex"
+
+
+async def test_snooze_reminder_records_ui_interaction_metadata(svc):
+    service, _, _ = svc
+    ctx = make_ctx(user_id="alex", role="parent", band="GREEN")
+    create_res = await service.dispatch(
+        "create_reminder",
+        {"title": "Vitamins", "recipient": "alex", "trigger": _TIME_TRIGGER},
+        ctx,
+    )
+
+    snooze_res = await service.dispatch(
+        "snooze_reminder",
+        {
+            "reminder_id": create_res["reminder_id"],
+            "snooze_until": "2026-06-01T09:30:00Z",
+            "interaction_source": "reminder_board",
+            "interaction_kind": "drag_snooze",
+        },
+        ctx,
+    )
+
+    assert snooze_res["success"] is True
+    assert snooze_res["reminder"]["status"] == "snoozed"
+    assert snooze_res["reminder"]["metadata"]["_last_ui_interaction"]["source"] == "reminder_board"
+    assert snooze_res["reminder"]["metadata"]["_last_ui_interaction"]["kind"] == "drag_snooze"
+
+    out = await service.dispatch("get_reminder", {"reminder_id": create_res["reminder_id"]}, ctx)
+    assert out["reminder"]["status"] == "snoozed"
+    assert out["reminder"]["metadata"]["_last_ui_interaction"]["source"] == "reminder_board"
 
 
 async def test_list_reminders_status_filter(svc):

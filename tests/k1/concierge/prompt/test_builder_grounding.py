@@ -143,9 +143,7 @@ async def test_builder_v2_seats_typed_grounding_time_and_place_and_device(
     load_config(override)
     try:
         bundle = GroundingFactory.create_standalone()
-        projection = await bundle.service.build_projection(
-            "s1", consumer="front", turn_id="t1"
-        )
+        projection = await bundle.service.build_projection("s1", consumer="front", turn_id="t1")
 
         built = DynamicPromptBuilder().build(
             PromptMode.STANDARD,
@@ -195,9 +193,7 @@ async def test_builder_v1_default_keeps_now_and_place_blocks() -> None:
     reset_config()
     try:
         bundle = GroundingFactory.create_standalone()
-        projection = await bundle.service.build_projection(
-            "s1", consumer="front", turn_id="t1"
-        )
+        projection = await bundle.service.build_projection("s1", consumer="front", turn_id="t1")
 
         built = DynamicPromptBuilder().build(
             PromptMode.STANDARD,
@@ -218,4 +214,3 @@ async def test_builder_v1_default_keeps_now_and_place_blocks() -> None:
         assert "-- INJECT: GROUNDING META --" not in prompt
     finally:
         reset_config()
-

@@ -140,8 +140,10 @@ class LLMSectionUpdateClassifier(ISectionUpdateClassifier):
             return self._noop(input_data, f"unexpected tool call: {call.name}")
 
         try:
-            args = json.loads(call.arguments) if isinstance(call.arguments, str) else dict(
-                call.arguments
+            args = (
+                json.loads(call.arguments)
+                if isinstance(call.arguments, str)
+                else dict(call.arguments)
             )
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             logger.warning(

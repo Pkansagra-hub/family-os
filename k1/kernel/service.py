@@ -890,7 +890,9 @@ class KernelService:
 
         section_update_enabled = bool(
             getattr(self._config, "enable_section_update_worker", False)
-        ) and str(getattr(self._config, "section_update_worker_mode", "off") or "off").strip().lower() not in {
+        ) and str(
+            getattr(self._config, "section_update_worker_mode", "off") or "off"
+        ).strip().lower() not in {
             "",
             "off",
             "disabled",
@@ -2929,9 +2931,9 @@ class KernelService:
             raise
 
         section_update_worker: SectionUpdateBackgroundWorker | None = None
-        section_update_mode = str(
-            getattr(self._config, "section_update_worker_mode", "off") or "off"
-        ).strip().lower()
+        section_update_mode = (
+            str(getattr(self._config, "section_update_worker_mode", "off") or "off").strip().lower()
+        )
         section_update_enabled = bool(
             getattr(self._config, "enable_section_update_worker", False)
         ) and section_update_mode not in {"", "off", "disabled", "none"}
@@ -2952,12 +2954,14 @@ class KernelService:
                     # ModelHub is unavailable, in which case the worker
                     # will publish noop plans rather than crashing.
                     if self._model_hub is not None:
-                        provider_id = str(
-                            getattr(self._config, "section_update_provider", "") or ""
-                        ) or "vertex"
-                        model_id = str(
-                            getattr(self._config, "section_update_model", "") or ""
-                        ) or "gemini-2.5-flash-lite"
+                        provider_id = (
+                            str(getattr(self._config, "section_update_provider", "") or "")
+                            or "vertex"
+                        )
+                        model_id = (
+                            str(getattr(self._config, "section_update_model", "") or "")
+                            or "gemini-2.5-flash-lite"
+                        )
                         timeout_ms = int(
                             getattr(self._config, "section_update_worker_timeout_ms", 75_000)
                             or 75_000
@@ -3011,9 +3015,7 @@ class KernelService:
                             )
                             or "section-update-v0"
                         ),
-                        provider_id=str(
-                            getattr(self._config, "section_update_provider", "") or ""
-                        ),
+                        provider_id=str(getattr(self._config, "section_update_provider", "") or ""),
                         model_id=str(getattr(self._config, "section_update_model", "") or ""),
                     ),
                 )

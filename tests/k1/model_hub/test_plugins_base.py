@@ -30,7 +30,13 @@ from k1.model_hub.plugins.base import (
     ProviderHealth,
     ProviderResponse,
 )
-from k1.model_hub.types import CapabilityType, FinishReason, HealthStatus, Message, ToolCallResult
+from k1.model_hub.types import (
+    CapabilityType,
+    FinishReason,
+    HealthStatus,
+    Message,
+    ToolCallResult,
+)
 
 # ===========================================================================
 # NormalizedRequest Tests

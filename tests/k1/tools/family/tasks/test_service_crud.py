@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from tests.k1.tools.family.tasks.conftest import make_ctx
 
 
@@ -43,6 +41,33 @@ async def test_update_task_bumps_version(svc):
     assert upd["version"] == 2
     get_res = await service.dispatch("get_task", {"task_id": task_id}, make_ctx())
     assert get_res["task"]["title"] == "Updated"
+
+
+async def test_update_task_status_records_ui_interaction_metadata(svc):
+    service, _, _ = svc
+    ctx = make_ctx(user_id="u1", role="parent", band="GREEN")
+    create_res = await service.dispatch("create_task", {"title": "Board move"}, ctx)
+    task_id = create_res["task_id"]
+
+    upd = await service.dispatch(
+        "update_task",
+        {
+            "task_id": task_id,
+            "expected_version": 1,
+            "status": "in_progress",
+            "interaction_source": "task_board",
+            "interaction_kind": "drag_status",
+        },
+        ctx,
+    )
+
+    assert upd["success"] is True
+    assert upd["task"]["status"] == "in_progress"
+    get_res = await service.dispatch("get_task", {"task_id": task_id}, make_ctx())
+    metadata = get_res["task"]["metadata"]
+    assert metadata["_last_ui_interaction"]["source"] == "task_board"
+    assert metadata["_last_ui_interaction"]["kind"] == "drag_status"
+    assert metadata["_last_ui_interaction"]["at"]
 
 
 async def test_update_task_stale_version_raises(svc):

@@ -45,6 +45,19 @@ _JSON_EVENT_COLS = ("named_visible", "tags", "metadata", "attendees")
 _JSON_FEED_COLS = ("named_visible", "tags", "metadata")
 
 
+def _ui_interaction_metadata(params: dict[str, Any]) -> dict[str, Any]:
+    source = str(params.get("interaction_source") or "").strip()
+    kind = str(params.get("interaction_kind") or "").strip()
+    if not source and not kind:
+        return {}
+    stamp: dict[str, Any] = {"at": _now_iso()}
+    if source:
+        stamp["source"] = source[:80]
+    if kind:
+        stamp["kind"] = kind[:80]
+    return {"_last_ui_interaction": stamp}
+
+
 def _now_iso() -> str:
     """Return the current UTC time as an ISO 8601 string."""
 
@@ -127,10 +140,14 @@ class CalendarToolService(BaseToolService):
         for field in ("title", "start", "end", "location", "notes", "rrule", "attendees"):
             if field in params and params[field] is not None:
                 updates[field] = params[field]
+        metadata_updates: dict[str, Any] = {}
         if "metadata" in params and params["metadata"] is not None:
             if not isinstance(params["metadata"], dict):
                 raise ValueError("update_event metadata must be an object")
-            updates["metadata"] = {**existing.metadata, **params["metadata"]}
+            metadata_updates.update(params["metadata"])
+        metadata_updates.update(_ui_interaction_metadata(params))
+        if metadata_updates:
+            updates["metadata"] = {**existing.metadata, **metadata_updates}
 
         # ``BaseEntity.bump`` only refreshes the audit columns; apply the
         # business-field updates first, then bump, so the version counter
@@ -145,6 +162,7 @@ class CalendarToolService(BaseToolService):
             "success": True,
             "event_id": ev.id,
             "version": ev.version,
+            "event": ev.model_dump(mode="json"),
         }
 
     async def delete_event(self, params: dict[str, Any], ctx: WriteContext) -> dict[str, Any]:

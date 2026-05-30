@@ -75,6 +75,32 @@ async def test_update_event_bumps_version(svc) -> None:
     assert got["event"]["title"] == "Soccer (rescheduled)"
 
 
+async def test_update_event_records_ui_interaction_metadata(svc) -> None:
+    service, _, _ = svc
+    created = await service.dispatch("create_event", _evt_params(), make_ctx())
+    eid = created["event_id"]
+
+    out = await service.dispatch(
+        "update_event",
+        {
+            "event_id": eid,
+            "expected_version": 1,
+            "start": "2026-05-15T11:00:00+00:00",
+            "end": "2026-05-15T12:30:00+00:00",
+            "interaction_source": "calendar_grid",
+            "interaction_kind": "drag_reschedule",
+        },
+        make_ctx(),
+    )
+
+    assert out["success"] is True
+    got = await service.dispatch("get_event", {"event_id": eid}, make_ctx())
+    metadata = got["event"]["metadata"]
+    assert metadata["_last_ui_interaction"]["source"] == "calendar_grid"
+    assert metadata["_last_ui_interaction"]["kind"] == "drag_reschedule"
+    assert metadata["_last_ui_interaction"]["at"]
+
+
 async def test_update_event_rejects_stale_expected_version(svc) -> None:
     service, _, _ = svc
     created = await service.dispatch("create_event", _evt_params(), make_ctx())

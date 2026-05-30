@@ -99,6 +99,36 @@ def _normalize_frequency(value: Any) -> tuple[str, dict[str, Any]]:
     return "custom", {"raw": raw}
 
 
+def _ui_interaction_metadata(params: dict[str, Any]) -> dict[str, Any]:
+    source = str(params.get("interaction_source") or "").strip()
+    kind = str(params.get("interaction_kind") or "").strip()
+    if not source and not kind:
+        return {}
+    stamp: dict[str, Any] = {"at": _now_iso()}
+    if source:
+        stamp["source"] = source[:80]
+    if kind:
+        stamp["kind"] = kind[:80]
+    return {"_last_ui_interaction": stamp}
+
+
+def _metadata_updates(params: dict[str, Any]) -> dict[str, Any]:
+    updates: dict[str, Any] = {}
+    if "metadata" in params and params["metadata"] is not None:
+        if not isinstance(params["metadata"], dict):
+            raise ValueError("chore metadata must be an object")
+        updates.update(params["metadata"])
+    updates.update(_ui_interaction_metadata(params))
+    return updates
+
+
+def _merged_metadata(existing: ChoreOccurrence, params: dict[str, Any]) -> dict[str, Any]:
+    updates = _metadata_updates(params)
+    if not updates:
+        return existing.metadata
+    return {**existing.metadata, **updates}
+
+
 class ChoresToolService(BaseToolService):
     """Family Chores adapter service."""
 
@@ -118,7 +148,9 @@ class ChoresToolService(BaseToolService):
             raise PermissionError("only a parent or system may create chore templates")
 
         frequency, recurrence_metadata = _normalize_frequency(params.get("frequency", "weekly"))
-        metadata = dict(params.get("metadata") or {}) if isinstance(params.get("metadata"), dict) else {}
+        metadata = (
+            dict(params.get("metadata") or {}) if isinstance(params.get("metadata"), dict) else {}
+        )
         if recurrence_metadata:
             metadata["recurrence"] = recurrence_metadata
 
@@ -282,6 +314,8 @@ class ChoresToolService(BaseToolService):
                 "occurrence_id": occurrence_id,
                 "completed_at": existing.completed_at,
                 "points_awarded": existing.points_awarded,
+                "version": existing.version,
+                "chore": existing.model_dump(mode="json"),
             }
 
         completed_by = params.get("completed_by") or ctx.user_id
@@ -301,6 +335,7 @@ class ChoresToolService(BaseToolService):
                 "points_awarded": points,
                 "skipped_at": None,
                 "skip_reason": None,
+                "metadata": _merged_metadata(existing, params),
             }
         ).bump(ctx.user_id)
         self._upsert_occurrence(occ)
@@ -310,6 +345,8 @@ class ChoresToolService(BaseToolService):
             "occurrence_id": occ.id,
             "completed_at": now,
             "points_awarded": points,
+            "version": occ.version,
+            "chore": occ.model_dump(mode="json"),
         }
 
     async def skip_chore(self, params: dict[str, Any], ctx: WriteContext) -> dict[str, Any]:
@@ -325,7 +362,12 @@ class ChoresToolService(BaseToolService):
         self._assert_occurrence_gate(existing, ctx, action_name="skip")
 
         if existing.status == "skipped":
-            return {"success": True, "occurrence_id": occurrence_id}
+            return {
+                "success": True,
+                "occurrence_id": occurrence_id,
+                "version": existing.version,
+                "chore": existing.model_dump(mode="json"),
+            }
 
         now = _now_iso()
         occ = existing.model_copy(
@@ -335,11 +377,17 @@ class ChoresToolService(BaseToolService):
                 "skip_reason": params.get("skip_reason"),
                 "completed_at": None,
                 "completed_by": None,
+                "metadata": _merged_metadata(existing, params),
             }
         ).bump(ctx.user_id)
         self._upsert_occurrence(occ)
         self.emit_entity_write("update", occ, ctx, action=action)
-        return {"success": True, "occurrence_id": occ.id}
+        return {
+            "success": True,
+            "occurrence_id": occ.id,
+            "version": occ.version,
+            "chore": occ.model_dump(mode="json"),
+        }
 
     async def reopen_chore(self, params: dict[str, Any], ctx: WriteContext) -> dict[str, Any]:
         action = self._spec("reopen_chore")
@@ -354,7 +402,12 @@ class ChoresToolService(BaseToolService):
             raise ValueError(f"occurrence not found: {occurrence_id}")
 
         if existing.status == "pending":
-            return {"success": True, "occurrence_id": occurrence_id}
+            return {
+                "success": True,
+                "occurrence_id": occurrence_id,
+                "version": existing.version,
+                "chore": existing.model_dump(mode="json"),
+            }
 
         occ = existing.model_copy(
             update={
@@ -363,11 +416,17 @@ class ChoresToolService(BaseToolService):
                 "completed_by": None,
                 "skipped_at": None,
                 "skip_reason": None,
+                "metadata": _merged_metadata(existing, params),
             }
         ).bump(ctx.user_id)
         self._upsert_occurrence(occ)
         self.emit_entity_write("update", occ, ctx, action=action)
-        return {"success": True, "occurrence_id": occ.id}
+        return {
+            "success": True,
+            "occurrence_id": occ.id,
+            "version": occ.version,
+            "chore": occ.model_dump(mode="json"),
+        }
 
     async def list_chores(self, params: dict[str, Any], ctx: WriteContext) -> dict[str, Any]:
         rows = self._scan_occurrences(

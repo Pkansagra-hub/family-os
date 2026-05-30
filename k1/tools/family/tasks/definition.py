@@ -207,6 +207,12 @@ TASKS_DEFINITION = ToolDefinition(
                 FieldSpec(name="title", type="string", required=False),
                 FieldSpec(name="due_at", type="datetime", required=False),
                 FieldSpec(name="priority", type="string", required=False),
+                FieldSpec(
+                    name="status",
+                    type="string",
+                    required=False,
+                    description="Lifecycle state: open | in_progress | done | cancelled.",
+                ),
                 FieldSpec(name="list_id", type="string", required=False),
                 FieldSpec(name="linked_event_id", type="string", required=False),
             ],

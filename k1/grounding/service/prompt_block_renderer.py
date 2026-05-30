@@ -97,16 +97,12 @@ def render_place_and_device_block_v2(projection: GroundingProjection) -> str:
         lines.append(f"accuracy_m: {_format_accuracy_m(accuracy_m)}")
     if spatial.place_refs:
         refs = ", ".join(
-            f"{ref.place_id}({ref.place_kind})"
-            for ref in spatial.place_refs[:3]
-            if ref.place_id
+            f"{ref.place_id}({ref.place_kind})" for ref in spatial.place_refs[:3] if ref.place_id
         )
         if refs:
             lines.append(f"place_refs: {refs}")
     if spatial.co_presence:
-        names = ", ".join(
-            ref.subject_ref for ref in spatial.co_presence[:5] if ref.subject_ref
-        )
+        names = ", ".join(ref.subject_ref for ref in spatial.co_presence[:5] if ref.subject_ref)
         if names:
             lines.append(f"co_presence: {names}")
     if spatial.redactions:

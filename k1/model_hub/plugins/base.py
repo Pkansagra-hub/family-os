@@ -25,7 +25,13 @@ from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Dict, List, Optional, Protocol, runtime_checkable
 
 from k1.model_hub.manifest import ProviderManifest
-from k1.model_hub.types import CapabilityType, FinishReason, HealthStatus, Message, ToolCallResult
+from k1.model_hub.types import (
+    CapabilityType,
+    FinishReason,
+    HealthStatus,
+    Message,
+    ToolCallResult,
+)
 
 # ===========================================================================
 # Plugin Data Types (provider-agnostic intermediate forms)

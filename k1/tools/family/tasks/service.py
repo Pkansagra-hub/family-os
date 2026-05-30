@@ -49,6 +49,36 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _ui_interaction_metadata(params: dict[str, Any]) -> dict[str, Any]:
+    source = str(params.get("interaction_source") or "").strip()
+    kind = str(params.get("interaction_kind") or "").strip()
+    if not source and not kind:
+        return {}
+    stamp: dict[str, Any] = {"at": _now_iso()}
+    if source:
+        stamp["source"] = source[:80]
+    if kind:
+        stamp["kind"] = kind[:80]
+    return {"_last_ui_interaction": stamp}
+
+
+def _metadata_updates(params: dict[str, Any]) -> dict[str, Any]:
+    updates: dict[str, Any] = {}
+    if "metadata" in params and params["metadata"] is not None:
+        if not isinstance(params["metadata"], dict):
+            raise ValueError("task metadata must be an object")
+        updates.update(params["metadata"])
+    updates.update(_ui_interaction_metadata(params))
+    return updates
+
+
+def _merged_metadata(existing: TaskItem, params: dict[str, Any]) -> dict[str, Any]:
+    updates = _metadata_updates(params)
+    if not updates:
+        return existing.metadata
+    return {**existing.metadata, **updates}
+
+
 class TasksToolService(BaseToolService):
     """The Family Tasks adapter service."""
 
@@ -106,6 +136,22 @@ class TasksToolService(BaseToolService):
         for field in ("title", "due_at", "priority", "list_id", "linked_event_id"):
             if field in params and params[field] is not None:
                 updates[field] = params[field]
+        if "status" in params and params["status"] is not None:
+            status = str(params["status"])
+            if status not in {"open", "in_progress", "done", "cancelled"}:
+                raise ValueError(
+                    "update_task status must be one of open, in_progress, done, cancelled"
+                )
+            updates["status"] = status
+            if status == "done":
+                updates["completed_at"] = (
+                    params.get("completed_at") or existing.completed_at or _now_iso()
+                )
+            elif status != existing.status:
+                updates["completed_at"] = None
+        metadata = _merged_metadata(existing, params)
+        if metadata is not existing.metadata:
+            updates["metadata"] = metadata
 
         if updates:
             existing = existing.model_copy(update=updates)
@@ -113,7 +159,12 @@ class TasksToolService(BaseToolService):
         item = self._apply_visibility(item, ctx)
         self._upsert_item(item)
         self.emit_entity_write("update", item, ctx, action=action)
-        return {"success": True, "task_id": item.id, "version": item.version}
+        return {
+            "success": True,
+            "task_id": item.id,
+            "version": item.version,
+            "task": item.model_dump(mode="json"),
+        }
 
     async def complete_task(self, params: dict[str, Any], ctx: WriteContext) -> dict[str, Any]:
         action = self._spec("complete_task")
@@ -133,10 +184,21 @@ class TasksToolService(BaseToolService):
             }
 
         now = _now_iso()
-        item = existing.model_copy(update={"status": "done", "completed_at": now}).bump(ctx.user_id)
+        updates = {
+            "status": "done",
+            "completed_at": now,
+            "metadata": _merged_metadata(existing, params),
+        }
+        item = existing.model_copy(update=updates).bump(ctx.user_id)
         self._upsert_item(item)
         self.emit_entity_write("update", item, ctx, action=action)
-        return {"success": True, "task_id": item.id, "completed_at": now}
+        return {
+            "success": True,
+            "task_id": item.id,
+            "completed_at": now,
+            "version": item.version,
+            "task": item.model_dump(mode="json"),
+        }
 
     async def reopen_task(self, params: dict[str, Any], ctx: WriteContext) -> dict[str, Any]:
         action = self._spec("reopen_task")
@@ -154,12 +216,21 @@ class TasksToolService(BaseToolService):
         if existing.status == "open":
             return {"success": True, "task_id": task_id, "version": existing.version}
 
-        item = existing.model_copy(update={"status": "open", "completed_at": None}).bump(
-            ctx.user_id
-        )
+        item = existing.model_copy(
+            update={
+                "status": "open",
+                "completed_at": None,
+                "metadata": _merged_metadata(existing, params),
+            }
+        ).bump(ctx.user_id)
         self._upsert_item(item)
         self.emit_entity_write("update", item, ctx, action=action)
-        return {"success": True, "task_id": item.id, "version": item.version}
+        return {
+            "success": True,
+            "task_id": item.id,
+            "version": item.version,
+            "task": item.model_dump(mode="json"),
+        }
 
     async def reassign_task(self, params: dict[str, Any], ctx: WriteContext) -> dict[str, Any]:
         action = self._spec("reassign_task")
@@ -175,10 +246,18 @@ class TasksToolService(BaseToolService):
         if new_assignee != ctx.user_id and not role_satisfies(ctx.role, "parent"):
             raise PermissionError("only a parent or guardian may reassign a task to another member")
 
-        item = existing.model_copy(update={"assigned_to": new_assignee}).bump(ctx.user_id)
+        item = existing.model_copy(
+            update={"assigned_to": new_assignee, "metadata": _merged_metadata(existing, params)}
+        ).bump(ctx.user_id)
         self._upsert_item(item)
         self.emit_entity_write("update", item, ctx, action=action)
-        return {"success": True, "task_id": item.id, "assigned_to": new_assignee}
+        return {
+            "success": True,
+            "task_id": item.id,
+            "assigned_to": new_assignee,
+            "version": item.version,
+            "task": item.model_dump(mode="json"),
+        }
 
     async def delete_task(self, params: dict[str, Any], ctx: WriteContext) -> dict[str, Any]:
         action = self._spec("delete_task")

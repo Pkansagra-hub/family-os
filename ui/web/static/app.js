@@ -1,13 +1,13 @@
 /**
- * FamilyOS — Family Hub Web UI
+ * FamilyOS — Web UI
  *
  * Sidebar-driven SPA:
- *   - Home dashboard (real K1 data)
+ *   - Home operating surface (real K1 data)
  *   - Chat assistant (WebSocket streaming, FSM, affect, turn)
  *   - Adapter views (calendar, tasks, shopping, reminders, chores, family settings)
  *   - System views (timeline, dashboard, session state)
  *
- * Light theme, Figma-inspired layout. Backend integration unchanged.
+ * Light/dark theme, Figma-inspired layout. Backend integration unchanged.
  */
 
 "use strict";
@@ -40,27 +40,61 @@ const state = {
     currentAffect: { emotion: "neutral", valence: 0.5 },
     fsmState: "INITIALIZING",
     currentView: "home",
+    themeMode: "light",
+    householdWeather: "calm",
+    homeCognitionMode: "idle",
+    environment: {
+        view: "home",
+        weather: "calm",
+        timePhase: "midday",
+        dayRhythm: "weekday",
+        cognitionMode: "idle",
+        pressure: 0.22,
+        motion: "slow",
+        clarity: 0.72,
+        warmth: 0.46,
+        density: 0.26,
+        openness: 0.62,
+        diffusion: 0.22,
+        tension: 0.18,
+        motionRate: 0.22,
+        edgeDissolve: 0.22,
+        gravityX: "46%",
+        gravityY: "18%",
+        breathOpacity: 0.2,
+        emotionalRefraction: "steady",
+        refractionRgb: "255,255,255",
+        refractionAlpha: 0.018,
+        memoryEchoOpacity: 0,
+        memoryEchoTone: "none",
+        memoryEchoDuration: "0ms",
+        lastVisitedByView: {},
+    },
     memberDropdownOpen: false,
     tasksSelectedListId: null,
     tasksSelectedTaskKey: null,
     tasksViewMode: "list",
     tasksFilter: "now",
     tasksSearchQuery: "",
+    suppressNextTaskClick: false,
     shoppingSelectedListId: null,
     shoppingSelectedItemKey: null,
     shoppingViewMode: "list",
     shoppingFilter: "needed",
     shoppingSearchQuery: "",
+    suppressNextShoppingClick: false,
     remindersSelectedRecipient: null,
     remindersSelectedKey: null,
     remindersViewMode: "timeline",
     remindersFilter: "active",
     remindersSearchQuery: "",
+    suppressNextReminderClick: false,
     choresSelectedAssignee: "__all__",
     choresSelectedKey: null,
     choresViewMode: "today",
     choresFilter: "pending",
     choresSearchQuery: "",
+    suppressNextChoreClick: false,
     settingsViewMode: "overview",
     settingsSearchQuery: "",
     settingsAdvancedOpen: false,
@@ -75,6 +109,12 @@ const state = {
 };
 
 const DEFAULT_STREAMING_LABEL = "Understanding request...";
+const MERMAID_MODULE_URL = "https://cdn.jsdelivr.net/npm/mermaid@10.9.3/dist/mermaid.esm.min.mjs";
+const MERMAID_FENCE_LANGS = new Set(["mermaid", "mmd"]);
+const MERMAID_MAX_SOURCE_LENGTH = 20000;
+const MERMAID_VIEWER_MIN_SCALE = 0.5;
+const MERMAID_VIEWER_MAX_SCALE = 4;
+const MERMAID_VIEWER_ZOOM_STEP = 0.2;
 const BROWSER_LOCATION_TARGET_ACCURACY_M = 1;
 const BROWSER_LOCATION_WATCH_TIMEOUT_MS = 12000;
 const BROWSER_LOCATION_REFRESH_INTERVAL_MS = 60000;
@@ -93,6 +133,22 @@ const STREAMING_TOOL_LABELS = {
     recall_memory: "Checking memory...",
     summarize_context: "Summarizing context...",
     dispatch_task: "Starting task...",
+};
+
+let mermaidLoadPromise = null;
+let mermaidRenderSeq = 0;
+let mermaidConfiguredRuntime = null;
+let mermaidThemeMode = null;
+let mermaidViewerState = {
+    open: false,
+    scale: 1,
+    source: "",
+    previousFocus: null,
+    root: null,
+    stage: null,
+    canvas: null,
+    zoomLabel: null,
+    drag: null,
 };
 
 // Family member metadata
@@ -122,6 +178,80 @@ const ADAPTER_BACKEND_NAME = {
     chores: "chores",
     settings: "family_settings",
 };
+
+const ENVIRONMENT_VIEW_MODE = Object.freeze({
+    home: "idle",
+    chat: "reflection",
+    calendar: "planning",
+    tasks: "execution",
+    shopping: "coordination",
+    reminders: "review",
+    chores: "coordination",
+    settings: "review",
+    timeline: "review",
+    dashboard: "review",
+    sessionstate: "review",
+});
+
+const ENVIRONMENT_VIEW_GRAVITY = Object.freeze({
+    home: { x: "46%", y: "18%" },
+    chat: { x: "50%", y: "84%" },
+    calendar: { x: "34%", y: "16%" },
+    tasks: { x: "28%", y: "24%" },
+    shopping: { x: "72%", y: "22%" },
+    reminders: { x: "26%", y: "18%" },
+    chores: { x: "66%", y: "20%" },
+    settings: { x: "76%", y: "18%" },
+    timeline: { x: "50%", y: "16%" },
+    dashboard: { x: "50%", y: "16%" },
+    sessionstate: { x: "50%", y: "16%" },
+});
+
+const ENVIRONMENT_WEATHER_PROFILE = Object.freeze({
+    quiet: { pressure: 0.12, density: 0.18, clarity: 0.68, warmth: 0.42, edgeDissolve: 0.28, breathOpacity: 0.14, motion: "still" },
+    calm: { pressure: 0.22, density: 0.26, clarity: 0.72, warmth: 0.46, edgeDissolve: 0.22, breathOpacity: 0.2, motion: "slow" },
+    moving: { pressure: 0.48, density: 0.42, clarity: 0.76, warmth: 0.5, edgeDissolve: 0.18, breathOpacity: 0.28, motion: "active" },
+    decision: { pressure: 0.66, density: 0.52, clarity: 0.8, warmth: 0.58, edgeDissolve: 0.16, breathOpacity: 0.32, motion: "held" },
+    overload: { pressure: 0.84, density: 0.66, clarity: 0.78, warmth: 0.62, edgeDissolve: 0.12, breathOpacity: 0.26, motion: "held" },
+});
+
+const ENVIRONMENT_TIME_PROFILE = Object.freeze({
+    dawn: { pressure: -0.02, density: -0.04, clarity: 0.02, warmth: 0.46, openness: 0.05, diffusion: 0.03, motion: -0.02 },
+    morning: { pressure: -0.01, density: -0.02, clarity: 0.04, warmth: 0.48, openness: 0.03, diffusion: 0, motion: 0.02 },
+    midday: { pressure: 0, density: 0, clarity: 0.06, warmth: 0.44, openness: 0, diffusion: -0.02, motion: 0.01 },
+    afternoon: { pressure: 0.01, density: 0.02, clarity: 0.02, warmth: 0.5, openness: 0, diffusion: 0, motion: 0 },
+    evening: { pressure: -0.01, density: 0.01, clarity: -0.01, warmth: 0.58, openness: 0.02, diffusion: 0.03, motion: -0.03 },
+    late: { pressure: -0.05, density: -0.03, clarity: -0.03, warmth: 0.54, openness: 0.05, diffusion: 0.07, motion: -0.08 },
+    night: { pressure: -0.07, density: -0.06, clarity: -0.04, warmth: 0.48, openness: 0.07, diffusion: 0.08, motion: -0.1 },
+});
+
+const ENVIRONMENT_DAY_RHYTHM_PROFILE = Object.freeze({
+    weekday: { pressure: 0, density: 0, clarity: 0, warmth: 0, openness: 0, diffusion: 0, motion: 0 },
+    weekend: { pressure: -0.04, density: -0.02, clarity: -0.01, warmth: 0.02, openness: 0.06, diffusion: 0.03, motion: -0.03 },
+});
+
+const ENVIRONMENT_COGNITION_PROFILE = Object.freeze({
+    idle: { density: -0.02, clarity: 0, warmth: 0 },
+    planning: { density: 0.02, clarity: 0.03, warmth: 0 },
+    reflection: { density: -0.02, clarity: -0.01, warmth: 0.02 },
+    execution: { density: 0.04, clarity: 0.05, warmth: 0.01 },
+    coordination: { density: 0.03, clarity: 0.02, warmth: 0.04 },
+    review: { density: 0.01, clarity: 0.04, warmth: -0.01 },
+});
+
+const ENVIRONMENT_MOTION_PROFILE = Object.freeze({
+    still: { driftX: "0px", driftY: "0px", driftDuration: "0s" },
+    slow: { driftX: "1.5px", driftY: "1px", driftDuration: "680s" },
+    active: { driftX: "2.5px", driftY: "1.5px", driftDuration: "520s" },
+    held: { driftX: "1px", driftY: "0.5px", driftDuration: "760s" },
+});
+
+const ROOM_MEMORY_STORAGE_KEY = "familyos.roomMemory.v1";
+const ROOM_MEMORY_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const ROOM_MEMORY_VIEWS = new Set(Object.keys(ENVIRONMENT_VIEW_MODE));
+const ENVIRONMENT_TIME_PHASES = new Set(Object.keys(ENVIRONMENT_TIME_PROFILE));
+
+let environmentMemoryEchoFrame = 0;
 
 // ============================================================================
 // DOM refs
@@ -166,6 +296,8 @@ const dom = {
     memberName:        $("#member-name"),
     memberRole:        $("#member-role"),
     memberDropdown:    $("#member-list-dropdown"),
+    themeButtons:      $$("[data-theme-choice]"),
+    themeColorMeta:    $('meta[name="theme-color"]'),
     welcomeName:       $("#welcome-name"),
     navItems:          $$(".nav-item"),
     views:             $$(".view"),
@@ -176,6 +308,27 @@ const dom = {
     statReminders: $("#stat-reminders"),
     statChores:    $("#stat-chores"),
     homeActivity:  $("#home-activity"),
+    homePulseState:  $("#home-pulse-state"),
+    homePulseTime:   $("#home-pulse-time"),
+    homePulseTitle:  $("#home-pulse-title"),
+    homePulseDetail: $("#home-pulse-detail"),
+    homePulseMeta:   $("#home-pulse-meta"),
+    homePulseFamily: $("#home-pulse-family"),
+    homeNextTitle:   $("#home-next-title"),
+    homeNextMeta:    $("#home-next-meta"),
+    homeNextSource:  $("#home-next-source"),
+    homePrimaryAction:   $("#home-primary-action"),
+    homeDecisionCount:   $("#home-decision-count"),
+    homeDecisionList:    $("#home-decision-list"),
+    homeSystemSummary:   $("#home-system-summary"),
+    homeAppSignals:      $("#home-app-signals"),
+    homePeopleLoad:      $("#home-people-load"),
+    homeRhythmNowTitle:  $("#home-rhythm-now-title"),
+    homeRhythmNowMeta:   $("#home-rhythm-now-meta"),
+    homeRhythmNextTitle: $("#home-rhythm-next-title"),
+    homeRhythmNextMeta:  $("#home-rhythm-next-meta"),
+    homeRhythmLaterTitle: $("#home-rhythm-later-title"),
+    homeRhythmLaterMeta:  $("#home-rhythm-later-meta"),
     homeTodayTitle:   $("#home-today-title"),
     homeTodayDetail:  $("#home-today-detail"),
     homeTodayMeta:    $("#home-today-meta"),
@@ -217,19 +370,69 @@ const dom = {
 // ============================================================================
 
 function init() {
+    setupThemeMode();
+    loadEnvironmentMemory();
+    applyShellState();
     setupNav();
     setupMemberSwitcher();
     setupInput();
+    setupHomeInteractions();
     setupActionFormHandlers();
     setupKeyboardShortcuts();
     setupProgressiveDisclosure();
     setupActivityRail();
+    setupMermaidViewer();
     renderActivityRail();
     setChatWelcomeVisible();
     connect();
 }
 
 document.addEventListener("DOMContentLoaded", init);
+
+const THEME_STORAGE_KEY = "familyos.themeMode";
+const THEME_META_COLOR = Object.freeze({
+    light: "#f7f9fc",
+    dark: "#070b13",
+});
+
+function setupThemeMode() {
+    applyThemeMode(document.documentElement?.dataset.theme || readStoredThemeMode(), { persist: false });
+    dom.themeButtons.forEach((button) => {
+        button.addEventListener("click", () => applyThemeMode(button.dataset.themeChoice));
+    });
+}
+
+function readStoredThemeMode() {
+    try {
+        return normalizeThemeMode(window.localStorage?.getItem(THEME_STORAGE_KEY));
+    } catch {
+        return "light";
+    }
+}
+
+function normalizeThemeMode(mode) {
+    return String(mode || "light").toLowerCase() === "dark" ? "dark" : "light";
+}
+
+function applyThemeMode(mode, options = {}) {
+    const themeMode = normalizeThemeMode(mode);
+    state.themeMode = themeMode;
+    [document.documentElement, document.body].forEach((root) => {
+        if (!root) return;
+        root.dataset.theme = themeMode;
+        root.style.colorScheme = themeMode;
+    });
+    if (dom.themeColorMeta) dom.themeColorMeta.setAttribute("content", THEME_META_COLOR[themeMode]);
+    dom.themeButtons.forEach((button) => {
+        const active = normalizeThemeMode(button.dataset.themeChoice) === themeMode;
+        button.classList.toggle("theme-toggle__button--active", active);
+        button.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+    if (options.persist !== false) {
+        try { window.localStorage?.setItem(THEME_STORAGE_KEY, themeMode); } catch {/* ignore storage failures */}
+    }
+    refreshMermaidDiagramsForTheme();
+}
 
 function setupActivityRail() {
     if (!dom.activityRail || !dom.activityToggle) return;
@@ -363,9 +566,23 @@ function setupNav() {
     });
 }
 
+function setupHomeInteractions() {
+    document.addEventListener("click", (event) => {
+        const trigger = event.target.closest("[data-home-target]");
+        if (!trigger) return;
+        const target = trigger.dataset.homeTarget;
+        const suggestion = trigger.dataset.homeChatSuggestion || "";
+        if (target) navigateTo(target);
+        if (suggestion) applyChatSuggestion(suggestion);
+    });
+}
+
 function navigateTo(viewId) {
     if (!viewId) return;
+    const previousView = state.currentView;
+    if (previousView && previousView !== viewId) recordEnvironmentVisit(previousView);
     state.currentView = viewId;
+    applyShellState({ viewId });
 
     dom.navItems.forEach((item) => {
         const active = item.dataset.view === viewId;
@@ -391,12 +608,395 @@ function navigateTo(viewId) {
     }
 }
 
+function applyShellState({ viewId = state.currentView, weather = state.householdWeather } = {}) {
+    const nextView = String(viewId || "home").trim() || "home";
+    const nextWeather = normalizeHouseholdWeather(weather);
+    applyEnvironmentState(deriveEnvironmentState({ viewId: nextView, weather: nextWeather }));
+}
+
+function applyEnvironmentState(environment) {
+    const lastVisitedByView = state.environment?.lastVisitedByView || {};
+    state.environment = { ...state.environment, ...environment, lastVisitedByView };
+    state.currentView = state.environment.view;
+    state.householdWeather = state.environment.weather;
+
+    const cssVars = environmentCssVars(state.environment);
+    [document.documentElement, document.body].forEach((root) => {
+        if (!root) return;
+        root.dataset.view = state.environment.view;
+        root.dataset.householdWeather = state.environment.weather;
+        root.dataset.timePhase = state.environment.timePhase;
+        root.dataset.dayRhythm = state.environment.dayRhythm;
+        root.dataset.cognitionMode = state.environment.cognitionMode;
+        root.dataset.emotionalRefraction = state.environment.emotionalRefraction;
+        root.dataset.environmentMotion = state.environment.motion;
+        root.dataset.environmentPressure = state.environment.pressureBand;
+        root.dataset.environmentDensity = state.environment.densityBand;
+        root.dataset.environmentClarity = state.environment.clarityBand;
+        root.dataset.environmentWarmth = state.environment.warmthBand;
+        root.dataset.roomMemoryEcho = state.environment.memoryEchoTone || "none";
+        Object.entries(cssVars).forEach(([name, value]) => root.style.setProperty(name, value));
+    });
+    scheduleEnvironmentMemoryEcho(state.environment);
+}
+
+function normalizeHouseholdWeather(weather) {
+    const value = String(weather || "calm").trim().toLowerCase();
+    return ["quiet", "calm", "moving", "decision", "overload"].includes(value) ? value : "calm";
+}
+
+function deriveEnvironmentState({ viewId = state.currentView, weather = state.householdWeather, now = new Date() } = {}) {
+    const nextView = String(viewId || "home").trim() || "home";
+    const nextWeather = normalizeHouseholdWeather(weather);
+    const displayTimeZone = _displayTimeZone();
+    const timePhase = getTimePhase(now, displayTimeZone);
+    const dayRhythm = deriveEnvironmentDayRhythm(now, displayTimeZone);
+    const cognitionMode = deriveEnvironmentCognitionMode(nextView);
+    const weatherProfile = ENVIRONMENT_WEATHER_PROFILE[nextWeather] || ENVIRONMENT_WEATHER_PROFILE.calm;
+    const timeProfile = ENVIRONMENT_TIME_PROFILE[timePhase] || ENVIRONMENT_TIME_PROFILE.midday;
+    const dayProfile = ENVIRONMENT_DAY_RHYTHM_PROFILE[dayRhythm] || ENVIRONMENT_DAY_RHYTHM_PROFILE.weekday;
+    const cognitionProfile = ENVIRONMENT_COGNITION_PROFILE[cognitionMode] || ENVIRONMENT_COGNITION_PROFILE.idle;
+    const affectProfile = deriveEnvironmentAffectProfile(state.currentAffect);
+    const activeRuntime = hasRunningActivity() || Boolean(state.streamingMsgId);
+    const pressure = clampEnvironment(weatherProfile.pressure + (timeProfile.pressure || 0) + (dayProfile.pressure || 0) + affectProfile.pressure + (activeRuntime ? 0.06 : 0));
+    const density = clampEnvironment(weatherProfile.density + timeProfile.density + dayProfile.density + cognitionProfile.density + affectProfile.density + (activeRuntime ? 0.04 : 0));
+    const clarity = clampEnvironment(weatherProfile.clarity + timeProfile.clarity + dayProfile.clarity + cognitionProfile.clarity + affectProfile.clarity);
+    const warmth = clampEnvironment((weatherProfile.warmth + timeProfile.warmth) / 2 + dayProfile.warmth + cognitionProfile.warmth + affectProfile.warmth);
+    const motion = deriveEnvironmentMotion({ weather: nextWeather, pressure, cognitionMode, activeRuntime, timePhase, dayRhythm });
+    const motionProfile = ENVIRONMENT_MOTION_PROFILE[motion] || ENVIRONMENT_MOTION_PROFILE.slow;
+    const gravity = ENVIRONMENT_VIEW_GRAVITY[nextView] || ENVIRONMENT_VIEW_GRAVITY.home;
+    const memoryEcho = deriveEnvironmentMemoryEcho(nextView);
+    const tension = clampEnvironment(pressure * 0.62 + density * 0.2 + affectProfile.tension + (activeRuntime ? 0.03 : 0));
+    const openness = clampEnvironment(1 - density * 0.52 - pressure * 0.24 + (timeProfile.openness || 0) + (dayProfile.openness || 0) + affectProfile.openness);
+    const diffusion = clampEnvironment((1 - clarity) * 0.42 + density * 0.18 + (timeProfile.diffusion || 0) + (dayProfile.diffusion || 0) + affectProfile.diffusion);
+    const motionRate = clampEnvironment(environmentMotionRate(motion) + (timeProfile.motion || 0) + (dayProfile.motion || 0) + affectProfile.motion);
+    const emotionalRefraction = deriveEnvironmentRefraction({ affectProfile, tension, openness, warmth, diffusion });
+    const refraction = environmentRefractionLight(emotionalRefraction, { warmth, tension, diffusion });
+
+    return {
+        view: nextView,
+        weather: nextWeather,
+        timePhase,
+        dayRhythm,
+        cognitionMode,
+        emotionalRefraction,
+        pressure,
+        pressureBand: environmentBand(pressure, 0.34, 0.66, "low", "medium", "high"),
+        motion,
+        clarity,
+        clarityBand: environmentBand(clarity, 0.62, 0.78, "soft", "clear", "focused"),
+        warmth,
+        warmthBand: environmentBand(warmth, 0.42, 0.58, "cool", "balanced", "warm"),
+        density,
+        densityBand: environmentBand(density, 0.3, 0.58, "open", "balanced", "dense"),
+        openness,
+        diffusion,
+        tension,
+        motionRate,
+        edgeDissolve: clampEnvironment(weatherProfile.edgeDissolve + (1 - density) * 0.08),
+        gravityX: gravity.x,
+        gravityY: gravity.y,
+        breathOpacity: clampEnvironment(weatherProfile.breathOpacity + pressure * 0.08),
+        driftX: motionProfile.driftX,
+        driftY: motionProfile.driftY,
+        driftDuration: motionProfile.driftDuration,
+        memoryEchoOpacity: memoryEcho.opacity,
+        memoryEchoTone: memoryEcho.tone,
+        memoryEchoDuration: memoryEcho.duration,
+        memoryEchoRgb: memoryEcho.rgb,
+        memoryEchoDensityRgb: memoryEcho.densityRgb,
+        refractionRgb: refraction.rgb,
+        refractionAlpha: refraction.alpha,
+    };
+}
+
+function getTimePhase(date = new Date(), timeZone = _displayTimeZone()) {
+    return deriveEnvironmentTimePhase(date, timeZone);
+}
+
+function deriveEnvironmentTimePhase(date = new Date(), timeZone = _displayTimeZone()) {
+    const hour = environmentLocalHour(date, timeZone);
+    if (hour >= 5 && hour < 7) return "dawn";
+    if (hour >= 7 && hour < 11) return "morning";
+    if (hour >= 11 && hour < 15) return "midday";
+    if (hour >= 15 && hour < 18) return "afternoon";
+    if (hour >= 18 && hour < 22) return "evening";
+    if (hour >= 22) return "late";
+    return "night";
+}
+
+function environmentLocalHour(date = new Date(), timeZone = _displayTimeZone()) {
+    if (timeZone && typeof Intl !== "undefined") {
+        try {
+            const hourPart = new Intl.DateTimeFormat("en-US", {
+                timeZone,
+                hour: "2-digit",
+                hour12: false,
+            }).formatToParts(date).find((part) => part.type === "hour");
+            const hour = Number(hourPart?.value);
+            if (Number.isFinite(hour)) return hour % 24;
+        } catch {/* fall through */}
+    }
+    return date.getHours();
+}
+
+function deriveEnvironmentDayRhythm(date = new Date(), timeZone = _displayTimeZone()) {
+    const weekday = environmentLocalWeekday(date, timeZone);
+    return weekday === 0 || weekday === 6 ? "weekend" : "weekday";
+}
+
+function environmentLocalWeekday(date = new Date(), timeZone = _displayTimeZone()) {
+    if (timeZone && typeof Intl !== "undefined") {
+        try {
+            const label = new Intl.DateTimeFormat("en-US", { timeZone, weekday: "short" }).format(date).toLowerCase();
+            const map = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
+            if (label.slice(0, 3) in map) return map[label.slice(0, 3)];
+        } catch {/* fall through */}
+    }
+    return date.getDay();
+}
+
+function deriveEnvironmentCognitionMode(viewId = state.currentView) {
+    if (state.streamingMsgId || hasRunningActivity()) {
+        const runtime = _runtimePillState(state.streamingLabel || DEFAULT_STREAMING_LABEL);
+        const phaseMode = {
+            understanding: "reflection",
+            planning: "planning",
+            tool_calling: "execution",
+            executing: "execution",
+            verifying: "review",
+            waiting_for_approval: "review",
+            blocked: "review",
+        };
+        return phaseMode[runtime.phase] || "planning";
+    }
+    if (viewId === "home") return state.homeCognitionMode || "idle";
+    return ENVIRONMENT_VIEW_MODE[viewId] || "idle";
+}
+
+function deriveEnvironmentMotion({ weather, pressure, cognitionMode, activeRuntime, timePhase, dayRhythm } = {}) {
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return "still";
+    if (["late", "night"].includes(timePhase)) {
+        if (activeRuntime && ["execution", "planning"].includes(cognitionMode)) return "held";
+        return weather === "quiet" ? "still" : "slow";
+    }
+    if (activeRuntime && ["execution", "planning"].includes(cognitionMode)) return "active";
+    if (weather === "overload" || weather === "decision" || pressure >= 0.66) return "held";
+    if (weather === "moving" || pressure >= 0.42) return "active";
+    if (dayRhythm === "weekend" && pressure < 0.36) return "slow";
+    if (weather === "quiet") return "still";
+    return "slow";
+}
+
+function deriveEnvironmentAffectProfile(affect = {}) {
+    const emotion = String(affect.emotion || "neutral").toLowerCase();
+    if (emotion === "urgent") return { emotion, pressure: 0.09, density: 0.06, clarity: -0.02, warmth: 0.01, openness: -0.06, diffusion: 0.035, tension: 0.14, motion: -0.04, refraction: "tense" };
+    if (emotion === "anxious") return { emotion, pressure: 0.07, density: 0.05, clarity: -0.03, warmth: 0.02, openness: -0.05, diffusion: 0.055, tension: 0.12, motion: -0.08, refraction: "tense" };
+    if (emotion === "warm" || emotion === "empathetic") return { emotion, pressure: -0.01, density: -0.02, clarity: 0.01, warmth: 0.07, openness: 0.04, diffusion: 0.025, tension: -0.04, motion: -0.01, refraction: "warm" };
+    if (emotion === "calm") return { emotion, pressure: -0.03, density: -0.02, clarity: 0.03, warmth: 0, openness: 0.06, diffusion: -0.02, tension: -0.06, motion: -0.02, refraction: "open" };
+    if (emotion === "playful") return { emotion, pressure: 0, density: -0.01, clarity: 0.01, warmth: 0.04, openness: 0.05, diffusion: 0, tension: -0.02, motion: 0.04, refraction: "buoyant" };
+    return { emotion: "neutral", pressure: 0, density: 0, clarity: 0, warmth: 0, openness: 0, diffusion: 0, tension: 0, motion: 0, refraction: "steady" };
+}
+
+function environmentMotionRate(motion) {
+    return { still: 0.04, slow: 0.22, active: 0.58, held: 0.18 }[motion] ?? 0.22;
+}
+
+function deriveEnvironmentRefraction({ affectProfile, tension, openness, warmth, diffusion } = {}) {
+    if (affectProfile?.refraction && affectProfile.refraction !== "steady") return affectProfile.refraction;
+    if (tension >= 0.62) return "tense";
+    if (openness >= 0.66 && diffusion <= 0.24) return "open";
+    if (warmth >= 0.62) return "warm";
+    return "steady";
+}
+
+function environmentRefractionLight(refraction, { warmth = 0.46, tension = 0.18, diffusion = 0.22 } = {}) {
+    const alpha = clampEnvironment(0.012 + warmth * 0.008 + tension * 0.012 + diffusion * 0.006);
+    if (refraction === "warm") return { rgb: "255,247,237", alpha };
+    if (refraction === "tense") return { rgb: "226,232,240", alpha: clampEnvironment(alpha * 0.86) };
+    if (refraction === "open") return { rgb: "255,255,255", alpha: clampEnvironment(alpha * 0.72) };
+    if (refraction === "buoyant") return { rgb: "236,254,255", alpha: clampEnvironment(alpha * 0.88) };
+    return { rgb: "248,250,252", alpha: clampEnvironment(alpha * 0.72) };
+}
+
+function environmentCssVars(environment) {
+    return {
+        "--env-drift-x": environment.driftX || "0px",
+        "--env-drift-y": environment.driftY || "0px",
+        "--env-drift-duration": environment.driftDuration || "0s",
+        "--env-clarity": formatEnvironmentNumber(environment.clarity),
+        "--env-density": formatEnvironmentNumber(environment.density),
+        "--env-warmth": formatEnvironmentNumber(environment.warmth),
+        "--env-pressure": formatEnvironmentNumber(environment.pressure),
+        "--env-openness": formatEnvironmentNumber(environment.openness),
+        "--env-diffusion": formatEnvironmentNumber(environment.diffusion),
+        "--env-tension": formatEnvironmentNumber(environment.tension),
+        "--env-motion-rate": formatEnvironmentNumber(environment.motionRate),
+        "--env-edge-dissolve": formatEnvironmentNumber(environment.edgeDissolve),
+        "--env-gravity-x": environment.gravityX || "50%",
+        "--env-gravity-y": environment.gravityY || "16%",
+        "--env-breath-opacity": formatEnvironmentNumber(environment.breathOpacity),
+        "--env-memory-echo-opacity": formatEnvironmentNumber(environment.memoryEchoOpacity),
+        "--env-memory-echo-duration": environment.memoryEchoDuration || "0ms",
+        "--env-memory-echo-rgb": environment.memoryEchoRgb || "255,255,255",
+        "--env-memory-echo-density-rgb": environment.memoryEchoDensityRgb || "15,23,42",
+        "--env-refraction-rgb": environment.refractionRgb || "255,255,255",
+        "--env-refraction-alpha": formatEnvironmentNumber(environment.refractionAlpha),
+    };
+}
+
+function loadEnvironmentMemory() {
+    try {
+        const raw = window.localStorage?.getItem(ROOM_MEMORY_STORAGE_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        state.environment.lastVisitedByView = sanitizeEnvironmentMemory(parsed);
+    } catch {/* ignore unavailable or malformed local memory */}
+}
+
+function persistEnvironmentMemory() {
+    try {
+        const memory = sanitizeEnvironmentMemory(state.environment?.lastVisitedByView || {});
+        window.localStorage?.setItem(ROOM_MEMORY_STORAGE_KEY, JSON.stringify(memory));
+    } catch {/* ignore storage quota/privacy failures */}
+}
+
+function sanitizeEnvironmentMemory(raw) {
+    if (!raw || typeof raw !== "object") return {};
+    return Object.entries(raw).reduce((acc, [viewId, entry]) => {
+        const view = String(viewId || "").trim();
+        if (!ROOM_MEMORY_VIEWS.has(view)) return acc;
+        const sanitized = sanitizeEnvironmentMemoryEntry(entry);
+        if (sanitized) acc[view] = sanitized;
+        return acc;
+    }, {});
+}
+
+function sanitizeEnvironmentMemoryEntry(entry) {
+    if (!entry || typeof entry !== "object") return null;
+    const visitedAt = Number(entry.visitedAt);
+    if (!Number.isFinite(visitedAt) || visitedAt <= 0) return null;
+    const age = Date.now() - visitedAt;
+    if (age > ROOM_MEMORY_MAX_AGE_MS) return null;
+    const timePhase = String(entry.timePhase || "midday");
+    return {
+        weather: normalizeHouseholdWeather(entry.weather),
+        timePhase: ENVIRONMENT_TIME_PHASES.has(timePhase) ? timePhase : "midday",
+        warmth: clampEnvironment(entry.warmth),
+        density: clampEnvironment(entry.density),
+        pressure: clampEnvironment(entry.pressure),
+        visitedAt,
+    };
+}
+
+function deriveEnvironmentMemoryEcho(viewId) {
+    const memory = sanitizeEnvironmentMemoryEntry(state.environment?.lastVisitedByView?.[viewId]);
+    if (!memory) return defaultEnvironmentMemoryEcho();
+    const age = Math.max(0, Date.now() - memory.visitedAt);
+    const freshness = Math.max(0, 1 - Math.min(age, ROOM_MEMORY_MAX_AGE_MS) / ROOM_MEMORY_MAX_AGE_MS);
+    if (freshness <= 0) return defaultEnvironmentMemoryEcho();
+
+    const pressure = clampEnvironment(memory.pressure || ENVIRONMENT_WEATHER_PROFILE[memory.weather]?.pressure || 0.22);
+    const overloadTrace = memory.weather === "overload";
+    const opacityBase = overloadTrace ? 0.024 : 0.038;
+    const opacity = clampEnvironment((opacityBase + memory.density * 0.024 + pressure * 0.014) * (0.72 + freshness * 0.28));
+    const tone = overloadTrace
+        ? "high"
+        : memory.density >= 0.58
+            ? "dense"
+            : memory.warmth >= 0.58
+                ? "warm"
+                : memory.warmth < 0.42
+                    ? "cool"
+                    : "balanced";
+
+    return {
+        tone,
+        opacity,
+        duration: overloadTrace ? "4200ms" : "3400ms",
+        rgb: environmentMemoryWarmthRgb(memory.warmth),
+        densityRgb: environmentMemoryDensityRgb(memory.density),
+    };
+}
+
+function defaultEnvironmentMemoryEcho() {
+    return { tone: "none", opacity: 0, duration: "0ms", rgb: "255,255,255", densityRgb: "15,23,42" };
+}
+
+function environmentMemoryWarmthRgb(warmth) {
+    const value = clampEnvironment(warmth);
+    if (value >= 0.58) return "255,247,237";
+    if (value < 0.42) return "224,242,254";
+    return "236,254,255";
+}
+
+function environmentMemoryDensityRgb(density) {
+    const value = clampEnvironment(density);
+    if (value >= 0.58) return "15,23,42";
+    if (value < 0.3) return "255,255,255";
+    return "51,65,85";
+}
+
+function scheduleEnvironmentMemoryEcho(environment) {
+    const roots = [document.documentElement, document.body].filter(Boolean);
+    if (environmentMemoryEchoFrame) {
+        window.cancelAnimationFrame(environmentMemoryEchoFrame);
+        environmentMemoryEchoFrame = 0;
+    }
+    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    const startOpacity = reduceMotion ? 0 : clampEnvironment(environment?.memoryEchoOpacity);
+    roots.forEach((root) => {
+        root.dataset.roomMemoryEcho = startOpacity > 0 ? (environment.memoryEchoTone || "balanced") : "none";
+        root.style.setProperty("--env-memory-echo-opacity", startOpacity.toFixed(3));
+    });
+    if (!startOpacity) return;
+    environmentMemoryEchoFrame = window.requestAnimationFrame(() => {
+        environmentMemoryEchoFrame = window.requestAnimationFrame(() => {
+            roots.forEach((root) => root.style.setProperty("--env-memory-echo-opacity", "0"));
+            environmentMemoryEchoFrame = 0;
+        });
+    });
+}
+
+function recordEnvironmentVisit(viewId) {
+    const previousView = String(viewId || "").trim();
+    if (!previousView || !state.environment) return;
+    state.environment.lastVisitedByView = state.environment.lastVisitedByView || {};
+    state.environment.lastVisitedByView[previousView] = {
+        weather: state.environment.weather,
+        timePhase: state.environment.timePhase,
+        warmth: state.environment.warmth,
+        density: state.environment.density,
+        pressure: state.environment.pressure,
+        visitedAt: Date.now(),
+    };
+    persistEnvironmentMemory();
+}
+
+function clampEnvironment(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return 0;
+    return Math.max(0, Math.min(1, number));
+}
+
+function formatEnvironmentNumber(value) {
+    return clampEnvironment(value).toFixed(2);
+}
+
+function environmentBand(value, lowCutoff, highCutoff, lowLabel, middleLabel, highLabel) {
+    const number = clampEnvironment(value);
+    if (number < lowCutoff) return lowLabel;
+    if (number >= highCutoff) return highLabel;
+    return middleLabel;
+}
+
 // ============================================================================
-// Home dashboard
+// Home operating surface
 // ============================================================================
 
 async function loadHomeDashboard() {
     if (dom.welcomeName) dom.welcomeName.textContent = state.member;
+    await _ensureAdapterContext();
 
     // Family app data for counts + human-readable activity (best effort).
     const fetchData = async (adapter, action, qs = "") => {
@@ -430,93 +1030,513 @@ async function loadHomeDashboard() {
     const shoppingLists = Array.isArray(shoppingListData?.lists) ? shoppingListData.lists : _extractItems(shoppingListData);
     const shoppingItems = Array.isArray(shoppingItemData?.items) ? shoppingItemData.items : _extractItems(shoppingItemData);
 
+    const model = _buildHomePulseModel({
+        tasks,
+        events,
+        reminders,
+        chores,
+        shoppingItems,
+        loaded: { taskData, eventData, reminderData, choreData, shoppingItemData },
+        todayIso,
+    });
+    _renderHomePulseModel(model);
+
+    if (dom.homeActivity) {
+        _renderHomeActivity(_buildHomeActivityFeed({ tasks, events, reminders, chores, shoppingLists, shoppingItems }).slice(0, 4));
+    }
+}
+
+async function _ensureAdapterContext() {
+    if (adapterCache.context) return adapterCache.context;
+    try {
+        const response = await fetch("/api/family-tools");
+        if (response.ok) {
+            const data = await response.json();
+            adapterCache.context = data.context || null;
+        }
+    } catch {/* Home can still render in degraded mode. */}
+    return adapterCache.context;
+}
+
+function _buildHomePulseModel({ tasks = [], events = [], reminders = [], chores = [], shoppingItems = [], loaded = {}, todayIso = _localDateIso() } = {}) {
+    const nowMs = Date.now();
+    const currentMember = _currentMemberActorId();
     const activeTasks = tasks.filter(_taskIsActive);
     const dueTasks = activeTasks.filter((task) => _taskIsOverdue(task) || _taskIsDueToday(task));
+    const taskNow = _taskNowTasks(tasks, currentMember);
+    const taskDecisions = activeTasks.filter((task) => _taskNeedsDecision(task, currentMember));
     const eventsToday = events.filter((event) => _calEventOverlapsDate(event, todayIso));
+    const sortedEvents = _calSortEvents(events);
+    const relevantEventsToday = eventsToday.filter((event) => _homeEventIsActiveOrFuture(event, nowMs));
+    const nextEvent = _homeNextEvent(sortedEvents, nowMs);
+    const eventConflicts = _homeFindEventConflicts(relevantEventsToday, nowMs);
     const activeReminders = reminders.filter(_reminderIsActive);
     const remindersToNotice = activeReminders.filter((reminder) => _reminderNeedsAttention(reminder) || _reminderIsOverdue(reminder) || _reminderIsDueToday(reminder));
     const pendingChores = chores.filter((chore) => _choreStatus(chore) === "pending");
     const choresDueNow = pendingChores.filter(_choreIsDueNow);
     const shoppingNeeded = shoppingItems.filter(_shoppingIsNeeded);
+    const shoppingApprovals = shoppingItems.filter((item) => item.approval_status === "pending_parent_approval");
     const nudgeCount = remindersToNotice.length + choresDueNow.length;
+    const loadedCore = loaded.taskData || loaded.eventData || loaded.reminderData || loaded.choreData || loaded.shoppingItemData;
+    const attentionCount = eventConflicts.length + taskNow.length + remindersToNotice.length + choresDueNow.length + shoppingApprovals.length;
+    const primaryMove = _homePrimaryMove({ eventConflicts, taskNow, remindersToNotice, choresDueNow, shoppingApprovals, shoppingNeeded, nextEvent });
+    const householdWeather = _homeHouseholdWeather({ loadedCore, attentionCount, eventConflicts, taskNow, remindersToNotice, choresDueNow, shoppingApprovals });
 
-    dom.statTasks     && (dom.statTasks.textContent     = taskData     ? activeTasks.length       : "—");
-    dom.statEvents    && (dom.statEvents.textContent    = eventData    ? events.length            : "—");
-    dom.statReminders && (dom.statReminders.textContent = reminderData ? activeReminders.length  : "—");
-    dom.statChores    && (dom.statChores.textContent    = choreData    ? pendingChores.length    : "—");
-    dom.homeSignalTasks  && (dom.homeSignalTasks.textContent  = taskData ? dueTasks.length : "—");
-    dom.homeSignalEvents && (dom.homeSignalEvents.textContent = eventData ? eventsToday.length : "—");
-    dom.homeSignalNudges && (dom.homeSignalNudges.textContent = (reminderData || choreData) ? nudgeCount : "—");
-    _renderHomeTodayGlance({
-        activeTasks,
-        dueTasks,
-        events,
-        eventsToday,
-        activeReminders,
-        remindersToNotice,
-        pendingChores,
-        choresDueNow,
-        shoppingNeeded,
-        loaded: { taskData, eventData, reminderData, choreData, shoppingItemData },
-    });
-
-    if (dom.homeActivity) {
-        _renderHomeActivity(_buildHomeActivityFeed({ tasks, events, reminders, chores, shoppingLists, shoppingItems }).slice(0, 1));
-    }
+    return {
+        loaded,
+        loadedCore,
+        currentMember,
+        pulse: _homePulseCopy({ loadedCore, attentionCount, eventConflicts, taskNow, eventsToday, nextEvent, remindersToNotice, choresDueNow, shoppingApprovals, todayIso }),
+        primaryMove,
+        rhythm: _homeRhythmItems({ eventConflicts, taskNow, remindersToNotice, choresDueNow, shoppingNeeded, nextEvent }),
+        decisions: _homeDecisionItems({ eventConflicts, taskDecisions, remindersToNotice, choresDueNow, shoppingApprovals }),
+        appSignals: _homeAppSignals({ events, eventsToday, eventConflicts, activeTasks, taskNow, activeReminders, remindersToNotice, pendingChores, choresDueNow, shoppingNeeded, shoppingApprovals }),
+        peopleLoad: _homePeopleLoad({ tasks, reminders, chores }),
+        householdWeather,
+        cognitionMode: _homeCognitionMode(primaryMove, householdWeather),
+        counts: { activeTasks, dueTasks, events, eventsToday, activeReminders, remindersToNotice, pendingChores, choresDueNow, shoppingNeeded, nudgeCount },
+        status: [
+            _countPhrase(activeTasks.length, "task"),
+            _countPhrase(events.length, "calendar item"),
+            _countPhrase(activeReminders.length, "reminder"),
+            _countPhrase(pendingChores.length, "chore"),
+            shoppingNeeded.length ? _countPhrase(shoppingNeeded.length, "shopping item") : "",
+        ].filter(Boolean).join(" · "),
+    };
 }
 
-function _renderHomeTodayGlance(metrics) {
-    const {
-        activeTasks,
-        dueTasks,
-        events,
-        eventsToday,
-        activeReminders,
-        remindersToNotice,
-        pendingChores,
-        choresDueNow,
-        shoppingNeeded,
-        loaded,
-    } = metrics;
-    const attentionCount = dueTasks.length + remindersToNotice.length + choresDueNow.length;
-    const todayCount = attentionCount + eventsToday.length;
-    const hasLoadedCore = loaded.taskData || loaded.eventData || loaded.reminderData || loaded.choreData;
-    const title = !hasLoadedCore
-        ? "Family status is unavailable"
-        : attentionCount > 0
-            ? `${attentionCount} ${attentionCount === 1 ? "thing needs" : "things need"} attention`
-            : todayCount > 0
-                ? `${todayCount} ${todayCount === 1 ? "thing is" : "things are"} in motion today`
-                : "Today looks open";
-    const detailParts = [
-        eventsToday.length ? _countPhrase(eventsToday.length, "calendar event") : "",
-        dueTasks.length ? _countPhrase(dueTasks.length, "due task") : "",
-        remindersToNotice.length ? _countPhrase(remindersToNotice.length, "reminder") : "",
-        choresDueNow.length ? _countPhrase(choresDueNow.length, "chore") : "",
-    ].filter(Boolean);
-    const detail = !hasLoadedCore
-        ? "Open the apps for full detail."
-        : detailParts.length
-            ? `${detailParts.join(", ")} need the first look.`
-            : "No due tasks, reminders, or chores are calling for attention.";
-    const meta = [
-        _countPhrase(activeTasks.length, "open task"),
-        _countPhrase(events.length, "event", "events"),
-        _countPhrase(activeReminders.length, "active reminder"),
-        _countPhrase(pendingChores.length, "pending chore"),
-    ].join(" · ");
-    const status = [
-        _countPhrase(activeTasks.length, "task"),
-        _countPhrase(events.length, "calendar item"),
-        _countPhrase(activeReminders.length, "reminder"),
-        _countPhrase(pendingChores.length, "chore"),
-        shoppingNeeded.length ? _countPhrase(shoppingNeeded.length, "shopping item") : "",
-    ].filter(Boolean).join(" · ");
+function _renderHomePulseModel(model) {
+    const counts = model.counts;
+    const loaded = model.loaded || {};
 
-    if (dom.homeTodayTitle) dom.homeTodayTitle.textContent = title;
-    if (dom.homeTodayDetail) dom.homeTodayDetail.textContent = detail;
-    if (dom.homeTodayMeta) dom.homeTodayMeta.textContent = meta;
-    if (dom.homeStatusSummary) dom.homeStatusSummary.textContent = status || "Full stats when needed";
+    dom.statTasks     && (dom.statTasks.textContent     = loaded.taskData     ? counts.activeTasks.length       : "—");
+    dom.statEvents    && (dom.statEvents.textContent    = loaded.eventData    ? counts.events.length            : "—");
+    dom.statReminders && (dom.statReminders.textContent = loaded.reminderData ? counts.activeReminders.length  : "—");
+    dom.statChores    && (dom.statChores.textContent    = loaded.choreData    ? counts.pendingChores.length    : "—");
+    dom.homeSignalTasks  && (dom.homeSignalTasks.textContent  = counts.dueTasks.length);
+    dom.homeSignalEvents && (dom.homeSignalEvents.textContent = counts.eventsToday.length);
+    dom.homeSignalNudges && (dom.homeSignalNudges.textContent = counts.nudgeCount);
+
+    _setText(dom.homePulseState, model.pulse.state);
+    _setText(dom.homePulseTime, model.pulse.time);
+    _setText(dom.homePulseTitle, model.pulse.title);
+    _setText(dom.homePulseDetail, model.pulse.detail);
+    _setText(dom.homePulseMeta, model.pulse.meta);
+    _setText(dom.homePulseFamily, `${state.member} is active`);
+    if (dom.homePulseState) dom.homePulseState.dataset.tone = model.pulse.tone;
+    state.homeCognitionMode = model.cognitionMode || "idle";
+    applyShellState({ weather: model.householdWeather });
+
+    _renderHomeAction(dom.homePrimaryAction, model.primaryMove.primaryAction);
+    _setText(dom.homeNextTitle, model.primaryMove.title);
+    _setText(dom.homeNextMeta, model.primaryMove.detail);
+    _setText(dom.homeNextSource, model.primaryMove.source);
+
+    _renderHomeRhythm(model.rhythm);
+    _renderHomeDecisions(model.decisions);
+    _renderHomeAppSignals(model.appSignals);
+    _renderHomePeopleLoad(model.peopleLoad);
+    _setText(dom.homeSystemSummary, `${model.appSignals.length} app signals`);
+    if (dom.homeStatusSummary) dom.homeStatusSummary.textContent = model.status || "Full status when needed";
+}
+
+function _homeHouseholdWeather({ loadedCore, attentionCount = 0, eventConflicts = [], taskNow = [], remindersToNotice = [], choresDueNow = [], shoppingApprovals = [] } = {}) {
+    if (!loadedCore) return "quiet";
+    if (eventConflicts.length || shoppingApprovals.length) return attentionCount >= 8 ? "overload" : "decision";
+    if (attentionCount >= 10 || (taskNow.length + remindersToNotice.length + choresDueNow.length) >= 10) return "overload";
+    if (attentionCount > 0) return "moving";
+    return "calm";
+}
+
+function _homeCognitionMode(primaryMove = {}, householdWeather = state.householdWeather) {
+    const source = String(primaryMove.source || "").toLowerCase();
+    if (source.includes("task")) return "execution";
+    if (source.includes("shopping")) return "coordination";
+    if (source.includes("chore")) return "coordination";
+    if (source.includes("reminder")) return "review";
+    if (source.includes("calendar decision")) return "review";
+    if (source.includes("calendar")) return "planning";
+    return normalizeHouseholdWeather(householdWeather) === "calm" ? "idle" : "planning";
+}
+
+function _homePulseCopy({ loadedCore, attentionCount, eventConflicts, taskNow, eventsToday, nextEvent, remindersToNotice, choresDueNow, shoppingApprovals, todayIso = _localDateIso() }) {
+    if (!loadedCore) {
+        return {
+            state: "Offline",
+            tone: "quiet",
+            time: _homeTodayLabel(),
+            title: "Family pulse is unavailable",
+            detail: "The apps are not returning enough data yet. Home will rebuild the picture as soon as the system responds.",
+            meta: "Open an app for local detail",
+        };
+    }
+    if (eventConflicts.length) {
+        const conflictCopy = _homeConflictCopy(eventConflicts[0]);
+        return {
+            state: "Decision",
+            tone: "attention",
+            time: _homeTodayLabel(),
+            title: "The schedule needs a decision",
+            detail: `${conflictCopy.detail} Resolve that and the rest of the day gets easier to trust.`,
+            meta: [_countPhrase(eventsToday.length, "event"), eventConflicts.length > 1 ? `${eventConflicts.length} overlaps behind this` : "1 overlap", _countPhrase(remindersToNotice.length + choresDueNow.length, "nudge")].join(" · "),
+        };
+    }
+    if (attentionCount > 0) {
+        const attentionMix = [
+            taskNow.length ? _countPhrase(taskNow.length, "task") : "",
+            remindersToNotice.length ? _countPhrase(remindersToNotice.length, "nudge") : "",
+            choresDueNow.length ? _countPhrase(choresDueNow.length, "chore") : "",
+            shoppingApprovals.length ? _countPhrase(shoppingApprovals.length, "approval") : "",
+        ].filter(Boolean).join(" and ");
+        const taskSubject = taskNow[0] ? _homeTaskSubject(taskNow[0]) : "";
+        const headline = taskSubject
+            ? `${taskSubject} needs the next turn`
+            : remindersToNotice.length
+                ? `${_countPhrase(remindersToNotice.length, "nudge")} ${remindersToNotice.length === 1 ? "needs" : "need"} a reset`
+                : choresDueNow.length
+                    ? "The house rhythm needs a small reset"
+                    : "Something needs a quick decision";
+        const detail = taskSubject
+            ? `${attentionMix} ${attentionCount === 1 ? "is" : "are"} asking for a first look. Start there, then let the rest line up behind it.`
+            : remindersToNotice.length
+                ? `${_countPhrase(remindersToNotice.length, "nudge")} ${remindersToNotice.length === 1 ? "is" : "are"} waiting. Reset what matters now and let the rest stay quiet.`
+                : choresDueNow.length
+                    ? `${_countPhrase(choresDueNow.length, "chore")} ${choresDueNow.length === 1 ? "is" : "are"} due now. A small reset keeps the household rhythm honest.`
+                    : "A quick review keeps the day from getting noisy.";
+        return {
+            state: "In motion",
+            tone: "active",
+            time: _homeTodayLabel(),
+            title: headline,
+            detail,
+            meta: nextEvent ? `Next up: ${nextEvent.title || "event"}` : "No calendar pressure yet",
+        };
+    }
+    if (nextEvent) {
+        const nextIsToday = _calEventOverlapsDate(nextEvent, todayIso);
+        return {
+            state: "Calm",
+            tone: "calm",
+            time: _homeTodayLabel(),
+            title: nextIsToday ? `Today is anchored by ${nextEvent.title || "the next event"}` : "Today looks open",
+            detail: nextIsToday
+                ? `${_fmtEventTime(nextEvent.start, nextEvent.end, nextEvent.all_day)}. Tasks, nudges, chores, and shopping are quiet enough to stay in the background.`
+                : `No calendar conflict is calling for attention now. ${nextEvent.title || "The next event"} is the next thing worth protecting.`,
+            meta: [_countPhrase(eventsToday.length, "event"), "No urgent household signal"].join(" · "),
+        };
+    }
+    return {
+        state: "Open",
+        tone: "calm",
+        time: _homeTodayLabel(),
+        title: "The household is in a quiet state",
+        detail: "No app is calling for immediate attention. The system can stay ambient until the day needs a turn.",
+        meta: "No urgent tasks, nudges, chores, or calendar blocks",
+    };
+}
+
+function _homePrimaryMove({ eventConflicts, taskNow, remindersToNotice, choresDueNow, shoppingApprovals, shoppingNeeded, nextEvent }) {
+    const chatPlan = "Give me a calm plan for today using our tasks, calendar, reminders, chores, and shopping.";
+    if (eventConflicts.length) {
+        const conflict = eventConflicts[0];
+        const conflictCopy = _homeConflictCopy(conflict);
+        return _homeMove({
+            title: "Resolve the first overlap",
+            detail: conflictCopy.summary,
+            source: "Calendar decision",
+            target: "calendar",
+            primaryLabel: "Open Calendar",
+            suggestion: `Help me resolve this calendar overlap: ${conflict.title}.`,
+        });
+    }
+    if (taskNow.length) {
+        const task = taskNow[0];
+        return _homeMove({
+            title: task.title || "Open the task lane",
+            detail: _taskFocusReason(task, _currentMemberActorId()) || _taskDueLabel(task, true),
+            source: "Tasks",
+            target: "tasks",
+            primaryLabel: "Open Tasks",
+            suggestion: `Help me turn the current task queue into a calm plan. Start with: ${task.title || "the next task"}.`,
+        });
+    }
+    if (remindersToNotice.length) {
+        const reminder = remindersToNotice[0];
+        return _homeMove({
+            title: reminder.title || "Review the next reminder",
+            detail: _reminderDueLabel(reminder, true),
+            source: "Reminders",
+            target: "reminders",
+            primaryLabel: "Open Reminders",
+            suggestion: `Help me review the active reminders, starting with: ${reminder.title || "the next reminder"}.`,
+        });
+    }
+    if (choresDueNow.length) {
+        const chore = choresDueNow[0];
+        return _homeMove({
+            title: chore.title || "Review the next chore",
+            detail: _choreDueLabel(chore),
+            source: "Chores",
+            target: "chores",
+            primaryLabel: "Open Chores",
+            suggestion: `Help me rebalance today's chores, starting with: ${chore.title || "the next chore"}.`,
+        });
+    }
+    if (shoppingApprovals.length || shoppingNeeded.length) {
+        const item = shoppingApprovals[0] || shoppingNeeded[0];
+        return _homeMove({
+            title: shoppingApprovals.length ? "Review shopping approval" : `Pick up ${item?.name || "shopping items"}`,
+            detail: item ? (_shoppingQuantityLabel(item) || _humanizeLabel(item.category || item.priority || "shopping")) : "Shopping has open items.",
+            source: "Shopping",
+            target: "shopping",
+            primaryLabel: "Open Shopping",
+            suggestion: "Help me review shopping needs and approvals for the family.",
+        });
+    }
+    if (nextEvent) {
+        return _homeMove({
+            title: nextEvent.title || "Open the next calendar block",
+            detail: _fmtEventTime(nextEvent.start, nextEvent.end, nextEvent.all_day),
+            source: "Calendar",
+            target: "calendar",
+            primaryLabel: "Open Calendar",
+            suggestion: `Help me plan around this calendar event: ${nextEvent.title || "the next event"}.`,
+        });
+    }
+    return _homeMove({
+        title: "Shape the day when you are ready",
+        detail: "No app is urgent. The system is quiet, so planning can stay optional instead of shouting for attention.",
+        source: "Ambient state",
+        target: "chat",
+        primaryLabel: "Shape the day",
+        suggestion: chatPlan,
+    });
+}
+
+function _homeMove({ title, detail, source, target, primaryLabel, suggestion }) {
+    return {
+        title,
+        detail,
+        source,
+        primaryAction: { label: primaryLabel || "Open", target, suggestion: target === "chat" ? suggestion : "" },
+    };
+}
+
+function _homeTaskSubject(task) {
+    const title = String(task?.title || "").trim().replace(/^(complete|finish|do|review|check)\s+/i, "");
+    return title || "One task";
+}
+
+function _homeRhythmItems({ eventConflicts, taskNow, remindersToNotice, choresDueNow, shoppingNeeded, nextEvent }) {
+    const now = eventConflicts[0]
+        ? { title: "Resolve overlap", meta: _homeConflictCopy(eventConflicts[0]).summary, target: "calendar" }
+        : taskNow[0]
+            ? { title: taskNow[0].title || "Task lane", meta: _taskFocusReason(taskNow[0], _currentMemberActorId()), target: "tasks" }
+            : remindersToNotice[0]
+                ? { title: remindersToNotice[0].title || "Reminder", meta: _reminderDueLabel(remindersToNotice[0]), target: "reminders" }
+                : { title: "All clear", meta: "No urgent app signal", target: "chat" };
+    const next = nextEvent
+        ? { title: nextEvent.title || "Calendar block", meta: _fmtEventTime(nextEvent.start, nextEvent.end, nextEvent.all_day), target: "calendar" }
+        : choresDueNow[0]
+            ? { title: choresDueNow[0].title || "Chore rhythm", meta: _choreDueLabel(choresDueNow[0]), target: "chores" }
+            : { title: "Plan ahead", meta: "No scheduled pressure", target: "calendar" };
+    const later = shoppingNeeded[0]
+        ? { title: `${shoppingNeeded.length} shopping item${shoppingNeeded.length === 1 ? "" : "s"}`, meta: shoppingNeeded[0].name || "Shopping list", target: "shopping" }
+        : choresDueNow.length
+            ? { title: `${choresDueNow.length} chore${choresDueNow.length === 1 ? "" : "s"}`, meta: "Household rhythm", target: "chores" }
+            : { title: "Quiet backlog", meta: "Dig in only if needed", target: "tasks" };
+    return [now, next, later];
+}
+
+function _homeDecisionItems({ eventConflicts, taskDecisions, remindersToNotice, choresDueNow, shoppingApprovals }) {
+    return [
+        ...eventConflicts.slice(0, 3).map((conflict) => ({ app: "Calendar", title: conflict.title, detail: "Timing overlap", target: "calendar", tone: "critical" })),
+        ...taskDecisions.slice(0, 2).map((task) => ({ app: "Tasks", title: task.title || "Task needs decision", detail: _taskFocusReason(task, _currentMemberActorId()), target: "tasks", tone: "active" })),
+        ...remindersToNotice.slice(0, 2).map((reminder) => ({ app: "Reminders", title: reminder.title || "Reminder needs reset", detail: _reminderDueLabel(reminder), target: "reminders", tone: "active" })),
+        ...choresDueNow.slice(0, 2).map((chore) => ({ app: "Chores", title: chore.title || "Chore due", detail: _choreDueLabel(chore), target: "chores", tone: "active" })),
+        ...shoppingApprovals.slice(0, 2).map((item) => ({ app: "Shopping", title: item.name || "Shopping approval", detail: "Parent approval", target: "shopping", tone: "active" })),
+    ].slice(0, 5);
+}
+
+function _homeAppSignals({ events, eventsToday, eventConflicts, activeTasks, taskNow, activeReminders, remindersToNotice, pendingChores, choresDueNow, shoppingNeeded, shoppingApprovals }) {
+    return [
+        { key: "time", label: "Time", value: eventConflicts.length || eventsToday.length, detail: eventConflicts.length ? `${eventConflicts.length} overlap${eventConflicts.length === 1 ? "" : "s"}` : `${eventsToday.length} today · ${events.length} in range`, target: "calendar", accent: "#2563eb" },
+        { key: "work", label: "Work", value: taskNow.length, detail: `${activeTasks.length} open task${activeTasks.length === 1 ? "" : "s"}`, target: "tasks", accent: "#7c3aed" },
+        { key: "nudges", label: "Nudges", value: remindersToNotice.length, detail: `${activeReminders.length} active reminder${activeReminders.length === 1 ? "" : "s"}`, target: "reminders", accent: "#ea580c" },
+        { key: "household", label: "Household", value: choresDueNow.length, detail: `${pendingChores.length} pending chore${pendingChores.length === 1 ? "" : "s"}`, target: "chores", accent: "#16a34a" },
+        { key: "supplies", label: "Supplies", value: shoppingApprovals.length || shoppingNeeded.length, detail: shoppingApprovals.length ? "Approval waiting" : `${shoppingNeeded.length} needed`, target: "shopping", accent: "#0891b2" },
+        { key: "safety", label: "Safety", value: "OK", detail: "Parent controls", target: "settings", accent: "#be123c" },
+    ];
+}
+
+function _homePeopleLoad({ tasks = [], reminders = [], chores = [] } = {}) {
+    const familyMembers = (state.family?.members || []).map((member) => ({
+        id: member.actor_id || member.name,
+        label: member.name || member.actor_id || "Family",
+    }));
+    const fallbackMembers = Object.entries(MEMBERS).map(([name, meta]) => ({ id: meta.key, label: name }));
+    const members = familyMembers.length ? familyMembers : fallbackMembers;
+    return members.map((member) => {
+        const key = _homeMemberKey(member.id || member.label);
+        const taskCount = tasks.filter((task) => _taskIsActive(task) && _homeMemberKey(task.assigned_to) === key).length;
+        const reminderCount = reminders.filter((reminder) => _reminderIsActive(reminder) && _homeMemberKey(_reminderRecipientCanonical(reminder)) === key).length;
+        const choreCount = chores.filter((chore) => _choreStatus(chore) === "pending" && _homeMemberKey(_choreAssigneeId(chore)) === key).length;
+        const total = taskCount + reminderCount + choreCount;
+        const actor = _actorDisplay(member.id || member.label);
+        return { ...actor, total, detail: `${taskCount} tasks · ${reminderCount} nudges · ${choreCount} chores` };
+    });
+}
+
+function _renderHomeAction(button, action) {
+    if (!button || !action) return;
+    button.textContent = action.label || "Open";
+    button.dataset.homeTarget = action.target || "home";
+    if (action.suggestion) button.dataset.homeChatSuggestion = action.suggestion;
+    else delete button.dataset.homeChatSuggestion;
+}
+
+function _renderHomeRhythm(items) {
+    const [now, next, later] = items;
+    _setText(dom.homeRhythmNowTitle, now?.title || "All clear");
+    _setText(dom.homeRhythmNowMeta, now?.meta || "No urgent signal");
+    _setText(dom.homeRhythmNextTitle, next?.title || "Plan ahead");
+    _setText(dom.homeRhythmNextMeta, next?.meta || "No scheduled pressure");
+    _setText(dom.homeRhythmLaterTitle, later?.title || "Quiet backlog");
+    _setText(dom.homeRhythmLaterMeta, later?.meta || "Dig in only if needed");
+    _setHomeTarget(dom.homeRhythmNowTitle?.closest("button"), now?.target);
+    _setHomeTarget(dom.homeRhythmNextTitle?.closest("button"), next?.target);
+    _setHomeTarget(dom.homeRhythmLaterTitle?.closest("button"), later?.target);
+}
+
+function _renderHomeDecisions(items) {
+    _setText(dom.homeDecisionCount, items.length);
+    if (!dom.homeDecisionList) return;
+    if (!items.length) {
+        dom.homeDecisionList.innerHTML = `<div class="home-empty-state"><strong>No decisions waiting</strong><span>Home will surface conflicts, approvals, overdue work, and resets here.</span></div>`;
+        return;
+    }
+    dom.homeDecisionList.innerHTML = items.map((item) => `
+        <button class="home-decision-row home-decision-row--${escapeHtml(item.tone || "active")}" type="button" data-home-target="${escapeHtml(item.target)}">
+            <span>${escapeHtml(item.app)}</span>
+            <strong>${escapeHtml(item.title)}</strong>
+            <small>${escapeHtml(item.detail || "Needs a look")}</small>
+        </button>`).join("");
+}
+
+function _renderHomeAppSignals(signals) {
+    if (!dom.homeAppSignals) return;
+    dom.homeAppSignals.innerHTML = signals.map((signal) => `
+        <button class="home-app-signal home-app-signal--${escapeHtml(signal.key)}" type="button" data-home-target="${escapeHtml(signal.target)}" style="--home-signal-accent:${escapeHtml(signal.accent)}">
+            <span>${escapeHtml(signal.label)}</span>
+            <strong>${escapeHtml(signal.value)}</strong>
+            <small>${escapeHtml(signal.detail)}</small>
+        </button>`).join("");
+}
+
+function _renderHomePeopleLoad(people) {
+    if (!dom.homePeopleLoad) return;
+    dom.homePeopleLoad.innerHTML = people.map((person) => `
+        <div class="home-person-load" style="--member-color:${escapeHtml(person.color)}">
+            <span>${escapeHtml(person.initials)}</span>
+            <div><strong>${escapeHtml(person.name)}</strong><small>${escapeHtml(person.detail)}</small></div>
+            <em>${person.total}</em>
+        </div>`).join("");
+}
+
+function _setText(node, value) {
+    if (node) node.textContent = value == null ? "" : String(value);
+}
+
+function _setHomeTarget(button, target) {
+    if (button && target) button.dataset.homeTarget = target;
+}
+
+function _homeNextEvent(events, now = Date.now()) {
+    return events.find((event) => {
+        const window = _homeEventWindow(event);
+        return window && window.end > now;
+    }) || null;
+}
+
+function _homeFindEventConflicts(events, now = Date.now()) {
+    const timed = events
+        .filter((event) => event && !event.all_day && event.start)
+        .map((event) => ({ event, ...(_homeEventWindow(event) || {}) }))
+        .filter((entry) => Number.isFinite(entry.start) && Number.isFinite(entry.end) && entry.end > now)
+        .sort((a, b) => a.start - b.start);
+    const conflicts = [];
+    for (let i = 0; i < timed.length; i += 1) {
+        for (let j = i + 1; j < timed.length; j += 1) {
+            if (timed[j].start >= timed[i].end) break;
+            const overlapStart = Math.max(timed[i].start, timed[j].start);
+            const overlapEnd = Math.min(timed[i].end, timed[j].end);
+            if (overlapEnd <= now) continue;
+            conflicts.push({
+                title: `${timed[i].event.title || "Event"} + ${timed[j].event.title || "Event"}`,
+                first: timed[i].event,
+                second: timed[j].event,
+                start: overlapStart,
+                end: overlapEnd,
+            });
+            if (conflicts.length >= 8) return conflicts;
+        }
+    }
+    return conflicts;
+}
+
+function _homeEventWindow(event) {
+    const start = new Date(event?.start || "").getTime();
+    if (!Number.isFinite(start)) return null;
+    let end = new Date(event?.end || event?.start || "").getTime();
+    if (!Number.isFinite(end) || end <= start) end = start + 60 * 60 * 1000;
+    return { start, end };
+}
+
+function _homeEventIsActiveOrFuture(event, now = Date.now()) {
+    const window = _homeEventWindow(event);
+    return Boolean(window && window.end > now);
+}
+
+function _homeConflictCopy(conflict) {
+    const firstTitle = conflict?.first?.title || "one commitment";
+    const secondTitle = conflict?.second?.title || "another commitment";
+    const firstOwner = _homeEventOwner(conflict?.first);
+    const secondOwner = _homeEventOwner(conflict?.second);
+    const time = conflict?.start ? _homeEventStartsAtLabel(conflict.start) : "the same time";
+    const summary = `${firstTitle} + ${secondTitle}`;
+    if (firstOwner && secondOwner && firstOwner !== secondOwner) {
+        return { summary, detail: `${firstOwner} and ${secondOwner} collide at ${time}.` };
+    }
+    if (firstOwner || secondOwner) {
+        return { summary, detail: `${firstOwner || secondOwner} has two things at ${time}.` };
+    }
+    return { summary, detail: `${firstTitle} and ${secondTitle} overlap at ${time}.` };
+}
+
+function _homeEventOwner(event) {
+    const title = String(event?.title || "").toLowerCase();
+    const members = state.family?.members || [];
+    for (const member of members) {
+        const name = String(member.name || "").trim();
+        if (name && title.includes(name.toLowerCase())) return name;
+    }
+    const possessive = String(event?.title || "").match(/^([A-Z][A-Za-z]+(?:\s+[A-Z][A-Za-z]+)?)['’]s\b/);
+    return possessive ? possessive[1] : "";
+}
+
+function _homeEventStartsAtLabel(value) {
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) return "the same time";
+    return date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+}
+
+function _homeMemberKey(value) {
+    return String(value || "").trim().toLowerCase().replace(/\s+/g, "_");
+}
+
+function _homeTodayLabel() {
+    const now = new Date();
+    return `${now.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })} · ${now.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })}`;
 }
 
 function _countPhrase(count, singular, plural = `${singular}s`) {
@@ -777,6 +1797,7 @@ function handleInit(msg) {
     state.member = msg.member || state.member;
     state.device = msg.device || state.device;
     state.turn = msg.turn || 0;
+    applyShellState();
     setFsmBadge(msg.fsm_state || "READY");
     renderMemberDropdown();
     renderActiveMember();
@@ -798,6 +1819,7 @@ function handleResponse(msg) {
             if (bubble) {
                 bubble.classList.remove("message-bubble--work");
                 bubble.innerHTML = renderAssistantBubbleContent(msg.text, { final: true, reasoning });
+                hydrateMessageContent(bubble);
             }
         }
         state.streamingMsgId = null;
@@ -846,6 +1868,7 @@ function handleStreamChunk(msg) {
                 final: false,
                 reasoning: getCurrentReasoningSnapshot(),
             });
+            hydrateMessageContent(bubble);
         }
         scrollChatToBottom();
     }
@@ -880,11 +1903,6 @@ function handleWeave(msg) {
         addAssistantMessage(text, { label: "woven update" });
         showToast("Task Complete", text);
     });
-}
-
-function handleSystem(msg) {
-    finishStreaming(true);
-    addSystemMessage(msg.text);
 }
 
 function handleSystem(msg) {
@@ -948,7 +1966,7 @@ function _setHilWidgetState(baseIds, statusText) {
 // styling / submit logic know the next user message should be treated
 // as a reply to the open HIL request rather than a new turn.
 function handleHilPresented(msg) {
-    const input = document.getElementById("chatInput");
+    const input = dom.input || document.getElementById("message-input");
     if (!input) return;
     const requestId = msg.hil_request_id || "";
     if (!requestId) return;
@@ -1284,6 +2302,7 @@ function renderActivityRail() {
     dom.activityEmpty.classList.toggle("hidden", items.length > 0);
     dom.activityList.innerHTML = items.map(renderActivityCard).join("");
     updateChatSystemDisclosureState();
+    applyShellState();
 }
 
 function renderActivityCard(item) {
@@ -1388,9 +2407,7 @@ function addMessageRow(kind, sender, text, opts = {}) {
 
     if (kind === "system") {
         row.innerHTML = `
-            <div style="margin:8px auto;font-size:11px;color:var(--text-tertiary);text-align:center;width:100%">
-                ${escapeHtml(text)}
-            </div>`;
+            <div class="message-system-note">${formatMessageText(text)}</div>`;
     } else if (kind === "user") {
         row.innerHTML = `
             <div class="message-avatar" style="background:${meta.color}">${meta.initials}</div>
@@ -1402,13 +2419,9 @@ function addMessageRow(kind, sender, text, opts = {}) {
         const labelTag = opts.label
             ? `<span style="background:rgba(37,99,235,0.1);color:var(--brand-blue);padding:1px 6px;border-radius:6px;font-size:10px;margin-left:4px">${opts.label}</span>`
             : "";
-        const body = opts.reasoning
-            ? renderAssistantBubbleContent(text, {
-                final: true,
-                includeMeta: false,
-                reasoning: opts.reasoning,
-            })
-            : formatMessageText(text);
+        const contentOptions = { final: true, includeMeta: false };
+        if (Object.prototype.hasOwnProperty.call(opts, "reasoning")) contentOptions.reasoning = opts.reasoning;
+        const body = renderAssistantBubbleContent(text, contentOptions);
         row.innerHTML = `
             <div class="message-avatar message-avatar--concierge">C</div>
             <div class="message-bubble">
@@ -1418,6 +2431,7 @@ function addMessageRow(kind, sender, text, opts = {}) {
     }
 
     dom.messages.appendChild(row);
+    hydrateMessageContent(row);
     setChatWelcomeVisible();
     scrollChatToBottom();
     return id;
@@ -1432,8 +2446,8 @@ function createStreamingMessage(id) {
     row.className = "message-row message-row--assistant message-thinking message-working";
     row.id = id;
     row.innerHTML = `
-        <div class="message-avatar message-avatar--concierge">C</div>
-        <div class="message-bubble message-bubble--work">${renderConciergeWorkCard(DEFAULT_STREAMING_LABEL)}</div>`;
+        <div class="message-avatar message-avatar--concierge message-avatar--runtime">C</div>
+        <div class="message-bubble message-bubble--work">${renderRuntimePill(DEFAULT_STREAMING_LABEL)}</div>`;
     dom.messages.appendChild(row);
     setChatWelcomeVisible();
     scrollChatToBottom();
@@ -1459,40 +2473,315 @@ function updateStreamingWorkCard(label = DEFAULT_STREAMING_LABEL) {
     if (!bubble) return;
     el.classList.add("message-working", "message-thinking");
     bubble.classList.add("message-bubble--work");
-    bubble.innerHTML = renderConciergeWorkCard(label, { reasoning: getCurrentReasoningSnapshot() });
+    bubble.innerHTML = renderRuntimePill(label, { reasoning: getCurrentReasoningSnapshot() });
     scrollChatToBottom();
 }
 
-function renderConciergeWorkCard(label = DEFAULT_STREAMING_LABEL, opts = {}) {
-    const phase = _conciergeWorkPhase(label);
-    const chips = _conciergeWorkChips(label);
-    const trace = renderConciergeWorkTrace(opts.reasoning || getCurrentReasoningSnapshot());
+function renderRuntimePill(label = DEFAULT_STREAMING_LABEL, opts = {}) {
+    const snapshot = opts.reasoning || getCurrentReasoningSnapshot();
+    const runtime = _runtimePillState(label, snapshot);
+    const liveLines = _runtimePillLiveLines(runtime, label, snapshot);
+    const phaseRail = _runtimePillPhaseRail(runtime, label);
+    const lanes = _runtimePillLanes(snapshot, runtime, label);
+    const confidence = _runtimeConfidence(runtime, label, snapshot);
+    const trace = renderRuntimePillTrace(snapshot);
     return `
-        <section class="concierge-work-card" role="status" aria-live="polite">
-            <div class="concierge-work-head">
-                <span class="concierge-work-orb" aria-hidden="true"><span></span></span>
-                <div class="concierge-work-title">
-                    <strong>I'm on it</strong>
-                    <span>${escapeHtml(phase.detail)}</span>
+        <section class="runtime-pill runtime-pill--${escapeHtml(runtime.phase)}" role="status" aria-live="polite" style="--runtime-progress:${runtime.progress}%">
+            <div class="runtime-pill__header">
+                <span class="runtime-orb runtime-orb--${escapeHtml(runtime.phase)}" aria-hidden="true"><span></span></span>
+                <div class="runtime-pill__copy">
+                    <strong>${escapeHtml(runtime.headline)}</strong>
+                    <div class="runtime-status-stack">
+                        ${liveLines.map((line, index) => `<span class="runtime-status-line" style="--line-index:${index}">${escapeHtml(line)}</span>`).join("")}
+                    </div>
                 </div>
-                <span class="concierge-work-live">Working</span>
+                <div class="runtime-pill__signals">
+                    <span class="runtime-live-chip"><b>${escapeHtml(runtime.liveLabel)}</b><i aria-hidden="true">·</i><span>${escapeHtml(_thinkingDuration(snapshot.startMs))}</span></span>
+                    ${_renderRuntimeConfidence(confidence)}
+                </div>
             </div>
-            <div class="concierge-work-rail" aria-hidden="true"><span></span></div>
-            <div class="concierge-work-phase">
-                <span class="concierge-work-phase-label">Now</span>
-                <strong>${escapeHtml(phase.title)}</strong>
-            </div>
-            <div class="concierge-work-steps" aria-label="Work progress">
-                <span class="concierge-work-step concierge-work-step--done">Listen</span>
-                <span class="concierge-work-step concierge-work-step--active">Check</span>
-                <span class="concierge-work-step">Reply</span>
-            </div>
-            ${chips.length ? `<div class="concierge-work-chips">${chips.map((chip) => `<span class="concierge-work-chip concierge-work-chip--${escapeHtml(chip.tone)}">${escapeHtml(chip.label)}</span>`).join("")}</div>` : ""}
+            ${phaseRail}
+            <div class="runtime-lanes" aria-label="Runtime lanes">${lanes.map(_renderRuntimeLane).join("")}</div>
             ${trace}
         </section>`;
 }
 
-function renderConciergeWorkTrace(snapshot = {}) {
+function _runtimePillState(label = DEFAULT_STREAMING_LABEL, snapshot = {}) {
+    const raw = String(label || DEFAULT_STREAMING_LABEL).replace(/\.{3,}$/g, "").trim();
+    const lower = raw.toLowerCase();
+    const running = state.activityItems.filter((item) => item.status === "running");
+    const primary = running[0];
+    const normalizedSource = primary ? normalizeActivitySource(primary.source) : "";
+    const latest = primary?.events?.[primary.events.length - 1];
+    const runtimeText = [raw, primary?.phase, primary?.title, latest?.label, latest?.detail].filter(Boolean).join(" ").toLowerCase();
+
+    if (lower.includes("block") || lower.includes("fail") || lower.includes("deny")) {
+        return { phase: "blocked", headline: "Concierge runtime paused", subtitle: raw || "Blocked by policy", liveLabel: "HOLD", progress: 100 };
+    }
+    if (lower.includes("confirm") || lower.includes("approval") || lower.includes("human") || lower.includes("clarif")) {
+        return { phase: "waiting_for_approval", headline: "Concierge needs your call", subtitle: raw || "Waiting for confirmation", liveLabel: "HIL", progress: 58 };
+    }
+    if (runtimeText.includes("verify") || runtimeText.includes("verified") || runtimeText.includes("read-after")) {
+        return { phase: "verifying", headline: "Concierge is reasoning", subtitle: raw || "Checking the result", liveLabel: "LIVE", progress: 88 };
+    }
+    if (runtimeText.includes("execut") || runtimeText.includes("invoke") || runtimeText.includes("mutation") || runtimeText.includes("write")) {
+        return { phase: "executing", headline: "Concierge is reasoning", subtitle: primary?.phase || raw || "Executing bound capability", liveLabel: "LIVE", progress: 76 };
+    }
+    if (runtimeText.includes("draft") || runtimeText.includes("reply")) {
+        return { phase: "verifying", headline: "Concierge is reasoning", subtitle: raw || "Preparing a grounded reply", liveLabel: "LIVE", progress: 92 };
+    }
+    if (primary) {
+        const meta = activityMeta(primary.source);
+        const phase = ["fabric", "tool", "agent"].includes(normalizedSource) ? "tool_calling" : "planning";
+        return { phase, headline: "Concierge is reasoning", subtitle: primary.phase || primary.title || meta.title, liveLabel: "LIVE", progress: phase === "tool_calling" ? 68 : 54 };
+    }
+    if (lower.includes("memory") || lower.includes("context") || lower.includes("summar") || String(snapshot.back || "").trim()) {
+        const focus = _runtimeMemoryFocus(raw, snapshot);
+        return { phase: "planning", headline: "Concierge is reasoning", subtitle: focus.status, liveLabel: "LIVE", progress: 46, focus };
+    }
+    if (lower.includes("task") || lower.includes("tool") || lower.includes("starting")) {
+        return { phase: "tool_calling", headline: "Concierge is reasoning", subtitle: raw || "Preparing tool context", liveLabel: "LIVE", progress: 62 };
+    }
+    if (state.thinkingActive || String(snapshot.front || "").trim()) {
+        return { phase: "understanding", headline: "Concierge is reasoning", subtitle: raw || "Building request frame", liveLabel: "LIVE", progress: 28 };
+    }
+    return { phase: "understanding", headline: "Concierge is reasoning", subtitle: raw || "Understanding request", liveLabel: "LIVE", progress: 18 };
+}
+
+function _runtimePillLiveLines(runtime, label = DEFAULT_STREAMING_LABEL, snapshot = {}) {
+    const running = state.activityItems.filter((item) => item.status === "running");
+    const lines = [];
+    const add = (value) => {
+        const text = String(value || "").replace(/\s+/g, " ").trim();
+        if (text && !lines.includes(text)) lines.push(text);
+    };
+    const latestActivity = running.map((item) => {
+        const meta = activityMeta(item.source);
+        const latest = item.events[item.events.length - 1];
+        const detail = latest?.label || item.phase || item.title || meta.title;
+        return detail ? `${meta.label}: ${detail}` : "";
+    }).find(Boolean);
+    const rawLabel = String(label || "").replace(/\.{3,}$/g, "").trim();
+
+    add(runtime.subtitle);
+    if (runtime.focus?.live) add(runtime.focus.live);
+    add(latestActivity);
+    if (rawLabel !== runtime.subtitle) add(rawLabel);
+    if (String(snapshot.back || "").trim()) add("Preparing capability map");
+    if (String(snapshot.front || "").trim()) add("Building semantic intent");
+    add("Keeping the answer tied to household context");
+
+    return lines.slice(0, 3);
+}
+
+function _runtimePillPhaseRail(runtime = {}, label = DEFAULT_STREAMING_LABEL) {
+    const activePhase = runtime.phase || "understanding";
+    const toolHint = _runtimeToolHint(runtime, label);
+    const phases = [
+        { id: "understanding", label: "Understand" },
+        { id: "planning", label: "Plan" },
+        { id: "tool_calling", label: "Tools" },
+        { id: "verifying", label: "Verify" },
+    ];
+    const activeIndex = _runtimePillPhaseIndex(activePhase);
+    return `<div class="runtime-phase-rail" aria-label="Runtime phase">
+        ${phases.map((phase, index) => {
+            const stateName = index < activeIndex ? "complete" : index === activeIndex ? "active" : "pending";
+            const connector = index < phases.length - 1 ? `<span class="runtime-phase-line runtime-phase-line--${index < activeIndex ? "active" : "pending"}"></span>` : "";
+            const cue = phase.id === "tool_calling" && activeIndex >= 2 ? _renderRuntimeToolCue(toolHint) : "";
+            return `<span class="runtime-phase runtime-phase--${stateName}"><span class="runtime-phase-dot" aria-hidden="true"></span><span>${phase.label}</span>${cue}</span>${connector}`;
+        }).join("")}
+    </div>`;
+}
+
+function _runtimePillPhaseIndex(phase) {
+    const map = {
+        understanding: 0,
+        planning: 1,
+        tool_calling: 2,
+        waiting_for_approval: 2,
+        executing: 2,
+        verifying: 3,
+        complete: 3,
+        blocked: 3,
+    };
+    return map[phase] ?? 0;
+}
+
+function _runtimePillLanes(snapshot = {}, runtime = {}, label = DEFAULT_STREAMING_LABEL) {
+    const focus = runtime.focus || _runtimeFocusCopy(runtime, label, snapshot);
+    const lanes = state.activityItems
+        .filter((item) => item.status === "running")
+        .slice(0, 3)
+        .map((item, index) => {
+            const meta = _runtimeLaneMeta(item.source);
+            const latest = item.events[item.events.length - 1];
+            return {
+                label: meta.label,
+                tone: meta.tone,
+                title: item.phase || item.title || meta.title,
+                detail: latest?.detail || latest?.label || item.title || meta.detail,
+                index,
+            };
+        });
+
+    if (!lanes.length && String(snapshot.back || "").trim()) {
+        lanes.push({ label: "BACK", tone: "back", title: focus.backTitle || "Searching household memory", detail: focus.backDetail || "Checking context and available runtime state", index: 0 });
+    }
+    if (!lanes.length && String(snapshot.front || "").trim()) {
+        lanes.push({ label: "FRONT", tone: "front", title: focus.frontTitle || "Reading request frame", detail: focus.frontDetail || "Building semantic intent from user message", index: 0 });
+    }
+    if (!lanes.length) {
+        lanes.push({ label: "FRONT", tone: "front", title: focus.frontTitle || "Reading request frame", detail: focus.frontDetail || "Building semantic intent from user message", index: 0 });
+    }
+
+    const policyTitle = runtime.phase === "waiting_for_approval" ? "Human approval required" : runtime.phase === "blocked" ? "Action blocked" : "Low risk";
+    const policyDetail = runtime.phase === "waiting_for_approval" ? "Waiting for a clear human choice" : runtime.phase === "blocked" ? "Policy is preventing execution" : "No approval needed";
+    lanes.push({ label: "POLICY", tone: runtime.phase === "blocked" ? "blocked" : runtime.phase === "waiting_for_approval" ? "approval" : "policy", title: policyTitle, detail: policyDetail, index: lanes.length });
+
+    return lanes.slice(0, 4).map((lane, index) => ({ ...lane, index }));
+}
+
+function _runtimeLaneMeta(source) {
+    const normalized = normalizeActivitySource(source);
+    const map = {
+        back: { label: "BACK", title: "Preparing capability map", detail: "Checking context", tone: "back" },
+        front: { label: "FRONT", title: "Reading request frame", detail: "Building semantic intent", tone: "front" },
+        planner: { label: "PLAN", title: "Planning next move", detail: "Sequencing runtime steps", tone: "plan" },
+        orchestrator: { label: "PLAN", title: "Coordinating runtime", detail: "Sequencing runtime steps", tone: "plan" },
+        fabric: { label: "TOOLS", title: "Preparing tools", detail: "Binding executable capabilities", tone: "tools" },
+        agent: { label: "TOOLS", title: "Preparing helper", detail: "Running a helper lane", tone: "tools" },
+        tool: { label: "TOOLS", title: "Calling tool", detail: "Executing bound capability", tone: "tools" },
+        kernel: { label: "SYSTEM", title: "Runtime check", detail: "Checking system state", tone: "system" },
+    };
+    return map[normalized] || map.kernel;
+}
+
+function _runtimeMemberName() {
+    return String(state.member || "Alex").trim() || "Alex";
+}
+
+function _runtimeStableIndex(seed, count) {
+    const text = String(seed || "runtime");
+    let hash = 0;
+    for (let index = 0; index < text.length; index += 1) {
+        hash = ((hash * 31) + text.charCodeAt(index)) >>> 0;
+    }
+    return count > 0 ? hash % count : 0;
+}
+
+function _runtimeMemoryFocus(label = DEFAULT_STREAMING_LABEL, snapshot = {}) {
+    const member = _runtimeMemberName();
+    const choices = [
+        {
+            status: `Recalling ${member}'s context`,
+            live: "Looking for preferences, routines, and recent family state",
+            frontTitle: `Recalling ${member}'s preferences`,
+            frontDetail: "Matching the request to routines, patterns, and prior choices",
+            backTitle: "Searching household memory",
+            backDetail: "Looking across routines, preferences, and recent context",
+        },
+        {
+            status: "Searching relevant routines",
+            live: `Checking what usually matters for ${member}`,
+            frontTitle: "Searching for relevant routines",
+            frontDetail: `Filtering memory for ${member}'s likely next useful path`,
+            backTitle: "Reading routine memory",
+            backDetail: "Checking repeated patterns, timing, and family state",
+        },
+        {
+            status: "Checking household memory",
+            live: "Separating useful context from background noise",
+            frontTitle: "Locating useful memory",
+            frontDetail: "Pulling only the context that can shape this answer",
+            backTitle: "Preparing memory context",
+            backDetail: "Checking stored preferences, routines, and recent turns",
+        },
+    ];
+    const seed = `${label}|${snapshot.startMs || state._thinkingStartMs || 0}`;
+    return choices[_runtimeStableIndex(seed, choices.length)];
+}
+
+function _runtimeFocusCopy(runtime = {}, label = DEFAULT_STREAMING_LABEL, snapshot = {}) {
+    const lower = [label, runtime.subtitle, snapshot.front, snapshot.back].filter(Boolean).join(" ").toLowerCase();
+    if (lower.includes("memory") || lower.includes("context") || lower.includes("routine") || lower.includes("preference")) {
+        return _runtimeMemoryFocus(label, snapshot);
+    }
+    if (lower.includes("tool") || lower.includes("task") || lower.includes("dispatch")) {
+        return {
+            frontTitle: "Choosing the right capability",
+            frontDetail: "Checking which helper can act without overreaching",
+            backTitle: "Preparing tool context",
+            backDetail: "Binding only the state needed for this step",
+        };
+    }
+    return {
+        frontTitle: "Reading request frame",
+        frontDetail: "Building semantic intent from user message",
+        backTitle: "Preparing capability map",
+        backDetail: "Checking context and available runtime state",
+    };
+}
+
+function _runtimeToolHint(runtime = {}, label = DEFAULT_STREAMING_LABEL) {
+    const runningText = state.activityItems
+        .filter((item) => item.status === "running")
+        .map((item) => {
+            const latest = item.events?.[item.events.length - 1] || {};
+            return [item.source, item.phase, item.title, latest.label, latest.detail].filter(Boolean).join(" ");
+        })
+        .join(" ");
+    const text = [label, runtime.subtitle, runningText].filter(Boolean).join(" ").toLowerCase();
+    if (/calendar|schedule|event|appointment/.test(text)) return { kind: "schedule", label: "Schedule" };
+    if (/search|lookup|find|recall|memory|context/.test(text)) return { kind: "search", label: "Search" };
+    if (/task|todo|list|shopping|chore|reminder/.test(text)) return { kind: "list", label: "List" };
+    if (/write|update|create|save|send|book|mutation|execute|invoke/.test(text)) return { kind: "write", label: "Write" };
+    return { kind: "tool", label: "Tool" };
+}
+
+function _renderRuntimeToolCue(hint) {
+    if (!hint) return "";
+    return `<span class="runtime-phase-cue runtime-phase-cue--${escapeHtml(hint.kind)}" aria-label="Tool cue: ${escapeHtml(hint.label)}"><i aria-hidden="true"></i><span>${escapeHtml(hint.label)}</span></span>`;
+}
+
+function _runtimeConfidence(runtime = {}, label = DEFAULT_STREAMING_LABEL, snapshot = {}) {
+    const lower = [label, runtime.subtitle, snapshot.front, snapshot.back].filter(Boolean).join(" ").toLowerCase();
+    let value = 54;
+    if (runtime.phase === "planning") value = 66;
+    if (runtime.phase === "tool_calling") value = 72;
+    if (runtime.phase === "executing") value = 76;
+    if (runtime.phase === "verifying" || runtime.phase === "complete") value = 86;
+    if (runtime.phase === "waiting_for_approval") value = 58;
+    if (runtime.phase === "blocked") value = 34;
+    if (String(snapshot.front || "").trim()) value += 4;
+    if (String(snapshot.back || "").trim()) value += 5;
+    if (state.activityItems.some((item) => item.status === "running")) value += 3;
+    if (lower.includes("clarif") || lower.includes("approval") || lower.includes("confirm")) value = Math.min(value, 62);
+    value = Math.max(24, Math.min(92, Math.round(value)));
+    const tone = value >= 78 ? "high" : value >= 58 ? "steady" : "forming";
+    return { value, tone };
+}
+
+function _renderRuntimeConfidence(confidence = {}) {
+    const value = Number.isFinite(Number(confidence.value)) ? Number(confidence.value) : 54;
+    const tone = confidence.tone || "forming";
+    return `<span class="runtime-confidence runtime-confidence--${escapeHtml(tone)}" style="--runtime-confidence:${value}%" aria-label="Path confidence ${value} percent"><span>Path</span><b>${value}%</b><i aria-hidden="true"><em></em></i></span>`;
+}
+
+function _renderRuntimeLane(lane) {
+    return `<div class="runtime-lane runtime-lane--${escapeHtml(lane.tone)}" style="--lane-index:${lane.index}">
+        <div class="runtime-lane__icon"></div>
+        <span class="runtime-lane__label">${escapeHtml(lane.label)}</span>
+        <div class="runtime-lane__divider"></div>
+        <div class="runtime-lane__content">
+            <strong>${escapeHtml(lane.title)}</strong>
+            <small>${escapeHtml(lane.detail)}</small>
+        </div>
+        <div class="runtime-lane__status"><i aria-hidden="true"></i>Active</div>
+    </div>`;
+}
+
+function renderRuntimePillTrace(snapshot = {}) {
     const frontText = String(snapshot.front || "").trim();
     const backText = String(snapshot.back || "").trim();
     if (!frontText && !backText) return "";
@@ -1504,64 +2793,10 @@ function renderConciergeWorkTrace(snapshot = {}) {
         sections.push(`<section><strong>Background</strong><pre>${escapeHtml(snapshot.back || "")}</pre></section>`);
     }
     return `
-        <details class="concierge-work-trace">
-            <summary><span>Reasoning notes</span><span>${frontText && backText ? "Reply + context" : frontText ? "Reply" : "Context"}</span></summary>
-            <div class="concierge-work-trace-body">${sections.join("")}</div>
+        <details class="runtime-trace">
+            <summary><span>Process trace</span><span>${frontText && backText ? "Reply + context" : frontText ? "Reply" : "Context"}</span></summary>
+            <div class="runtime-trace__body">${sections.join("")}</div>
         </details>`;
-}
-
-function _conciergeWorkPhase(label = DEFAULT_STREAMING_LABEL) {
-    const raw = String(label || DEFAULT_STREAMING_LABEL).replace(/\.{3,}$/g, "").trim();
-    const lower = raw.toLowerCase();
-    if (lower.includes("draft") || lower.includes("reply")) {
-        return { title: "Writing response", detail: raw || "Preparing answer" };
-    }
-    if (lower.includes("memory") || lower.includes("context") || lower.includes("summar")) {
-        return { title: "Checking context", detail: raw };
-    }
-    if (lower.includes("clarif")) {
-        return { title: "Clarifying intent", detail: raw };
-    }
-    if (lower.includes("task") || lower.includes("tool") || lower.includes("starting")) {
-        return { title: "Coordinating tools", detail: raw };
-    }
-    if (state.thinkingActive || String(state.thinkingBuffer || "").trim()) {
-        return { title: "Reasoning through it", detail: raw };
-    }
-    return { title: "Understanding request", detail: raw };
-}
-
-function _conciergeWorkChips(label = DEFAULT_STREAMING_LABEL) {
-    const chips = new Map();
-    const add = (labelText, tone = "brand") => chips.set(labelText, { label: labelText, tone });
-    const lower = String(label || "").toLowerCase();
-    add("Context", "system");
-    if (lower.includes("memory") || lower.includes("context") || lower.includes("belief")) add("Memory", "purple");
-    if (lower.includes("task") || lower.includes("tool") || lower.includes("dispatch")) add("Tools", "teal");
-    if (lower.includes("reply") || lower.includes("draft")) add("Reply", "brand");
-    state.activityItems
-        .filter((item) => item.status === "running")
-        .slice(0, 3)
-        .forEach((item) => {
-            const chip = _conciergeActivityChip(item.source);
-            add(chip.label, chip.tone || "system");
-        });
-    return Array.from(chips.values()).slice(0, 4);
-}
-
-function _conciergeActivityChip(source) {
-    const normalized = normalizeActivitySource(source);
-    const map = {
-        back: { label: "Background", tone: "blue" },
-        front: { label: "Reply", tone: "brand" },
-        planner: { label: "Planning", tone: "purple" },
-        orchestrator: { label: "Coordinating", tone: "green" },
-        fabric: { label: "Context", tone: "purple" },
-        agent: { label: "Helper", tone: "teal" },
-        tool: { label: "Tools", tone: "teal" },
-        kernel: { label: "System", tone: "gray" },
-    };
-    return map[normalized] || map.kernel;
 }
 
 function renderReasoningTrace() {
@@ -1572,7 +2807,9 @@ function renderAssistantBubbleContent(text, opts = {}) {
     const final = Boolean(opts.final);
     const includeMeta = opts.includeMeta !== false;
     const content = [];
-    const reasoning = renderReasoningTraceBlock({ final, reasoning: opts.reasoning });
+    const reasoningOptions = { final };
+    if (Object.prototype.hasOwnProperty.call(opts, "reasoning")) reasoningOptions.reasoning = opts.reasoning;
+    const reasoning = renderReasoningTraceBlock(reasoningOptions);
 
     const responseText = String(text || "").trim();
     if (responseText) {
@@ -1593,7 +2830,7 @@ function renderAssistantBubbleContent(text, opts = {}) {
 
 function renderReasoningTraceBlock(opts = {}) {
     const final = Boolean(opts.final);
-    const snapshot = opts.reasoning || getCurrentReasoningSnapshot();
+    const snapshot = Object.prototype.hasOwnProperty.call(opts, "reasoning") ? (opts.reasoning || {}) : getCurrentReasoningSnapshot();
     const frontRaw = String((snapshot && snapshot.front) || "");
     const backRaw = String((snapshot && snapshot.back) || "");
     const frontText = frontRaw.trim();
@@ -1620,7 +2857,7 @@ function renderReasoningTraceBlock(opts = {}) {
     }
 
     const openAttr = final ? "" : " open";
-    const label = final ? "Behind the scenes" : "Working through it";
+    const label = final ? "Process trace" : "Working through it";
     const sourceLabel = final
         ? (frontText && backText ? "Reply + context" : frontText ? "Reply" : "Context")
         : sources.join(" + ");
@@ -1775,7 +3012,7 @@ function renderActiveMember() {
     }
     if (dom.chatMemberLine) dom.chatMemberLine.textContent = `Here with ${state.member}`;
     if (dom.chatWelcomeTitle) dom.chatWelcomeTitle.textContent = `Hi, ${state.member}.`;
-    if (dom.chatWelcomeNote) dom.chatWelcomeNote.textContent = "Tell me the outcome. I can help shape the plan, reminders, and next steps.";
+    if (dom.chatWelcomeNote) dom.chatWelcomeNote.textContent = "Name the outcome. I will turn the moving pieces into the next useful step.";
     if (dom.welcomeName) dom.welcomeName.textContent = state.member;
     // Mark dropdown selection
     dom.memberDropdown && dom.memberDropdown.querySelectorAll(".member-dropdown-item").forEach((el) => {
@@ -1788,15 +3025,18 @@ function renderActiveMember() {
 // ============================================================================
 
 function updateAffect(emotion, valence) {
-    state.currentAffect = { emotion, valence };
-    const info = AFFECT_MAP[emotion] || AFFECT_MAP.neutral;
+    const normalizedEmotion = String(emotion || "neutral").toLowerCase();
+    const normalizedValence = Number.isFinite(Number(valence)) ? Number(valence) : 0;
+    state.currentAffect = { emotion: normalizedEmotion, valence: normalizedValence };
+    const info = AFFECT_MAP[normalizedEmotion] || AFFECT_MAP.neutral;
     if (dom.affectEmoji) dom.affectEmoji.textContent = info.emoji;
-    if (dom.affectLabel) dom.affectLabel.textContent = emotion;
+    if (dom.affectLabel) dom.affectLabel.textContent = normalizedEmotion;
     if (dom.affectFill) {
-        const pct = Math.max(0, Math.min(100, (valence + 1) * 50));
+        const pct = Math.max(0, Math.min(100, (normalizedValence + 1) * 50));
         dom.affectFill.style.width = `${pct}%`;
         dom.affectFill.style.background = info.color;
     }
+    applyShellState();
 }
 
 function updateFsmState(toState, fromState, trigger) {
@@ -1896,6 +3136,7 @@ function showStreaming(visible, label = DEFAULT_STREAMING_LABEL) {
     if (dom.streamingText) dom.streamingText.textContent = state.streamingLabel || DEFAULT_STREAMING_LABEL;
     if (visible) updateStreamingWorkCard(state.streamingLabel);
     updateChatSystemDisclosureState();
+    applyShellState();
 }
 
 // ============================================================================
@@ -2009,11 +3250,645 @@ function escapeHtml(text) {
 }
 
 function formatMessageText(text) {
+    const source = String(text == null ? "" : text).replace(/\r\n?/g, "\n").trim();
+    if (!source) return "";
+    return `<div class="message-markdown">${renderMarkdownBlocks(source)}</div>`;
+}
+
+function renderMarkdownBlocks(source) {
+    const lines = String(source || "").split("\n");
+    const blocks = [];
+    let i = 0;
+    while (i < lines.length) {
+        const line = lines[i];
+        const trimmed = line.trim();
+        if (!trimmed) { i++; continue; }
+
+        if (/^```/.test(trimmed)) {
+            const fenceLanguage = markdownFenceLanguage(trimmed);
+            const code = [];
+            i++;
+            while (i < lines.length && !/^```/.test(lines[i].trim())) {
+                code.push(lines[i]);
+                i++;
+            }
+            const closed = i < lines.length;
+            if (closed) i++;
+            const codeSource = code.join("\n");
+            blocks.push(closed && shouldRenderMermaidBlock(codeSource, fenceLanguage)
+                ? renderMermaidBlock(codeSource)
+                : renderCodeBlock(codeSource, fenceLanguage));
+            continue;
+        }
+
+        const heading = trimmed.match(/^(#{1,4})\s+(.+)$/);
+        if (heading) {
+            const level = Math.min(Math.max(heading[1].length + 1, 3), 5);
+            blocks.push(`<h${level} class="message-md-heading message-md-heading--${heading[1].length}">${renderMarkdownInline(heading[2])}</h${level}>`);
+            i++;
+            continue;
+        }
+
+        if (/^[-*+]\s+/.test(trimmed)) {
+            const items = [];
+            while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) {
+                items.push(`<li>${renderMarkdownInline(lines[i].replace(/^\s*[-*+]\s+/, ""))}</li>`);
+                i++;
+            }
+            blocks.push(`<ul>${items.join("")}</ul>`);
+            continue;
+        }
+
+        if (/^\d+[.)]\s+/.test(trimmed)) {
+            const items = [];
+            while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i])) {
+                items.push(`<li>${renderMarkdownInline(lines[i].replace(/^\s*\d+[.)]\s+/, ""))}</li>`);
+                i++;
+            }
+            blocks.push(`<ol>${items.join("")}</ol>`);
+            continue;
+        }
+
+        if (/^>\s?/.test(trimmed)) {
+            const quote = [];
+            while (i < lines.length && /^\s*>\s?/.test(lines[i])) {
+                quote.push(lines[i].replace(/^\s*>\s?/, ""));
+                i++;
+            }
+            blocks.push(`<blockquote>${renderMarkdownInline(quote.join(" "))}</blockquote>`);
+            continue;
+        }
+
+        if (/^---+$/.test(trimmed)) {
+            blocks.push("<hr>");
+            i++;
+            continue;
+        }
+
+        const paragraph = [trimmed];
+        i++;
+        while (i < lines.length && lines[i].trim() && !isMarkdownBlockStart(lines[i])) {
+            paragraph.push(lines[i].trim());
+            i++;
+        }
+        blocks.push(`<p>${renderMarkdownInline(paragraph.join(" "))}</p>`);
+    }
+    return blocks.join("");
+}
+
+function isMarkdownBlockStart(line) {
+    const trimmed = String(line || "").trim();
+    return /^```/.test(trimmed)
+        || /^(#{1,4})\s+/.test(trimmed)
+        || /^[-*+]\s+/.test(trimmed)
+        || /^\d+[.)]\s+/.test(trimmed)
+        || /^>\s?/.test(trimmed)
+        || /^---+$/.test(trimmed);
+}
+
+function markdownFenceLanguage(trimmedFence) {
+    const match = String(trimmedFence || "").match(/^```\s*([^\s`{]+)?/);
+    return String(match?.[1] || "").trim().toLowerCase();
+}
+
+function isMermaidFenceLanguage(language) {
+    return MERMAID_FENCE_LANGS.has(String(language || "").trim().toLowerCase());
+}
+
+function shouldRenderMermaidBlock(source, language = "") {
+    if (isMermaidFenceLanguage(language)) return true;
+    if (String(language || "").trim()) return false;
+    return isLikelyMermaidSource(source);
+}
+
+function isLikelyMermaidSource(source) {
+    const text = String(source || "").trimStart();
+    if (!text) return false;
+    return hasMermaidDiagramDirective(text)
+        || isLikelyMermaidGraphFragment(text);
+}
+
+function hasMermaidDiagramDirective(source) {
+    const text = String(source || "").trimStart();
+    return /^(graph|flowchart)\s+(TB|TD|BT|RL|LR)\b/i.test(text)
+        || /^sequenceDiagram\b/i.test(text)
+        || /^classDiagram(?:-v2)?\b/i.test(text)
+        || /^stateDiagram(?:-v2)?\b/i.test(text)
+        || /^erDiagram\b/i.test(text)
+        || /^journey\b/i.test(text)
+        || /^gantt\b/i.test(text)
+        || /^pie(?:\s+title)?\b/i.test(text)
+        || /^mindmap\b/i.test(text)
+        || /^timeline\b/i.test(text)
+        || /^quadrantChart\b/i.test(text)
+        || /^gitGraph\b/i.test(text)
+        || /^C4(?:Context|Container|Component|Dynamic|Deployment)\b/.test(text);
+}
+
+function isLikelyMermaidGraphFragment(source) {
+    const text = String(source || "").trim();
+    if (!text) return false;
+    const hasGraphArrow = /(?:-->|---|-.->|==>|--\||\|--)/.test(text);
+    const hasGraphShape = /\b[A-Za-z][\w-]*\s*(?:\[[^\]]+\]|\([^)]*\)|\{[^}]+\})/.test(text);
+    return /^subgraph\b/i.test(text)
+        || (/^style\s+[A-Za-z][\w-]*\s+/im.test(text) && hasGraphArrow)
+        || (hasGraphArrow && hasGraphShape);
+}
+
+function normalizeMermaidSourceForRender(source) {
+    const text = String(source || "").trim();
+    if (!text) return "";
+    if (hasMermaidDiagramDirective(text)) return normalizeMermaidFlowchartSyntax(text);
+    if (isLikelyMermaidGraphFragment(text)) return normalizeMermaidFlowchartSyntax(`graph TD\n${text}`);
+    return text;
+}
+
+function normalizeMermaidFlowchartSyntax(source) {
+    return normalizeMermaidFlowchartLinkStyles(normalizeMermaidFlowchartLabels(source));
+}
+
+function normalizeMermaidFlowchartLabels(source) {
+    const text = String(source || "");
+    if (!/^(graph|flowchart)\s+/i.test(text.trimStart())) return text;
+    return text
+        .replace(/(\b[A-Za-z][\w-]*\s*)\[([^\]\n"]+)\]/g, (_, node, label) => {
+            const safeLabel = String(label || "").replace(/\\/g, "\\\\").replace(/"/g, "#quot;");
+            return `${node}["${safeLabel}"]`;
+        })
+        .replace(/(\b[A-Za-z][\w-]*\s*)\{([^}\n"]+)\}/g, (_, node, label) => {
+            const safeLabel = String(label || "").replace(/\\/g, "\\\\").replace(/"/g, "#quot;");
+            return `${node}{"${safeLabel}"}`;
+        });
+}
+
+function normalizeMermaidFlowchartLinkStyles(source) {
+    const text = String(source || "");
+    if (!/^(graph|flowchart)\s+/i.test(text.trimStart())) return text;
+    return text
+        .split(/\r?\n/)
+        .map((line) => /^\s*linkStyle\s+/i.test(line) ? line.replace(/;\s*$/, "") : line)
+        .join("\n");
+}
+
+function mermaidRenderSourceCandidates(source) {
+    const normalized = normalizeMermaidSourceForRender(source);
+    if (!normalized) return [];
+    const candidates = [normalized];
+    if (/^(graph|flowchart)\s+/i.test(normalized.trimStart())) {
+        candidates.push(normalized.replace(/^\s*linkStyle\s+.*$/gim, ""));
+        candidates.push(normalized.replace(/^\s*(?:linkStyle|style|classDef|class)\s+.*$/gim, ""));
+    }
+    return [...new Set(candidates.map((candidate) => candidate.trim()).filter(Boolean))];
+}
+
+function renderCodeBlock(source, language = "") {
+    const langClass = language ? ` message-code-block--${escapeHtml(language)}` : "";
+    return `<pre class="message-code-block${langClass}"><code>${escapeHtml(source)}</code></pre>`;
+}
+
+function renderMermaidBlock(source) {
+    const diagramSource = String(source || "").trim();
+    if (!diagramSource) return renderCodeBlock(source, "mermaid");
+    return `
+        <figure class="message-mermaid" data-mermaid-status="pending">
+            <div class="message-mermaid__canvas" aria-label="Mermaid diagram"></div>
+            <pre class="message-code-block message-mermaid__fallback"><code>${escapeHtml(diagramSource)}</code></pre>
+        </figure>`;
+}
+
+function setupMermaidViewer() {
+    document.addEventListener("click", (event) => {
+        const figure = event.target?.closest?.(".message-mermaid[data-mermaid-status='rendered']");
+        if (!figure || event.target?.closest?.(".message-mermaid__fallback")) return;
+        event.preventDefault();
+        openMermaidViewer(figure);
+    });
+
+    document.addEventListener("keydown", (event) => {
+        if (mermaidViewerState.open) {
+            handleMermaidViewerKeydown(event);
+            return;
+        }
+        const figure = event.target?.closest?.(".message-mermaid[data-mermaid-status='rendered']");
+        if (!figure || (event.key !== "Enter" && event.key !== " ")) return;
+        event.preventDefault();
+        openMermaidViewer(figure);
+    });
+}
+
+function prepareMermaidDiagramInteraction(diagram) {
+    if (!diagram) return;
+    diagram.tabIndex = 0;
+    diagram.setAttribute("role", "button");
+    diagram.setAttribute("aria-label", "Open Mermaid diagram viewer");
+    diagram.title = "Open diagram";
+}
+
+function ensureMermaidViewer() {
+    if (mermaidViewerState.root?.isConnected) return mermaidViewerState;
+    const root = document.createElement("div");
+    root.className = "mermaid-viewer";
+    root.dataset.state = "closed";
+    root.dataset.mermaidViewerStatus = "idle";
+    root.setAttribute("role", "dialog");
+    root.setAttribute("aria-modal", "true");
+    root.setAttribute("aria-label", "Mermaid diagram viewer");
+    root.setAttribute("aria-hidden", "true");
+    root.hidden = true;
+    root.innerHTML = `
+        <div class="mermaid-viewer__backdrop" data-mermaid-viewer-close></div>
+        <section class="mermaid-viewer__panel">
+            <div class="mermaid-viewer__toolbar">
+                <div class="mermaid-viewer__title">Diagram</div>
+                <div class="mermaid-viewer__controls">
+                    <button type="button" class="mermaid-viewer__button" data-mermaid-viewer-zoom="out" aria-label="Zoom out" title="Zoom out">-</button>
+                    <span class="mermaid-viewer__zoom" data-mermaid-viewer-zoom-label>100%</span>
+                    <button type="button" class="mermaid-viewer__button" data-mermaid-viewer-zoom="in" aria-label="Zoom in" title="Zoom in">+</button>
+                    <button type="button" class="mermaid-viewer__button mermaid-viewer__button--wide" data-mermaid-viewer-zoom="fit" aria-label="Fit diagram" title="Fit diagram">Fit</button>
+                    <button type="button" class="mermaid-viewer__button" data-mermaid-viewer-close aria-label="Close diagram viewer" title="Close">x</button>
+                </div>
+            </div>
+            <div class="mermaid-viewer__stage" tabindex="0">
+                <div class="mermaid-viewer__canvas"></div>
+            </div>
+        </section>`;
+    const stage = root.querySelector(".mermaid-viewer__stage");
+    const canvas = root.querySelector(".mermaid-viewer__canvas");
+    const zoomLabel = root.querySelector("[data-mermaid-viewer-zoom-label]");
+    root.addEventListener("click", handleMermaidViewerClick);
+    stage?.addEventListener("wheel", handleMermaidViewerWheel, { passive: false });
+    stage?.addEventListener("pointerdown", handleMermaidViewerPointerDown);
+    stage?.addEventListener("pointermove", handleMermaidViewerPointerMove);
+    stage?.addEventListener("pointerup", handleMermaidViewerPointerEnd);
+    stage?.addEventListener("pointercancel", handleMermaidViewerPointerEnd);
+    document.body.appendChild(root);
+    mermaidViewerState = {
+        ...mermaidViewerState,
+        root,
+        stage,
+        canvas,
+        zoomLabel,
+    };
+    return mermaidViewerState;
+}
+
+function openMermaidViewer(diagram) {
+    const source = diagram?.querySelector(".message-mermaid__fallback code")?.textContent || "";
+    if (!source.trim()) return;
+    const viewer = ensureMermaidViewer();
+    mermaidViewerState.open = true;
+    mermaidViewerState.source = source;
+    mermaidViewerState.previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    document.body.classList.add("mermaid-viewer-open");
+    viewer.root.hidden = false;
+    viewer.root.setAttribute("aria-hidden", "false");
+    viewer.root.dataset.state = "open";
+    viewer.root.dataset.mermaidViewerStatus = "loading";
+    setMermaidViewerScale(1);
+    viewer.stage?.focus({ preventScroll: true });
+    renderMermaidViewerSource(source);
+}
+
+async function renderMermaidViewerSource(source) {
+    const viewer = ensureMermaidViewer();
+    const renderSource = String(source || "");
+    const sources = mermaidRenderSourceCandidates(renderSource)
+        .filter((candidate) => candidate.length <= MERMAID_MAX_SOURCE_LENGTH);
+    viewer.canvas?.replaceChildren();
+    if (!sources.length || !viewer.canvas) {
+        viewer.root.dataset.mermaidViewerStatus = "error";
+        return;
+    }
+
+    let lastError = null;
+    try {
+        const mermaid = await loadMermaid();
+        configureMermaid(mermaid);
+        for (const sourceCandidate of sources) {
+            try {
+                const renderId = `message-mermaid-viewer-svg-${++mermaidRenderSeq}`;
+                const result = await mermaid.render(renderId, sourceCandidate);
+                if (!mermaidViewerState.open || mermaidViewerState.source !== renderSource) return;
+                viewer.canvas.innerHTML = result.svg || "";
+                result.bindFunctions?.(viewer.canvas);
+                viewer.root.dataset.mermaidViewerStatus = "rendered";
+                viewer.stage?.scrollTo({ top: 0, left: 0 });
+                return;
+            } catch (error) {
+                lastError = error;
+            }
+        }
+    } catch (error) {
+        lastError = error;
+    }
+    if (!mermaidViewerState.open || mermaidViewerState.source !== renderSource) return;
+    viewer.root.dataset.mermaidViewerStatus = "error";
+    viewer.canvas.textContent = "Diagram unavailable";
+    console.warn("Mermaid viewer render failed:", lastError);
+}
+
+function closeMermaidViewer() {
+    if (!mermaidViewerState.open) return;
+    const previousFocus = mermaidViewerState.previousFocus;
+    mermaidViewerState.root?.remove();
+    mermaidViewerState = {
+        ...mermaidViewerState,
+        open: false,
+        scale: 1,
+        source: "",
+        previousFocus: null,
+        root: null,
+        stage: null,
+        canvas: null,
+        zoomLabel: null,
+        drag: null,
+    };
+    document.body.classList.remove("mermaid-viewer-open");
+    previousFocus?.focus?.({ preventScroll: true });
+}
+
+function handleMermaidViewerClick(event) {
+    const closeTarget = event.target?.closest?.("[data-mermaid-viewer-close]");
+    if (closeTarget) {
+        event.preventDefault();
+        closeMermaidViewer();
+        return;
+    }
+    const zoomTarget = event.target?.closest?.("[data-mermaid-viewer-zoom]");
+    if (!zoomTarget) return;
+    event.preventDefault();
+    const action = zoomTarget.dataset.mermaidViewerZoom;
+    if (action === "in") setMermaidViewerScale(mermaidViewerState.scale + MERMAID_VIEWER_ZOOM_STEP);
+    if (action === "out") setMermaidViewerScale(mermaidViewerState.scale - MERMAID_VIEWER_ZOOM_STEP);
+    if (action === "fit") setMermaidViewerScale(1);
+}
+
+function handleMermaidViewerKeydown(event) {
+    if (event.key === "Escape") {
+        event.preventDefault();
+        closeMermaidViewer();
+        return;
+    }
+    if (event.key === "+" || event.key === "=") {
+        event.preventDefault();
+        setMermaidViewerScale(mermaidViewerState.scale + MERMAID_VIEWER_ZOOM_STEP);
+        return;
+    }
+    if (event.key === "-") {
+        event.preventDefault();
+        setMermaidViewerScale(mermaidViewerState.scale - MERMAID_VIEWER_ZOOM_STEP);
+        return;
+    }
+    if (event.key === "0") {
+        event.preventDefault();
+        setMermaidViewerScale(1);
+    }
+}
+
+function handleMermaidViewerWheel(event) {
+    if (!event.ctrlKey && !event.metaKey) return;
+    event.preventDefault();
+    const direction = event.deltaY < 0 ? 1 : -1;
+    setMermaidViewerScale(mermaidViewerState.scale + (direction * MERMAID_VIEWER_ZOOM_STEP));
+}
+
+function handleMermaidViewerPointerDown(event) {
+    if (event.button !== 0 || mermaidViewerState.scale <= 1) return;
+    const stage = mermaidViewerState.stage;
+    if (!stage) return;
+    mermaidViewerState.drag = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        scrollLeft: stage.scrollLeft,
+        scrollTop: stage.scrollTop,
+    };
+    stage.classList.add("mermaid-viewer__stage--dragging");
+    stage.setPointerCapture?.(event.pointerId);
+}
+
+function handleMermaidViewerPointerMove(event) {
+    const drag = mermaidViewerState.drag;
+    const stage = mermaidViewerState.stage;
+    if (!drag || !stage || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    stage.scrollLeft = drag.scrollLeft - (event.clientX - drag.startX);
+    stage.scrollTop = drag.scrollTop - (event.clientY - drag.startY);
+}
+
+function handleMermaidViewerPointerEnd(event) {
+    const drag = mermaidViewerState.drag;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    mermaidViewerState.drag = null;
+    mermaidViewerState.stage?.classList.remove("mermaid-viewer__stage--dragging");
+}
+
+function setMermaidViewerScale(nextScale) {
+    const scale = Math.max(MERMAID_VIEWER_MIN_SCALE, Math.min(MERMAID_VIEWER_MAX_SCALE, Number(nextScale) || 1));
+    mermaidViewerState.scale = Math.round(scale * 100) / 100;
+    const percentage = Math.round(mermaidViewerState.scale * 100);
+    if (mermaidViewerState.canvas) mermaidViewerState.canvas.style.width = `${percentage}%`;
+    if (mermaidViewerState.zoomLabel) mermaidViewerState.zoomLabel.textContent = `${percentage}%`;
+    mermaidViewerState.root?.style.setProperty("--mermaid-viewer-scale", String(mermaidViewerState.scale));
+}
+
+function hydrateMessageContent(root) {
+    renderMermaidBlocks(root);
+}
+
+function renderMermaidBlocks(root = document) {
+    if (!root || !root.querySelectorAll) return;
+    const diagrams = [
+        ...(root.matches?.(".message-mermaid[data-mermaid-status='pending']") ? [root] : []),
+        ...root.querySelectorAll(".message-mermaid[data-mermaid-status='pending']"),
+    ];
+    diagrams.forEach((diagram) => {
+        diagram.dataset.mermaidStatus = "loading";
+        renderMermaidDiagram(diagram);
+    });
+}
+
+async function renderMermaidDiagram(diagram) {
+    const fallback = diagram.querySelector(".message-mermaid__fallback code");
+    const canvas = diagram.querySelector(".message-mermaid__canvas");
+    const sources = mermaidRenderSourceCandidates(fallback?.textContent || "")
+        .filter((source) => source.length <= MERMAID_MAX_SOURCE_LENGTH);
+    if (!sources.length || !canvas) {
+        diagram.dataset.mermaidStatus = "error";
+        return;
+    }
+
+    let lastError = null;
+    try {
+        const mermaid = await loadMermaid();
+        if (!diagram.isConnected) return;
+        configureMermaid(mermaid);
+        for (const [index, source] of sources.entries()) {
+            try {
+                const renderId = `message-mermaid-svg-${++mermaidRenderSeq}`;
+                const result = await mermaid.render(renderId, source);
+                if (!diagram.isConnected) return;
+                canvas.innerHTML = result.svg || "";
+                result.bindFunctions?.(canvas);
+                diagram.dataset.mermaidStatus = "rendered";
+                prepareMermaidDiagramInteraction(diagram);
+                if (index > 0) diagram.dataset.mermaidRepaired = "true";
+                else diagram.removeAttribute("data-mermaid-repaired");
+                diagram.removeAttribute("data-mermaid-error");
+                scrollChatToBottom();
+                return;
+            } catch (error) {
+                lastError = error;
+            }
+        }
+    } catch (error) {
+        lastError = error;
+    }
+    console.warn("Mermaid render failed:", lastError);
+    if (!diagram.isConnected) return;
+    canvas.replaceChildren();
+    diagram.dataset.mermaidStatus = "error";
+    diagram.dataset.mermaidError = String(lastError?.message || lastError || "render_failed").slice(0, 160);
+}
+
+function loadMermaid() {
+    const existingMermaid = window.mermaid;
+    if (existingMermaid && typeof existingMermaid.render === "function") {
+        configureMermaid(existingMermaid);
+        return Promise.resolve(existingMermaid);
+    }
+    if (!mermaidLoadPromise) {
+        mermaidLoadPromise = import(MERMAID_MODULE_URL)
+            .then((module) => {
+                const mermaid = module.default || module.mermaid || module;
+                configureMermaid(mermaid);
+                return mermaid;
+            })
+            .catch((error) => {
+                mermaidLoadPromise = null;
+                throw error;
+            });
+    }
+    return mermaidLoadPromise;
+}
+
+function configureMermaid(mermaid) {
+    if (!mermaid || typeof mermaid.initialize !== "function" || typeof mermaid.render !== "function") {
+        throw new Error("Mermaid runtime unavailable");
+    }
+    const themeMode = normalizeThemeMode(state.themeMode);
+    if (mermaidConfiguredRuntime === mermaid && mermaidThemeMode === themeMode) return;
+    mermaid.initialize({
+        startOnLoad: false,
+        securityLevel: "strict",
+        theme: "base",
+        darkMode: themeMode === "dark",
+        maxTextSize: MERMAID_MAX_SOURCE_LENGTH,
+        fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif",
+        flowchart: { htmlLabels: false, curve: "basis" },
+        sequence: { useMaxWidth: true },
+        themeVariables: mermaidThemeVariables(themeMode),
+    });
+    mermaidConfiguredRuntime = mermaid;
+    mermaidThemeMode = themeMode;
+}
+
+function mermaidThemeVariables(themeMode) {
+    if (normalizeThemeMode(themeMode) === "dark") {
+        return {
+            background: "#0f1726",
+            mainBkg: "#172235",
+            primaryColor: "#172235",
+            primaryTextColor: "#edf4ff",
+            primaryBorderColor: "#8bb7ff",
+            secondaryColor: "#0e7490",
+            tertiaryColor: "#0b1320",
+            lineColor: "#97a8be",
+            textColor: "#edf4ff",
+            nodeBorder: "#8bb7ff",
+            clusterBkg: "#0b1320",
+            clusterBorder: "rgba(148,163,184,0.42)",
+            edgeLabelBackground: "#0f1726",
+            actorBkg: "#172235",
+            actorBorder: "#8bb7ff",
+            actorTextColor: "#edf4ff",
+            signalColor: "#c6d3e4",
+            signalTextColor: "#c6d3e4",
+            noteBkgColor: "#1f2937",
+            noteTextColor: "#edf4ff",
+            noteBorderColor: "#fde68a",
+        };
+    }
+    return {
+        background: "#ffffff",
+        mainBkg: "#ffffff",
+        primaryColor: "#eef2ff",
+        primaryTextColor: "#1e293b",
+        primaryBorderColor: "#a5b4fc",
+        secondaryColor: "#ecfeff",
+        tertiaryColor: "#f8fafc",
+        lineColor: "#64748b",
+        textColor: "#1e293b",
+        nodeBorder: "#a5b4fc",
+        clusterBkg: "#f8fafc",
+        clusterBorder: "#cbd5e1",
+        edgeLabelBackground: "#ffffff",
+        actorBkg: "#eef2ff",
+        actorBorder: "#a5b4fc",
+        actorTextColor: "#1e293b",
+        signalColor: "#334155",
+        signalTextColor: "#334155",
+        noteBkgColor: "#fffbeb",
+        noteTextColor: "#1e293b",
+        noteBorderColor: "#fde68a",
+    };
+}
+
+function refreshMermaidDiagramsForTheme() {
+    const diagrams = $$(".message-mermaid[data-mermaid-status='rendered']");
+    if (!diagrams.length) return;
+    diagrams.forEach((diagram) => {
+        diagram.querySelector(".message-mermaid__canvas")?.replaceChildren();
+        diagram.dataset.mermaidStatus = "pending";
+        diagram.removeAttribute("data-mermaid-error");
+    });
+    renderMermaidBlocks(document);
+}
+
+function renderMarkdownInline(raw) {
+    const tokens = [];
+    const store = (html) => {
+        const token = `@@MDTOKEN${tokens.length}@@`;
+        tokens.push(html);
+        return token;
+    };
+    let text = String(raw == null ? "" : raw);
+    text = text.replace(/`([^`\n]+)`/g, (_, code) => store(`<code>${escapeHtml(code)}</code>`));
+    text = text.replace(/\[([^\]\n]+)\]\(([^\s)]+)\)/g, (match, label, href) => {
+        const safeHref = safeMarkdownHref(href);
+        if (!safeHref) return match;
+        return store(`<a href="${escapeHtml(safeHref)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`);
+    });
+
     let html = escapeHtml(text);
-    html = html.replace(/\n/g, "<br>");
-    html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-    html = html.replace(/`(.+?)`/g, '<code style="background:rgba(0,0,0,0.04);padding:1px 5px;border-radius:4px;font-size:12px;font-family:ui-monospace,Menlo,monospace">$1</code>');
+    html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    html = html.replace(/__([^_]+)__/g, "<strong>$1</strong>");
+    html = html.replace(/(^|\s)\*([^*\n]+)\*/g, "$1<em>$2</em>");
+    html = html.replace(/(^|\s)_([^_\n]+)_/g, "$1<em>$2</em>");
+    tokens.forEach((tokenHtml, index) => {
+        html = html.replaceAll(`@@MDTOKEN${index}@@`, tokenHtml);
+    });
     return html;
+}
+
+function safeMarkdownHref(href) {
+    const raw = String(href || "").trim();
+    try {
+        const url = new URL(raw, location.origin);
+        return ["http:", "https:", "mailto:"].includes(url.protocol) ? url.href : "";
+    } catch {
+        return "";
+    }
 }
 
 function formatTime() {
@@ -2415,6 +4290,75 @@ const SETTINGS_KID_CAPABILITIES = [
     { key: "can_redeem_rewards_without_approval", label: "Redeem rewards directly",      defaultValue: false },
 ];
 
+const SETTINGS_POLICY_PRESETS = [
+    {
+        key: "balanced",
+        label: "Balanced",
+        detail: "Family sources stay open; work, personal, and adult terms stay guarded.",
+        rules: {
+            native_default: "family",
+            classroom: "family",
+            google_work: "adults",
+            outlook_default: "adults",
+            google_personal: "private",
+        },
+        kid_capabilities: {
+            can_create_events: true,
+            can_create_reminders: true,
+            can_add_shopping_requests: true,
+            can_mark_chores_complete: true,
+            can_see_parent_personal_calendar: false,
+            can_override_visibility: false,
+            can_redeem_rewards_without_approval: false,
+        },
+        sensitive_keywords: ["doctor", "therapy", "salary", "insurance"],
+    },
+    {
+        key: "school_week",
+        label: "School week",
+        detail: "School stays visible while parent calendars and reward changes tighten.",
+        rules: {
+            native_default: "family",
+            classroom: "family",
+            google_work: "adults",
+            outlook_default: "adults",
+            google_personal: "private",
+        },
+        kid_capabilities: {
+            can_create_events: false,
+            can_create_reminders: true,
+            can_add_shopping_requests: true,
+            can_mark_chores_complete: true,
+            can_see_parent_personal_calendar: false,
+            can_override_visibility: false,
+            can_redeem_rewards_without_approval: false,
+        },
+        sensitive_keywords: ["doctor", "therapy", "salary", "insurance", "tuition"],
+    },
+    {
+        key: "privacy_tight",
+        label: "Privacy tight",
+        detail: "Imported calendars go parent-first; kid override paths close down.",
+        rules: {
+            native_default: "family",
+            classroom: "adults",
+            google_work: "private",
+            outlook_default: "private",
+            google_personal: "private",
+        },
+        kid_capabilities: {
+            can_create_events: false,
+            can_create_reminders: false,
+            can_add_shopping_requests: true,
+            can_mark_chores_complete: true,
+            can_see_parent_personal_calendar: false,
+            can_override_visibility: false,
+            can_redeem_rewards_without_approval: false,
+        },
+        sensitive_keywords: ["doctor", "therapy", "salary", "insurance", "prescription", "diagnosis"],
+    },
+];
+
 const calState = {
     viewMode: "focus",
     year: new Date().getFullYear(),
@@ -2427,7 +4371,14 @@ const calState = {
     manifest: null,
     loadedStart: "",
     loadedEnd: "",
+    suppressNextEventClick: false,
 };
+
+let calendarGridDrag = null;
+let taskBoardDrag = null;
+let shoppingDirectDrag = null;
+let reminderBoardDrag = null;
+let choreDirectDrag = null;
 
 const CALENDAR_VIEW_MODES = ["focus", "month", "week", "day"];
 const CALENDAR_VIEW_LABELS = { focus: "Today & next", month: "Month", week: "Week", day: "Day" };
@@ -2797,7 +4748,7 @@ function _calRenderFocus(surface) {
     surface.innerHTML = `
         <div class="cal-focus-surface">
             <div class="cal-focus-stage">
-                <section class="cal-focus-hero${nextEvent ? "" : " cal-focus-hero--empty"}" style="--ev-color:${nextColor}">
+                <section class="cal-focus-hero${nextEvent ? "" : " cal-focus-hero--empty"}" data-gravity="${nextEvent ? "primary" : "quiet"}" style="--ev-color:${nextColor}">
                     <div class="cal-focus-hero-top">
                         <p class="cal-side-kicker">Up next</p>
                         <div class="cal-focus-date-token" aria-hidden="true">
@@ -2820,7 +4771,7 @@ function _calRenderFocus(surface) {
                         ${_hasAction(manifest, "create_event") ? `<button class="view-small-btn" type="button" id="cal-add-focus">Add event</button>` : ""}
                     </div>
                 </section>
-                <section class="cal-focus-panel cal-focus-panel--decisions cal-focus-panel--feature">
+                <section class="cal-focus-panel cal-focus-panel--decisions cal-focus-panel--feature" data-gravity="${metrics.conflicts.length ? "secondary" : "quiet"}">
                     <header class="cal-focus-panel-head">
                         <div>
                             <p class="cal-side-kicker">Needs a decision</p>
@@ -3130,6 +5081,7 @@ function _calRenderWeek(surface) {
         </div>`;
     _calWireDateButtons(surface);
     _calWireEventClicks(surface);
+    _calWireGridDirectManipulation(surface);
 }
 
 function _calRenderDay(surface) {
@@ -3162,6 +5114,7 @@ function _calRenderDay(surface) {
         addButton.addEventListener("click", () => _openAdapterAction("calendar", calState.manifest || { actions: [] }, "create_event", _defaultEventTimes(calState.selectedDate)));
     }
     _calWireEventClicks(surface);
+    _calWireGridDirectManipulation(surface);
 }
 
 async function _calNavigate(direction) {
@@ -3445,8 +5398,9 @@ function _calTimedEventBlock(event, density, dateIso, layout = null) {
     const leftPct = (laneIndex / laneCount) * 100;
     const widthPct = 100 / laneCount;
     const widthInset = laneCount === 1 ? 8 : 6;
+    const canMove = _hasAction(calState.manifest || { actions: [] }, "update_event") && _calEventId(event) && !event.all_day && !_calIsAllDay(event);
     return `
-        <button class="cal-time-event cal-time-event--${density}${compactClass}${laneClass}${denseClass}" type="button" data-cal-event-key="${escapeHtml(_calEventKey(event))}" data-cal-event-date="${escapeHtml(dateIso)}" style="--event-color:${color};--event-top:${placement.top}px;--event-height:${placement.height}px;--event-left:calc(${leftPct}% + 4px);--event-width:calc(${widthPct}% - ${widthInset}px)" title="${escapeHtml(event.title || "Untitled")}">
+        <button class="cal-time-event cal-time-event--${density}${compactClass}${laneClass}${denseClass}${canMove ? " cal-time-event--movable" : ""}" type="button" data-cal-event-key="${escapeHtml(_calEventKey(event))}" data-cal-event-date="${escapeHtml(dateIso)}"${canMove ? ` data-cal-event-id="${escapeHtml(_calEventId(event))}"` : ""} style="--event-color:${color};--event-top:${placement.top}px;--event-height:${placement.height}px;--event-left:calc(${leftPct}% + 4px);--event-width:calc(${widthPct}% - ${widthInset}px)" title="${escapeHtml(event.title || "Untitled")}" aria-label="${escapeHtml(`${event.title || "Untitled"}. ${canMove ? "Drag to reschedule, or press Enter for details." : "Press Enter for details."}`)}">
             <span class="cal-time-event-title">${escapeHtml(event.title || "Untitled")}</span>
             <span class="cal-time-event-meta">${escapeHtml(_fmtEventTimeShort(event.start, event.end, event.all_day))}</span>
             ${event.location ? `<span class="cal-time-event-meta">${escapeHtml(event.location)}</span>` : ""}
@@ -3579,6 +5533,12 @@ function _calWireDateButtons(container) {
 function _calWireEventClicks(container) {
     container.querySelectorAll("[data-cal-event-key]").forEach((eventNode) => {
         eventNode.addEventListener("click", (clickEvent) => {
+            if (calState.suppressNextEventClick) {
+                calState.suppressNextEventClick = false;
+                clickEvent.preventDefault();
+                clickEvent.stopPropagation();
+                return;
+            }
             if (clickEvent.target.closest("[data-cal-action], [data-cal-detail-action]")) return;
             clickEvent.stopPropagation();
             _calOpenEvent(eventNode.dataset.calEventKey, eventNode.dataset.calEventDate || "");
@@ -3590,6 +5550,237 @@ function _calWireEventClicks(container) {
             }
         });
     });
+}
+
+function _calWireGridDirectManipulation(container) {
+    if (!_hasAction(calState.manifest || { actions: [] }, "update_event")) return;
+    container.querySelectorAll(".cal-time-event--movable[data-cal-event-key]").forEach((eventNode) => {
+        eventNode.addEventListener("pointerdown", (pointerEvent) => {
+            if (pointerEvent.button !== 0 || pointerEvent.altKey || pointerEvent.ctrlKey || pointerEvent.metaKey) return;
+            const eventKey = eventNode.dataset.calEventKey;
+            const event = _calFindEvent(eventKey);
+            const eventId = event ? _calEventId(event) : "";
+            if (!event || !eventId || event.all_day || _calIsAllDay(event)) return;
+            const column = eventNode.closest(".cal-timed-column[data-cal-date]");
+            if (!column) return;
+            const columnRect = column.getBoundingClientRect();
+            const eventRect = eventNode.getBoundingClientRect();
+            const grabOffsetPx = Math.max(0, pointerEvent.clientY - eventRect.top);
+
+            pointerEvent.preventDefault();
+            pointerEvent.stopPropagation();
+            calendarGridDrag = {
+                pointerId: pointerEvent.pointerId,
+                node: eventNode,
+                eventKey,
+                eventId,
+                originalEvent: { ...event, metadata: event.metadata && typeof event.metadata === "object" ? { ...event.metadata } : {} },
+                originalEvents: calState.events,
+                startX: pointerEvent.clientX,
+                startY: pointerEvent.clientY,
+                grabOffsetPx: Math.min(grabOffsetPx, Math.max(0, columnRect.height)),
+                moved: false,
+                projection: null,
+                preview: null,
+            };
+            eventNode.classList.add("cal-time-event--drag-source");
+            if (eventNode.setPointerCapture) eventNode.setPointerCapture(pointerEvent.pointerId);
+        });
+        eventNode.addEventListener("pointermove", _calHandleGridDragMove);
+        eventNode.addEventListener("pointerup", _calHandleGridDragEnd);
+        eventNode.addEventListener("pointercancel", _calHandleGridDragCancel);
+    });
+}
+
+function _calHandleGridDragMove(pointerEvent) {
+    const drag = calendarGridDrag;
+    if (!drag || drag.pointerId !== pointerEvent.pointerId) return;
+    const distance = Math.hypot(pointerEvent.clientX - drag.startX, pointerEvent.clientY - drag.startY);
+    if (distance < 5 && !drag.moved) return;
+    drag.moved = true;
+    pointerEvent.preventDefault();
+    pointerEvent.stopPropagation();
+    document.body.classList.add("calendar-grid-dragging");
+    const projection = _calProjectGridDrop(pointerEvent, drag);
+    drag.projection = projection;
+    _calUpdateGridDragPreview(drag, projection);
+}
+
+function _calHandleGridDragEnd(pointerEvent) {
+    const drag = calendarGridDrag;
+    if (!drag || drag.pointerId !== pointerEvent.pointerId) return;
+    pointerEvent.preventDefault();
+    pointerEvent.stopPropagation();
+    const projection = drag.projection || _calProjectGridDrop(pointerEvent, drag);
+    const moved = drag.moved && projection;
+    _calClearGridDrag(drag);
+    calState.suppressNextEventClick = true;
+    window.setTimeout(() => { calState.suppressNextEventClick = false; }, 0);
+    calendarGridDrag = null;
+    if (!moved) {
+        _calOpenEvent(drag.eventKey, drag.node?.dataset?.calEventDate || "");
+        return;
+    }
+    _calCommitGridDrag(drag, projection);
+}
+
+function _calHandleGridDragCancel(pointerEvent) {
+    const drag = calendarGridDrag;
+    if (!drag || drag.pointerId !== pointerEvent.pointerId) return;
+    _calClearGridDrag(drag);
+    calendarGridDrag = null;
+}
+
+function _calClearGridDrag(drag) {
+    if (drag?.node) drag.node.classList.remove("cal-time-event--drag-source");
+    if (drag?.preview) drag.preview.remove();
+    document.querySelectorAll(".cal-timed-column--drop-target").forEach((column) => column.classList.remove("cal-timed-column--drop-target"));
+    document.body.classList.remove("calendar-grid-dragging");
+}
+
+function _calProjectGridDrop(pointerEvent, drag) {
+    const target = document.elementFromPoint(pointerEvent.clientX, pointerEvent.clientY);
+    const column = target?.closest?.(".cal-timed-column[data-cal-date]");
+    if (!column) return null;
+    const dateIso = column.dataset.calDate;
+    const rect = column.getBoundingClientRect();
+    const minMinutes = CALENDAR_DAY_START_HOUR * 60;
+    const maxMinutes = CALENDAR_DAY_END_HOUR * 60;
+    const durationMinutes = _calEventDurationMinutes(drag.originalEvent);
+    const gridMinutes = maxMinutes - minMinutes;
+    const previewMinutes = Math.min(durationMinutes, gridMinutes);
+    const y = Math.max(0, Math.min(rect.height, pointerEvent.clientY - rect.top - (drag.grabOffsetPx || 0)));
+    const rawMinutes = minMinutes + (y / Math.max(1, rect.height)) * gridMinutes;
+    const snapped = Math.round(rawMinutes / 15) * 15;
+    const latestStart = Math.max(minMinutes, maxMinutes - previewMinutes);
+    const startMinutes = Math.max(minMinutes, Math.min(latestStart, snapped));
+    const endMinutes = startMinutes + durationMinutes;
+    const endDateOffset = Math.floor(endMinutes / (24 * 60));
+    const endDateIso = endDateOffset ? _calAddDays(dateIso, endDateOffset) : dateIso;
+    const start = _zonedDateTimeToIso(dateIso, _calMinutesToClock(startMinutes));
+    const end = _zonedDateTimeToIso(endDateIso, _calMinutesToClock(endMinutes % (24 * 60)));
+    const top = ((startMinutes - minMinutes) / 60) * CALENDAR_HOUR_HEIGHT;
+    const height = Math.max(32, (previewMinutes / 60) * CALENDAR_HOUR_HEIGHT);
+    return {
+        column,
+        dateIso,
+        start,
+        end,
+        startMinutes,
+        endMinutes,
+        top,
+        height,
+        label: `${_calMinutesToDisplayLabel(startMinutes)} - ${_calMinutesToDisplayLabel(endMinutes)}`,
+    };
+}
+
+function _calUpdateGridDragPreview(drag, projection) {
+    document.querySelectorAll(".cal-timed-column--drop-target").forEach((column) => column.classList.remove("cal-timed-column--drop-target"));
+    if (!projection) {
+        if (drag.preview) drag.preview.remove();
+        drag.preview = null;
+        return;
+    }
+    projection.column.classList.add("cal-timed-column--drop-target");
+    if (!drag.preview) {
+        drag.preview = document.createElement("div");
+        drag.preview.className = "cal-drag-preview";
+    }
+    drag.preview.style.setProperty("--event-top", `${projection.top}px`);
+    drag.preview.style.setProperty("--event-height", `${projection.height}px`);
+    drag.preview.textContent = projection.label;
+    if (drag.preview.parentElement !== projection.column) {
+        projection.column.appendChild(drag.preview);
+    }
+}
+
+function _calEventDurationMinutes(event) {
+    const startMs = _calEventStartMs(event);
+    const endMs = _calEventEndMs(event);
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) return 60;
+    return Math.max(15, Math.round((endMs - startMs) / 60000));
+}
+
+function _calMinutesToClock(minutes) {
+    const normalized = ((Math.round(minutes) % (24 * 60)) + (24 * 60)) % (24 * 60);
+    const hour = Math.floor(normalized / 60);
+    const minute = normalized % 60;
+    return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00`;
+}
+
+function _calMinutesToDisplayLabel(minutes) {
+    const normalized = ((Math.round(minutes) % (24 * 60)) + (24 * 60)) % (24 * 60);
+    const hour = Math.floor(normalized / 60);
+    const minute = normalized % 60;
+    return new Date(2026, 0, 1, hour, minute, 0).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+}
+
+function _calSameMinute(firstValue, secondValue) {
+    const first = new Date(firstValue || "").getTime();
+    const second = new Date(secondValue || "").getTime();
+    return Number.isFinite(first) && Number.isFinite(second) && Math.abs(first - second) < 60000;
+}
+
+async function _calCommitGridDrag(drag, projection) {
+    const event = drag.originalEvent;
+    if (_calSameMinute(event.start, projection.start) && _calSameMinute(event.end, projection.end)) return;
+    const previousEvents = drag.originalEvents;
+    const movedAt = new Date().toISOString();
+    const nextMetadata = {
+        ...(event.metadata && typeof event.metadata === "object" ? event.metadata : {}),
+        _last_ui_interaction: {
+            source: "calendar_grid",
+            kind: "drag_reschedule",
+            at: movedAt,
+            previous_start: event.start || "",
+            previous_end: event.end || "",
+        },
+    };
+    const optimisticEvent = {
+        ...event,
+        start: projection.start,
+        end: projection.end,
+        metadata: nextMetadata,
+    };
+    _calReplaceEvent(drag.eventKey, optimisticEvent);
+    _calSetSelectedDate(projection.dateIso);
+    _calRenderAll();
+
+    const params = {
+        event_id: drag.eventId,
+        start: projection.start,
+        end: projection.end,
+        interaction_source: "calendar_grid",
+        interaction_kind: "drag_reschedule",
+        metadata: {
+            _last_ui_interaction: nextMetadata._last_ui_interaction,
+        },
+    };
+    if (event.version !== undefined && event.version !== null) params.expected_version = event.version;
+
+    try {
+        const result = await _callAdapterWrite("calendar", "update_event", params);
+        const serverEvent = result.event || { ...optimisticEvent, version: result.version || optimisticEvent.version };
+        _calReplaceEvent(drag.eventKey, serverEvent);
+        showToast("Event moved", `${event.title || "Event"} now starts ${_calMinutesToDisplayLabel(projection.startMinutes)}.`);
+        _calRenderAll();
+    } catch (error) {
+        calState.events = previousEvents;
+        adapterCache.listData.calendar = {
+            ...(adapterCache.listData.calendar || {}),
+            events: calState.events,
+        };
+        _calRenderAll();
+        showToast("Move failed", error.message || "Calendar could not save the new time.", 7000);
+    }
+}
+
+function _calReplaceEvent(eventKey, nextEvent) {
+    calState.events = calState.events.map((event) => _calEventKey(event) === eventKey ? nextEvent : event);
+    adapterCache.listData.calendar = {
+        ...(adapterCache.listData.calendar || {}),
+        events: calState.events,
+    };
 }
 
 function _calOpenEvent(eventKey, dateIso = "") {
@@ -3989,7 +6180,7 @@ function _renderTasksView(viewId, manifest, writeActions, listData) {
             <div class="task-workbench app-workspace${selectedTask ? "" : " app-workspace--single task-workbench--single"}">
                 <section class="task-main app-focus-card">
                     <div class="task-focus-stage">
-                        <section class="task-next-hero${nextTask ? "" : " task-next-hero--empty"}" style="--task-accent:${nextTask ? _taskAccent(nextTask, lists) : "var(--brand-blue)"}">
+                        <section class="task-next-hero${nextTask ? "" : " task-next-hero--empty"}" data-gravity="${nextTask ? "primary" : "quiet"}" style="--task-accent:${nextTask ? _taskAccent(nextTask, lists) : "var(--brand-blue)"}">
                             <div>
                                 <p class="task-side-kicker">Next best move</p>
                                 <h3>${escapeHtml(nextTask?.title || "Nothing urgent right now")}</h3>
@@ -4005,7 +6196,7 @@ function _renderTasksView(viewId, manifest, writeActions, listData) {
                                 ${actions.has("create_task") ? `<button class="view-small-btn" type="button" data-app-action="tasks:create_task">Add task</button>` : ""}
                             </div>
                         </section>
-                        <section class="task-now-panel">
+                        <section class="task-now-panel" data-gravity="${nowTasks.length ? "secondary" : "quiet"}">
                             <header>
                                 <p class="task-side-kicker">Today, overdue, decisions</p>
                                 <h3>${nowTasks.length ? `${nowTasks.length} to consider` : "All clear"}</h3>
@@ -4139,7 +6330,7 @@ function _renderTasksView(viewId, manifest, writeActions, listData) {
             const taskId = btn.dataset.taskId;
             const actionName = btn.dataset.taskAction;
             if (!taskId || !actionName || btn.disabled) return;
-            await _submitAdapterAction("tasks", actionName, { task_id: taskId });
+            await _submitAdapterAction("tasks", actionName, { task_id: taskId, interaction_source: "task_row", interaction_kind: actionName });
         });
     });
     body.querySelectorAll("[data-task-detail-action]").forEach((btn) => {
@@ -4153,7 +6344,7 @@ function _renderTasksView(viewId, manifest, writeActions, listData) {
             } else if (actionName === "reassign_task") {
                 _openAdapterAction("tasks", manifest, "reassign_task", { task_id: taskId, new_assignee: task.assigned_to || currentMember });
             } else if (actionName === "complete_task" || actionName === "reopen_task" || actionName === "delete_task") {
-                await _submitAdapterAction("tasks", actionName, { task_id: taskId });
+                await _submitAdapterAction("tasks", actionName, { task_id: taskId, interaction_source: "task_detail", interaction_kind: actionName });
             }
         });
     });
@@ -4162,7 +6353,7 @@ function _renderTasksView(viewId, manifest, writeActions, listData) {
             const taskId = btn.dataset.taskId;
             const newAssignee = btn.dataset.taskAssignee;
             if (!taskId || !newAssignee || btn.disabled) return;
-            await _submitAdapterAction("tasks", "reassign_task", { task_id: taskId, new_assignee: newAssignee });
+            await _submitAdapterAction("tasks", "reassign_task", { task_id: taskId, new_assignee: newAssignee, interaction_source: "task_assignee_strip", interaction_kind: "tap_reassign" });
         });
     });
     body.querySelectorAll("[data-task-close-detail]").forEach((btn) => {
@@ -4173,6 +6364,12 @@ function _renderTasksView(viewId, manifest, writeActions, listData) {
     });
     body.querySelectorAll("[data-task-key]").forEach((node) => {
         node.addEventListener("click", (event) => {
+            if (state.suppressNextTaskClick) {
+                state.suppressNextTaskClick = false;
+                event.preventDefault();
+                event.stopPropagation();
+                return;
+            }
             if (event.target.closest("[data-task-action], [data-task-detail-action], [data-task-reassign]")) return;
             state.tasksSelectedTaskKey = node.dataset.taskKey;
             _renderAdapterBody(viewId, "tasks", manifest, writeActions, listData);
@@ -4185,6 +6382,7 @@ function _renderTasksView(viewId, manifest, writeActions, listData) {
             _renderAdapterBody(viewId, "tasks", manifest, writeActions, listData);
         });
     });
+    _wireTaskBoardDirectManipulation(body, viewId, manifest, writeActions);
 }
 
 function _renderTaskSurface(tasks, scopedItems, lists, manifest, currentMember) {
@@ -4221,7 +6419,7 @@ function _renderTaskBoard(tasks, lists, manifest) {
             ${columns.map((column) => {
                 const columnTasks = tasks.filter((task) => (task.status || "open") === column.key);
                 return `
-                    <section class="task-board-column task-board-column--${column.key}">
+                    <section class="task-board-column task-board-column--${column.key}" data-task-status="${column.key}">
                         <header><h4>${escapeHtml(column.label)}</h4><span>${columnTasks.length}</span></header>
                         <div class="task-board-stack">
                             ${columnTasks.length ? columnTasks.map((task) => _renderTaskRow(task, lists, manifest, { compact: true })).join("") : `<p class="task-column-empty">Empty</p>`}
@@ -4263,12 +6461,13 @@ function _renderTaskRow(task, lists, manifest, options = {}) {
     const selected = state.tasksSelectedTaskKey === taskKey;
     const canComplete = _hasAction(manifest, "complete_task") && taskId && !done && !cancelled;
     const canReopen = _hasAction(manifest, "reopen_task") && taskId && (done || cancelled);
+    const canUpdate = _hasAction(manifest, "update_task") && taskId;
     const canDelete = _hasAction(manifest, "delete_task") && taskId;
     const accent = _taskAccent(task, lists);
     const dueClass = _taskDueClass(task);
     const assignee = task.assigned_to ? _actorDisplay(task.assigned_to) : null;
     return `
-        <div class="task-row task-row--${escapeHtml(dueClass)}${done ? " task-row--done" : ""}${cancelled ? " task-row--cancelled" : ""}${selected ? " task-row--selected" : ""}${options.compact ? " task-row--compact" : ""}" role="button" tabindex="0" data-task-key="${escapeHtml(taskKey)}" style="--task-accent:${accent}">
+        <div class="task-row task-row--${escapeHtml(dueClass)}${done ? " task-row--done" : ""}${cancelled ? " task-row--cancelled" : ""}${selected ? " task-row--selected" : ""}${options.compact ? " task-row--compact" : ""}${canUpdate ? " task-row--movable" : ""}" role="button" tabindex="0" data-task-key="${escapeHtml(taskKey)}"${taskId ? ` data-task-id="${escapeHtml(taskId)}"` : ""} style="--task-accent:${accent}" aria-label="${escapeHtml(`${task.title || "Untitled task"}. ${canUpdate ? "Drag on the board to change status, or press Enter for details." : "Press Enter for details."}`)}">
             <button class="task-checkbox${done ? " task-checkbox--checked" : ""}" data-task-action="${done || cancelled ? "reopen_task" : "complete_task"}" data-task-id="${escapeHtml(taskId)}" ${canComplete || canReopen ? "" : "disabled"} aria-label="${done || cancelled ? "Reopen" : "Complete"} ${escapeHtml(task.title || "task")}">
                 ${done ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>` : ""}
             </button>
@@ -4289,6 +6488,177 @@ function _renderTaskRow(task, lists, manifest, options = {}) {
                 ${canDelete ? `<button class="view-action-btn view-action-btn--danger" data-task-action="delete_task" data-task-id="${escapeHtml(taskId)}">Remove</button>` : ""}
             </div>
         </div>`;
+}
+
+function _wireTaskBoardDirectManipulation(body, viewId, manifest, writeActions) {
+    if (state.tasksViewMode !== "board" || !_hasAction(manifest, "update_task")) return;
+    body.querySelectorAll(".task-board .task-row--movable[data-task-key][data-task-id]").forEach((row) => {
+        row.addEventListener("pointerdown", (pointerEvent) => {
+            if (pointerEvent.button !== 0 || pointerEvent.altKey || pointerEvent.ctrlKey || pointerEvent.metaKey) return;
+            if (pointerEvent.target.closest("button, input, textarea, select, [data-task-action], [data-task-detail-action], [data-task-reassign]")) return;
+            const task = _taskFindCached(row.dataset.taskKey);
+            if (!task) return;
+            pointerEvent.preventDefault();
+            pointerEvent.stopPropagation();
+            taskBoardDrag = {
+                pointerId: pointerEvent.pointerId,
+                node: row,
+                taskKey: row.dataset.taskKey,
+                taskId: row.dataset.taskId,
+                originalTask: { ...task, metadata: task.metadata && typeof task.metadata === "object" ? { ...task.metadata } : {} },
+                originalTasks: _tasksCachedItems(),
+                viewId,
+                manifest,
+                writeActions,
+                startX: pointerEvent.clientX,
+                startY: pointerEvent.clientY,
+                moved: false,
+                projection: null,
+                preview: null,
+            };
+            row.classList.add("task-row--drag-source");
+            if (row.setPointerCapture) row.setPointerCapture(pointerEvent.pointerId);
+        });
+        row.addEventListener("pointermove", _taskHandleBoardDragMove);
+        row.addEventListener("pointerup", _taskHandleBoardDragEnd);
+        row.addEventListener("pointercancel", _taskHandleBoardDragCancel);
+    });
+}
+
+function _taskHandleBoardDragMove(pointerEvent) {
+    const drag = taskBoardDrag;
+    if (!drag || drag.pointerId !== pointerEvent.pointerId) return;
+    const distance = Math.hypot(pointerEvent.clientX - drag.startX, pointerEvent.clientY - drag.startY);
+    if (distance < 5 && !drag.moved) return;
+    drag.moved = true;
+    pointerEvent.preventDefault();
+    pointerEvent.stopPropagation();
+    document.body.classList.add("task-board-dragging");
+    const projection = _taskProjectBoardDrop(pointerEvent);
+    drag.projection = projection;
+    _taskUpdateBoardDragPreview(drag, projection);
+}
+
+function _taskHandleBoardDragEnd(pointerEvent) {
+    const drag = taskBoardDrag;
+    if (!drag || drag.pointerId !== pointerEvent.pointerId) return;
+    pointerEvent.preventDefault();
+    pointerEvent.stopPropagation();
+    const projection = drag.projection || _taskProjectBoardDrop(pointerEvent);
+    const moved = drag.moved && projection;
+    _taskClearBoardDrag(drag);
+    state.suppressNextTaskClick = true;
+    window.setTimeout(() => { state.suppressNextTaskClick = false; }, 0);
+    taskBoardDrag = null;
+    if (!moved) {
+        state.tasksSelectedTaskKey = drag.taskKey;
+        _renderAdapterBody(drag.viewId, "tasks", drag.manifest, drag.writeActions, adapterCache.listData.tasks || {});
+        return;
+    }
+    _taskCommitBoardDrag(drag, projection);
+}
+
+function _taskHandleBoardDragCancel(pointerEvent) {
+    const drag = taskBoardDrag;
+    if (!drag || drag.pointerId !== pointerEvent.pointerId) return;
+    _taskClearBoardDrag(drag);
+    taskBoardDrag = null;
+}
+
+function _taskProjectBoardDrop(pointerEvent) {
+    const target = document.elementFromPoint(pointerEvent.clientX, pointerEvent.clientY);
+    const column = target?.closest?.(".task-board-column[data-task-status]");
+    if (!column) return null;
+    return { column, status: column.dataset.taskStatus || "open" };
+}
+
+function _taskUpdateBoardDragPreview(drag, projection) {
+    document.querySelectorAll(".task-board-column--drop-target").forEach((column) => column.classList.remove("task-board-column--drop-target"));
+    if (!projection) {
+        if (drag.preview) drag.preview.remove();
+        drag.preview = null;
+        return;
+    }
+    projection.column.classList.add("task-board-column--drop-target");
+    const stack = projection.column.querySelector(".task-board-stack") || projection.column;
+    if (!drag.preview) {
+        drag.preview = document.createElement("div");
+        drag.preview.className = "task-drag-preview";
+    }
+    drag.preview.textContent = `Move to ${_humanizeLabel(projection.status)}`;
+    if (drag.preview.parentElement !== stack) stack.appendChild(drag.preview);
+}
+
+function _taskClearBoardDrag(drag) {
+    if (drag?.node) drag.node.classList.remove("task-row--drag-source");
+    if (drag?.preview) drag.preview.remove();
+    document.querySelectorAll(".task-board-column--drop-target").forEach((column) => column.classList.remove("task-board-column--drop-target"));
+    document.body.classList.remove("task-board-dragging");
+}
+
+async function _taskCommitBoardDrag(drag, projection) {
+    const nextStatus = projection.status;
+    const original = drag.originalTask;
+    if (!nextStatus || (original.status || "open") === nextStatus) return;
+    const movedAt = new Date().toISOString();
+    const interaction = {
+        source: "task_board",
+        kind: "drag_status",
+        at: movedAt,
+        previous_status: original.status || "open",
+        next_status: nextStatus,
+    };
+    const nextTask = {
+        ...original,
+        status: nextStatus,
+        completed_at: nextStatus === "done" ? (original.completed_at || movedAt) : null,
+        metadata: {
+            ...(original.metadata && typeof original.metadata === "object" ? original.metadata : {}),
+            _last_ui_interaction: interaction,
+        },
+    };
+    _taskReplaceCached(drag.taskKey, nextTask);
+    state.tasksSelectedTaskKey = _taskKey(nextTask);
+    _renderAdapterBody(drag.viewId, "tasks", drag.manifest, drag.writeActions, adapterCache.listData.tasks || {});
+
+    const params = {
+        task_id: drag.taskId,
+        status: nextStatus,
+        interaction_source: "task_board",
+        interaction_kind: "drag_status",
+        metadata: { _last_ui_interaction: interaction },
+    };
+    if (original.version !== undefined && original.version !== null) params.expected_version = original.version;
+
+    try {
+        const result = await _callAdapterWrite("tasks", "update_task", params);
+        _taskReplaceCached(drag.taskKey, result.task || { ...nextTask, version: result.version || nextTask.version });
+        showToast("Task moved", `${original.title || "Task"} is now ${_humanizeLabel(nextStatus)}.`);
+    } catch (error) {
+        _tasksSetCachedItems(drag.originalTasks);
+        showToast("Move failed", error.message || "Tasks could not save the new status.", 7000);
+    }
+    _renderAdapterBody(drag.viewId, "tasks", drag.manifest, drag.writeActions, adapterCache.listData.tasks || {});
+}
+
+function _tasksCachedItems() {
+    const data = adapterCache.listData.tasks || {};
+    return Array.isArray(data.tasks) ? data.tasks : _extractItems(data);
+}
+
+function _tasksSetCachedItems(tasks) {
+    adapterCache.listData.tasks = {
+        ...(adapterCache.listData.tasks || {}),
+        tasks: Array.isArray(tasks) ? tasks : [],
+    };
+}
+
+function _taskFindCached(taskKey) {
+    return _tasksCachedItems().find((task) => _taskKey(task) === taskKey) || null;
+}
+
+function _taskReplaceCached(taskKey, nextTask) {
+    _tasksSetCachedItems(_tasksCachedItems().map((task) => _taskKey(task) === taskKey ? nextTask : task));
 }
 
 function _renderTaskDetail(task, lists, manifest, currentMember, scopedItems) {
@@ -4690,7 +7060,7 @@ function _renderShoppingView(viewId, manifest, writeActions, listData) {
     body.innerHTML = `
         <div class="shopping-shell">
             <div class="shopping-stage">
-                <article class="shopping-hero${nextItem ? "" : " shopping-hero--empty"}" style="--shopping-accent:${selectedColor}">
+                <article class="shopping-hero${nextItem ? "" : " shopping-hero--empty"}" data-gravity="${nextItem || pending.length ? "primary" : "quiet"}" style="--shopping-accent:${selectedColor}">
                     <div>
                         <p class="shopping-side-kicker">Active list</p>
                         <h3>${escapeHtml(heroTitle)}</h3>
@@ -4716,7 +7086,7 @@ function _renderShoppingView(viewId, manifest, writeActions, listData) {
                         ${nextItem && _hasAction(manifest, "check_off_item") && _shoppingItemId(nextItem) && nextItem.approval_status === "approved" ? `<button class="shopping-small-btn" type="button" data-shopping-action="check_off_item" data-item-id="${escapeHtml(_shoppingItemId(nextItem))}">Check off</button>` : ""}
                     </div>
                 </article>
-                <aside class="shopping-signal-panel">
+                <aside class="shopping-signal-panel" data-gravity="${pending.length ? "secondary" : "quiet"}">
                     <div class="shopping-signal-head">
                         <p class="shopping-side-kicker">Signals</p>
                         <strong>${escapeHtml(selectedListLabel)}</strong>
@@ -4872,7 +7242,7 @@ function _renderShoppingView(viewId, manifest, writeActions, listData) {
         const itemId = btn.dataset.itemId;
         const actionName = btn.dataset.shoppingAction || btn.dataset.shoppingDetailAction;
         if (!itemId || !actionName || btn.disabled) return;
-        await _submitAdapterAction("shopping", actionName, { item_id: itemId });
+        await _submitAdapterAction("shopping", actionName, { item_id: itemId, interaction_source: "shopping_row", interaction_kind: actionName });
     };
     body.querySelectorAll("[data-shopping-action]").forEach((btn) => {
         btn.addEventListener("click", async () => {
@@ -4895,6 +7265,12 @@ function _renderShoppingView(viewId, manifest, writeActions, listData) {
     });
     body.querySelectorAll("[data-shopping-item-key]").forEach((node) => {
         node.addEventListener("click", (event) => {
+            if (state.suppressNextShoppingClick) {
+                state.suppressNextShoppingClick = false;
+                event.preventDefault();
+                event.stopPropagation();
+                return;
+            }
             if (event.target.closest("[data-shopping-action], [data-shopping-detail-action]")) return;
             state.shoppingSelectedItemKey = node.dataset.shoppingItemKey;
             _renderAdapterBody(viewId, "shopping", manifest, writeActions, listData);
@@ -4907,6 +7283,7 @@ function _renderShoppingView(viewId, manifest, writeActions, listData) {
             _renderAdapterBody(viewId, "shopping", manifest, writeActions, listData);
         });
     });
+    _wireShoppingDirectManipulation(body, viewId, manifest, writeActions);
     body.querySelectorAll("[data-shopping-close-detail]").forEach((btn) => {
         btn.addEventListener("click", () => {
             state.shoppingSelectedItemKey = null;
@@ -4939,13 +7316,12 @@ function _renderShoppingList(items, lists, manifest) {
 
 function _renderShoppingAisles(items, lists, manifest) {
     const groups = _shoppingCategoryGroups(items);
-    if (!groups.length) return `<div class="shopping-empty">No aisle items match this view.</div>`;
     return `
         <div class="shopping-aisle-grid">
             ${groups.map((group) => `
-                <section class="shopping-aisle" style="--shopping-accent:${_shoppingCategoryColor(group.key)}">
+                <section class="shopping-aisle" data-shopping-category="${escapeHtml(group.key)}" style="--shopping-accent:${_shoppingCategoryColor(group.key)}">
                     <header><h4>${escapeHtml(group.label)}</h4><span>${group.items.length}</span></header>
-                    ${group.items.map((item) => _renderShoppingRow(item, lists, manifest, { compact: true })).join("")}
+                    ${group.items.length ? group.items.map((item) => _renderShoppingRow(item, lists, manifest, { compact: true })).join("") : `<p class="shopping-column-empty">Drop items here</p>`}
                 </section>
             `).join("")}
         </div>`;
@@ -4957,15 +7333,15 @@ function _renderShoppingApproval(items, scopedItems, lists, manifest) {
     const approved = _shoppingSortItems(scopedItems.filter((item) => item.approval_status === "approved" && item.status !== "checked")).slice(0, 8);
     return `
         <div class="shopping-approval-grid">
-            <section class="shopping-approval-lane shopping-approval-lane--pending">
+            <section class="shopping-approval-lane shopping-approval-lane--pending" data-shopping-approval="pending_parent_approval">
                 <header><h4>Pending Approval</h4><span>${pending.length}</span></header>
                 ${pending.length ? pending.map((item) => _renderShoppingRow(item, lists, manifest, { compact: true })).join("") : `<p class="shopping-column-empty">Clear</p>`}
             </section>
-            <section class="shopping-approval-lane shopping-approval-lane--approved">
+            <section class="shopping-approval-lane shopping-approval-lane--approved" data-shopping-approval="approved">
                 <header><h4>Ready To Buy</h4><span>${approved.length}</span></header>
                 ${approved.length ? approved.map((item) => _renderShoppingRow(item, lists, manifest, { compact: true })).join("") : `<p class="shopping-column-empty">Nothing waiting</p>`}
             </section>
-            <section class="shopping-approval-lane shopping-approval-lane--rejected">
+            <section class="shopping-approval-lane shopping-approval-lane--rejected" data-shopping-approval="rejected">
                 <header><h4>Rejected</h4><span>${rejected.length}</span></header>
                 ${rejected.length ? rejected.map((item) => _renderShoppingRow(item, lists, manifest, { compact: true })).join("") : `<p class="shopping-column-empty">None</p>`}
             </section>
@@ -4986,8 +7362,9 @@ function _renderShoppingRow(item, lists, manifest, options = {}) {
     const canReject = _hasAction(manifest, "reject_item") && itemId && pendingApproval;
     const canUpdate = _hasAction(manifest, "update_item") && itemId && !checkedOff;
     const canDelete = _hasAction(manifest, "delete_item") && itemId;
+    const canMove = itemId && !checkedOff && (canUpdate || canApprove || _hasAction(manifest, "reject_item"));
     return `
-        <div class="shopping-row${checkedOff ? " shopping-row--checked" : ""}${pendingApproval ? " shopping-row--pending" : ""}${rejected ? " shopping-row--rejected" : ""}${selected ? " shopping-row--selected" : ""}${options.compact ? " shopping-row--compact" : ""}" role="button" tabindex="0" data-shopping-item-key="${escapeHtml(itemKey)}" style="--shopping-accent:${_shoppingItemAccent(item)}">
+        <div class="shopping-row${checkedOff ? " shopping-row--checked" : ""}${pendingApproval ? " shopping-row--pending" : ""}${rejected ? " shopping-row--rejected" : ""}${selected ? " shopping-row--selected" : ""}${options.compact ? " shopping-row--compact" : ""}${canMove ? " shopping-row--movable" : ""}" role="button" tabindex="0" data-shopping-item-key="${escapeHtml(itemKey)}"${itemId ? ` data-shopping-item-id="${escapeHtml(itemId)}"` : ""} style="--shopping-accent:${_shoppingItemAccent(item)}" aria-label="${escapeHtml(`${item.name || "Shopping item"}. ${canMove ? "Drag in aisle or approval views to update it, or press Enter for details." : "Press Enter for details."}`)}">
             <button class="shopping-check${checkedOff ? " shopping-check--checked" : ""}" data-shopping-action="check_off_item" data-item-id="${escapeHtml(itemId)}" ${canCheck ? "" : "disabled"} aria-label="Check off ${escapeHtml(item.name || "item")}">
                 ${checkedOff ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>` : ""}
             </button>
@@ -5011,6 +7388,248 @@ function _renderShoppingRow(item, lists, manifest, options = {}) {
                 ${canDelete ? `<button class="shopping-action-btn shopping-action-btn--danger" data-shopping-action="delete_item" data-item-id="${escapeHtml(itemId)}">Remove</button>` : ""}
             </div>
         </div>`;
+}
+
+function _wireShoppingDirectManipulation(body, viewId, manifest, writeActions) {
+    if (!["aisles", "approval"].includes(state.shoppingViewMode)) return;
+    const canDirectMove = _hasAction(manifest, "update_item") || _hasAction(manifest, "approve_item") || _hasAction(manifest, "reject_item");
+    if (!canDirectMove) return;
+    body.querySelectorAll(".shopping-row--movable[data-shopping-item-key][data-shopping-item-id]").forEach((row) => {
+        row.addEventListener("pointerdown", (pointerEvent) => {
+            if (pointerEvent.button !== 0 || pointerEvent.altKey || pointerEvent.ctrlKey || pointerEvent.metaKey) return;
+            if (pointerEvent.target.closest("button, input, textarea, select, [data-shopping-action], [data-shopping-detail-action]")) return;
+            const item = _shoppingFindCached(row.dataset.shoppingItemKey);
+            if (!item || item.status === "checked") return;
+            pointerEvent.preventDefault();
+            pointerEvent.stopPropagation();
+            shoppingDirectDrag = {
+                pointerId: pointerEvent.pointerId,
+                node: row,
+                itemKey: row.dataset.shoppingItemKey,
+                itemId: row.dataset.shoppingItemId,
+                originalItem: { ...item, metadata: item.metadata && typeof item.metadata === "object" ? { ...item.metadata } : {} },
+                originalItems: _shoppingCachedItems(),
+                viewId,
+                manifest,
+                writeActions,
+                startX: pointerEvent.clientX,
+                startY: pointerEvent.clientY,
+                moved: false,
+                projection: null,
+                preview: null,
+            };
+            row.classList.add("shopping-row--drag-source");
+            if (row.setPointerCapture) row.setPointerCapture(pointerEvent.pointerId);
+        });
+        row.addEventListener("pointermove", _shoppingHandleDirectDragMove);
+        row.addEventListener("pointerup", _shoppingHandleDirectDragEnd);
+        row.addEventListener("pointercancel", _shoppingHandleDirectDragCancel);
+    });
+}
+
+function _shoppingHandleDirectDragMove(pointerEvent) {
+    const drag = shoppingDirectDrag;
+    if (!drag || drag.pointerId !== pointerEvent.pointerId) return;
+    const distance = Math.hypot(pointerEvent.clientX - drag.startX, pointerEvent.clientY - drag.startY);
+    if (distance < 5 && !drag.moved) return;
+    drag.moved = true;
+    pointerEvent.preventDefault();
+    pointerEvent.stopPropagation();
+    document.body.classList.add("shopping-direct-dragging");
+    const projection = _shoppingProjectDirectDrop(pointerEvent, drag);
+    drag.projection = projection;
+    _shoppingUpdateDirectDragPreview(drag, projection);
+}
+
+function _shoppingHandleDirectDragEnd(pointerEvent) {
+    const drag = shoppingDirectDrag;
+    if (!drag || drag.pointerId !== pointerEvent.pointerId) return;
+    pointerEvent.preventDefault();
+    pointerEvent.stopPropagation();
+    const projection = drag.projection || _shoppingProjectDirectDrop(pointerEvent, drag);
+    const moved = drag.moved && projection;
+    _shoppingClearDirectDrag(drag);
+    state.suppressNextShoppingClick = true;
+    window.setTimeout(() => { state.suppressNextShoppingClick = false; }, 0);
+    shoppingDirectDrag = null;
+    if (!moved) {
+        state.shoppingSelectedItemKey = drag.itemKey;
+        _renderAdapterBody(drag.viewId, "shopping", drag.manifest, drag.writeActions, adapterCache.listData.shopping || {});
+        return;
+    }
+    _shoppingCommitDirectDrag(drag, projection);
+}
+
+function _shoppingHandleDirectDragCancel(pointerEvent) {
+    const drag = shoppingDirectDrag;
+    if (!drag || drag.pointerId !== pointerEvent.pointerId) return;
+    _shoppingClearDirectDrag(drag);
+    shoppingDirectDrag = null;
+}
+
+function _shoppingProjectDirectDrop(pointerEvent, drag) {
+    const target = document.elementFromPoint(pointerEvent.clientX, pointerEvent.clientY);
+    const categoryLane = state.shoppingViewMode === "aisles" ? target?.closest?.(".shopping-aisle[data-shopping-category]") : null;
+    if (categoryLane) {
+        const category = categoryLane.dataset.shoppingCategory || "other";
+        if (category === drag.originalItem.category) return null;
+        return { lane: categoryLane, kind: "category", value: category, label: _humanizeLabel(category) };
+    }
+    const approvalLane = state.shoppingViewMode === "approval" ? target?.closest?.(".shopping-approval-lane[data-shopping-approval]") : null;
+    if (approvalLane) {
+        const approval = approvalLane.dataset.shoppingApproval || "approved";
+        if (approval === drag.originalItem.approval_status || approval === "pending_parent_approval") return null;
+        if (approval === "approved" && !_hasAction(drag.manifest, "approve_item")) return null;
+        if (approval === "rejected" && !_hasAction(drag.manifest, "reject_item")) return null;
+        return { lane: approvalLane, kind: "approval", value: approval, label: _humanizeLabel(approval) };
+    }
+    return null;
+}
+
+function _shoppingUpdateDirectDragPreview(drag, projection) {
+    document.querySelectorAll(".shopping-aisle--drop-target, .shopping-approval-lane--drop-target").forEach((lane) => lane.classList.remove("shopping-aisle--drop-target", "shopping-approval-lane--drop-target"));
+    if (!projection) {
+        if (drag.preview) drag.preview.remove();
+        drag.preview = null;
+        return;
+    }
+    projection.lane.classList.add(projection.kind === "category" ? "shopping-aisle--drop-target" : "shopping-approval-lane--drop-target");
+    if (!drag.preview) {
+        drag.preview = document.createElement("div");
+        drag.preview.className = "shopping-drag-preview";
+    }
+    drag.preview.textContent = projection.kind === "category" ? `Move to ${projection.label}` : `Mark ${projection.label}`;
+    projection.lane.appendChild(drag.preview);
+}
+
+function _shoppingClearDirectDrag(drag) {
+    if (drag?.node) drag.node.classList.remove("shopping-row--drag-source");
+    if (drag?.preview) drag.preview.remove();
+    document.querySelectorAll(".shopping-aisle--drop-target, .shopping-approval-lane--drop-target").forEach((lane) => lane.classList.remove("shopping-aisle--drop-target", "shopping-approval-lane--drop-target"));
+    document.body.classList.remove("shopping-direct-dragging");
+}
+
+async function _shoppingCommitDirectDrag(drag, projection) {
+    if (projection.kind === "category") {
+        await _shoppingCommitCategoryDrag(drag, projection);
+        return;
+    }
+    if (projection.kind === "approval") {
+        await _shoppingCommitApprovalDrag(drag, projection);
+    }
+}
+
+async function _shoppingCommitCategoryDrag(drag, projection) {
+    const original = drag.originalItem;
+    const movedAt = new Date().toISOString();
+    const interaction = {
+        source: "shopping_aisle_grid",
+        kind: "drag_category",
+        at: movedAt,
+        previous_category: original.category || "other",
+        next_category: projection.value,
+    };
+    const nextItem = {
+        ...original,
+        category: projection.value,
+        metadata: {
+            ...(original.metadata && typeof original.metadata === "object" ? original.metadata : {}),
+            _last_ui_interaction: interaction,
+        },
+    };
+    _shoppingReplaceCached(drag.itemKey, nextItem);
+    state.shoppingSelectedItemKey = _shoppingItemKey(nextItem);
+    _renderAdapterBody(drag.viewId, "shopping", drag.manifest, drag.writeActions, adapterCache.listData.shopping || {});
+    try {
+        const result = await _callAdapterWrite("shopping", "update_item", {
+            item_id: drag.itemId,
+            category: projection.value,
+            interaction_source: "shopping_aisle_grid",
+            interaction_kind: "drag_category",
+            metadata: { _last_ui_interaction: interaction },
+        });
+        _shoppingReplaceCached(drag.itemKey, result.item || { ...nextItem, version: result.version || nextItem.version });
+        showToast("Item moved", `${original.name || "Item"} moved to ${projection.label}.`);
+    } catch (error) {
+        _shoppingSetCachedItems(drag.originalItems);
+        showToast("Move failed", error.message || "Shopping could not save the new category.", 7000);
+    }
+    _renderAdapterBody(drag.viewId, "shopping", drag.manifest, drag.writeActions, adapterCache.listData.shopping || {});
+}
+
+async function _shoppingCommitApprovalDrag(drag, projection) {
+    const original = drag.originalItem;
+    const movedAt = new Date().toISOString();
+    const actionName = projection.value === "approved" ? "approve_item" : "reject_item";
+    const interaction = {
+        source: "shopping_approval_lanes",
+        kind: projection.value === "approved" ? "drag_approve" : "drag_reject",
+        at: movedAt,
+        previous_approval_status: original.approval_status || "approved",
+        next_approval_status: projection.value,
+    };
+    const nextItem = projection.value === "approved"
+        ? {
+            ...original,
+            approval_status: "approved",
+            approved_at: movedAt,
+            approved_by: _currentMemberActorId(),
+            rejected_at: null,
+            rejected_by: null,
+            rejection_reason: null,
+        }
+        : {
+            ...original,
+            approval_status: "rejected",
+            status: "needed",
+            rejected_at: movedAt,
+            rejected_by: _currentMemberActorId(),
+            approved_at: null,
+            approved_by: null,
+            checked_at: null,
+            checked_by: null,
+        };
+    nextItem.metadata = {
+        ...(original.metadata && typeof original.metadata === "object" ? original.metadata : {}),
+        _last_ui_interaction: interaction,
+    };
+    _shoppingReplaceCached(drag.itemKey, nextItem);
+    state.shoppingSelectedItemKey = _shoppingItemKey(nextItem);
+    _renderAdapterBody(drag.viewId, "shopping", drag.manifest, drag.writeActions, adapterCache.listData.shopping || {});
+    try {
+        const result = await _callAdapterWrite("shopping", actionName, {
+            item_id: drag.itemId,
+            interaction_source: "shopping_approval_lanes",
+            interaction_kind: interaction.kind,
+            metadata: { _last_ui_interaction: interaction },
+        });
+        _shoppingReplaceCached(drag.itemKey, result.item || { ...nextItem, version: result.version || nextItem.version });
+        showToast("Approval updated", `${original.name || "Item"} is ${projection.label}.`);
+    } catch (error) {
+        _shoppingSetCachedItems(drag.originalItems);
+        showToast("Move failed", error.message || "Shopping could not save the approval change.", 7000);
+    }
+    _renderAdapterBody(drag.viewId, "shopping", drag.manifest, drag.writeActions, adapterCache.listData.shopping || {});
+}
+
+function _shoppingCachedItems() {
+    const data = adapterCache.listData.shopping || {};
+    return Array.isArray(data.items) ? data.items : [];
+}
+
+function _shoppingSetCachedItems(items) {
+    adapterCache.listData.shopping = {
+        ...(adapterCache.listData.shopping || {}),
+        items: Array.isArray(items) ? items : [],
+    };
+}
+
+function _shoppingFindCached(itemKey) {
+    return _shoppingCachedItems().find((item) => _shoppingItemKey(item) === itemKey) || null;
+}
+
+function _shoppingReplaceCached(itemKey, nextItem) {
+    _shoppingSetCachedItems(_shoppingCachedItems().map((item) => _shoppingItemKey(item) === itemKey ? nextItem : item));
 }
 
 function _renderShoppingDetail(item, lists, manifest, currentMember, scopedItems) {
@@ -5187,7 +7806,7 @@ function _shoppingCategoryGroups(items) {
         const category = SHOPPING_CATEGORY_ORDER.includes(item.category) ? item.category : "other";
         groups.get(category).push(item);
     });
-    return SHOPPING_CATEGORY_ORDER.map((key) => ({ key, label: _humanizeLabel(key), items: groups.get(key) })).filter((group) => group.items.length);
+    return SHOPPING_CATEGORY_ORDER.map((key) => ({ key, label: _humanizeLabel(key), items: groups.get(key) }));
 }
 
 function _shoppingSortItems(items) {
@@ -5327,7 +7946,7 @@ function _renderRemindersView(viewId, manifest, writeActions, listData) {
     body.innerHTML = `
         <div class="reminder-shell">
             <div class="reminder-stage">
-                <article class="reminder-hero${nextReminder ? "" : " reminder-hero--empty"}" style="--reminder-accent:${nextReminder ? _reminderAccent(nextReminder) : "var(--brand-blue)"}">
+                <article class="reminder-hero${nextReminder ? "" : " reminder-hero--empty"}" data-gravity="${nextReminder ? "primary" : "quiet"}" style="--reminder-accent:${nextReminder ? _reminderAccent(nextReminder) : "var(--brand-blue)"}">
                     <div>
                         <p class="reminder-side-kicker">Nudge lane</p>
                         <h3>${escapeHtml(heroTitle)}</h3>
@@ -5341,7 +7960,7 @@ function _renderRemindersView(viewId, manifest, writeActions, listData) {
                         ${actions.has("create_reminder") ? `<button class="view-small-btn" data-app-action="reminders:create_reminder">Add reminder</button>` : ""}
                     </div>
                 </article>
-                <aside class="reminder-signal-panel">
+                <aside class="reminder-signal-panel" data-gravity="${dueNow.length || dueToday.length ? "secondary" : "quiet"}">
                     <div class="reminder-signal-head">
                         <p class="reminder-side-kicker">Due now, today, later</p>
                         <strong>${active.length ? `${active.length} active nudges` : "All clear"}</strong>
@@ -5496,6 +8115,7 @@ function _renderRemindersView(viewId, manifest, writeActions, listData) {
     });
     body.querySelectorAll("[data-reminder-key]").forEach((node) => {
         node.addEventListener("click", (event) => {
+            if (state.suppressNextReminderClick) return;
             if (event.target.closest("[data-reminder-action], [data-reminder-detail-action]")) return;
             state.remindersSelectedKey = node.dataset.reminderKey;
             _renderAdapterBody(viewId, "reminders", manifest, writeActions, listData);
@@ -5514,6 +8134,7 @@ function _renderRemindersView(viewId, manifest, writeActions, listData) {
             _renderAdapterBody(viewId, "reminders", manifest, writeActions, listData);
         });
     });
+    _wireReminderBoardDirectManipulation(body, viewId, manifest, writeActions);
 }
 
 function _renderReminderSurface(reminders, scopedItems, manifest, currentMember) {
@@ -5557,7 +8178,7 @@ function _renderReminderBoard(reminders, manifest) {
             ${columns.map((column) => {
                 const columnReminders = reminders.filter((reminder) => (reminder.status || "scheduled") === column.key);
                 return `
-                    <section class="reminder-board-column reminder-board-column--${column.key}">
+                    <section class="reminder-board-column reminder-board-column--${column.key}" data-reminder-status="${column.key}">
                         <header><h4>${escapeHtml(column.label)}</h4><span>${columnReminders.length}</span></header>
                         <div class="reminder-board-stack">
                             ${columnReminders.length ? columnReminders.map((reminder) => _renderReminderRow(reminder, manifest, { compact: true })).join("") : `<p class="reminder-column-empty">Empty</p>`}
@@ -5602,10 +8223,11 @@ function _renderReminderRow(reminder, manifest, options = {}) {
     const canDismiss = _hasAction(manifest, "dismiss_reminder") && reminderId && (status === "fired" || status === "snoozed");
     const canUpdate = _hasAction(manifest, "update_reminder") && reminderId && status === "scheduled";
     const canDelete = _hasAction(manifest, "delete_reminder") && reminderId;
+    const canDirectMove = reminderId && status !== "dismissed" && (_hasAction(manifest, "snooze_reminder") || _hasAction(manifest, "dismiss_reminder"));
     const message = String(reminder.message || "").trim();
     const dueClass = _reminderDueClass(reminder);
     return `
-        <div class="reminder-row reminder-row--${escapeHtml(dueClass)}${selected ? " reminder-row--selected" : ""}${status === "dismissed" ? " reminder-row--muted" : ""}${options.compact ? " reminder-row--compact" : ""}" role="button" tabindex="0" data-reminder-key="${escapeHtml(reminderKey)}" style="--reminder-accent:${_reminderAccent(reminder)}">
+        <div class="reminder-row reminder-row--${escapeHtml(dueClass)}${selected ? " reminder-row--selected" : ""}${status === "dismissed" ? " reminder-row--muted" : ""}${options.compact ? " reminder-row--compact" : ""}${canDirectMove ? " reminder-row--movable" : ""}" role="button" tabindex="0" data-reminder-key="${escapeHtml(reminderKey)}"${reminderId ? ` data-reminder-id="${escapeHtml(reminderId)}"` : ""} data-reminder-status="${escapeHtml(status)}" style="--reminder-accent:${_reminderAccent(reminder)}" aria-label="${escapeHtml(`${reminder.title || "Reminder"}. ${canDirectMove ? "Drag on the board to snooze or dismiss, or press Enter for details." : "Press Enter for details."}`)}">
             <div class="reminder-icon reminder-icon--${escapeHtml(kind)}">${_reminderKindIcon(kind)}</div>
             <div class="reminder-body">
                 <div class="reminder-title-line">
@@ -5626,6 +8248,190 @@ function _renderReminderRow(reminder, manifest, options = {}) {
                 ${canDelete ? `<button class="view-action-btn view-action-btn--danger" data-reminder-action="delete_reminder" data-reminder-id="${escapeHtml(reminderId)}">Remove</button>` : ""}
             </div>
         </div>`;
+}
+
+function _wireReminderBoardDirectManipulation(body, viewId, manifest, writeActions) {
+    if (state.remindersViewMode !== "board") return;
+    const canMove = _hasAction(manifest, "snooze_reminder") || _hasAction(manifest, "dismiss_reminder");
+    if (!canMove) return;
+    body.querySelectorAll(".reminder-board .reminder-row--movable[data-reminder-key][data-reminder-id]").forEach((row) => {
+        row.addEventListener("pointerdown", (pointerEvent) => {
+            if (pointerEvent.button !== 0 || pointerEvent.altKey || pointerEvent.ctrlKey || pointerEvent.metaKey) return;
+            if (pointerEvent.target.closest("button, input, textarea, select, [data-reminder-action], [data-reminder-detail-action]")) return;
+            const reminder = _reminderFindCached(row.dataset.reminderKey);
+            if (!reminder) return;
+            pointerEvent.preventDefault();
+            pointerEvent.stopPropagation();
+            reminderBoardDrag = {
+                pointerId: pointerEvent.pointerId,
+                node: row,
+                reminderKey: row.dataset.reminderKey,
+                reminderId: row.dataset.reminderId,
+                originalReminder: { ...reminder, metadata: reminder.metadata && typeof reminder.metadata === "object" ? { ...reminder.metadata } : {} },
+                originalReminders: _remindersCachedItems(),
+                viewId,
+                manifest,
+                writeActions,
+                startX: pointerEvent.clientX,
+                startY: pointerEvent.clientY,
+                moved: false,
+                projection: null,
+                preview: null,
+            };
+            row.classList.add("reminder-row--drag-source");
+            if (row.setPointerCapture) row.setPointerCapture(pointerEvent.pointerId);
+        });
+        row.addEventListener("pointermove", _reminderHandleBoardDragMove);
+        row.addEventListener("pointerup", _reminderHandleBoardDragEnd);
+        row.addEventListener("pointercancel", _reminderHandleBoardDragCancel);
+    });
+}
+
+function _reminderHandleBoardDragMove(pointerEvent) {
+    const drag = reminderBoardDrag;
+    if (!drag || drag.pointerId !== pointerEvent.pointerId) return;
+    const distance = Math.hypot(pointerEvent.clientX - drag.startX, pointerEvent.clientY - drag.startY);
+    if (distance < 5 && !drag.moved) return;
+    drag.moved = true;
+    pointerEvent.preventDefault();
+    pointerEvent.stopPropagation();
+    document.body.classList.add("reminder-board-dragging");
+    const projection = _reminderProjectBoardDrop(pointerEvent, drag);
+    drag.projection = projection;
+    _reminderUpdateBoardDragPreview(drag, projection);
+}
+
+function _reminderHandleBoardDragEnd(pointerEvent) {
+    const drag = reminderBoardDrag;
+    if (!drag || drag.pointerId !== pointerEvent.pointerId) return;
+    pointerEvent.preventDefault();
+    pointerEvent.stopPropagation();
+    const projection = drag.projection || _reminderProjectBoardDrop(pointerEvent, drag);
+    const moved = drag.moved && projection;
+    _reminderClearBoardDrag(drag);
+    state.suppressNextReminderClick = true;
+    window.setTimeout(() => { state.suppressNextReminderClick = false; }, 0);
+    reminderBoardDrag = null;
+    if (!moved) {
+        state.remindersSelectedKey = drag.reminderKey;
+        _renderAdapterBody(drag.viewId, "reminders", drag.manifest, drag.writeActions, adapterCache.listData.reminders || {});
+        return;
+    }
+    _reminderCommitBoardDrag(drag, projection);
+}
+
+function _reminderHandleBoardDragCancel(pointerEvent) {
+    const drag = reminderBoardDrag;
+    if (!drag || drag.pointerId !== pointerEvent.pointerId) return;
+    _reminderClearBoardDrag(drag);
+    reminderBoardDrag = null;
+}
+
+function _reminderProjectBoardDrop(pointerEvent, drag) {
+    const target = document.elementFromPoint(pointerEvent.clientX, pointerEvent.clientY);
+    const column = target?.closest?.(".reminder-board-column[data-reminder-status]");
+    if (!column) return null;
+    const nextStatus = column.dataset.reminderStatus || "scheduled";
+    const currentStatus = drag.originalReminder.status || "scheduled";
+    if (nextStatus === currentStatus) return null;
+    if (nextStatus === "snoozed" && _hasAction(drag.manifest, "snooze_reminder")) return { column, status: nextStatus, label: "Snooze 30m" };
+    if (nextStatus === "dismissed" && _hasAction(drag.manifest, "dismiss_reminder")) return { column, status: nextStatus, label: "Dismiss" };
+    return null;
+}
+
+function _reminderUpdateBoardDragPreview(drag, projection) {
+    document.querySelectorAll(".reminder-board-column--drop-target").forEach((column) => column.classList.remove("reminder-board-column--drop-target"));
+    if (!projection) {
+        if (drag.preview) drag.preview.remove();
+        drag.preview = null;
+        return;
+    }
+    projection.column.classList.add("reminder-board-column--drop-target");
+    const stack = projection.column.querySelector(".reminder-board-stack") || projection.column;
+    if (!drag.preview) {
+        drag.preview = document.createElement("div");
+        drag.preview.className = "reminder-drag-preview";
+    }
+    drag.preview.textContent = projection.label;
+    if (drag.preview.parentElement !== stack) stack.appendChild(drag.preview);
+}
+
+function _reminderClearBoardDrag(drag) {
+    if (drag?.node) drag.node.classList.remove("reminder-row--drag-source");
+    if (drag?.preview) drag.preview.remove();
+    document.querySelectorAll(".reminder-board-column--drop-target").forEach((column) => column.classList.remove("reminder-board-column--drop-target"));
+    document.body.classList.remove("reminder-board-dragging");
+}
+
+async function _reminderCommitBoardDrag(drag, projection) {
+    const original = drag.originalReminder;
+    const movedAt = new Date().toISOString();
+    const isSnooze = projection.status === "snoozed";
+    const actionName = isSnooze ? "snooze_reminder" : "dismiss_reminder";
+    const snoozeUntil = _isoMinutesFromNow(30);
+    const interaction = {
+        source: "reminder_board",
+        kind: isSnooze ? "drag_snooze" : "drag_dismiss",
+        at: movedAt,
+        previous_status: original.status || "scheduled",
+        next_status: projection.status,
+    };
+    const nextReminder = isSnooze
+        ? {
+            ...original,
+            status: "snoozed",
+            fired_at: original.fired_at || movedAt,
+            snoozed_until: snoozeUntil,
+        }
+        : {
+            ...original,
+            status: "dismissed",
+            fired_at: original.fired_at || movedAt,
+            snoozed_until: null,
+        };
+    nextReminder.metadata = {
+        ...(original.metadata && typeof original.metadata === "object" ? original.metadata : {}),
+        _last_ui_interaction: interaction,
+    };
+    _reminderReplaceCached(drag.reminderKey, nextReminder);
+    state.remindersSelectedKey = _reminderKey(nextReminder);
+    _renderAdapterBody(drag.viewId, "reminders", drag.manifest, drag.writeActions, adapterCache.listData.reminders || {});
+    const params = {
+        reminder_id: drag.reminderId,
+        interaction_source: "reminder_board",
+        interaction_kind: interaction.kind,
+        metadata: { _last_ui_interaction: interaction },
+    };
+    if (isSnooze) params.snooze_until = snoozeUntil;
+    try {
+        const result = await _callAdapterWrite("reminders", actionName, params);
+        _reminderReplaceCached(drag.reminderKey, result.reminder || { ...nextReminder, version: result.version || nextReminder.version });
+        showToast(isSnooze ? "Reminder snoozed" : "Reminder dismissed", `${original.title || "Reminder"} updated.`);
+    } catch (error) {
+        _remindersSetCachedItems(drag.originalReminders);
+        showToast("Move failed", error.message || "Reminder could not save the new state.", 7000);
+    }
+    _renderAdapterBody(drag.viewId, "reminders", drag.manifest, drag.writeActions, adapterCache.listData.reminders || {});
+}
+
+function _remindersCachedItems() {
+    const data = adapterCache.listData.reminders || {};
+    return Array.isArray(data.reminders) ? data.reminders : _extractItems(data);
+}
+
+function _remindersSetCachedItems(reminders) {
+    adapterCache.listData.reminders = {
+        ...(adapterCache.listData.reminders || {}),
+        reminders: Array.isArray(reminders) ? reminders : [],
+    };
+}
+
+function _reminderFindCached(reminderKey) {
+    return _remindersCachedItems().find((reminder) => _reminderKey(reminder) === reminderKey) || null;
+}
+
+function _reminderReplaceCached(reminderKey, nextReminder) {
+    _remindersSetCachedItems(_remindersCachedItems().map((reminder) => _reminderKey(reminder) === reminderKey ? nextReminder : reminder));
 }
 
 function _renderReminderDetail(reminder, manifest, currentMember, scopedItems) {
@@ -6129,7 +8935,7 @@ function _renderChoresView(viewId, manifest, writeActions, listData) {
     body.innerHTML = `
         <div class="chore-shell">
             <div class="chore-stage">
-                <article class="chore-hero${nextChore ? "" : " chore-hero--clear"}" style="--chore-accent:${nextChore ? _choreAccent(nextChore) : selectedBucket?.color || "var(--brand-blue)"}">
+                <article class="chore-hero${nextChore ? "" : " chore-hero--clear"}" data-gravity="${nextChore ? "primary" : "quiet"}" style="--chore-accent:${nextChore ? _choreAccent(nextChore) : selectedBucket?.color || "var(--brand-blue)"}">
                     <div>
                         <p class="chore-side-kicker">Today in chores</p>
                         <h3>${escapeHtml(heroTitle)}</h3>
@@ -6144,7 +8950,7 @@ function _renderChoresView(viewId, manifest, writeActions, listData) {
                         ${actions.has("create_template") ? `<button class="view-small-btn" data-app-action="chores:create_template">New template</button>` : ""}
                     </div>
                 </article>
-                <aside class="chore-rhythm-panel">
+                <aside class="chore-rhythm-panel" data-gravity="${rhythmCount ? "secondary" : "quiet"}">
                     <header>
                         <p class="chore-side-kicker">Rhythm</p>
                         <h3>${rhythmCount ? `${rhythmCount} still moving` : "All clear"}</h3>
@@ -6289,8 +9095,10 @@ function _renderChoresView(viewId, manifest, writeActions, listData) {
             _renderAdapterBody(viewId, "chores", manifest, writeActions, listData);
         });
     });
+    _wireChoreDirectManipulation(body, viewId, manifest, writeActions);
     body.querySelectorAll("[data-chore-select-key]").forEach((node) => {
         node.addEventListener("click", (event) => {
+            if (state.suppressNextChoreClick) return;
             if (event.target.closest("[data-chore-action], [data-chore-form-action]")) return;
             state.choresSelectedKey = node.dataset.choreSelectKey;
             _renderAdapterBody(viewId, "chores", manifest, writeActions, listData);
@@ -6329,17 +9137,17 @@ function _renderChoresToday(items, scopedItems, manifest, todayData = {}) {
     const done = filter === "pending" ? (todayData.recentDone || []) : items.filter((chore) => _choreStatus(chore) === "done");
     const skipped = filter === "skipped" ? items.filter((chore) => _choreStatus(chore) === "skipped") : [];
     const lanes = [
-        { key: "due_now", label: "Due now", items: dueNow, empty: "Nothing due now" },
-        { key: "upcoming", label: "Upcoming", items: upcoming.slice(0, 6), empty: "No chores waiting" },
-        { key: "done", label: "Done recently", items: done.slice(0, 6), empty: "No wins yet" },
-        ...(skipped.length ? [{ key: "skipped", label: "Skipped", items: skipped, empty: "None" }] : []),
+        { key: "due_now", label: "Due now", status: "pending", items: dueNow, empty: "Nothing due now" },
+        { key: "upcoming", label: "Upcoming", status: "pending", items: upcoming.slice(0, 6), empty: "No chores waiting" },
+        { key: "done", label: "Done recently", status: "done", items: done.slice(0, 6), empty: "No wins yet" },
+        { key: "skipped", label: "Skipped", status: "skipped", items: skipped, empty: "None" },
     ];
     if (!scopedItems.length) return `<div class="chore-empty">No chores in this scope yet.</div>`;
     if (!lanes.some((lane) => lane.items.length)) return `<div class="chore-empty">${escapeHtml(_choreEmptyMessage())}</div>`;
     return `
         <div class="chore-today-grid">
             ${lanes.map((lane) => `
-                <section class="chore-today-lane chore-today-lane--${escapeHtml(lane.key)}">
+                <section class="chore-today-lane chore-today-lane--${escapeHtml(lane.key)}" data-chore-status="${escapeHtml(lane.status)}">
                     <header><h4>${escapeHtml(lane.label)}</h4><span>${lane.items.length}</span></header>
                     <div class="chore-lane-list">
                         ${lane.items.length ? lane.items.map((chore) => _renderChoreRow(chore, manifest, { compact: lane.key !== "done" })).join("") : `<p class="chore-column-empty">${escapeHtml(lane.empty)}</p>`}
@@ -6351,16 +9159,16 @@ function _renderChoresToday(items, scopedItems, manifest, todayData = {}) {
 
 function _renderChoresBoard(items, manifest) {
     const lanes = [
-        { key: "due_now", label: "Due Now", items: items.filter((chore) => _choreStatus(chore) === "pending" && _choreIsDueNow(chore)) },
-        { key: "upcoming", label: "Upcoming", items: items.filter((chore) => _choreStatus(chore) === "pending" && !_choreIsDueNow(chore)) },
-        { key: "done", label: "Done", items: items.filter((chore) => _choreStatus(chore) === "done") },
-        { key: "skipped", label: "Skipped", items: items.filter((chore) => _choreStatus(chore) === "skipped") },
+        { key: "due_now", label: "Due Now", status: "pending", items: items.filter((chore) => _choreStatus(chore) === "pending" && _choreIsDueNow(chore)) },
+        { key: "upcoming", label: "Upcoming", status: "pending", items: items.filter((chore) => _choreStatus(chore) === "pending" && !_choreIsDueNow(chore)) },
+        { key: "done", label: "Done", status: "done", items: items.filter((chore) => _choreStatus(chore) === "done") },
+        { key: "skipped", label: "Skipped", status: "skipped", items: items.filter((chore) => _choreStatus(chore) === "skipped") },
     ];
     if (!items.length) return `<div class="chore-empty">${escapeHtml(_choreEmptyMessage())}</div>`;
     return `
         <div class="chore-board">
             ${lanes.map((lane) => `
-                <section class="chore-lane chore-lane--${lane.key}">
+                <section class="chore-lane chore-lane--${lane.key}" data-chore-status="${escapeHtml(lane.status)}">
                     <header><h4>${escapeHtml(lane.label)}</h4><span>${lane.items.length}</span></header>
                     <div class="chore-lane-list">
                         ${lane.items.length ? lane.items.map((chore) => _renderChoreRow(chore, manifest, { compact: true })).join("") : `<p class="chore-column-empty">Clear</p>`}
@@ -6421,8 +9229,9 @@ function _renderChoreRow(chore, manifest, options = {}) {
     const canReopen = status !== "pending" && _hasAction(manifest, "reopen_chore") && occurrenceId;
     const canAssign = _hasAction(manifest, "assign_chore") && chore.template_id;
     const canEdit = _hasAction(manifest, "update_template") && chore.template_id;
+    const canDirectMove = occurrenceId && ((status === "pending" && (canComplete || canSkip)) || (status !== "pending" && canReopen));
     return `
-        <div class="chore-row chore-row--${escapeHtml(status)}${selected ? " chore-row--selected" : ""}${options.compact ? " chore-row--compact" : ""}" role="button" tabindex="0" data-chore-select-key="${escapeHtml(choreKey)}" style="--chore-accent:${_choreAccent(chore)}">
+        <div class="chore-row chore-row--${escapeHtml(status)}${selected ? " chore-row--selected" : ""}${options.compact ? " chore-row--compact" : ""}${canDirectMove ? " chore-row--movable" : ""}" role="button" tabindex="0" data-chore-select-key="${escapeHtml(choreKey)}"${occurrenceId ? ` data-occurrence-id="${escapeHtml(occurrenceId)}"` : ""} data-chore-status="${escapeHtml(status)}" style="--chore-accent:${_choreAccent(chore)}" aria-label="${escapeHtml(`${chore.title || "Chore"}. ${canDirectMove ? "Drag between lanes to update status, or press Enter for details." : "Press Enter for details."}`)}">
             <button class="chore-check" type="button" data-chore-action="complete_chore" data-occurrence-id="${escapeHtml(occurrenceId)}" ${canComplete ? "" : "disabled"} aria-label="Complete ${escapeHtml(chore.title || "chore")}">
                 ${status === "done" ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>` : ""}
             </button>
@@ -6445,6 +9254,192 @@ function _renderChoreRow(chore, manifest, options = {}) {
                 ${canEdit ? `<button class="view-action-btn" type="button" data-chore-form-action="update_template" data-chore-key="${escapeHtml(choreKey)}">Edit</button>` : ""}
             </div>
         </div>`;
+}
+
+function _wireChoreDirectManipulation(body, viewId, manifest, writeActions) {
+    if (!["today", "board"].includes(state.choresViewMode)) return;
+    const canMove = _hasAction(manifest, "complete_chore") || _hasAction(manifest, "skip_chore") || _hasAction(manifest, "reopen_chore");
+    if (!canMove) return;
+    body.querySelectorAll(".chore-row--movable[data-chore-select-key][data-occurrence-id]").forEach((row) => {
+        row.addEventListener("pointerdown", (pointerEvent) => {
+            if (pointerEvent.button !== 0 || pointerEvent.altKey || pointerEvent.ctrlKey || pointerEvent.metaKey) return;
+            if (pointerEvent.target.closest("button, input, textarea, select, [data-chore-action], [data-chore-form-action]")) return;
+            const chore = _choreFindCached(row.dataset.choreSelectKey);
+            if (!chore) return;
+            pointerEvent.preventDefault();
+            pointerEvent.stopPropagation();
+            choreDirectDrag = {
+                pointerId: pointerEvent.pointerId,
+                node: row,
+                choreKey: row.dataset.choreSelectKey,
+                occurrenceId: row.dataset.occurrenceId,
+                originalChore: { ...chore, metadata: chore.metadata && typeof chore.metadata === "object" ? { ...chore.metadata } : {} },
+                originalChores: _choresCachedItems(),
+                viewId,
+                viewMode: state.choresViewMode,
+                manifest,
+                writeActions,
+                startX: pointerEvent.clientX,
+                startY: pointerEvent.clientY,
+                moved: false,
+                projection: null,
+                preview: null,
+            };
+            row.classList.add("chore-row--drag-source");
+            if (row.setPointerCapture) row.setPointerCapture(pointerEvent.pointerId);
+        });
+        row.addEventListener("pointermove", _choreHandleDirectDragMove);
+        row.addEventListener("pointerup", _choreHandleDirectDragEnd);
+        row.addEventListener("pointercancel", _choreHandleDirectDragCancel);
+    });
+}
+
+function _choreHandleDirectDragMove(pointerEvent) {
+    const drag = choreDirectDrag;
+    if (!drag || drag.pointerId !== pointerEvent.pointerId) return;
+    const distance = Math.hypot(pointerEvent.clientX - drag.startX, pointerEvent.clientY - drag.startY);
+    if (distance < 5 && !drag.moved) return;
+    drag.moved = true;
+    pointerEvent.preventDefault();
+    pointerEvent.stopPropagation();
+    document.body.classList.add("chore-direct-dragging");
+    const projection = _choreProjectDirectDrop(pointerEvent, drag);
+    drag.projection = projection;
+    _choreUpdateDirectDragPreview(drag, projection);
+}
+
+function _choreHandleDirectDragEnd(pointerEvent) {
+    const drag = choreDirectDrag;
+    if (!drag || drag.pointerId !== pointerEvent.pointerId) return;
+    pointerEvent.preventDefault();
+    pointerEvent.stopPropagation();
+    const projection = drag.projection || _choreProjectDirectDrop(pointerEvent, drag);
+    const moved = drag.moved && projection;
+    _choreClearDirectDrag(drag);
+    state.suppressNextChoreClick = true;
+    window.setTimeout(() => { state.suppressNextChoreClick = false; }, 0);
+    choreDirectDrag = null;
+    if (!moved) {
+        state.choresSelectedKey = drag.choreKey;
+        _renderAdapterBody(drag.viewId, "chores", drag.manifest, drag.writeActions, adapterCache.listData.chores || {});
+        return;
+    }
+    _choreCommitDirectDrag(drag, projection);
+}
+
+function _choreHandleDirectDragCancel(pointerEvent) {
+    const drag = choreDirectDrag;
+    if (!drag || drag.pointerId !== pointerEvent.pointerId) return;
+    _choreClearDirectDrag(drag);
+    choreDirectDrag = null;
+}
+
+function _choreProjectDirectDrop(pointerEvent, drag) {
+    const target = document.elementFromPoint(pointerEvent.clientX, pointerEvent.clientY);
+    const lane = target?.closest?.(".chore-lane[data-chore-status], .chore-today-lane[data-chore-status]");
+    if (!lane) return null;
+    const nextStatus = lane.dataset.choreStatus || "pending";
+    const currentStatus = _choreStatus(drag.originalChore);
+    if (nextStatus === currentStatus) return null;
+    if (currentStatus === "pending" && nextStatus === "done" && _hasAction(drag.manifest, "complete_chore")) return { lane, status: nextStatus, actionName: "complete_chore", label: "Mark done" };
+    if (currentStatus === "pending" && nextStatus === "skipped" && _hasAction(drag.manifest, "skip_chore")) return { lane, status: nextStatus, actionName: "skip_chore", label: "Skip chore" };
+    if (currentStatus !== "pending" && nextStatus === "pending" && _hasAction(drag.manifest, "reopen_chore")) return { lane, status: nextStatus, actionName: "reopen_chore", label: "Reopen" };
+    return null;
+}
+
+function _choreUpdateDirectDragPreview(drag, projection) {
+    document.querySelectorAll(".chore-lane--drop-target, .chore-today-lane--drop-target").forEach((lane) => lane.classList.remove("chore-lane--drop-target", "chore-today-lane--drop-target"));
+    if (!projection) {
+        if (drag.preview) drag.preview.remove();
+        drag.preview = null;
+        return;
+    }
+    projection.lane.classList.add(projection.lane.classList.contains("chore-today-lane") ? "chore-today-lane--drop-target" : "chore-lane--drop-target");
+    const list = projection.lane.querySelector(".chore-lane-list") || projection.lane;
+    if (!drag.preview) {
+        drag.preview = document.createElement("div");
+        drag.preview.className = "chore-drag-preview";
+    }
+    drag.preview.textContent = projection.label;
+    if (drag.preview.parentElement !== list) list.appendChild(drag.preview);
+}
+
+function _choreClearDirectDrag(drag) {
+    if (drag?.node) drag.node.classList.remove("chore-row--drag-source");
+    if (drag?.preview) drag.preview.remove();
+    document.querySelectorAll(".chore-lane--drop-target, .chore-today-lane--drop-target").forEach((lane) => lane.classList.remove("chore-lane--drop-target", "chore-today-lane--drop-target"));
+    document.body.classList.remove("chore-direct-dragging");
+}
+
+async function _choreCommitDirectDrag(drag, projection) {
+    const original = drag.originalChore;
+    const movedAt = new Date().toISOString();
+    const source = drag.viewMode === "today" ? "chore_today_lanes" : "chore_board";
+    const kindByAction = {
+        complete_chore: "drag_complete",
+        skip_chore: "drag_skip",
+        reopen_chore: "drag_reopen",
+    };
+    const interaction = {
+        source,
+        kind: kindByAction[projection.actionName] || "drag_status",
+        at: movedAt,
+        previous_status: _choreStatus(original),
+        next_status: projection.status,
+    };
+    const nextChore = {
+        ...original,
+        status: projection.status,
+        completed_at: projection.status === "done" ? (original.completed_at || movedAt) : null,
+        completed_by: projection.status === "done" ? _currentMemberActorId() : null,
+        skipped_at: projection.status === "skipped" ? (original.skipped_at || movedAt) : null,
+        skip_reason: projection.status === "skipped" ? (original.skip_reason || "Skipped from board") : null,
+        metadata: {
+            ...(original.metadata && typeof original.metadata === "object" ? original.metadata : {}),
+            _last_ui_interaction: interaction,
+        },
+    };
+    _choreReplaceCached(drag.choreKey, nextChore);
+    state.choresSelectedKey = _choreKey(nextChore);
+    _renderAdapterBody(drag.viewId, "chores", drag.manifest, drag.writeActions, adapterCache.listData.chores || {});
+    const params = {
+        occurrence_id: drag.occurrenceId,
+        interaction_source: source,
+        interaction_kind: interaction.kind,
+        metadata: { _last_ui_interaction: interaction },
+    };
+    if (projection.actionName === "skip_chore") params.skip_reason = "Skipped from board";
+    try {
+        const result = await _callAdapterWrite("chores", projection.actionName, params);
+        _choreReplaceCached(drag.choreKey, result.chore || { ...nextChore, version: result.version || nextChore.version });
+        showToast("Chore updated", `${original.title || "Chore"} is ${_humanizeLabel(projection.status)}.`);
+        await loadAdapterView(drag.viewId);
+        return;
+    } catch (error) {
+        _choresSetCachedItems(drag.originalChores);
+        showToast("Move failed", error.message || "Chore could not save the new state.", 7000);
+    }
+    _renderAdapterBody(drag.viewId, "chores", drag.manifest, drag.writeActions, adapterCache.listData.chores || {});
+}
+
+function _choresCachedItems() {
+    const data = adapterCache.listData.chores || {};
+    return Array.isArray(data.chores) ? data.chores : _extractItems(data);
+}
+
+function _choresSetCachedItems(chores) {
+    adapterCache.listData.chores = {
+        ...(adapterCache.listData.chores || {}),
+        chores: Array.isArray(chores) ? chores : [],
+    };
+}
+
+function _choreFindCached(choreKey) {
+    return _choresCachedItems().find((chore) => _choreKey(chore) === choreKey) || null;
+}
+
+function _choreReplaceCached(choreKey, nextChore) {
+    _choresSetCachedItems(_choresCachedItems().map((chore) => _choreKey(chore) === choreKey ? nextChore : chore));
 }
 
 function _renderChoreDetail(chore, manifest, scopedItems, summary) {
@@ -6863,7 +9858,7 @@ function _renderSettingsView(viewId, manifest, writeActions, listData) {
     body.innerHTML = `
         <div class="settings-shell">
             <div class="settings-safety-stage">
-                <section class="settings-safety-hero${reviewItems.length ? " settings-safety-hero--review" : ""}">
+                <section class="settings-safety-hero${reviewItems.length ? " settings-safety-hero--review" : ""}" data-gravity="${reviewItems.length ? "primary" : "secondary"}">
                     <div>
                         <p class="settings-side-kicker">Family safety overview</p>
                         <h3>${escapeHtml(safetyTitle)}</h3>
@@ -6875,7 +9870,7 @@ function _renderSettingsView(viewId, manifest, writeActions, listData) {
                         <span><strong>${keywords.length}</strong> sensitive terms</span>
                     </div>
                 </section>
-                <aside class="settings-safety-panel">
+                <aside class="settings-safety-panel" data-gravity="${reviewItems.length ? "secondary" : "quiet"}">
                     <div class="settings-policy-card settings-policy-card--m8">
                         <p class="settings-section-title">Parent control</p>
                         <h3>${policy ? `Policy v${escapeHtml(policy.version || 1)}` : "Default policy"}</h3>
@@ -6927,6 +9922,9 @@ function _renderSettingsView(viewId, manifest, writeActions, listData) {
             state.settingsViewMode = btn.dataset.settingsMode || "overview";
             _renderAdapterBody(viewId, "family_settings", manifest, writeActions, listData);
         });
+    });
+    body.querySelectorAll("[data-settings-preset]").forEach((btn) => {
+        btn.addEventListener("click", () => _applySettingsPreset(btn));
     });
     const advancedPolicy = body.querySelector(".settings-advanced-policy");
     if (advancedPolicy) {
@@ -6995,11 +9993,12 @@ function _renderSettingsSurface(mode, ctx) {
     return _renderSettingsPrivacy(ctx);
 }
 
-function _renderSettingsOverview({ rules, kidCaps, keywords, flags, guardedSources, disabledKidCaps, openKidCaps, privateSources, reviewItems, enabledFlagCount }) {
+function _renderSettingsOverview({ rules, kidCaps, keywords, flags, guardedSources, disabledKidCaps, openKidCaps, privateSources, reviewItems, enabledFlagCount, canUpdatePolicy }) {
     const limitedSources = SETTINGS_SOURCE_RULES.filter((source) => _settingsBandForSource(source, rules) !== "family");
     const lockedCaps = SETTINGS_KID_CAPABILITIES.filter((cap) => Object.prototype.hasOwnProperty.call(kidCaps, cap.key) ? !Boolean(kidCaps[cap.key]) : !cap.defaultValue);
     return `
         <div class="settings-overview-surface">
+            ${_renderSettingsPresetPanel({ rules, kidCaps, keywords, canUpdatePolicy })}
             <section class="settings-overview-card settings-overview-card--privacy">
                 <header>
                     <div><p class="settings-section-title">Privacy</p><h4>${guardedSources ? "Visibility boundaries are active" : "Family-wide by default"}</h4></div>
@@ -7036,8 +10035,54 @@ function _renderSettingsOverview({ rules, kidCaps, keywords, flags, guardedSourc
                 <div class="settings-feature-meter" style="--feature-on:${flags.length ? Math.round((enabledFlagCount / flags.length) * 100) : 0}%"><span></span></div>
                 <p class="settings-feature-note">${privateSources ? `${privateSources} private source${privateSources === 1 ? "" : "s"} stay parent-only.` : "No source is marked parent-only."}</p>
             </section>
+            ${_renderSettingsImpactMatrix({ rules, kidCaps })}
             ${reviewItems.length ? `<section class="settings-review-list"><p class="settings-section-title">Needs review</p>${reviewItems.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</section>` : ""}
         </div>`;
+}
+
+function _renderSettingsPresetPanel({ rules, kidCaps, keywords, canUpdatePolicy }) {
+    return `
+        <section class="settings-preset-panel">
+            <header>
+                <div>
+                    <p class="settings-section-title">Policy modes</p>
+                    <h4>Parent presets</h4>
+                </div>
+                <span class="settings-band settings-band--private">Immediate</span>
+            </header>
+            <div class="settings-preset-grid">
+                ${SETTINGS_POLICY_PRESETS.map((preset) => {
+                    const active = _settingsPresetMatches(preset, rules, kidCaps, keywords);
+                    return `
+                        <button class="settings-preset-card${active ? " settings-preset-card--active" : ""}" type="button" data-settings-preset="${escapeHtml(preset.key)}" ${canUpdatePolicy ? "" : "disabled"}>
+                            <span>${escapeHtml(preset.label)}</span>
+                            <small>${escapeHtml(preset.detail)}</small>
+                            <strong>${active ? "Active" : "Apply"}</strong>
+                        </button>`;
+                }).join("")}
+            </div>
+        </section>`;
+}
+
+function _renderSettingsImpactMatrix({ rules, kidCaps }) {
+    const roles = _settingsRoleImpact(rules, kidCaps);
+    return `
+        <section class="settings-impact-panel">
+            <header>
+                <div>
+                    <p class="settings-section-title">Access impact</p>
+                    <h4>Family visibility by role</h4>
+                </div>
+            </header>
+            <div class="settings-impact-grid">
+                ${roles.map((role) => `
+                    <div class="settings-impact-row">
+                        <span>${escapeHtml(role.label)}</span>
+                        <strong>${role.visibleSources}/${SETTINGS_SOURCE_RULES.length}</strong>
+                        <small>${escapeHtml(role.detail)}</small>
+                    </div>`).join("")}
+            </div>
+        </section>`;
 }
 
 function _renderSettingsPrivacy({ policy, renderSourceRule }) {
@@ -7209,12 +10254,90 @@ function _settingsCurrentKeywords() {
     return Array.isArray(policy.sensitive_keywords) ? policy.sensitive_keywords.map(String) : [];
 }
 
+function _settingsCurrentKidCapabilities() {
+    const policy = _settingsCurrentPolicy();
+    return policy.kid_capabilities && typeof policy.kid_capabilities === "object" ? policy.kid_capabilities : {};
+}
+
+function _settingsPresetByKey(key) {
+    return SETTINGS_POLICY_PRESETS.find((preset) => preset.key === key) || null;
+}
+
+function _settingsMergedKeywords(additions) {
+    const current = _settingsCurrentKeywords();
+    const seen = new Set(current.map((value) => value.toLowerCase()));
+    const next = [...current];
+    (additions || []).forEach((value) => {
+        const normalized = String(value || "").trim().toLowerCase();
+        if (normalized && !seen.has(normalized)) {
+            seen.add(normalized);
+            next.push(normalized);
+        }
+    });
+    return next;
+}
+
+function _settingsPresetMatches(preset, rules, kidCaps, keywords) {
+    const keywordSet = new Set((keywords || []).map((value) => String(value).toLowerCase()));
+    const rulesMatch = Object.entries(preset.rules || {}).every(([key, value]) => {
+        const source = SETTINGS_SOURCE_RULES.find((item) => item.key === key) || { key, defaultBand: "family" };
+        return _settingsBandForSource(source, rules || {}) === value;
+    });
+    const capsMatch = Object.entries(preset.kid_capabilities || {}).every(([key, value]) => {
+        const defaultCap = SETTINGS_KID_CAPABILITIES.find((cap) => cap.key === key)?.defaultValue;
+        const effective = Object.prototype.hasOwnProperty.call(kidCaps || {}, key) ? Boolean(kidCaps[key]) : Boolean(defaultCap);
+        return effective === Boolean(value);
+    });
+    const keywordsMatch = (preset.sensitive_keywords || []).every((value) => keywordSet.has(String(value).toLowerCase()));
+    return rulesMatch && capsMatch && keywordsMatch;
+}
+
+function _settingsRoleImpact(rules, kidCaps) {
+    const roleBands = {
+        child: new Set(["family", "named"]),
+        elder: new Set(["family", "adults", "named"]),
+        guardian: new Set(["family", "adults", "named", "private"]),
+        parent: new Set(["family", "adults", "named", "private"]),
+    };
+    const kidAllowed = SETTINGS_KID_CAPABILITIES.filter((cap) => Object.prototype.hasOwnProperty.call(kidCaps || {}, cap.key) ? Boolean(kidCaps[cap.key]) : cap.defaultValue).length;
+    return [
+        { key: "child", label: "Children", detail: `${kidAllowed} kid actions allowed` },
+        { key: "elder", label: "Elders", detail: "Private sources hidden" },
+        { key: "guardian", label: "Guardians", detail: "Full family visibility" },
+        { key: "parent", label: "Parents", detail: "Full policy control" },
+    ].map((role) => ({
+        ...role,
+        visibleSources: SETTINGS_SOURCE_RULES.filter((source) => roleBands[role.key].has(_settingsBandForSource(source, rules || {}))).length,
+    }));
+}
+
+async function _applySettingsPreset(button) {
+    if (!button || button.disabled) return;
+    const preset = _settingsPresetByKey(button.dataset.settingsPreset);
+    if (!preset) return;
+    await _updateSettingsPolicy({
+        rules: preset.rules,
+        kid_capabilities: preset.kid_capabilities,
+        sensitive_keywords: _settingsMergedKeywords(preset.sensitive_keywords),
+        interaction_source: "settings_quick_presets",
+        interaction_kind: "preset_apply",
+        interaction_preset: preset.key,
+    }, button, `${preset.label} settings applied.`);
+}
+
 async function _setVisibilityRule(select) {
     const key = select.dataset.settingRule;
     const value = select.value;
     const previous = select.dataset.currentBand;
     if (!key || !value) return;
-    const saved = await _updateSettingsPolicy({ rules: { [key]: value } }, select, "Privacy rule updated.");
+    const saved = await _updateSettingsPolicy({
+        rules: { [key]: value },
+        interaction_source: "settings_privacy_rule",
+        interaction_kind: "visibility_band_change",
+        interaction_target: key,
+        interaction_previous: previous,
+        interaction_next: value,
+    }, select, "Privacy rule updated.");
     if (!saved) select.value = previous;
 }
 
@@ -7234,13 +10357,23 @@ async function _addSensitiveKeywords(input, button) {
         }
     });
     input.value = "";
-    await _updateSettingsPolicy({ sensitive_keywords: next }, button, "Sensitive terms updated.");
+    await _updateSettingsPolicy({
+        sensitive_keywords: next,
+        interaction_source: "settings_sensitive_terms",
+        interaction_kind: "keyword_add",
+        interaction_target: additions.join(","),
+    }, button, "Sensitive terms updated.");
 }
 
 async function _removeSensitiveKeyword(keyword, button) {
     if (!keyword) return;
     const next = _settingsCurrentKeywords().filter((value) => value !== keyword);
-    await _updateSettingsPolicy({ sensitive_keywords: next }, button, "Sensitive terms updated.");
+    await _updateSettingsPolicy({
+        sensitive_keywords: next,
+        interaction_source: "settings_sensitive_terms",
+        interaction_kind: "keyword_remove",
+        interaction_target: keyword,
+    }, button, "Sensitive terms updated.");
 }
 
 async function _toggleKidCapability(tog) {
@@ -7248,7 +10381,14 @@ async function _toggleKidCapability(tog) {
     const key = tog.dataset.kidCapability;
     const current = tog.dataset.enabled === "true";
     if (!key) return;
-    await _updateSettingsPolicy({ kid_capabilities: { [key]: !current } }, tog, "Kid permissions updated.");
+    await _updateSettingsPolicy({
+        kid_capabilities: { [key]: !current },
+        interaction_source: "settings_kid_capability",
+        interaction_kind: current ? "kid_capability_block" : "kid_capability_allow",
+        interaction_target: key,
+        interaction_previous: current,
+        interaction_next: !current,
+    }, tog, "Kid permissions updated.");
 }
 
 async function _updateSettingsPolicy(patch, pendingEl, message) {
@@ -7261,16 +10401,8 @@ async function _updateSettingsPolicy(patch, pendingEl, message) {
     pendingEl?.classList?.add("settings-pending");
     if (pendingEl && "disabled" in pendingEl) pendingEl.disabled = true;
     try {
-        const resp = await fetch("/k1/tools/family_settings/update_visibility_policy", {
-            method: "POST",
-            headers: { ...buildAppsHeaders(), "Content-Type": "application/json" },
-            body: JSON.stringify(patch || {}),
-        });
-        const result = resp.ok ? await resp.json() : { success: false, error: `HTTP ${resp.status}` };
-        if (result.success === false) {
-            showToast("Action failed", result.error || result.error_code || "Unknown error", 7000);
-            return false;
-        }
+        const result = await _callAdapterWrite("family_settings", "update_visibility_policy", patch || {});
+        if (result.policy && adapterCache.listData.family_settings) adapterCache.listData.family_settings.policy = result.policy;
         showToast("Settings", message || "Settings saved.");
         await loadAdapterView("settings");
         return true;
@@ -7292,20 +10424,20 @@ async function _toggleFlag(tog, manifest) {
 
     tog.classList.add("toggle--pending");
     try {
-        const resp = await fetch("/k1/tools/family_settings/set_feature_flag", {
-            method: "POST",
-            headers: { ...buildAppsHeaders(), "Content-Type": "application/json" },
-            body: JSON.stringify({ flag_name: flagName, enabled: newVal }),
+        await _callAdapterWrite("family_settings", "set_feature_flag", {
+            flag_name: flagName,
+            enabled: newVal,
+            interaction_source: "settings_feature_toggle",
+            interaction_kind: newVal ? "toggle_on" : "toggle_off",
+            interaction_target: flagName,
+            interaction_previous: current,
+            interaction_next: newVal,
         });
-        if (resp.ok) {
-            tog.dataset.enabled = String(newVal);
-            tog.setAttribute("aria-checked", String(newVal));
-            tog.classList.toggle("toggle--on", newVal);
-            showToast("Settings", `${_humanizeLabel(flagName)} ${newVal ? "enabled" : "disabled"}.`);
-            await loadAdapterView("settings");
-        } else {
-            showToast("Error", `HTTP ${resp.status}`);
-        }
+        tog.dataset.enabled = String(newVal);
+        tog.setAttribute("aria-checked", String(newVal));
+        tog.classList.toggle("toggle--on", newVal);
+        showToast("Settings", `${_humanizeLabel(flagName)} ${newVal ? "enabled" : "disabled"}.`);
+        await loadAdapterView("settings");
     } catch (e) {
         showToast("Error", e.message);
     } finally {
@@ -7412,23 +10544,27 @@ async function _submitAdapterAction(adapterId, actionName, params) {
     const label = actionSpec?.label || _humanizeLabel(actionName);
 
     try {
-        const resp = await fetch(`/k1/tools/${adapterId}/${actionName}`, {
-            method: "POST",
-            headers: { ...buildAppsHeaders(), "Content-Type": "application/json" },
-            body: JSON.stringify(params || {}),
-        });
-        const result = resp.ok ? await resp.json() : { success: false, error: `HTTP ${resp.status}` };
-        if (result.success !== false) {
-            showToast("Done", `${label} completed.`);
-            const viewId = Object.entries(ADAPTER_BACKEND_NAME).find(([, b]) => b === adapterId)?.[0];
-            if (viewId) await loadAdapterView(viewId);
-            if (state.currentView === "home") loadHomeDashboard();
-        } else {
-            showToast("Action failed", result.error || result.error_message || result.error_code || "Unknown error", 7000);
-        }
+        await _callAdapterWrite(adapterId, actionName, params);
+        showToast("Done", `${label} completed.`);
+        const viewId = Object.entries(ADAPTER_BACKEND_NAME).find(([, b]) => b === adapterId)?.[0];
+        if (viewId) await loadAdapterView(viewId);
+        if (state.currentView === "home") loadHomeDashboard();
     } catch (e) {
-        showToast("Error", e.message, 7000);
+        showToast("Action failed", e.message, 7000);
     }
+}
+
+async function _callAdapterWrite(adapterId, actionName, params) {
+    const resp = await fetch(`/k1/tools/${adapterId}/${actionName}`, {
+        method: "POST",
+        headers: { ...buildAppsHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify(params || {}),
+    });
+    const result = resp.ok ? await resp.json() : { success: false, error: `HTTP ${resp.status}` };
+    if (result.success === false) {
+        throw new Error(result.error || result.error_message || result.error_code || "Unknown error");
+    }
+    return result;
 }
 
 async function submitActionForm() {

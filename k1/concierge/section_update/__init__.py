@@ -15,7 +15,6 @@ from k1.concierge.section_update.classifier import (
     DeterministicSectionUpdateClassifier,
     ISectionUpdateClassifier,
 )
-from k1.concierge.section_update.llm_classifier import LLMSectionUpdateClassifier
 from k1.concierge.section_update.events import (
     SectionUpdateCompletionStatus,
     build_section_update_completed_payload,
@@ -40,6 +39,7 @@ from k1.concierge.section_update.live_api import (
     is_live_turn_complete_record,
     normalize_live_turn_complete_record,
 )
+from k1.concierge.section_update.llm_classifier import LLMSectionUpdateClassifier
 from k1.concierge.section_update.overlay import (
     OVERLAY_TASK_PAYLOAD_KEY,
     attach_overlay_to_task_payload,

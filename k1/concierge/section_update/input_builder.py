@@ -280,7 +280,9 @@ def _collect_speaker_identity(ss: Any | None) -> dict[str, Any]:
         identity["active_member"] = active_member
     if members:
         identity["known_members"] = members
-    family_name = str(family_data.get("family_name", "") or "") if isinstance(family_data, Mapping) else ""
+    family_name = (
+        str(family_data.get("family_name", "") or "") if isinstance(family_data, Mapping) else ""
+    )
     if family_name:
         identity["family_name"] = family_name
     return identity

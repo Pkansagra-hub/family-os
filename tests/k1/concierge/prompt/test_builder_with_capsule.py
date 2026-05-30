@@ -97,6 +97,25 @@ def test_trust_level_renders_as_situation_frame_seat() -> None:
     assert "## trust_level" in out.system_prompt
     assert "Trust score: 0.38" in out.system_prompt
     assert "Latest signal: correction_after_misread" in out.system_prompt
+    assert "Action posture: repairing" in out.system_prompt
+    assert "Clarification rule: ask only for blocking missing fields" in out.system_prompt
+
+
+def test_high_trust_gives_front_action_friction_guidance() -> None:
+    trust = TrustLevelSection(session_id="s1")
+    trust.update(
+        trust_score=0.86,
+        confidence=0.85,
+        signal="explicit_confidence",
+        stance="steady",
+        reason="User asked K1 to use judgment and stop over-clarifying.",
+    )
+
+    out = _build(ss=_SessionState({"trust_level": trust}))
+
+    assert "Action posture: trusted autonomy" in out.system_prompt
+    assert "proceed on clear GREEN actions" in out.system_prompt
+    assert "do not ask redundant confirmations" in out.system_prompt
 
 
 def test_capsule_appended_for_every_mode() -> None:

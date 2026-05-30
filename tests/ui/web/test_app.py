@@ -204,6 +204,55 @@ def test_family_app_static_contracts_are_manifest_aligned(client: TestClient) ->
     assert "Inspect HOT / WARM / COLD memory sections and stored data" in html
 
 
+def test_chat_static_assets_support_mermaid_blocks(client: TestClient) -> None:
+    """Chat markdown can upgrade Mermaid fences to rendered diagrams."""
+    html = client.get("/").text
+    js = client.get("/static/app.js").text
+    css = client.get("/static/styles.css").text
+
+    assert "/static/app.js?v=136" in html
+    assert "/static/styles.css?v=136" in html
+    assert "MERMAID_MODULE_URL" in js
+    assert "mermaid@10.9.3" in js
+    assert "shouldRenderMermaidBlock" in js
+    assert "isLikelyMermaidSource" in js
+    assert "normalizeMermaidSourceForRender" in js
+    assert "normalizeMermaidFlowchartSyntax" in js
+    assert "normalizeMermaidFlowchartLabels" in js
+    assert "normalizeMermaidFlowchartLinkStyles" in js
+    assert "mermaidRenderSourceCandidates" in js
+    assert "isLikelyMermaidGraphFragment" in js
+    assert "sequenceDiagram" in js
+    assert "isMermaidFenceLanguage" in js
+    assert "data-mermaid-status" in js
+    assert "setupMermaidViewer" in js
+    assert "openMermaidViewer" in js
+    assert "setMermaidViewerScale" in js
+    assert "mermaid-viewer__stage" in js
+    assert "hydrateMessageContent(bubble)" in js
+    assert ".message-mermaid" in css
+    assert ".message-mermaid__canvas" in css
+    assert ".mermaid-viewer" in css
+    assert ".mermaid-viewer__button" in css
+
+
+def test_chat_runtime_panel_has_subtle_transparency_signals(client: TestClient) -> None:
+    """Runtime panel exposes active copy, tool cues, and quiet confidence."""
+    js = client.get("/static/app.js").text
+    css = client.get("/static/styles.css").text
+
+    assert "_runtimeMemoryFocus" in js
+    assert "Recalling ${member}'s preferences" in js
+    assert "Searching for relevant routines" in js
+    assert "_runtimeToolHint" in js
+    assert "runtime-phase-cue" in js
+    assert "Tool cue:" in js
+    assert "_runtimeConfidence" in js
+    assert "Path confidence" in js
+    assert "runtime-confidence" in css
+    assert "runtime-phase-cue" in css
+
+
 def test_configure_sets_test_mode() -> None:
     app_module.configure(test_mode=True)
     assert app_module._test_mode is True

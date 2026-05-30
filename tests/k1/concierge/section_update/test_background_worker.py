@@ -46,7 +46,9 @@ class _FakeBus:
                 handler(envelope)
 
     def subscribe(self, pattern: str, handler: Any) -> SubscriptionHandle:
-        handle = SubscriptionHandle(subscription_id=f"sub-{len(self.subscriptions) + 1}", pattern=pattern)
+        handle = SubscriptionHandle(
+            subscription_id=f"sub-{len(self.subscriptions) + 1}", pattern=pattern
+        )
         self.subscriptions[handle.subscription_id] = (pattern, handler)
         return handle
 
@@ -137,7 +139,9 @@ def test_legacy_shadow_mode_is_remapped_to_background_apply_noop() -> None:
     topics = [item.topic for item in bus.published]
     assert TOPIC_SECTION_UPDATE_REQUESTED in topics
     assert TOPIC_SECTION_UPDATE_COMPLETED in topics
-    completed = [_payload(item) for item in bus.published if item.topic == TOPIC_SECTION_UPDATE_COMPLETED]
+    completed = [
+        _payload(item) for item in bus.published if item.topic == TOPIC_SECTION_UPDATE_COMPLETED
+    ]
     assert completed[-1]["status"] == "noop"
     assert completed[-1]["mode"] == "background_apply"
 
@@ -200,7 +204,9 @@ def test_background_apply_calls_writer_through_apply_boundary() -> None:
         worker.stop()
 
     writer.batch_mutations.assert_called_once()
-    completed = [_payload(item) for item in bus.published if item.topic == TOPIC_SECTION_UPDATE_COMPLETED]
+    completed = [
+        _payload(item) for item in bus.published if item.topic == TOPIC_SECTION_UPDATE_COMPLETED
+    ]
     assert completed[-1]["status"] == "applied"
     assert completed[-1]["provider_id"] == "vertex"
     assert completed[-1]["model_id"] == "gemini-2.5-flash-lite"
@@ -226,7 +232,9 @@ def test_background_apply_rejects_invalid_schema_without_writer_call() -> None:
         worker.stop()
 
     writer.batch_mutations.assert_not_called()
-    completed = [_payload(item) for item in bus.published if item.topic == TOPIC_SECTION_UPDATE_COMPLETED]
+    completed = [
+        _payload(item) for item in bus.published if item.topic == TOPIC_SECTION_UPDATE_COMPLETED
+    ]
     assert completed[-1]["status"] == "rejected"
     assert completed[-1]["diagnostics"][0]["code"] == "invalid_schema"
 
@@ -247,7 +255,9 @@ def test_queue_full_publishes_fail_closed_diagnostics_without_writer_call() -> N
     worker._on_turn_completed(_turn("overflow-turn"))
 
     writer.batch_mutations.assert_not_called()
-    completed = [_payload(item) for item in bus.published if item.topic == TOPIC_SECTION_UPDATE_COMPLETED]
+    completed = [
+        _payload(item) for item in bus.published if item.topic == TOPIC_SECTION_UPDATE_COMPLETED
+    ]
     assert completed[-1]["turn_id"] == "overflow-turn"
     assert completed[-1]["status"] == "degraded_noop"
     assert completed[-1]["diagnostics"][0]["code"] == "queue_full"

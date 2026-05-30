@@ -958,9 +958,7 @@ def _build_prompt(raw: dict[str, Any]) -> PromptConfig:
     if "front_prompt_iteration" in raw:
         value = str(raw["front_prompt_iteration"]).strip().lower()
         if value not in {"v1", "v2"}:
-            raise ValueError(
-                f"prompt.front_prompt_iteration must be 'v1' or 'v2', got {value!r}"
-            )
+            raise ValueError(f"prompt.front_prompt_iteration must be 'v1' or 'v2', got {value!r}")
         cfg.front_prompt_iteration = value
     if "max_iterations" in raw and isinstance(raw["max_iterations"], dict):
         cfg.max_iterations = {str(k): int(v) for k, v in raw["max_iterations"].items()}

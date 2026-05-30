@@ -109,6 +109,36 @@ async def test_parent_approves_then_checks_off_child_item(svc):
     assert got["item"]["status"] == "checked"
 
 
+async def test_shopping_direct_interactions_record_metadata(svc):
+    service, _, _ = svc
+    create = await _create_grocery_list(service)
+    add = await service.dispatch(
+        "add_item",
+        {"list_id": create["list_id"], "name": "paper towels", "category": "household"},
+        make_ctx(user_id="parent1", role="parent"),
+    )
+    item_id = add["item_id"]
+
+    updated = await service.dispatch(
+        "update_item",
+        {
+            "item_id": item_id,
+            "category": "groceries",
+            "interaction_source": "shopping_aisle_grid",
+            "interaction_kind": "drag_category",
+        },
+        make_ctx(user_id="parent1", role="parent"),
+    )
+
+    assert updated["success"] is True
+    got = await service.dispatch("get_item", {"item_id": item_id}, make_ctx())
+    metadata = got["item"]["metadata"]
+    assert got["item"]["category"] == "groceries"
+    assert metadata["_last_ui_interaction"]["source"] == "shopping_aisle_grid"
+    assert metadata["_last_ui_interaction"]["kind"] == "drag_category"
+    assert metadata["_last_ui_interaction"]["at"]
+
+
 async def test_parent_rejects_child_item(svc):
     service, _, _ = svc
     create = await _create_grocery_list(service)

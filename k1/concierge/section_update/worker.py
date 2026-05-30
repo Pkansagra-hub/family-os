@@ -7,7 +7,7 @@ import logging
 import queue
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Mapping
 
 from k1.bus.envelope import Envelope
@@ -222,7 +222,7 @@ class SectionUpdateBackgroundWorker:
         started = time.perf_counter()
         try:
             input_data = self._build_input(envelope)
-        except Exception as exc:  # noqa: BLE001 - background worker must fail closed.
+        except Exception:  # noqa: BLE001 - background worker must fail closed.
             logger.warning("section_update worker failed to build input", exc_info=True)
             self._record_status(SectionUpdateCompletionStatus.DEGRADED_NOOP, "input_build_failed")
             return
@@ -260,10 +260,12 @@ class SectionUpdateBackgroundWorker:
                 input_data,
                 envelope,
                 status=SectionUpdateCompletionStatus.DEGRADED_NOOP,
-                diagnostics=[{
-                    "code": "worker_misconfigured",
-                    "message": "classifier or writer_port missing",
-                }],
+                diagnostics=[
+                    {
+                        "code": "worker_misconfigured",
+                        "message": "classifier or writer_port missing",
+                    }
+                ],
                 elapsed_ms=_elapsed_ms(started),
             )
             return
@@ -415,7 +417,9 @@ class SectionUpdateBackgroundWorker:
         *,
         turn_id: str = "",
     ) -> None:
-        status_text = status.value if isinstance(status, SectionUpdateCompletionStatus) else str(status)
+        status_text = (
+            status.value if isinstance(status, SectionUpdateCompletionStatus) else str(status)
+        )
         with self._lock:
             self._stats.section_update_completed_count += 1
             self._stats.last_turn_id_completed = turn_id or self._stats.last_turn_id_completed

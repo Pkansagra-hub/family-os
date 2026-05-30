@@ -54,26 +54,20 @@ from k1.model_hub.types import (
     CapabilityType,
     ChatPayload,
     ChatResult,
-)
-from k1.model_hub.types import FinishReason as K1FinishReason
-from k1.model_hub.types import (
     HubChunk,
     HubRequest,
     HubResponse,
-)
-from k1.model_hub.types import Message as K1Message
-from k1.model_hub.types import (
     ReasonResult,
     RequestConstraints,
     ResponseMetadata,
     StructuredResult,
     TokenUsage,
     ToolCallPayload,
-)
-from k1.model_hub.types import ToolCallResult as K1ToolCallResult
-from k1.model_hub.types import (
     ToolCallResultSet,
 )
+from k1.model_hub.types import FinishReason as K1FinishReason
+from k1.model_hub.types import Message as K1Message
+from k1.model_hub.types import ToolCallResult as K1ToolCallResult
 from k1.model_hub.types import ToolDefinition as K1ToolDefinition
 
 logger = logging.getLogger(__name__)

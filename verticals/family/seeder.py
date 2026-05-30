@@ -194,7 +194,7 @@ class SpaceDataSeeder:
         # space block would only ever list one parent + the children. See
         # k1/selfmodel/service/space_graph.py L181-L188.
         for i, p1 in enumerate(parents):
-            for p2 in parents[i + 1:]:
+            for p2 in parents[i + 1 :]:
                 edges.append(
                     SpaceEdge(
                         from_member=p1.actor_id,
@@ -215,7 +215,7 @@ class SpaceDataSeeder:
         # Build sibling_of edges: every child pair is mutually adjacent so
         # children-rendered prompts see all their siblings, not just one.
         for i, c1 in enumerate(children):
-            for c2 in children[i + 1:]:
+            for c2 in children[i + 1 :]:
                 edges.append(
                     SpaceEdge(
                         from_member=c1.actor_id,
@@ -254,12 +254,10 @@ class SpaceDataSeeder:
         # map to one of the four typed kinds, and they vanish from the
         # per-actor visible-space block even though the constitution permits
         # the viewer to see them. Skip pairs already covered by a typed edge.
-        existing_pairs = {
-            (e.from_member, e.to_member) for e in edges
-        }
+        existing_pairs = {(e.from_member, e.to_member) for e in edges}
         all_members = list(profile.members)
         for i, m1 in enumerate(all_members):
-            for m2 in all_members[i + 1:]:
+            for m2 in all_members[i + 1 :]:
                 if (m1.actor_id, m2.actor_id) not in existing_pairs:
                     edges.append(
                         SpaceEdge(
