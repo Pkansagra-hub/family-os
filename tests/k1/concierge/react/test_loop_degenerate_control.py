@@ -10,6 +10,17 @@ from k1.concierge.llm.types import ToolSchema
 from k1.concierge.react.control import BackControlEvent
 from k1.concierge.react.loop import react_loop
 from k1.concierge.tools.result_protocol import ToolResult
+from k1.model_hub.types import (
+    CapabilityType,
+)
+from k1.model_hub.types import FinishReason as HubFinishReason
+from k1.model_hub.types import (
+    HubChunk,
+    HubResponse,
+    ReasonResult,
+    ResponseMetadata,
+    TokenUsage,
+)
 from tests.k1.concierge.conftest import (
     make_hub_empty_response,
     make_hub_text_response,
@@ -126,6 +137,289 @@ async def test_repeated_empty_back_response_returns_loop_degenerate() -> None:
     assert result.status == "loop_degenerate"
     assert result.data == {"error_code": "REACT_LOOP_DEGENERATE"}
     assert any(event["event_type"] == "degenerate_loop" for event in result.loop_events)
+
+
+@pytest.mark.asyncio
+async def test_back_malformed_tool_call_retries_instead_of_aborting() -> None:
+    class Model:
+        def __init__(self) -> None:
+            self.requests = []
+
+        async def execute(self, request):  # type: ignore[no-untyped-def]
+            self.requests.append(request)
+            if len(self.requests) == 1:
+                return make_hub_text_response(
+                    "",
+                    finish_reason=HubFinishReason.MALFORMED_TOOL_CALL,
+                )
+            return make_hub_tool_response(
+                [
+                    {
+                        "id": "submit-1",
+                        "name": "submit_result",
+                        "arguments": {
+                            "result_type": "complete",
+                            "final_answer": "done",
+                        },
+                    }
+                ]
+            )
+
+    model = Model()
+    dispatcher = _SubmitDispatcher()
+
+    result = await react_loop(
+        actor="back",
+        system_prompt="system",
+        messages=[],
+        tools=[_submit_tool()],
+        max_iterations=3,
+        model=model,  # type: ignore[arg-type]
+        tool_dispatcher=dispatcher,  # type: ignore[arg-type]
+        on_text_response=lambda text: None,  # type: ignore[arg-type]
+        cancellation_check=_never_cancel,
+        trace_id="malformed-test",
+        scenario="task_execution",
+    )
+
+    assert result.status == "complete"
+    assert dispatcher.calls == ["submit_result"]
+    assert any(event["event_type"] == "schema_repair" for event in result.loop_events)
+    retry_messages = model.requests[1].payload.messages
+    assert any("invalid JSON" in message.content for message in retry_messages)
+
+
+@pytest.mark.asyncio
+async def test_react_loop_adds_actor_reasoning_effort_to_requests() -> None:
+    class Model:
+        def __init__(self, response) -> None:  # type: ignore[no-untyped-def]
+            self.requests = []
+            self.response = response
+
+        async def execute(self, request):  # type: ignore[no-untyped-def]
+            self.requests.append(request)
+            return self.response
+
+    front_model = Model(make_hub_text_response("done"))
+    await react_loop(
+        actor="front",
+        system_prompt="system",
+        messages=[],
+        tools=[],
+        max_iterations=1,
+        model=front_model,  # type: ignore[arg-type]
+        tool_dispatcher=_SubmitDispatcher(),  # type: ignore[arg-type]
+        on_text_response=lambda text: None,  # type: ignore[arg-type]
+        cancellation_check=_never_cancel,
+        trace_id="front-reasoning-test",
+    )
+
+    back_model = Model(
+        make_hub_tool_response(
+            [
+                {
+                    "id": "submit-1",
+                    "name": "submit_result",
+                    "arguments": {
+                        "result_type": "complete",
+                        "final_answer": "done",
+                    },
+                }
+            ]
+        )
+    )
+    await react_loop(
+        actor="back",
+        system_prompt="system",
+        messages=[],
+        tools=[_submit_tool()],
+        max_iterations=1,
+        model=back_model,  # type: ignore[arg-type]
+        tool_dispatcher=_SubmitDispatcher(),  # type: ignore[arg-type]
+        on_text_response=lambda text: None,  # type: ignore[arg-type]
+        cancellation_check=_never_cancel,
+        trace_id="back-reasoning-test",
+    )
+
+    assert front_model.requests[0].constraints.reasoning_effort == "low"
+    assert back_model.requests[0].constraints.reasoning_effort == "medium"
+
+
+@pytest.mark.asyncio
+async def test_non_streaming_thought_text_is_forwarded_to_stream_callback() -> None:
+    metadata = ResponseMetadata(
+        request_id="req-1",
+        model_id="model",
+        provider_id="test",
+        usage=TokenUsage(),
+        cost_usd=0.0,
+        latency_ms=0,
+        cache_hit=False,
+        capability=CapabilityType.CHAT,
+        trace_id="thought-test",
+    )
+
+    class Model:
+        async def execute(self, request):  # type: ignore[no-untyped-def]
+            return HubResponse(
+                result=ReasonResult(text="done", thinking="I am reasoning."),
+                metadata=metadata,
+            )
+
+    chunks = []
+
+    async def on_stream(chunk):  # type: ignore[no-untyped-def]
+        chunks.append(chunk)
+
+    result = await react_loop(
+        actor="front",
+        system_prompt="system",
+        messages=[],
+        tools=[],
+        max_iterations=1,
+        model=Model(),  # type: ignore[arg-type]
+        tool_dispatcher=_SubmitDispatcher(),  # type: ignore[arg-type]
+        on_text_response=lambda text: None,  # type: ignore[arg-type]
+        cancellation_check=_never_cancel,
+        trace_id="thought-test",
+        on_stream=on_stream,
+    )
+
+    assert result.status == "complete"
+    assert [chunk.thought_text for chunk in chunks] == ["I am reasoning."]
+
+
+@pytest.mark.asyncio
+async def test_front_force_text_final_answer_streams_text_chunks() -> None:
+    metadata = ResponseMetadata(
+        request_id="req-1",
+        model_id="model",
+        provider_id="test",
+        usage=TokenUsage(),
+        cost_usd=0.0,
+        latency_ms=0,
+        cache_hit=False,
+        capability=CapabilityType.CHAT,
+        trace_id="front-stream-test",
+    )
+
+    class Model:
+        def __init__(self) -> None:
+            self.requests = []
+
+        async def execute(self, request):  # type: ignore[no-untyped-def]
+            raise AssertionError("forced Front final text should stream")
+
+        async def stream_execute(self, request):  # type: ignore[no-untyped-def]
+            self.requests.append(request)
+            yield HubChunk(content="Done", done=False)
+            yield HubChunk(content=".", done=False)
+            yield HubChunk(content="Done.", done=True, metadata=metadata)
+
+    chunks = []
+
+    async def on_stream(chunk):  # type: ignore[no-untyped-def]
+        chunks.append(chunk)
+
+    model = Model()
+
+    result = await react_loop(
+        actor="front",
+        system_prompt="system",
+        messages=[],
+        tools=[_tool("dispatch_task")],
+        max_iterations=1,
+        model=model,  # type: ignore[arg-type]
+        tool_dispatcher=_SubmitDispatcher(),  # type: ignore[arg-type]
+        on_text_response=lambda text: None,  # type: ignore[arg-type]
+        cancellation_check=_never_cancel,
+        trace_id="front-stream-test",
+        on_stream=on_stream,
+    )
+
+    assert result.status == "complete"
+    assert result.text == "Done."
+    assert model.requests[0].capability == CapabilityType.CHAT
+    assert [chunk.text for chunk in chunks if chunk.chunk_type == "text_delta"] == ["Done", "."]
+
+
+@pytest.mark.asyncio
+async def test_repeated_front_tool_calls_can_continue_to_dispatch() -> None:
+    class Model:
+        def __init__(self) -> None:
+            self.requests = 0
+
+        async def execute(self, request):  # type: ignore[no-untyped-def]
+            self.requests += 1
+            if self.requests <= 3:
+                return make_hub_tool_response(
+                    [
+                        {
+                            "id": f"belief-{self.requests}",
+                            "name": "update_beliefs",
+                            "arguments": {
+                                "facts": [
+                                    {
+                                        "subject": "Alex",
+                                        "predicate": "has_appointment",
+                                        "object": "dentist appointment Friday 9 AM",
+                                    }
+                                ]
+                            },
+                        }
+                    ]
+                )
+            if self.requests == 4:
+                return make_hub_tool_response(
+                    [
+                        {
+                            "id": "dispatch-1",
+                            "name": "dispatch_task",
+                            "arguments": {
+                                "intents": [
+                                    {
+                                        "action": "create dentist appointment calendar event",
+                                        "domain": "calendar",
+                                    }
+                                ]
+                            },
+                        }
+                    ]
+                )
+            return make_hub_text_response("Booking it now.")
+
+    dispatcher = _SubmitDispatcher()
+
+    result = await react_loop(
+        actor="front",
+        system_prompt="system",
+        messages=[],
+        tools=[_tool("update_beliefs"), _tool("dispatch_task")],
+        max_iterations=6,
+        model=Model(),  # type: ignore[arg-type]
+        tool_dispatcher=dispatcher,  # type: ignore[arg-type]
+        on_text_response=lambda text: None,  # type: ignore[arg-type]
+        cancellation_check=_never_cancel,
+        trace_id="front-repeat-test",
+        scenario="standard",
+    )
+
+    assert result.status == "complete"
+    assert "dispatch_task" in dispatcher.calls
+    assert result.dispatched_tasks == [
+        {
+            "intents": [
+                {
+                    "action": "create dentist appointment calendar event",
+                    "domain": "calendar",
+                }
+            ]
+        }
+    ]
+    assert not any(
+        event.get("payload", {}).get("reason") == "repeated_tool_call"
+        for event in result.loop_events
+    )
 
 
 @pytest.mark.asyncio

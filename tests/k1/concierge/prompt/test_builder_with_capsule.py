@@ -12,11 +12,14 @@ The contract for this milestone:
 
 from __future__ import annotations
 
+from k1.concierge.config import load_config, reset_config
+
 # AffectBand is a small dataclass elsewhere in the prompt package.
 from k1.concierge.prompt.affect import AffectBand
 from k1.concierge.prompt.builder import DynamicPromptBuilder
 from k1.concierge.prompt.mode import PromptMode
 from k1.selfmodel.contracts.capsule import GroundingCapsule
+from k1.sessionstate.sections.trust_level import TrustLevelSection
 
 
 def _affect_neutral() -> AffectBand:
@@ -36,6 +39,14 @@ def _build(
         scenario_data=scenario_data or {},
         **kwargs,
     )
+
+
+class _SessionState:
+    def __init__(self, sections: dict[str, object]) -> None:
+        self._sections = sections
+
+    def get_section(self, name: str) -> object | None:
+        return self._sections.get(name)
 
 
 # ---------------------------------------------------------------------
@@ -63,10 +74,48 @@ def test_capsule_text_appended_when_provided() -> None:
     augmented = _build(grounding_capsule=cap)
     assert "[actor]" in augmented.system_prompt
     assert "[freshness]" in augmented.system_prompt
-    # The capsule text must appear AFTER the baseline content.
-    assert augmented.system_prompt.endswith("worst_of_three=fresh")
-    # Augmented prompt strictly contains baseline as a prefix.
-    assert augmented.system_prompt.startswith(baseline.system_prompt)
+    assert "-- INJECT: REFERENCE PROFILE --" in augmented.system_prompt
+    assert augmented.system_prompt != baseline.system_prompt
+    assert augmented.system_prompt.index(
+        "-- INJECT: REFERENCE PROFILE --"
+    ) < augmented.system_prompt.index("== CURRENT EVENT ==")
+
+
+def test_trust_level_renders_as_situation_frame_seat() -> None:
+    trust = TrustLevelSection(session_id="s1")
+    trust.update(
+        trust_score=0.38,
+        confidence=0.9,
+        signal="correction_after_misread",
+        stance="repairing",
+        reason="User corrected K1 and asked it not to assume.",
+    )
+
+    out = _build(ss=_SessionState({"trust_level": trust}))
+
+    assert "-- INJECT: TRUST CALIBRATION --" in out.system_prompt
+    assert "## trust_level" in out.system_prompt
+    assert "Trust score: 0.38" in out.system_prompt
+    assert "Latest signal: correction_after_misread" in out.system_prompt
+    assert "Action posture: repairing" in out.system_prompt
+    assert "Clarification rule: ask only for blocking missing fields" in out.system_prompt
+
+
+def test_high_trust_gives_front_action_friction_guidance() -> None:
+    trust = TrustLevelSection(session_id="s1")
+    trust.update(
+        trust_score=0.86,
+        confidence=0.85,
+        signal="explicit_confidence",
+        stance="steady",
+        reason="User asked K1 to use judgment and stop over-clarifying.",
+    )
+
+    out = _build(ss=_SessionState({"trust_level": trust}))
+
+    assert "Action posture: trusted autonomy" in out.system_prompt
+    assert "proceed on clear GREEN actions" in out.system_prompt
+    assert "do not ask redundant confirmations" in out.system_prompt
 
 
 def test_capsule_appended_for_every_mode() -> None:
@@ -98,7 +147,8 @@ def test_empty_capsule_text_is_skipped() -> None:
 
 def test_standard_prompt_examples_do_not_override_greeting_rules() -> None:
     out = _build(grounding_capsule=None)
-    assert "Greeting / banter turn:\n  1. Text response only. No tools." in out.system_prompt
+    assert "Reply like a family member would" in out.system_prompt
+    assert "One short line, two at most. No tools." in out.system_prompt
     assert "Mixed banter + request turn:" in out.system_prompt
     assert (
         "1. recall_memory() + update_scoreboard() + update_beliefs()  [all at once]"
@@ -110,8 +160,9 @@ def test_standard_prompt_forces_text_only_salutations() -> None:
     out = _build(grounding_capsule=None)
     assert "good morning" in out.system_prompt
     assert "good evening" in out.system_prompt
-    assert "Greeting / salutation turns: reply directly with text. No tools." in out.system_prompt
-    assert "Never use this path for greetings, salutations," in out.system_prompt
+    assert "Reply like a family member would" in out.system_prompt
+    assert "One short line, two at most. No tools." in out.system_prompt
+    assert "Do not spend a tool iteration maintaining hidden state." in out.system_prompt
     assert "1. update_beliefs() or text response directly" not in out.system_prompt
 
 
@@ -125,6 +176,33 @@ def test_standard_prompt_drops_duplicate_active_member_when_capsule_present() ->
         grounding_capsule=cap,
         scenario_data={"active_member": "unknown", "async_results_context": ""},
     )
-    assert out.system_prompt.count("== ACTIVE MEMBER") == 1
+    assert out.system_prompt.count("-- INJECT: ACTIVE ACTOR --") == 1
+    assert out.system_prompt.count("-- INJECT: VISIBLE SPACE --") == 1
     assert "You are talking to: unknown" not in out.system_prompt
     assert "name=Alex" in out.system_prompt
+
+
+def test_builder_reads_iteration_budget_from_config(tmp_path) -> None:
+    override = tmp_path / "config.yaml"
+    override.write_text(
+        "prompt:\n"
+        "  max_iterations:\n"
+        "    STANDARD: 2\n"
+        "  crisis_iterations:\n"
+        "    STANDARD: 1\n",
+        encoding="utf-8",
+    )
+    load_config(override)
+    try:
+        standard = _build(mode=PromptMode.STANDARD)
+        crisis = DynamicPromptBuilder().build(
+            mode=PromptMode.STANDARD,
+            affect_band=AffectBand(band="crisis"),
+            history_messages=[],
+            all_tool_schemas=[],
+            scenario_data={},
+        )
+        assert standard.max_iterations == 2
+        assert crisis.max_iterations == 1
+    finally:
+        reset_config()

@@ -1,0 +1,19 @@
+sequenceDiagram
+    participant User
+    participant Front
+    participant Temporal
+    participant Spatial
+    participant Grounding
+    participant Back
+    participant Planner
+    participant Fabric
+
+    User->>Front: user turn
+    Front->>Temporal: refresh_turn
+    Front->>Spatial: refresh_turn
+    Front->>Grounding: create_envelope
+    Grounding-->>Front: front projection
+    Front->>Back: TaskDispatch with grounding ids
+    Back->>Grounding: build_projection(back)
+    Back->>Planner: PlanRequest with grounding
+    Planner->>Fabric: CapabilityRequest with grounding_invocation

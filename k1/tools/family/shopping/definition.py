@@ -257,6 +257,7 @@ SHOPPING_DEFINITION = ToolDefinition(
                 FieldSpec(name="name", type="string", required=False),
                 FieldSpec(name="quantity", type="string", required=False),
                 FieldSpec(name="unit", type="string", required=False),
+                FieldSpec(name="list_id", type="string", required=False),
                 _CATEGORY_FIELD,
                 FieldSpec(name="notes", type="string", required=False),
                 FieldSpec(name="priority", type="string", required=False),

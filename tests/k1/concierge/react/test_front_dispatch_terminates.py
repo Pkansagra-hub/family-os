@@ -53,11 +53,11 @@ class _Model:
                     }
                 ]
             )
-        return make_hub_text_response("This should not be needed.")
+        return make_hub_text_response("On it -- working on that now.")
 
 
 @pytest.mark.asyncio
-async def test_front_stops_after_successful_dispatch_task() -> None:
+async def test_front_loops_for_llm_ack_after_successful_dispatch_task() -> None:
     model = _Model()
     dispatcher = _DispatchingTool()
 
@@ -85,7 +85,8 @@ async def test_front_stops_after_successful_dispatch_task() -> None:
     )
 
     assert result.status == "complete"
-    assert model.calls == 1
+    assert model.calls == 2
     assert dispatcher.calls == ["dispatch_task"]
+    assert result.text == "On it -- working on that now."
     assert len(result.dispatched_tasks) == 1
     assert result.dispatched_tasks[0]["task_id"] == "task-1"

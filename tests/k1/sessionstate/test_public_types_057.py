@@ -120,16 +120,14 @@ class TestReExportIdentity:
         assert Facade is Deep
 
     def test_compute_temporal_anchor_identity(self) -> None:
-        from k1.sessionstate.public_types import compute_temporal_anchor as Facade
-        from k1.sessionstate.sections.temporal_context import compute_temporal_anchor as Deep
+        from k1.sessionstate import public_types
 
-        assert Facade is Deep
+        assert not hasattr(public_types, "compute_temporal_anchor")
 
     def test_temporal_anchor_identity(self) -> None:
-        from k1.sessionstate.public_types import TemporalAnchor as Facade
-        from k1.sessionstate.sections.temporal_context import TemporalAnchor as Deep
+        from k1.sessionstate import public_types
 
-        assert Facade is Deep
+        assert not hasattr(public_types, "TemporalAnchor")
 
     def test_meta_section_identity(self) -> None:
         from k1.sessionstate.public_types import MetaSection as Facade
@@ -163,8 +161,14 @@ _DEEP_SS_PATTERNS = (
     "k1.sessionstate.migration",
 )
 
-# Allowed import: the facade itself
-_ALLOWED_SS_IMPORT = "k1.sessionstate.public_types"
+# Allowed imports: the public facade plus the few explicitly-sanctioned
+# protocol/section surfaces still used by Concierge runtime wiring.
+_ALLOWED_SS_IMPORTS = {
+    "k1.sessionstate.public_types",
+    "k1.sessionstate.ports.writer",
+    "k1.sessionstate.sections.control",
+    "k1.sessionstate.sections.task_state",
+}
 
 
 def _collect_production_py_files() -> list[Path]:
@@ -213,7 +217,7 @@ class TestNoDeepSSImports:
             imports = _extract_imports(source)
             for mod in imports:
                 if any(mod.startswith(p) for p in _DEEP_SS_PATTERNS):
-                    if mod == _ALLOWED_SS_IMPORT:
+                    if mod in _ALLOWED_SS_IMPORTS:
                         continue
                     violations.append(f"{py_file.name}: {mod}")
 

@@ -66,6 +66,9 @@ _ALL_PORT_KEYS = frozenset(
         "dispatch",
         "delta",
         "memory",
+        "temporal",
+        "spatial",
+        "grounding",
     }
 )
 
@@ -87,6 +90,9 @@ class PortBundle:
     # OPTIONAL -- default to null/test adapters for two-tier boot
     dispatch: IDispatchPort | None = None
     memory: IMemoryPort | None = None
+    temporal: Any | None = None
+    spatial: Any | None = None
+    grounding: Any | None = None
     # P4B.6: writer is passed explicitly (was reach-through into ssm._writer_port)
     writer: IWriterPort | None = None
 
@@ -375,6 +381,7 @@ class ConciergeFactory:
             llm=adapters["llm"],
             dispatch=adapters["dispatch"],
             memory=adapters["memory"],
+            spatial=adapters.get("spatial"),
         )
 
         return cls._construct_concierge(
@@ -429,6 +436,7 @@ class ConciergeFactory:
             llm=adapters["llm"],
             dispatch=adapters.get("dispatch"),
             memory=adapters.get("memory"),
+            spatial=adapters.get("spatial"),
         )
 
         return cls._construct_concierge(
@@ -537,6 +545,7 @@ class ConciergeFactory:
             "dispatch": MockDispatchAdapter(),
             "delta": bus,
             "memory": MockMemoryAdapter(),
+            "spatial": None,
             "_router": router,
             "_front_mailbox": front_mailbox,
             "_back_mailbox": back_mailbox,
@@ -784,7 +793,7 @@ class ConciergeFactory:
             front_subs = subscribe_front_events(bus, _route_front)
 
         # Step 16: Build and return ConciergeRuntime
-        return ConciergeRuntime(
+        runtime = ConciergeRuntime(
             bus=bus,
             router=router,
             front_mailbox=front_mailbox,
@@ -809,6 +818,13 @@ class ConciergeFactory:
             ledger_store=ledger_store,
             dead_letter_consumer=dead_letter,
         )
+        if ports.temporal is not None:
+            runtime.set_temporal(ports.temporal)
+        if ports.spatial is not None:
+            runtime.set_spatial(ports.spatial)
+        if ports.grounding is not None:
+            runtime.set_grounding(ports.grounding)
+        return runtime
 
 
 # ---------------------------------------------------------------------------

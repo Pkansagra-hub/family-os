@@ -24,9 +24,8 @@ Exports grouped by source module:
   2. Control section types (IntentClassification, PrivacyBand)
   3. Task section types (TaskStatus, TaskStateEntry, TaskStateSection)
   4. Task artifact types (ArtifactType, TaskArtifactEntry, TaskArtifactsSection)
-  5. Temporal context (compute_temporal_anchor, TemporalAnchor)
-  6. Meta section (MetaSection)
-  7. Factory (SessionStateFactory)
+  5. Meta section (MetaSection)
+  6. Factory (SessionStateFactory)
 """
 
 from __future__ import annotations
@@ -39,7 +38,11 @@ from k1.sessionstate.factory import SessionStateFactory
 # ---------------------------------------------------------------------------
 # 1. Writer port types
 # ---------------------------------------------------------------------------
-from k1.sessionstate.ports.writer import BatchRequest, MutationRequest, RejectionCategory
+from k1.sessionstate.ports.writer import (
+    BatchRequest,
+    MutationRequest,
+    RejectionCategory,
+)
 
 # ---------------------------------------------------------------------------
 # 2. Control section types
@@ -63,12 +66,11 @@ from k1.sessionstate.sections.task_artifacts import (
 # ---------------------------------------------------------------------------
 # 3. Task state section types
 # ---------------------------------------------------------------------------
-from k1.sessionstate.sections.task_state import TaskStateEntry, TaskStateSection, TaskStatus
-
-# ---------------------------------------------------------------------------
-# 5. Temporal context
-# ---------------------------------------------------------------------------
-from k1.sessionstate.sections.temporal_context import TemporalAnchor, compute_temporal_anchor
+from k1.sessionstate.sections.task_state import (
+    TaskStateEntry,
+    TaskStateSection,
+    TaskStatus,
+)
 
 __all__ = [
     # Writer port types
@@ -86,9 +88,6 @@ __all__ = [
     "ArtifactType",
     "TaskArtifactEntry",
     "TaskArtifactsSection",
-    # Temporal context
-    "TemporalAnchor",
-    "compute_temporal_anchor",
     # Meta section
     "MetaSection",
     # Factory

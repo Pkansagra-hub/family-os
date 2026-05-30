@@ -13,15 +13,15 @@ Exposes :data:`CHORES_DEFINITION`, the single source of truth consumed by:
 9 actions
 ---------
 Templates (3):
-  1. ``create_template``  write  AMBER  idempotent  (parent+ only)
-  2. ``update_template``  write  AMBER              (parent+ only)
-  3. ``delete_template``  delete AMBER              (parent+ only)
+    1. ``create_template``  write  GREEN  idempotent  (parent+ only)
+    2. ``update_template``  write  GREEN              (parent+ only)
+    3. ``delete_template``  delete GREEN              (parent+ only)
 
 Occurrences (6):
-  4. ``assign_chore``     write  AMBER              (parent+ or guardian+)
-  5. ``complete_chore``   write  AMBER              (assignee | parent+)
-  6. ``skip_chore``       write  AMBER              (assignee | parent+)
-  7. ``reopen_chore``     write  AMBER              (parent+ only)
+    4. ``assign_chore``     write  GREEN              (parent+ or guardian+)
+    5. ``complete_chore``   write  GREEN              (assignee | parent+)
+    6. ``skip_chore``       write  GREEN              (assignee | parent+)
+    7. ``reopen_chore``     write  GREEN              (parent+ only)
   8. ``list_chores``      read   GREEN              (all roles incl. guest)
   9. ``chore_summary``    read   GREEN              (all roles incl. guest)
 """
@@ -146,7 +146,10 @@ CHORES_DEFINITION = ToolDefinition(
                     name="frequency",
                     type="string",
                     required=False,
-                    description="daily | weekly | monthly | once. Default: weekly.",
+                    description=(
+                        "daily | weekly | monthly | once, or a natural recurrence "
+                        "phrase such as 'every 3 days'. Default: weekly."
+                    ),
                 ),
                 FieldSpec(
                     name="base_points",
@@ -154,7 +157,19 @@ CHORES_DEFINITION = ToolDefinition(
                     required=False,
                     description="Gamification points per completion. Default: 0.",
                 ),
+                FieldSpec(
+                    name="due_at",
+                    type="datetime",
+                    required=False,
+                    description="Optional ISO 8601 due timestamp for the first pending occurrence.",
+                ),
                 _VISIBILITY_FIELD,
+            ],
+            result=[
+                FieldSpec(name="success", type="boolean", required=True),
+                FieldSpec(name="template_id", type="string", required=True),
+                FieldSpec(name="occurrence_id", type="string", required=True),
+                FieldSpec(name="version", type="integer", required=True),
             ],
             sse=SSESpec(
                 emits=["family.chores.create_template.write.v1"],
@@ -188,7 +203,12 @@ CHORES_DEFINITION = ToolDefinition(
                 FieldSpec(name="title", type="string", required=False),
                 FieldSpec(name="description", type="string", required=False),
                 FieldSpec(name="assigned_to", type="string", required=False),
-                FieldSpec(name="frequency", type="string", required=False),
+                FieldSpec(
+                    name="frequency",
+                    type="string",
+                    required=False,
+                    description="daily | weekly | monthly | once, or a natural recurrence phrase.",
+                ),
                 FieldSpec(name="base_points", type="integer", required=False),
                 FieldSpec(
                     name="is_active",

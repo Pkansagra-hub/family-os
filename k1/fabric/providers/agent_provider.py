@@ -82,7 +82,8 @@ import logging
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Protocol
 
 from k1.fabric.core.context_builder import ContextBuilder
@@ -1665,6 +1666,13 @@ class AgentFactory:
                 ) from exc
 
         # Step 6: Build initial context via ContextBuilder
+        effective_context_override = context_override
+        fallback_override = (fallback_context.session_sections or {}).get("context_override")
+        if isinstance(fallback_override, dict):
+            effective_context_override = dict(fallback_override)
+            if isinstance(context_override, dict):
+                effective_context_override.update(context_override)
+
         if self._context_builder is not None:
             try:
                 build_result = self._context_builder.build(
@@ -1673,7 +1681,7 @@ class AgentFactory:
                     trace_id=trace_id,
                     session_id=session_id,
                     prompt_template_name=prompt_template_name or contract.prompt_template,
-                    context_override=context_override,
+                    context_override=effective_context_override,
                 )
                 initial_context = build_result.context
             except Exception as exc:
@@ -1685,6 +1693,15 @@ class AgentFactory:
                 initial_context = fallback_context
         else:
             initial_context = fallback_context
+
+        if (
+            getattr(fallback_context, "grounding_lease", None) is not None
+            and getattr(initial_context, "grounding_lease", None) is None
+        ):
+            initial_context = replace(
+                initial_context,
+                grounding_lease=fallback_context.grounding_lease,
+            )
 
         # Step 7: Create DeltaEmitter for structured emission (4.3.4)
         delta_emitter: Optional[DeltaEmitter] = None
@@ -1784,6 +1801,7 @@ class AgentProvider(BaseProvider):
 
     __slots__ = (
         "_agent_factory",
+        "_grounding_port",
         "_capability_names",
         "_default_timeout_ms",
         "_active_agents",
@@ -1795,12 +1813,14 @@ class AgentProvider(BaseProvider):
         config: ProviderConfig,
         *,
         agent_factory: Optional[IAgentFactory] = None,
+        grounding_port: Optional[Any] = None,
         capability_names: Optional[List[str]] = None,
         default_timeout_ms: int = DEFAULT_AGENT_TIMEOUT_MS,
         **_kwargs: Any,
     ) -> None:
         super().__init__(config)
         self._agent_factory = agent_factory
+        self._grounding_port = grounding_port
         self._capability_names: List[str] = list(capability_names or [])
         self._default_timeout_ms = default_timeout_ms
         self._active_agents: Dict[str, Agent] = {}
@@ -1814,6 +1834,11 @@ class AgentProvider(BaseProvider):
     def agent_factory(self) -> Optional[IAgentFactory]:
         """The injected agent factory (None when stub)."""
         return self._agent_factory
+
+    @property
+    def grounding_port(self) -> Optional[Any]:
+        """The injected grounding port used for agent leases."""
+        return self._grounding_port
 
     @property
     def active_agent_count(self) -> int:
@@ -1919,6 +1944,7 @@ class AgentProvider(BaseProvider):
         # Resolve timeout from factory/contract or default
         timeout_ms = self._resolve_timeout(request)
         timeout_s = timeout_ms / 1000.0
+        context = await self._context_with_agent_lease(request, context, trace_id)
 
         try:
             agent_result = await asyncio.wait_for(
@@ -1931,6 +1957,8 @@ class AgentProvider(BaseProvider):
                 agent_id="unknown",
                 timeout_ms=timeout_ms,
             )
+
+        await self._refresh_context_lease_if_expired(request, context, trace_id)
 
         # --- Template not found ---
         if (
@@ -2016,6 +2044,143 @@ class AgentProvider(BaseProvider):
         if isinstance(explicit, (int, float)) and explicit > 0:
             return int(explicit)
         return self._default_timeout_ms
+
+    async def _context_with_agent_lease(
+        self,
+        request: CapabilityRequest,
+        context: ExecutionContext,
+        trace_id: str,
+    ) -> ExecutionContext:
+        if self._grounding_port is None or not request.session_id:
+            return context
+
+        existing = getattr(context, "grounding_lease", None)
+        contract = self._load_contract_for_lease(request.capability_name)
+        lease_config = self._lease_config(contract)
+        allow_refresh = bool(lease_config.get("allow_refresh", True))
+        if existing is not None and not self._lease_expired(existing):
+            return context
+        if existing is not None and not allow_refresh:
+            return context
+
+        try:
+            lease = await self._issue_agent_lease(
+                request=request,
+                trace_id=trace_id,
+                task_scope=getattr(contract, "name", None) or request.capability_name,
+                ttl_seconds=int(lease_config.get("ttl_seconds", 900)),
+            )
+        except Exception:
+            logger.warning(
+                "[%s] failed to issue agent grounding lease for %s",
+                self.provider_id,
+                request.capability_name,
+                exc_info=True,
+            )
+            return context
+
+        return self._attach_lease_to_context(context, lease)
+
+    async def _refresh_context_lease_if_expired(
+        self,
+        request: CapabilityRequest,
+        context: ExecutionContext,
+        trace_id: str,
+    ) -> ExecutionContext:
+        lease = getattr(context, "grounding_lease", None)
+        if lease is None or not self._lease_expired(lease):
+            return context
+        if not bool(getattr(lease, "refresh_allowed", False)):
+            return context
+        refreshed = await self._context_with_agent_lease(request, context, trace_id)
+        if getattr(refreshed, "grounding_lease", None) is not lease:
+            logger.debug(
+                "[%s] refreshed expired agent grounding lease for %s",
+                self.provider_id,
+                request.capability_name,
+            )
+        return refreshed
+
+    async def _issue_agent_lease(
+        self,
+        *,
+        request: CapabilityRequest,
+        trace_id: str,
+        task_scope: str,
+        ttl_seconds: int,
+    ) -> Any:
+        envelope = await self._grounding_port.create_envelope(
+            request.session_id,
+            "agent",
+            trace_id=trace_id,
+        )
+        return await self._grounding_port.build_agent_lease(
+            envelope,
+            task_scope=task_scope,
+            ttl_seconds=ttl_seconds,
+        )
+
+    def _attach_lease_to_context(self, context: ExecutionContext, lease: Any) -> ExecutionContext:
+        session_sections = dict(context.session_sections or {})
+        raw_override = session_sections.get("context_override")
+        override = dict(raw_override) if isinstance(raw_override, dict) else {}
+        raw_invocation = override.get("grounding_invocation")
+        invocation = dict(raw_invocation) if isinstance(raw_invocation, dict) else {}
+        invocation.setdefault("grounding_envelope_id", getattr(lease, "envelope_id", ""))
+        invocation["grounding_lease_id"] = getattr(lease, "lease_id", "")
+        invocation["grounding_lease_expires_at_utc"] = getattr(lease, "expires_at_utc", "")
+        override["grounding_invocation"] = invocation
+        session_sections["context_override"] = override
+        try:
+            from k1.grounding.serialization import lease_to_dict
+
+            session_sections["agent_grounding_lease"] = lease_to_dict(lease)
+        except Exception:
+            session_sections["agent_grounding_lease"] = lease
+        return replace(context, session_sections=session_sections, grounding_lease=lease)
+
+    def _load_contract_for_lease(self, capability_name: str) -> Optional[AgentContract]:
+        if self._agent_factory is None:
+            return None
+        loader = getattr(self._agent_factory, "_load_contract", None)
+        if callable(loader):
+            try:
+                contract = loader(capability_name)
+                return contract if isinstance(contract, AgentContract) else None
+            except Exception:
+                logger.debug("Agent lease contract lookup failed", exc_info=True)
+                return None
+        contract_loader = getattr(self._agent_factory, "_contract_loader", None)
+        if callable(contract_loader):
+            try:
+                contract = contract_loader(capability_name)
+                return contract if isinstance(contract, AgentContract) else None
+            except Exception:
+                logger.debug("Agent lease contract_loader failed", exc_info=True)
+        return None
+
+    @staticmethod
+    def _lease_config(contract: Optional[AgentContract]) -> Dict[str, Any]:
+        raw = getattr(contract, "lease", None) if contract is not None else None
+        if not isinstance(raw, dict):
+            return {"ttl_seconds": 900, "allow_refresh": True}
+        return {
+            "ttl_seconds": int(raw.get("ttl_seconds") or 900),
+            "allow_refresh": bool(raw.get("allow_refresh", True)),
+        }
+
+    @staticmethod
+    def _lease_expired(lease: Any) -> bool:
+        expires_at = getattr(lease, "expires_at_utc", "")
+        if not isinstance(expires_at, str) or not expires_at:
+            return False
+        try:
+            parsed = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed <= datetime.now(timezone.utc)
+        except ValueError:
+            return False
 
     # ------------------------------------------------------------------
     # Shutdown / resource disposal

@@ -56,6 +56,7 @@ from ..sections import (
     BeliefsHistorySection,
     HistoryRecentSection,
     PersonaSection,
+    PlaceRegistrySection,
     TelemetrySection,
 )
 
@@ -78,6 +79,7 @@ SECTION_BUDGETS: Dict[str, int] = {
     "beliefs_history": 12 * 1024,  # 12KB
     "history_recent": 20 * 1024,  # 20KB
     "persona": 8 * 1024,  # 8KB
+    "place_registry": 8 * 1024,
     "artifacts_warm": 8 * 1024,  # 8KB (config: artifacts_warm)
 }
 
@@ -88,6 +90,7 @@ EVICTION_ORDER: List[str] = [
     "artifacts_warm",  # Priority 2 - evict after telemetry
     "beliefs_history",  # Priority 3
     "history_recent",  # Priority 4
+    "place_registry",  # Priority 4
     "persona",  # Priority 5 - last to evict
 ]
 
@@ -97,6 +100,7 @@ EVICTION_PRIORITIES: Dict[str, int] = {
     "artifacts_warm": 2,
     "beliefs_history": 3,
     "history_recent": 4,
+    "place_registry": 4,
     "persona": 5,
 }
 
@@ -112,6 +116,7 @@ WARM_SECTION_NAMES: List[str] = [
     "telemetry",
     "beliefs_history",
     "history_recent",
+    "place_registry",
     "persona",
     "artifacts_warm",
 ]
@@ -294,6 +299,7 @@ SectionType = Union[
     TelemetrySection,
     BeliefsHistorySection,
     HistoryRecentSection,
+    PlaceRegistrySection,
     PersonaSection,
 ]
 
@@ -374,6 +380,7 @@ class WarmTier:
             "telemetry": TelemetrySection(),
             "beliefs_history": BeliefsHistorySection(),
             "history_recent": HistoryRecentSection(),
+            "place_registry": PlaceRegistrySection(session_id=session_id),
             "persona": PersonaSection(),
             "artifacts_warm": ArtifactsWarmSection(),
         }

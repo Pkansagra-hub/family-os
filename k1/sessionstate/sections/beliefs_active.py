@@ -18,7 +18,7 @@ Schema Contents:
 - current_turn_facts: [Fact] - Max ~50 facts
 - mentioned_entities: [EntityRef]
 - mentioned_time: MentionedTime
-- mentioned_location: MentionedLocation
+- mentioned_location: MentionedLocation conversational evidence
 - pinned_fact_ids: [string]
 - fact_count: uint16
 - entity_count: uint16
@@ -194,6 +194,9 @@ class MentionedTime:
 class MentionedLocation:
     """
     Location reference mentioned in current turn.
+
+    This is conversational evidence only. It is not the authoritative
+    current device place; k1.spatial owns device/place grounding.
 
     Maps to MentionedLocation table in beliefs_active_section.fbs:
     - raw_text: string ("the kitchen", "mom's house")
@@ -712,7 +715,7 @@ class BeliefsActiveSection:
         self._touch()
 
     # =========================================================================
-    # Spatial Context (mentioned_location per schema)
+    # Conversational location evidence (mentioned_location per schema)
     # =========================================================================
 
     def set_mentioned_location(
@@ -723,7 +726,7 @@ class BeliefsActiveSection:
         confidence: float = 1.0,
     ) -> None:
         """
-        Set spatial context mentioned in current turn.
+        Set conversational location evidence mentioned in current turn.
 
         Args:
             raw_text: Original text ("the kitchen", "mom's house")
@@ -741,11 +744,11 @@ class BeliefsActiveSection:
         self._touch()
 
     def get_mentioned_location(self) -> Optional[MentionedLocation]:
-        """Get spatial context."""
+        """Get conversational location evidence, not authoritative current place."""
         return self._mentioned_location
 
     def clear_mentioned_location(self) -> None:
-        """Clear spatial context."""
+        """Clear conversational location evidence."""
         self._mentioned_location = None
         self._invalidate_cache()
         self._touch()

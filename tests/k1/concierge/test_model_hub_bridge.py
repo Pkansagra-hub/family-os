@@ -22,7 +22,7 @@ import pytest
 
 from k1.concierge.llm.model_hub_bridge import ModelHubPOCBridge
 from k1.concierge.llm.test_model_hub_bridge import TestModelHubBridge
-from k1.concierge.llm.types import ConciergeModelResponse
+from k1.concierge.llm.types import ConciergeModelResponse, ThinkingLevel
 from k1.concierge.llm.types import ToolCallResult as POCToolCallResult
 from k1.model_hub.ports import IModelHubPort
 from k1.model_hub.types import (
@@ -287,6 +287,29 @@ class TestReasonRoundTrip:
         # total_tokens includes thinking tokens
         assert resp.metadata.usage.total_tokens == 50 + 30 + 100
 
+    @pytest.mark.asyncio
+    async def test_tool_call_constraints_map_to_thinking_level(
+        self, bridge: TestModelHubBridge
+    ) -> None:
+        bridge.set_response("front", "", ConciergeModelResponse(text="ok"))
+        req = HubRequest(
+            capability=CapabilityType.TOOL_CALL,
+            payload=ToolCallPayload(
+                messages=[Message(role="user", content="schedule")],
+                tools=[ToolDefinition(name="schedule", description="schedule")],
+            ),
+            constraints=RequestConstraints(
+                consumer_id="concierge.front",
+                reasoning_effort="medium",
+            ),
+            trace_id="test-trace",
+        )
+
+        await bridge.execute(req)
+
+        assert bridge.inner.last_call is not None
+        assert bridge.inner.last_call.thinking == ThinkingLevel.MEDIUM
+
 
 # =====================================================================
 # Streaming
@@ -321,6 +344,25 @@ class TestStreaming:
         assert len(text_chunks) >= 1
         combined_text = "".join(c.content for c in text_chunks)
         assert combined_text == "Hello world"
+
+    @pytest.mark.asyncio
+    async def test_stream_execute_yields_thought_chunks(self, bridge: TestModelHubBridge) -> None:
+        bridge.set_response(
+            "front",
+            "",
+            ConciergeModelResponse(
+                text="Hello world",
+                thought_text="Reasoning trace",
+            ),
+        )
+        req = _make_chat_request("hi", actor="front")
+
+        chunks = []
+        async for chunk in bridge.stream_execute(req):
+            chunks.append(chunk)
+
+        thought_chunks = [chunk for chunk in chunks if chunk.thought and not chunk.done]
+        assert [chunk.thought for chunk in thought_chunks] == ["Reasoning trace"]
 
     @pytest.mark.asyncio
     async def test_stream_execute_done_preserves_tool_calls(

@@ -245,6 +245,22 @@ def _safe_float(value: Any, *, default: float) -> float:
         return default
 
 
+def _render_planning_grounding_block(grounding: Mapping[str, Any] | None) -> str:
+    """Render typed grounding for the EXPAND user prompt."""
+    if not grounding:
+        return ""
+    try:
+        from k1.grounding.serialization import dict_to_projection
+        from k1.grounding.service.prompt_block_renderer import (
+            render_planning_grounding_block,
+        )
+
+        return render_planning_grounding_block(dict_to_projection(dict(grounding)))
+    except Exception:
+        log.warning("expand: failed to render planning grounding block", exc_info=True)
+        return ""
+
+
 def _coerce_prompt_inventory(
     prompt_inventory: Mapping[str, Any] | Iterable[Any],
 ) -> Dict[str, _PromptDescriptor]:
@@ -504,7 +520,7 @@ EXPAND_TOOL_DEFINITIONS: Tuple[Dict[str, Any], ...] = (
                         "description": (
                             "Which sections to read. Available: "
                             "'beliefs_active', 'persona', 'temporal', "
-                            "'control', 'history_recent'."
+                            "'history_recent'."
                         ),
                     },
                 },
@@ -793,13 +809,12 @@ class ExpandService:
             safety_band = request.constraints.get("safety_band")
             if safety_band and safety_band != "GREEN":
                 constraint_lines.append(f"Safety restriction: {safety_band}")
-            temporal = request.constraints.get("temporal", {})
-            if isinstance(temporal, dict):
-                now = temporal.get("now")
-                if now:
-                    constraint_lines.append(f"Current time: {now}")
             if constraint_lines:
                 parts.append("\n[Constraints: " + ", ".join(constraint_lines) + "]")
+
+        grounding_block = _render_planning_grounding_block(request.grounding)
+        if grounding_block:
+            parts.append("\n" + grounding_block)
 
         # Arbiter feedback (revise loop).
         if arbiter_feedback:

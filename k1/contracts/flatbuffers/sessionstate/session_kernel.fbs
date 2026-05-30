@@ -23,13 +23,14 @@ include "telemetry_section.fbs";
 include "task_state_section.fbs";
 include "task_artifacts_section.fbs";
 include "artifacts_warm_section.fbs";
+include "trust_level_section.fbs";
 
 namespace K1.SessionState;
 
 // ============================================================================
 // HOT CORE - 48KB TOTAL
 // ============================================================================
-// 8 sections, <100μs read via zero-copy deserialization
+// HOT sections, <100μs read via zero-copy deserialization
 //
 // Section budgets:
 // - control: 8KB (NEVER EVICT)
@@ -42,6 +43,7 @@ namespace K1.SessionState;
 // - meta: 2KB (NEVER EVICT)
 // - task_state: 4KB (NEVER EVICT) [M4 extension]
 // - task_artifacts: 4KB (demotes to artifacts_warm) [M6 extension]
+// - trust_level: 2KB (NEVER EVICT) [prompt calibration extension]
 // ============================================================================
 
 /// Hot Core - Always in memory, never paged to disk
@@ -75,6 +77,9 @@ table HotCore {
 
     // Task artifacts section - 4KB [M6 extension]
     task_artifacts: TaskArtifactsSection;
+
+    // Trust level section - 2KB [prompt calibration extension]
+    trust_level: TrustLevelSection;
 
     // Hot tier metadata
     total_size_bytes: uint32;

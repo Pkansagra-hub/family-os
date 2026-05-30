@@ -14,13 +14,13 @@ Use this profile as procedural guidance only. The resolved capability contract, 
 
 - `tool.read.chores.list_chores` - required inputs: none. Use filters (`assigned_to`, `status`, `due_before`, `template_id`) to inspect pending/done/skipped occurrences, avoid duplicate templates/assignments, and find occurrence ids before mutations.
 - `tool.read.chores.chore_summary` - required inputs: none. Use for points totals, leaderboards, weekly reports, and verification after completions that change points.
-- `tool.execute.chores.create_template` - AMBER band. Parent/system only. Required: `title`. Optional: `description`, `assigned_to`, `frequency`, `base_points`, `visibility`. Use for recurring chores, not one-shot tasks.
-- `tool.execute.chores.update_template` - AMBER band. Parent/system only. Required: `template_id` plus fields to change. Use `is_active=false` to pause a chore instead of deleting when the parent asks to pause.
-- `tool.execute.chores.delete_template` - AMBER band. Parent/system only. Required: `template_id`. Use only when the parent wants the chore removed permanently; this soft-deletes the template and pending occurrences.
-- `tool.execute.chores.assign_chore` - AMBER band. Guardian/parent/system only. Required: `template_id`, `assigned_to`. Optional: `due_at`, `points_awarded`, `visibility`. Use to create or override a specific occurrence assignment.
-- `tool.execute.chores.complete_chore` - AMBER band. Child/elder/guardian/parent/system. Required: `occurrence_id`. Optional: `completed_by`, `points_override`. Use when the assignee or authorized adult says the chore was done.
-- `tool.execute.chores.skip_chore` - AMBER band. Child/elder/guardian/parent/system. Required: `occurrence_id`. Optional: `skip_reason`. Use when a chore is explicitly excused or skipped; do not use for completed chores.
-- `tool.execute.chores.reopen_chore` - AMBER band. Parent/system only. Required: `occurrence_id`. Optional: `reason`. Use to undo a mistaken completion/skip and return the occurrence to pending.
+- `tool.execute.chores.create_template` - GREEN band. Parent/system only. Required: `title`. Optional: `description`, `assigned_to`, `frequency`, `base_points`, `visibility`. `frequency` may be `daily`, `weekly`, `monthly`, `once`, or a natural phrase such as `every 3 days`. Use for recurring chores, not one-shot tasks.
+- `tool.execute.chores.update_template` - GREEN band. Parent/system only. Required: `template_id` plus fields to change. Use `is_active=false` to pause a chore instead of deleting when the parent asks to pause. `frequency` may be canonical or a natural recurrence phrase.
+- `tool.execute.chores.delete_template` - GREEN band. Parent/system only. Required: `template_id`. Use only when the parent wants the chore removed permanently; this soft-deletes the template and pending occurrences.
+- `tool.execute.chores.assign_chore` - GREEN band. Guardian/parent/system only. Required: `template_id`, `assigned_to`. Optional: `due_at`, `points_awarded`, `visibility`. Use to create or override a specific occurrence assignment.
+- `tool.execute.chores.complete_chore` - GREEN band. Child/elder/guardian/parent/system. Required: `occurrence_id`. Optional: `completed_by`, `points_override`. Use when the assignee or authorized adult says the chore was done.
+- `tool.execute.chores.skip_chore` - GREEN band. Child/elder/guardian/parent/system. Required: `occurrence_id`. Optional: `skip_reason`. Use when a chore is explicitly excused or skipped; do not use for completed chores.
+- `tool.execute.chores.reopen_chore` - GREEN band. Parent/system only. Required: `occurrence_id`. Optional: `reason`. Use to undo a mistaken completion/skip and return the occurrence to pending.
 
 ## Duplicate-check rule
 

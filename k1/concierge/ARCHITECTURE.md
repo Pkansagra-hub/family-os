@@ -1718,3 +1718,259 @@ Tests follow `test_mXX_eYY_*.py` naming (milestone + epic) or `test_<feature>.py
 4. **High**: Add tests for `orchestrator/stub.py` and `orchestrator/routing.py` (G-2) — these are the MED/HIGH tier gateways.
 5. **Medium**: Consolidate dual-type design (R-1) — either use K1 fabric types everywhere or formalize the adapter bridge as a first-class pattern.
 6. **Medium**: Test OPP primitives: trust_accumulator (R-5), compression (R-6), identity (R-7).
+
+
+Here is the complete, verbatim rule map of every constraint the LLMs must satisfy to complete a turn in K1 Concierge. Source files cited inline.
+
+---
+
+# Front LLM rules
+
+## Mode selection (priority order, first match wins)
+mode.py — `determine_mode()`
+
+| # | Condition | Mode |
+|---|---|---|
+| 1 | `fsm == CANCELLING` | CANCEL |
+| 1 | `fsm == INTERRUPT_HANDLING` or `routing.interrupt_origin` | INTERRUPT |
+| 1 | `routing.late_hil_recovery` | HITL_RESOLVE |
+| 2 | `fsm == CLARIFYING_USER` + topic `user.input.v1` | CLARIFY_RESOLVE |
+| 2 | `fsm == CLARIFYING_USER` (other topic) | CLARIFY_ASK |
+| 2 | `fsm == CLARIFYING_WORKER` + topic `user.input.v1` | HITL_RESOLVE |
+| 2 | `fsm == CLARIFYING_WORKER` (other topic) | **HITL_RELAY** |
+| 3 | topic `task.complete.v1` / `k1.proactive.fill.v1` | PRESENT |
+| 3 | topic `task.failed.v1` | ERROR |
+| 3 | topic `weave.batch.v1` | WEAVE |
+| 3 | topic `task.suspended.v1` / `k1.hil.request.v1` | HITL_RELAY |
+| 4 | topic `user.input.v1` + suspended tasks in SS | HITL_RESOLVE |
+| 4 | topic `user.input.v1` + `blocking_gaps > 0` | CLARIFY_RESOLVE |
+| 5 | default | STANDARD |
+
+## Per-mode budget & tools
+
+| Mode | max_iter | tools |
+|---|---|---|
+| STANDARD | 6 (crisis 4) | 10 (full set, +`refine_affect`/`promote_belief` conditionally) |
+| CLARIFY_ASK | 3 | `update_clarifications`, `recall_memory` |
+| CLARIFY_RESOLVE | 5 | beliefs/scoreboard/clarifications/promote_belief/recall/dispatch_task |
+| **HITL_RELAY** | **2** | **0 — strictly text-only, no conditional adds** |
+| HITL_RESOLVE | 3 | `update_beliefs` |
+| PRESENT | 3 | `update_beliefs`, `update_narrative` |
+| WEAVE | 3 | `update_beliefs`, `update_narrative`, `update_scoreboard` |
+| CANCEL | 3 | `update_beliefs`, `update_narrative` |
+| INTERRUPT | 6 | all 10 |
+| ERROR | 2 | `update_narrative` |
+
+Source comment: *"HITL_RELAY is strictly text-only — adding tools wastes the 2-iter budget and causes degenerate empty responses."*
+
+## Event-turn prompts (verbatim user-role messages injected to Front)
+front.py `_build_event_turn_text()`
+
+- **HITL_RELAY**: `"A background task needs the user's input. Ask this question naturally and briefly: {question}"`
+- **ERROR**: `"A background task just failed. Tell the user in one concise, natural message that {task} did not go through. Offer to try again or take another path. {partial_hint} Do not expose internal reasons, error codes, stack traces, or system names."`
+- **PRESENT**: `"A user-relevant result is ready for {task}. Lead with what is now true or done, mention the concrete time/place/confirmation details… Sound like you handled it, not like you are reading an operations log."`
+- **PRESENT (proactive)**: `"A brief proactive status fill is ready. Use the fill facts as context, phrase it naturally in Front's voice, and do not expose internal payload fields."`
+- **WEAVE**: `"Async results are ready. Answer the current conversation first, then bring in the concrete result summary naturally."`
+- **CANCEL**: `"Confirm the cancellation status for {task} in one concise message."`
+
+## Termination contract
+- Front terminates ONLY when it emits **text with no tool calls** (or `force_text` on last iter).
+- Front output goes through 3 leak strippers (reasoning, system blocks, back frame). If ALL stripped → response suppressed silently.
+- HITL_RELAY only: if Front text == `front_degenerate_fallback` or `front_budget_fallback` or empty → kernel substitutes `scenario_data["hil_question"]` (Back's LLM-generated text) verbatim.
+
+## Observability topics that skip LLM entirely
+`k1.session.turn.started/completed.v1`, `k1.orchestration.tool.started/completed.v1`, `k1.session.state.updated.v1`
+
+## WEAVE skip rule
+If `result_count == 0` or `results_summary` empty → returns `status="skipped"` with no LLM call.
+
+---
+
+# Back LLM rules
+back_prompt.py `BACK_SYSTEM_PROMPT`
+
+## Identity (verbatim)
+> "You are the Worker… a pure executor. NOTHING else. No greetings, no opinions, no personality."
+> "You NEVER produce text for human consumption. Your final_answer is a TECHNICAL SUMMARY for the presentation system."
+
+## ReAct protocol (8 steps)
+ORIENT → CHECK → ASSESS → DISCOVER → SAFETY → INVOKE → EVALUATE → SUBMIT
+
+## Key rules
+- **System of record**: `discover_capabilities(intent, domain)` for any live read/write — NOT `recall_memory`.
+- **Memory vs capability**: `recall_memory` = preferences/history/routines. `discover_capabilities` = live state.
+- **Side-effect approval (STEP 5)**: If the user explicitly asked → execute. If not → `submit_result(needs_human, hil_type=approval)` first.
+- **Retry**: max 1 retry per capability (2 total attempts).
+- **Web search**: must follow with web-fetch on top 2-3 URLs.
+- **Budget**: at 2 remaining → submit what you have; at 1 → call `submit_result` immediately.
+- **Ambiguity**: max 2 suspensions; third ambiguity → pick best option.
+
+## Anti-patterns (NEVER)
+1. Generate user-facing text
+2. Re-execute work already in `task_artifacts`
+3. Call `invoke_capability` without checking side_effects
+4. Retry same capability with same params after failure
+5. Invent capability names
+6. Leave task without `submit_result`
+7. `submit_result(complete)` with empty results
+8. Call `discover_capabilities` more than ONCE per intent
+9. Call `discover_capabilities` on RESUME if found earlier
+10. Ask approval on capabilities user explicitly requested
+11. Spread discovery across iterations
+12. Spread independent `invoke_capability` calls across iterations — batch them
+13. **`submit_result(complete)` BEFORE invoking — system REJECTS it**
+
+## Per-tier budget
+LOW=4 iter, MEDIUM=8, HIGH=12. Budget counts every tool call including `submit_result`.
+
+## `submit_result` schema
+Required `result_type` ∈ `["complete","needs_human"]`. Must be called EXACTLY ONCE as final call. For `needs_human`: `hil_type`, `question`, `options`, `side_effects`, `missing_fields` all required. Back's `question` becomes Front's HITL_RELAY input.
+
+---
+
+# ReAct loop rules
+loop.py
+
+## tool_choice
+Always `"auto"`. Last iter for Front → `force_text=True` (tools=[], CHAT capability).
+
+## Degenerate-response nudges (when LLM returns no text + no tool calls)
+
+**Front in HITL_RELAY/HITL_RESOLVE/WEAVE/PRESENT**:
+> *"Respond now in one short, natural user-facing message based on the prior context. Do NOT call tools. Do NOT include reasoning. Output ONLY the message."*
+
+**Front in other modes (STANDARD/CLARIFY/INTERRUPT)**:
+> *"Now respond directly to the user. Synthesize everything you learned from the tools above into a helpful, natural response. Do NOT call any more tools. Do NOT include your reasoning or analysis — output ONLY the user-facing message."*
+
+**Front, after `dispatch_task` succeeded but no text yet**:
+> *"You have dispatched the background task. Now write a brief, natural acknowledgement to the user confirming you are working on their request. Do NOT call any more tools. Respond with text only."*
+
+**Front, after 3+ `recall_memory` calls (spin guard)**:
+> *"You have queried memory multiple times and have enough context. Now respond directly to the user… Do NOT call recall_memory again."*
+
+**Back, after discovery returned candidates but no invoke**:
+> *"Discovery returned viable capability candidates, but you have not invoked an authority capability yet. Inspect the discovered schemas and call invoke_capability or batch_invoke_capabilities with the exact registry-owned name. Do NOT call discover_capabilities or recall_memory again for the same task…"*
+
+**Back, after discovery returned nothing**:
+> *"Discovery returned no viable capability candidates… Call submit_result with result_type='needs_human', hil_type='clarification' or 'escalate'…"*
+
+**Back, last iteration force-submit**:
+> *"You are on your LAST iteration. You MUST call submit_result now… Use result_type='complete' only when the task is actually done; use result_type='needs_human' with hil_type='clarification' when required details are missing."*
+
+**Back, invalid `submit_result(complete)` rejection**:
+> *"Your tool call was INVALID and was rejected: {issues}. You MUST complete the work before submitting: 1) discover_capabilities, 2) invoke_capability, 3) THEN submit_result."*
+
+**Either, malformed tool call**:
+> *"Your function call had invalid JSON and was rejected. Call submit_result now. Keep the results array simple…"*
+
+**Either, safety DENY**:
+- Front: returns text *"I can't help with that here. I've flagged it for review."*
+- Back: returns `status="suspended"` with `safety_denial=True`.
+
+## Terminal conditions
+| Result | Cause |
+|---|---|
+| `complete` | Front: text+no tools. Back: `submit_result` ok. |
+| `suspended` | Back: `submit_result(needs_human)` or recovery contract from tool. |
+| `budget_exhausted` | Front: iter cap hit → text=`front_budget_fallback` |
+| `missing_submit_result` | Back: iter cap hit without submit |
+| `loop_degenerate` | ≥3 empty responses OR ≥3 schema-invalid responses |
+| `cancelled` | cancellation_check fired |
+
+## Recovery contract (bypasses LLM)
+A tool can embed `{schema_version, action:"ask_human", hil_type, question, capability_name, missing_fields}` in its data. Loop short-circuits immediately to `status="suspended"` — LLM never sees the question request.
+
+## Other loop guards
+- Duplicate tool call (same name+args hash) → returns synthetic `already_completed=True` without re-execution.
+- Same retryable error twice → promoted to non-retryable.
+- `submit_result` + other tools in same response → other tools SKIPPED with warning.
+- Tool timeout: `get_config().react.tool_timeout_ms` (default 30s); for `invoke_capability` extended to ~150s.
+- LLM call timeout: `get_config().llm.default_timeout_ms` per iter.
+
+---
+
+# HIL / clarification rules
+front_hil_envelope.py
+
+## Envelope shape (`k1.hil.request.v1`)
+Required: `hil_request_id` (UUID), `kind` ∈ `{clarification, approval, needs_human, override, capability_gate}`, `payload`.
+
+## Per-kind unwrap
+| kind | hil_type | question source | options | side_effects |
+|---|---|---|---|---|
+| clarification | `clarification` | `inner.question` | `inner.options` | `[]` |
+| approval | `approval` | summary + bullet side_effects | `inner.options` | `inner.side_effects` |
+| needs_human | `inner.hil_type or "clarification"` | `inner.question` | `inner.options` | `inner.side_effects` |
+| override | `override` | from `unresolved_capabilities + proposed_alternatives` | alts | `[]` |
+| capability_gate | `capability_gate` | `"About to {cap_name}: {params_summary}. Approve?"` | `[Approve, Reject]` | `contract.side_effects` |
+
+## FSM transitions
+| Trigger | From | To |
+|---|---|---|
+| `task.suspended.v1` | COMPANIONING/PROGRESSING | CLARIFYING_WORKER |
+| `hil.request.v1` (needs_human/clarification) | COMPANIONING/PROGRESSING | CLARIFYING_WORKER |
+| `hil.request.v1` (capability_gate/approval/override — inline) | any | NO TRANSITION |
+| `user.input.v1` in CLARIFYING_WORKER | — | stays (same-turn) |
+| `task.resume.v1` | CLARIFYING_WORKER | COMPANIONING |
+
+## HIL timeouts
+- clarification: 60s
+- approval: 120s
+- selection: 90s
+
+On timeout: emits `hitl.timed_out.v1`, cancels task, pushes to `_recently_expired_hil` ring buffer (60s window) → enables **late HIL recovery**: next user input within 60s sets `routing.late_hil_recovery=True` → mode forced to HITL_RESOLVE.
+
+## HITL_RESOLVE post-loop
+After Front loop completes: looks up SUSPENDED task in SS → publishes `hil.response.v1` (if unified envelope) AND/OR `task.resume.v1` (if legacy). If `task_state` has no SUSPENDED entry → resume never fires.
+
+## Approval text parsing
+Keywords: `approve/yes/ok/sure` → `approve`; `reject/deny/no` → `reject`; `cancel/abort` → `cancel`; `modify/change/with ` → `modify`; default → `cancel`.
+
+---
+
+# Tool contracts
+
+## Front tools
+`update_beliefs`, `update_scoreboard`, `update_clarifications`, `update_narrative`, `recall_memory`, `summarize_context`, `dispatch_task` (side-effect), `discover_capabilities`, `invoke_capability`, `refine_affect` (conditional), `promote_belief` (conditional).
+
+## Back tools (LOW tier)
+`recall_memory`, `discover_capabilities`, `invoke_capability`, `batch_invoke_capabilities`, `submit_result`.
+
+## Back tools (MEDIUM/HIGH)
+All LOW + `spawn_via_fabric`, `execute_workflow`.
+
+---
+
+# Guards that can reject LLM output
+
+1. **LLMOutputValidator**: validates every tool call against full schema set. Failure → fix or reject. 3 invalid → `loop_degenerate`.
+2. **FrontLock**: serializes Front events. Priority queue P1(user) > P2(hil) > P3(result) > P4(error) > P5(proactive). Max depth 8. **If `busy=True` and never released → all events queue forever.**
+3. **Operational routing guard**: if context-read tool reveals a gap, kernel synthesizes `dispatch_task` without asking LLM.
+4. **Crisis keyword short-circuit**: `suicide/kill/self-harm/want to die` → LLM bypassed, canned 988 response.
+5. **Dead-letter guard**: events in invalid FSM state → published to `dead_letter` topic, silently dropped.
+6. **Idempotency ledger**: duplicate envelope_id → dropped.
+7. **Back spin guard**: 2+ discovery/recall without authority invoke → forced nudge to invoke or submit_result(needs_human).
+8. **Front recall spin guard**: 3+ recall_memory calls → forced nudge to respond.
+
+---
+
+# Top stuck-flow root causes
+
+1. **`hil_question` empty in scenario_data** → HITL_RELAY produces silent empty text. Check Back's `submit_result(needs_human, question="...")` actually populated `question`.
+2. **FSM not in COMPANIONING/PROGRESSING when `task.suspended` arrives** → no transition to CLARIFYING_WORKER → HIL deferred/lost.
+3. **`control.flow_state` in SS out of sync with FSM `_state`** → `determine_mode()` falls through to STANDARD on user input that should be HITL_RESOLVE.
+4. **`task_state` has no SUSPENDED entry** when HITL_RESOLVE post-loop runs → `task.resume.v1` never fires → Back deadlocks.
+5. **`pending_hil_data.envelope` missing** → HIL response correlation fails.
+6. **FrontLock wedged**: Front exception escapes without `_finalize_turn()` → `busy=True` forever → all subsequent events queue.
+7. **WEAVE skipped silently** (no results) but FSM expected a response → state never advances.
+8. **Observability topic loop**: front → response.final → turn.completed → front → … (each call returns `status="skipped"` but the route itself is the bug).
+9. **`submit_result(complete)` rejected** because no authority invoke → Back retries, may exhaust budget → `missing_submit_result` → `task.failed`.
+
+---
+
+# Config knobs that affect LLM behavior
+loader.py
+
+`react.front_degenerate_fallback` (`"Let me think about that for a moment."`), `react.front_budget_fallback` (`"Let me get back to you on that."`), `react.parallel_tools_enabled` (True), `react.tool_timeout_ms` (30000), `prompt.max_iterations` (per-mode dict override), `prompt.affect_confidence_threshold`, `fsm.front_lock_max_queue_depth` (8), `fsm.dead_letter_enabled`, `llm.default_timeout_ms`.
+
+---

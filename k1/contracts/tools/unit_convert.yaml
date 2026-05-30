@@ -19,6 +19,10 @@ tool_contract:
     - "supported_units_only"
     - "no_currency_conversion"
 
+  context_precision:
+    temporal: "anchor"
+    spatial: "hidden"
+
   required_inputs:
     - name: "category"
       type: "STRING"

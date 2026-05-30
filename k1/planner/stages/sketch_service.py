@@ -81,6 +81,22 @@ log = logging.getLogger(__name__)
 _MAX_TOOL_ROUNDS = 6
 
 
+def _render_planning_grounding_block(grounding: Optional[Dict[str, Any]]) -> str:
+    """Render typed grounding for the SKETCH user prompt."""
+    if not grounding:
+        return ""
+    try:
+        from k1.grounding.serialization import dict_to_projection
+        from k1.grounding.service.prompt_block_renderer import (
+            render_planning_grounding_block,
+        )
+
+        return render_planning_grounding_block(dict_to_projection(dict(grounding)))
+    except Exception:
+        log.warning("sketch: failed to render planning grounding block", exc_info=True)
+        return ""
+
+
 # ---------------------------------------------------------------------------
 # Output schema -- the JSON Schema the LLM must conform to (Section 6.3.1).
 # Defined as a module-level constant so tests can introspect it and so
@@ -549,6 +565,7 @@ class SketchService:
         self,
         intent: str,
         constraints: Optional[Dict[str, Any]] = None,
+        grounding: Optional[Dict[str, Any]] = None,
         hil_addendum: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Build the initial message list for the agentic LLM call.
@@ -561,6 +578,7 @@ class SketchService:
         Args:
             intent: The raw user intent.
             constraints: Optional hard constraints dict.
+            grounding: Optional typed grounding projection dict.
             hil_addendum: Optional clarification text from HIL.
 
         Returns:
@@ -577,16 +595,12 @@ class SketchService:
             safety_band = constraints.get("safety_band")
             if safety_band and safety_band != "GREEN":
                 constraint_lines.append(f"Safety restriction: {safety_band}")
-            temporal = constraints.get("temporal", {})
-            if isinstance(temporal, dict):
-                now = temporal.get("now")
-                if now:
-                    constraint_lines.append(f"Current time: {now}")
-                tz = temporal.get("device_tz")
-                if tz:
-                    constraint_lines.append(f"Timezone: {tz}")
             if constraint_lines:
                 parts.append("\n[Context: " + ", ".join(constraint_lines) + "]")
+
+        grounding_block = _render_planning_grounding_block(grounding)
+        if grounding_block:
+            parts.append("\n" + grounding_block)
 
         if hil_addendum:
             parts.append(f"\n[User clarification: {hil_addendum}]")
@@ -1033,6 +1047,7 @@ class SketchService:
         messages = self._build_initial_messages(
             intent=request.intent,
             constraints=request.constraints,
+            grounding=request.grounding,
             hil_addendum=hil_addendum,
         )
 

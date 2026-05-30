@@ -1,0 +1,588 @@
+flowchart TB
+  subgraph concierge["k1/concierge"]
+    subgraph acking["acking"]
+      acking_elision_node["write_elision.py<br/>WriteElisionGate<br/>WriteElisionDecision<br/>low-signal write suppression"]
+    end
+    subgraph actors["actors"]
+      actors_init["__init__.py<br/>actor package exports"]
+
+      subgraph actors_front_file["front.py"]
+        front_handler_node["front_handler<br/>mode resolve -> prompt build -> ReAct -> bus emit"]
+        front_scenario_node["_extract_scenario_data<br/>PRESENT / WEAVE / HIL / ERROR / CANCEL / CLARIFY / STANDARD"]
+        front_hil_resolve_node["_build_resolution<br/>_build_resolution_frame<br/>HILResolutionFrame"]
+        front_emit_node["emit_task_cancel<br/>emit_task_resume<br/>_emit_streaming_response"]
+        front_subscribe_node["subscribe_front_events"]
+        front_route_meta_node["_parse_routing_metadata"]
+        front_context_node["_get_affect_dict<br/>_get_clarification_state<br/>_get_task_state_dict<br/>_extract_family_context"]
+        front_history_node["_get_history_active<br/>_extract_current_user_text<br/>_build_event_turn_text"]
+        front_prompt_dump_node["_write_runtime_prompt_dump"]
+        front_safety_node["leak guards<br/>reasoning / system block / Back frame cleanup"]
+      end
+
+      subgraph actors_back_file["back.py"]
+        back_handler_node["back_handler<br/>SS snapshot -> Back prompt -> ReAct -> result emit"]
+        back_resume_node["back_resume_handler<br/>resume context -> fresh SS snapshot -> continue ReAct"]
+        back_cancel_node["back_cancel_handler<br/>CancellationToken / legacy fallback"]
+        back_route_node["route_back_envelope<br/>dispatch / resume / cancel / clarification / dead-letter"]
+        back_snapshot_node["_read_ss_snapshot<br/>selective SessionState read contract"]
+        back_budget_node["_budget_to_iterations<br/>_filter_back_tools<br/>_maybe_rebind_back_dispatcher"]
+        back_checkpoint_node["_serialize_messages<br/>_deserialize_messages<br/>_build_react_checkpoint"]
+        back_result_node["_emit_back_result<br/>task.complete / task.suspended / task.failed"]
+        back_hil_node["_resolve_needs_human_in_process<br/>unified HIL loop"]
+        back_profile_node["execution profile helpers<br/>select / persist / metric record / prompt block"]
+        back_observe_node["emit_tool_started<br/>emit_tool_completed<br/>emit_artifact_created"]
+        back_cancel_helpers_node["_extract_cancel_token<br/>_build_cancellation_check"]
+      end
+
+      subgraph actors_frames_file["frames.py"]
+        back_result_frame_node["BackResultFrame<br/>facts / artifacts / blockers / semantic guidance"]
+        hil_resolution_frame_node["HILResolutionFrame<br/>typed human decision"]
+        weave_frame_node["WeavePresentationFrame<br/>async result presentation data"]
+        frame_helpers_node["affect_dict_from_session<br/>build_emotional_context<br/>semantic / summary helpers"]
+      end
+
+      subgraph actors_front_hil_file["front_hil_envelope.py"]
+        hil_detect_node["is_new_hil_envelope<br/>is_legacy_bridge_envelope"]
+        hil_unwrap_node["unwrap_hil_request_payload<br/>kind-specific render"]
+        hil_response_node["build_hil_response_envelope_dict<br/>_build_response_payload"]
+      end
+
+      subgraph actors_back_pool_file["back_pool.py"]
+        back_pool_config_node["BackPoolConfig"]
+        worker_slot_node["WorkerSlot<br/>task_id / worker_id / lease / asyncio task"]
+        back_pool_node["BackPool<br/>acquire / release / lease watcher / overflow / state"]
+        pool_errors_node["BackPoolExhausted<br/>SessionLimitReached"]
+      end
+
+      subgraph actors_ready_queue_file["ready_queue.py"]
+        ready_queue_node["ReadyQueue<br/>dependency ordered Back-bound envelopes"]
+        ready_enqueue_node["enqueue<br/>immediate / waiting / dep_failed / circular / unknown_dep"]
+        ready_dequeue_node["dequeue_ready<br/>notify_completed"]
+        ready_cycle_node["cycle detection<br/>queue state / stats"]
+      end
+
+      subgraph actors_back_router_file["back_router.py"]
+        back_topic_router_node["BackTopicRouter<br/>Back mailbox topic table"]
+        back_router_topics_node["task.dispatch -> back_handler<br/>task.resume -> back_resume_handler<br/>task.cancel -> back_cancel_handler<br/>clarification.response -> back_resume_handler"]
+        back_router_lease_node["get_cancel_token_for_task<br/>BackPool lease token"]
+      end
+
+      subgraph actors_shared_file["shared.py"]
+        shared_parse_node["parse_envelope_payload"]
+        shared_section_node["safe_get_section"]
+        shared_cancel_node["never_cancel"]
+      end
+
+      actors_cache["__pycache__"]
+
+      actors_init --> front_handler_node
+      actors_init --> front_scenario_node
+      actors_init --> front_hil_resolve_node
+      actors_init --> front_emit_node
+      actors_init --> front_subscribe_node
+      actors_init --> back_handler_node
+      actors_init --> back_resume_node
+      actors_init --> back_cancel_node
+      actors_init --> back_route_node
+      actors_init --> back_observe_node
+      actors_init --> back_result_frame_node
+      actors_init --> hil_resolution_frame_node
+      actors_init --> weave_frame_node
+      actors_init --> shared_parse_node
+      actors_init --> shared_section_node
+      actors_init --> shared_cancel_node
+
+      front_handler_node --> front_scenario_node
+      front_handler_node --> front_hil_resolve_node
+      front_handler_node --> front_emit_node
+      front_handler_node --> front_route_meta_node
+      front_handler_node --> front_context_node
+      front_handler_node --> front_history_node
+      front_handler_node --> front_prompt_dump_node
+      front_handler_node --> front_safety_node
+      front_subscribe_node --> front_handler_node
+      front_handler_node --> back_result_frame_node
+      front_handler_node --> weave_frame_node
+      front_handler_node --> hil_unwrap_node
+      front_hil_resolve_node --> hil_resolution_frame_node
+      front_emit_node --> hil_response_node
+      front_handler_node --> shared_parse_node
+      front_handler_node --> shared_section_node
+      front_handler_node --> shared_cancel_node
+
+      back_route_node --> back_handler_node
+      back_route_node --> back_resume_node
+      back_route_node --> back_cancel_node
+      back_route_node --> back_cancel_helpers_node
+      back_handler_node --> back_snapshot_node
+      back_handler_node --> back_budget_node
+      back_handler_node --> back_result_node
+      back_handler_node --> back_hil_node
+      back_handler_node --> back_profile_node
+      back_handler_node --> back_checkpoint_node
+      back_handler_node --> back_cancel_helpers_node
+      back_resume_node --> back_snapshot_node
+      back_resume_node --> back_budget_node
+      back_resume_node --> back_checkpoint_node
+      back_resume_node --> back_result_node
+      back_resume_node --> hil_resolution_frame_node
+      back_result_node --> back_result_frame_node
+      back_observe_node --> back_result_node
+      back_handler_node --> shared_parse_node
+      back_handler_node --> shared_section_node
+      back_cancel_helpers_node --> shared_cancel_node
+
+      hil_unwrap_node --> hil_detect_node
+      hil_response_node --> hil_detect_node
+      weave_frame_node --> back_result_frame_node
+      weave_frame_node --> frame_helpers_node
+
+      back_topic_router_node --> back_router_topics_node
+      back_topic_router_node --> back_router_lease_node
+      back_router_topics_node --> back_handler_node
+      back_router_topics_node --> back_resume_node
+      back_router_topics_node --> back_cancel_node
+      back_router_lease_node --> back_pool_node
+
+      back_pool_node --> back_pool_config_node
+      back_pool_node --> worker_slot_node
+      back_pool_node --> pool_errors_node
+      ready_queue_node --> ready_enqueue_node
+      ready_queue_node --> ready_dequeue_node
+      ready_queue_node --> ready_cycle_node
+      ready_dequeue_node --> back_pool_node
+    end
+    subgraph runtime_wiring["runtime wiring files"]
+      factory_node["factory.py<br/>PortBundle<br/>ConciergeFactory<br/>mailboxes / dispatchers / ports"]
+      session_mailbox_node["session.py<br/>ConciergeRuntime._mailbox_consumer<br/>front_handler + route_back_envelope"]
+      ports_node["ports.py<br/>ILLMPort / IDeltaPort / IInputPort / IOutputPort / IStatePort / IDispatchPort / IMemoryPort"]
+      runtime_backpool_note["BackPool runtime note<br/>FSM has capacity/release hooks<br/>ReadyQueue auto-dispatch is placeholder"]
+    end
+    subgraph adapters["adapters"]
+      adapters_bus_input_node["bus_input.py<br/>BusInputAdapter<br/>subscribe TOPIC_USER_INPUT -> queue"]
+      adapters_bus_output_node["bus_output.py<br/>BusOutputAdapter<br/>send -> bus.publish"]
+      adapters_fabric_dispatch_node["fabric_dispatch.py<br/>FabricDispatchAdapter<br/>dispatch_direct / dispatch_envelope / discover / lookup"]
+      adapters_recall_memory_node["recall_memory.py<br/>RecallMemoryAdapter<br/>BridgeRuntime query recall_request_v1"]
+      adapters_ssm_state_node["ssm_state.py<br/>SSMStateAdapter<br/>read-only SessionState access"]
+      adapters_snapshot_state_node["snapshot_state_read.py<br/>SnapshotStateReadAdapter<br/>bind SessionSnapshot -> read sections"]
+      adapters_null_node["null adapters<br/>NullBridgeWrite / NullDeltaBus / NullEventSubscription / NullStateReader"]
+      adapters_test_node["test adapters<br/>input / output / state / memory / dispatch / llm / delta"]
+      adapters_shim_node["hub_llm.py / local_delta.py<br/>ModelHubPOCBridge / BusFactory re-exports"]
+    end
+    subgraph affective["affective"]
+      affective_stub_node["__init__.py<br/>planned MS-4<br/>future affective_now tracking / Fabric affective routing"]
+    end
+    subgraph bus["bus"]
+      bus_topics_node["topics.py<br/>topic constants<br/>front / back / task / HIL / weave / pool events"]
+      bus_builders_node["builders.py<br/>Envelope builders<br/>task / response / HIL / tool / metric / dead-letter"]
+      bus_setup_node["setup.py<br/>ACTOR_FRONT=front_half<br/>ACTOR_BACK=back_half<br/>router registration"]
+      bus_deserialize_node["deserialize.py<br/>payload decode helpers"]
+    end
+    subgraph compression["compression"]
+      compression_turn_shape_node["turn_shape.py<br/>history_entries_to_opp_turns<br/>canonical history -> OPP turn dict"]
+      compression_episodic_node["episodic_compressor.py<br/>EpisodicCompressor<br/>CompressedEpisode<br/>CompressionConfig"]
+    end
+    subgraph config["config"]
+      config_loader_node["loader.py<br/>get_config<br/>typed config tree"]
+      config_actor_node["Actor configs<br/>FrontActorConfig<br/>BackActorConfig"]
+      config_fsm_node["FsmConfig<br/>pending result depth / ttl<br/>idempotency / dead-letter"]
+      config_react_node["ReactConfig / ProtocolsConfig<br/>loop fallback / HIL limits"]
+      config_backpool_node["BackPoolConfig<br/>pool size / session limit / lease ttl"]
+      config_concierge_node["concierge.py<br/>ConciergeConfig<br/>feature gates / session toggles"]
+    end
+    subgraph delta["delta"]
+      delta_session_node["session_delta.py<br/>SessionDelta<br/>sections / operations / dedup key"]
+      delta_topics_node["topics.py<br/>ARTIFACT_CREATED<br/>TASK_STATE_CHANGED<br/>STATE_UPDATED"]
+      delta_aggregator_node["aggregator.py<br/>DeltaAggregator<br/>DeltaBatch / batch window"]
+      delta_applicator_node["applicator.py<br/>DeltaApplicator<br/>preflight -> write -> evict -> notify"]
+      delta_emitters_node["emitters.py<br/>emit_artifact<br/>emit_task_state_change"]
+      delta_overflow_node["overflow.py<br/>SectionOverflowHandler<br/>section budgets / eviction"]
+      delta_snapshot_node["snapshot_reader.py<br/>SnapshotReader<br/>SectionSnapshot"]
+      delta_writer_registry_node["writer_registry.py<br/>WriterRole<br/>SECTION_WRITERS<br/>SingleWriterViolation"]
+      delta_dead_note["dead-area note<br/>overflow evict_fn not wired<br/>snapshot/writer registry standalone"]
+    end
+    subgraph docs["docs"]
+      docs_note_node["documentation only<br/>PoC/current wiring references<br/>no runtime code edges"]
+    end
+    subgraph empathy["empathy"]
+      empathy_stub_node["__init__.py<br/>planned MS-4<br/>future emotional inference -> affective_now / beliefs_active"]
+    end
+    subgraph events["events"]
+      events_base_node["base.py<br/>CanonicalEventMeta<br/>required metadata / validation"]
+      events_conversation_node["conversation.py<br/>UserInputReceived / IntentArbitrated / DeadLettered / ResponseDelivered / TaskRouted"]
+      events_task_node["task.py<br/>TaskCreated / TaskLeased / TaskProgressed / TaskCompleted / TaskFailed / TaskCancelled"]
+      events_hitl_node["hitl.py<br/>HILRequested / HILResolved / TaskSuspended / TaskResumed / HITL lifecycle events"]
+      events_weave_node["weave.py<br/>WeaveCandidateArrived / WeaveDecisionMade / WeaveEmitted / WeaveMetricsEvent"]
+      events_mutation_node["mutation.py<br/>TurnMutationSummary<br/>ledger-only mutation stats"]
+      events_pool_node["pool.py<br/>BackPoolWorker* / TaskLease* / TaskDeferred / DependencyFailed events"]
+      events_registry_node["registry.py<br/>EVENT_TYPE_REGISTRY<br/>resolve / deserialize"]
+      events_validator_node["validator.py<br/>validate_event<br/>validate_event_chain"]
+      events_placeholder_note["placeholder event note<br/>several registered events not emitted by controller yet"]
+    end
+    subgraph experience["experience"]
+      experience_layer_node["layer.py<br/>ExperienceLayer.tick<br/>orchestrates experience processors"]
+      experience_emotional_node["emotional_processor.py<br/>EmotionalProcessor<br/>EmotionalTrajectory"]
+      experience_mirror_node["affective_mirror.py<br/>AffectiveMirror<br/>ToneAdjustment"]
+      experience_narrative_node["narrative_weaver.py<br/>NarrativeWeaver<br/>NarrativeContext"]
+      experience_anticipatory_node["anticipatory_responder.py<br/>AnticipatoryResponder<br/>Anticipation"]
+      experience_proactive_node["proactive_agent.py<br/>ProactiveAgent<br/>FillMessage"]
+      experience_rhythm_node["rhythm_controller.py<br/>RhythmController<br/>TimingParams / ResponseStyle"]
+      experience_compression_note["compressor note<br/>EpisodicCompressor attached for telemetry-only path"]
+    end
+    subgraph fabric["fabric"]
+      fabric_ports_node["ports.py<br/>IFabricPort<br/>execute / execute_batch / discover / prompts"]
+      fabric_live_note["runtime backend<br/>k1.fabric.Fabric container<br/>POC mocks moved to tests fixtures"]
+    end
+    subgraph feedback["feedback"]
+      feedback_context_node["context.py<br/>ConversationContext<br/>record_recall / response / user / bot"]
+      feedback_correction_node["detectors/correction.py<br/>CorrectionDetector<br/>CorrectionSignal -> K0 P02"]
+      feedback_validation_node["detectors/validation.py<br/>ValidationDetector<br/>ValidationSignal -> K0 P08"]
+      feedback_reformulation_node["detectors/reformulation.py<br/>ReformulationDetector<br/>ReformulationSignal -> K0 P03"]
+      feedback_emitter_node["emitter.py<br/>FeedbackEmitter<br/>runtime.obs.feedback_envelope_v1.publish"]
+      feedback_wiring_note["wiring note<br/>detectors are live code<br/>must be called by runtime/actors"]
+    end
+    subgraph fsm["fsm"]
+      fsm_controller_node["controller.py<br/>ConciergeController<br/>bus subscriptions -> mailbox delivery"]
+      fsm_states_node["states.py<br/>ConciergeState<br/>LISTENING / DISPATCHING / COMPANIONING / WEAVING / HIL states"]
+      fsm_turn_state_node["turn_state.py<br/>FSMTurnState<br/>pending_results / deferred_results / TTL"]
+      fsm_front_lock_node["front_lock.py<br/>FrontLock<br/>single Front delivery gate"]
+      fsm_arbiter_node["arbiter.py<br/>ConversationArbiter<br/>cancel / modify / defer / parallel new"]
+      fsm_task_bridge_node["task_bridge.py<br/>TaskBridge<br/>SS task_state / artifacts SOT bridge"]
+      fsm_transition_node["transition_table.py<br/>legal transitions<br/>observability topics"]
+      fsm_idempotency_node["idempotency.py<br/>IdempotencyLedger"]
+      fsm_control_ext_node["control_extension.py<br/>mirror FSM state into SS.control"]
+    end
+    subgraph identity["identity"]
+      identity_dynamic_node["dynamic_identity.py<br/>DynamicIdentityContext<br/>IdentitySnapshot.to_prompt_block"]
+      identity_role_node["ConversationalRole<br/>EXPERT / PEER / GUIDE / SUPPORTER / EXECUTOR"]
+      identity_config_node["DynamicIdentityConfig<br/>role adaptation / expertise / formality drift"]
+    end
+    subgraph kernel["kernel"]
+      kernel_shim_node["shim-only folder<br/>re-exports k1.kernel bootstrap / runner"]
+    end
+    subgraph ledger["ledger"]
+      ledger_store_node["store.py<br/>LedgerEntry / ILedgerStore<br/>InMemoryLedgerStore"]
+      ledger_writer_node["writer.py<br/>LedgerWriter<br/>append / append_sync / idempotency"]
+      ledger_projection_node["projections.py<br/>project_task_states / cancel / history / hitl / pending_results"]
+      ledger_recovery_node["recovery.py<br/>CrashRecoveryOrchestrator<br/>recover -> FSM rebuild hooks"]
+      ledger_gap_note["recovery nuance<br/>pending_results projection recorded in report only"]
+    end
+    subgraph llm["llm"]
+      llm_types_node["types.py<br/>ModelMessage<br/>ToolSchema<br/>StreamChunk<br/>ToolCallResult"]
+      llm_validator_node["validator.py<br/>LLMOutputValidator<br/>tool name / required params / type checks"]
+      llm_bridge_node["model_hub_bridge.py<br/>model hub adapter surface"]
+      llm_adapter_node["model_hub_adapter.py / gemini_adapter.py<br/>provider adapters"]
+    end
+    subgraph obs["obs"]
+      obs_metrics_node["metrics.py<br/>MetricsCollector<br/>MetricEnvelope / TurnTimer"]
+      obs_actor_metrics_node["actor_metrics.py<br/>FrontOutcome / BackOutcome<br/>record_front_metrics / record_back_metrics"]
+      obs_fsm_metrics_node["fsm_metrics.py<br/>transition count / dwell metrics"]
+      obs_hitl_weave_node["hitl_metrics.py / weave_metrics.py / arbiter_metrics.py<br/>protocol decision metrics"]
+    end
+    subgraph orchestrator["orchestrator"]
+      orchestrator_types_node["types.py<br/>Budget / TaskEnvelope / AggregatedResult / PlanRequest / PlanStep / CommittedPlan"]
+      orchestrator_routing_node["routing.py<br/>route_task / route_task_sync<br/>LOW direct Back / MED-HIGH orchestrator envelope"]
+      orchestrator_budget_node["tier budgets<br/>fabric budget / planner token budget from config"]
+      orchestrator_gate_node["wiring gate<br/>HIGH without orchestrator -> OrchestratorNotWired"]
+    end
+    subgraph prompt["prompt"]
+      prompt_mode_node["mode.py<br/>PromptMode<br/>determine_mode"]
+      prompt_builder_node["builder.py<br/>DynamicPromptBuilder<br/>BuiltContext / SS_READ_CONFIGS"]
+      prompt_affect_node["affect.py<br/>compute_affect_band"]
+      prompt_scenarios_node["scenario_templates.py / sections.py<br/>mode scenario rendering"]
+      prompt_back_prompt_node["back_prompt.py<br/>build_back_prompt<br/>executor prompt contract"]
+      prompt_back_profiles_node["back_profiles.py<br/>select_back_execution_profiles<br/>render profile block"]
+    end
+    subgraph protocols["protocols"]
+      protocols_cancellation_node["cancellation.py<br/>CancellationToken<br/>CancelReason"]
+      protocols_cancel_handler_node["cancel_handler.py<br/>CancellationHandler<br/>register / cancel / late-complete dedupe"]
+      protocols_task_lease_node["task_lease.py<br/>TaskLease<br/>LeaseStatus / renewal / token"]
+      protocols_suspension_node["suspension.py<br/>SuspensionResolutionNotFound<br/>suspension limits"]
+      protocols_hitl_flow_node["hitl_flow.py<br/>parse approval / selection resolution"]
+      protocols_hitl_wiring_node["hitl_wiring.py<br/>ResumeContext<br/>relay / resolve config"]
+      protocols_weave_node["weave_policy.py / weave_batcher.py / weave_state.py<br/>delivery decisions / batching"]
+    end
+    subgraph react["react"]
+      react_loop_node["loop.py<br/>react_loop<br/>ReactResult"]
+      react_history_node["history.py<br/>build_chat_history<br/>build_chat_history_for_back"]
+      react_checkpoint_node["checkpoint.py<br/>ReActCheckpoint<br/>suspend / resume snapshot"]
+      react_control_node["control.py<br/>BackControlEvent<br/>ReactLoopEvent"]
+      react_capability_node["capability_routing.py / back_execution_plan.py<br/>capability execution planning"]
+    end
+    subgraph rhythm["rhythm"]
+      rhythm_stub_node["__init__.py<br/>planned MS-4<br/>working rhythm code lives in experience/rhythm_controller.py"]
+    end
+    subgraph scheduler["scheduler"]
+      scheduler_node["proactive_scheduler.py<br/>ProactiveScheduler<br/>evaluate idle/affect/HIL/inflight -> ProactiveTrigger"]
+      scheduler_config_node["ProactiveSchedulerConfig<br/>idle threshold / cooldown / suppressions / max per session"]
+      scheduler_wiring_note["wiring note<br/>WHEN primitive exists<br/>session path currently uses ExperienceLayer -> ProactiveAgent"]
+    end
+    subgraph services["services"]
+      recall_service_node["recall_service.py<br/>RecallService<br/>typed RecallRequestV1 client / offline empty fallback"]
+    end
+    subgraph task["task"]
+      task_dispatch_node["dispatch.py<br/>TaskDispatch / TaskComplete / TaskFailed<br/>front -> back payload contract"]
+      task_intent_node["intent.py<br/>TaskIntent<br/>capability / params / urgency"]
+      task_complexity_node["complexity.py<br/>ComplexityTier<br/>budget_for_tier"]
+      task_envelope_bridge_node["envelope_bridge.py<br/>dispatch_to_envelope<br/>complete_to_envelope / failed_to_envelope"]
+      task_receiver_node["receiver.py<br/>TaskReceiver<br/>dispatch subscription / active task tracking"]
+      task_dependency_node["dependency_queue.py<br/>TaskDependencyQueue<br/>depends_on / $ref hydration"]
+      dependency_layers_note["dependency layering<br/>TaskDependencyQueue hydrates $ref params<br/>ReadyQueue gates BackPool envelopes"]
+    end
+    subgraph tools["tools"]
+      tools_dispatcher_node["dispatcher.py<br/>ToolDispatcher<br/>allowlist -> budget -> schema -> policy -> execute -> record"]
+      tools_schemas_front_node["schemas_front.py<br/>FRONT_TOOL_SCHEMAS"]
+      tools_schemas_back_node["schemas_back.py<br/>BACK_TOOL_SCHEMAS<br/>BACK_TIER_ALLOWLISTS"]
+      tools_impl_node["implementations.py<br/>execute_update_* / recall / dispatch_task / discover / invoke / submit_result"]
+      tools_result_node["result_protocol.py<br/>ToolResult protocol"]
+      tools_recovery_node["recovery_contract.py<br/>tool recovery payloads"]
+      tools_parallel_node["parallelism.py<br/>can_parallelize / partition_calls"]
+    end
+    subgraph types["types"]
+      types_reexport_node["__init__.py<br/>pure re-export hub<br/>Envelope / IBus / TaskEnvelope / AggregatedResult / Capability* / Hub*"]
+    end
+    subgraph scan_temp["_scan_temp"]
+      scan_temp_node["generated scan outputs<br/>reference only<br/>not runtime graph"]
+    end
+    pycache["__pycache__"]
+
+    factory_node --> session_mailbox_node
+    ports_node --> factory_node
+    bus_setup_node --> factory_node
+    session_mailbox_node --> front_handler_node
+    session_mailbox_node --> back_route_node
+
+    fsm_controller_node --> session_mailbox_node
+    fsm_controller_node --> fsm_states_node
+    fsm_controller_node --> fsm_turn_state_node
+    fsm_controller_node --> fsm_front_lock_node
+    fsm_controller_node --> fsm_arbiter_node
+    fsm_controller_node --> fsm_task_bridge_node
+    fsm_controller_node --> fsm_transition_node
+    fsm_controller_node --> fsm_idempotency_node
+    fsm_controller_node --> fsm_control_ext_node
+    fsm_controller_node --> protocols_cancel_handler_node
+    fsm_controller_node --> protocols_weave_node
+    fsm_controller_node --> runtime_backpool_note
+    runtime_backpool_note --> back_pool_node
+    runtime_backpool_note --> ready_queue_node
+
+    front_handler_node --> bus_builders_node
+    front_emit_node --> bus_builders_node
+    front_subscribe_node --> bus_topics_node
+    back_route_node --> bus_topics_node
+    back_result_node --> bus_builders_node
+    back_observe_node --> bus_builders_node
+
+    front_handler_node --> prompt_mode_node
+    front_handler_node --> prompt_affect_node
+    front_handler_node --> prompt_builder_node
+    front_scenario_node --> prompt_scenarios_node
+    back_handler_node --> prompt_back_prompt_node
+    back_resume_node --> prompt_back_prompt_node
+    back_profile_node --> prompt_back_profiles_node
+    prompt_builder_node --> prompt_mode_node
+
+    front_handler_node --> react_loop_node
+    back_handler_node --> react_loop_node
+    back_resume_node --> react_loop_node
+    front_history_node --> react_history_node
+    back_handler_node --> react_history_node
+    back_resume_node --> react_history_node
+    back_checkpoint_node --> react_checkpoint_node
+    back_handler_node --> react_control_node
+    back_resume_node --> react_control_node
+
+    front_handler_node --> llm_types_node
+    back_handler_node --> llm_types_node
+    front_handler_node --> llm_validator_node
+    back_handler_node --> llm_validator_node
+    react_loop_node --> llm_bridge_node
+
+    front_handler_node --> tools_dispatcher_node
+    back_handler_node --> tools_dispatcher_node
+    back_resume_node --> tools_dispatcher_node
+    front_handler_node --> tools_schemas_front_node
+    back_budget_node --> tools_schemas_back_node
+    tools_dispatcher_node --> tools_impl_node
+    tools_dispatcher_node --> tools_result_node
+    tools_dispatcher_node --> tools_recovery_node
+    tools_impl_node --> tools_parallel_node
+
+    front_emit_node --> task_dispatch_node
+    front_handler_node --> task_complexity_node
+    back_handler_node --> task_dispatch_node
+    back_result_node --> task_dispatch_node
+    task_receiver_node --> task_dependency_node
+    task_envelope_bridge_node --> bus_builders_node
+    task_dependency_node --> dependency_layers_note
+    ready_queue_node --> dependency_layers_note
+
+    back_cancel_node --> protocols_cancellation_node
+    back_cancel_helpers_node --> protocols_cancellation_node
+    back_pool_node --> protocols_task_lease_node
+    back_router_lease_node --> protocols_task_lease_node
+    back_resume_node --> protocols_suspension_node
+    back_hil_node --> protocols_suspension_node
+    front_hil_resolve_node --> protocols_hitl_flow_node
+    back_resume_node --> protocols_hitl_wiring_node
+
+    front_handler_node --> config_loader_node
+    back_handler_node --> config_loader_node
+    front_handler_node --> config_actor_node
+    back_handler_node --> config_actor_node
+    back_pool_node --> config_backpool_node
+    fsm_controller_node --> config_fsm_node
+    react_loop_node --> config_react_node
+
+    back_profile_node --> obs_actor_metrics_node
+    fsm_controller_node --> obs_fsm_metrics_node
+    obs_actor_metrics_node --> obs_metrics_node
+    protocols_weave_node --> obs_hitl_weave_node
+
+    front_history_node --> compression_turn_shape_node
+    compression_turn_shape_node --> compression_episodic_node
+
+    factory_node --> adapters_bus_input_node
+    factory_node --> adapters_bus_output_node
+    factory_node --> adapters_fabric_dispatch_node
+    factory_node --> adapters_recall_memory_node
+    factory_node --> adapters_ssm_state_node
+    factory_node --> delta_aggregator_node
+    factory_node --> delta_applicator_node
+    factory_node --> ledger_writer_node
+    factory_node --> ledger_store_node
+    factory_node --> experience_layer_node
+    factory_node --> fabric_ports_node
+    factory_node --> orchestrator_routing_node
+
+    adapters_bus_input_node --> bus_topics_node
+    adapters_fabric_dispatch_node --> fabric_ports_node
+    adapters_fabric_dispatch_node --> orchestrator_types_node
+    adapters_shim_node --> llm_bridge_node
+
+    ports_node --> fabric_ports_node
+    ports_node --> types_reexport_node
+    types_reexport_node --> orchestrator_types_node
+
+    fsm_controller_node --> orchestrator_routing_node
+    orchestrator_routing_node --> orchestrator_types_node
+    orchestrator_routing_node --> orchestrator_budget_node
+    orchestrator_routing_node --> orchestrator_gate_node
+    orchestrator_routing_node --> task_dispatch_node
+    orchestrator_routing_node --> task_complexity_node
+    orchestrator_routing_node --> config_loader_node
+    orchestrator_routing_node --> session_mailbox_node
+    orchestrator_gate_node --> bus_builders_node
+
+    tools_impl_node --> adapters_fabric_dispatch_node
+    tools_impl_node --> adapters_recall_memory_node
+    tools_impl_node --> recall_service_node
+
+    session_mailbox_node --> experience_layer_node
+    experience_layer_node --> experience_emotional_node
+    experience_emotional_node --> experience_mirror_node
+    experience_layer_node --> experience_narrative_node
+    experience_layer_node --> experience_anticipatory_node
+    experience_layer_node --> experience_proactive_node
+    experience_layer_node --> experience_rhythm_node
+    experience_layer_node --> experience_compression_note
+    experience_compression_note --> compression_episodic_node
+    experience_layer_node --> bus_builders_node
+    experience_layer_node --> prompt_builder_node
+    experience_mirror_node --> prompt_builder_node
+    experience_rhythm_node --> prompt_builder_node
+    experience_narrative_node --> prompt_builder_node
+    experience_proactive_node --> bus_topics_node
+    scheduler_node --> scheduler_config_node
+    scheduler_node --> experience_proactive_node
+    scheduler_node --> scheduler_wiring_note
+    rhythm_stub_node --> experience_rhythm_node
+    affective_stub_node --> prompt_affect_node
+    empathy_stub_node --> prompt_builder_node
+
+    front_handler_node --> identity_dynamic_node
+    identity_dynamic_node --> identity_role_node
+    identity_dynamic_node --> identity_config_node
+    identity_dynamic_node --> prompt_builder_node
+    prompt_builder_node --> identity_dynamic_node
+
+    feedback_context_node --> feedback_emitter_node
+    feedback_correction_node --> feedback_emitter_node
+    feedback_validation_node --> feedback_emitter_node
+    feedback_reformulation_node --> feedback_emitter_node
+    feedback_wiring_note --> feedback_correction_node
+
+    delta_emitters_node --> delta_session_node
+    delta_emitters_node --> delta_topics_node
+    delta_aggregator_node --> delta_applicator_node
+    delta_applicator_node --> delta_overflow_node
+    delta_applicator_node --> bus_builders_node
+    delta_dead_note --> delta_overflow_node
+    delta_dead_note --> delta_snapshot_node
+    delta_dead_note --> delta_writer_registry_node
+
+    fsm_controller_node --> acking_elision_node
+
+    fsm_controller_node --> ledger_writer_node
+    fsm_controller_node --> ledger_recovery_node
+    ledger_writer_node --> ledger_store_node
+    ledger_writer_node --> events_base_node
+    ledger_recovery_node --> ledger_store_node
+    ledger_recovery_node --> ledger_projection_node
+    ledger_projection_node --> fsm_controller_node
+    ledger_gap_note --> ledger_projection_node
+
+    events_registry_node --> events_base_node
+    events_registry_node --> events_conversation_node
+    events_registry_node --> events_task_node
+    events_registry_node --> events_hitl_node
+    events_registry_node --> events_weave_node
+    events_registry_node --> events_mutation_node
+    events_registry_node --> events_pool_node
+    events_validator_node --> events_registry_node
+    bus_builders_node --> events_registry_node
+    fsm_controller_node --> events_conversation_node
+    fsm_controller_node --> events_task_node
+    fsm_controller_node --> events_hitl_node
+    fsm_controller_node --> events_placeholder_note
+
+    scan_temp_node --> docs_note_node
+  end
+  subgraph external_kernel["external k1 dependencies"]
+    external_k1_bus_node["k1/bus<br/>Envelope / Priority / IBus / IMailboxRouter"]
+    external_k1_hil_node["k1/hil<br/>HILKind / HILEnvelope / HILResponseEnvelope / NeedsHumanRequest"]
+    external_model_hub_node["k1/model_hub<br/>IModelHubPort"]
+    external_fabric_node["k1/fabric<br/>CapabilityRequest / CapabilityResult / Fabric execute/discover"]
+    external_orchestrator_node["k1/orchestrator<br/>WorkflowEngine / OrchestratorService / workflow request types"]
+    external_bridge_node["bridge generated clients<br/>recall_request_v1 / feedback_envelope_v1"]
+    external_sessionstate_node["k1/sessionstate<br/>SessionStateManager / SessionSnapshot / writer port"]
+    external_k1_kernel_node["k1/kernel<br/>KernelConfig / KernelRuntime / start_kernel / stop_kernel"]
+  end
+
+  shared_parse_node --> external_k1_bus_node
+  front_handler_node --> external_k1_bus_node
+  back_handler_node --> external_k1_bus_node
+  bus_builders_node --> external_k1_bus_node
+  adapters_bus_input_node --> external_k1_bus_node
+  adapters_bus_output_node --> external_k1_bus_node
+  delta_emitters_node --> external_k1_bus_node
+  types_reexport_node --> external_k1_bus_node
+  hil_unwrap_node --> external_k1_hil_node
+  hil_detect_node --> external_k1_hil_node
+  hil_response_node --> external_k1_hil_node
+  back_hil_node --> external_k1_hil_node
+  react_loop_node --> external_model_hub_node
+  types_reexport_node --> external_model_hub_node
+  adapters_fabric_dispatch_node --> external_fabric_node
+  fabric_ports_node --> external_fabric_node
+  types_reexport_node --> external_fabric_node
+  adapters_fabric_dispatch_node --> external_orchestrator_node
+  adapters_recall_memory_node --> external_bridge_node
+  recall_service_node --> external_bridge_node
+  feedback_emitter_node --> external_bridge_node
+  adapters_ssm_state_node --> external_sessionstate_node
+  adapters_snapshot_state_node --> external_sessionstate_node
+  delta_applicator_node --> external_sessionstate_node
+  acking_elision_node --> external_sessionstate_node
+  kernel_shim_node --> external_k1_kernel_node

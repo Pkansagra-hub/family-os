@@ -135,16 +135,28 @@ class SpaceDataSeeder:
 
         space_id = profile.space_id
 
-        # Idempotency: skip if a non-trivial snapshot already exists.
+        # Idempotency: skip only if a fully-populated snapshot already exists.
+        # A "fully-populated" snapshot has every profile member AND the full
+        # household_member edge mesh (one bidirectional edge between every
+        # pair of members). Earlier seeder versions only wrote parent_of edges,
+        # which left non-parent/non-child relations (grandparent, etc.)
+        # invisible in the per-actor adjacency view. Re-seed those stores.
         try:
             existing, _ = store.read_space(space_id)
         except Exception:  # pragma: no cover — defensive
             existing = None
-        if existing is not None and len(existing.members) >= len(profile.members):
+        member_count = len(profile.members)
+        expected_min_edges = member_count * (member_count - 1)  # full mesh
+        if (
+            existing is not None
+            and len(existing.members) >= member_count
+            and len(existing.relations) >= expected_min_edges
+        ):
             logger.info(
-                "seed_space_projection: space '%s' already populated (%d members) — skipping",
+                "seed_space_projection: space '%s' already populated (%d members, %d edges) — skipping",
                 space_id,
                 len(existing.members),
+                len(existing.relations),
             )
             return False
 
@@ -175,6 +187,95 @@ class SpaceDataSeeder:
                         weight=1.0,
                     )
                 )
+
+        # Build coparent_of edges: every parent pair is mutually adjacent.
+        # Without these edges, SpaceGraphService._filter_adjacent_edges drops
+        # the other parent from any guardian actor's view, so the visible
+        # space block would only ever list one parent + the children. See
+        # k1/selfmodel/service/space_graph.py L181-L188.
+        for i, p1 in enumerate(parents):
+            for p2 in parents[i + 1 :]:
+                edges.append(
+                    SpaceEdge(
+                        from_member=p1.actor_id,
+                        to_member=p2.actor_id,
+                        kind="coparent_of",
+                        weight=1.0,
+                    )
+                )
+                edges.append(
+                    SpaceEdge(
+                        from_member=p2.actor_id,
+                        to_member=p1.actor_id,
+                        kind="coparent_of",
+                        weight=1.0,
+                    )
+                )
+
+        # Build sibling_of edges: every child pair is mutually adjacent so
+        # children-rendered prompts see all their siblings, not just one.
+        for i, c1 in enumerate(children):
+            for c2 in children[i + 1 :]:
+                edges.append(
+                    SpaceEdge(
+                        from_member=c1.actor_id,
+                        to_member=c2.actor_id,
+                        kind="sibling_of",
+                        weight=1.0,
+                    )
+                )
+                edges.append(
+                    SpaceEdge(
+                        from_member=c2.actor_id,
+                        to_member=c1.actor_id,
+                        kind="sibling_of",
+                        weight=1.0,
+                    )
+                )
+
+        # Build child_of edges (reverse of parent_of) so children-rendered
+        # prompts see all parents in their visible-space block.
+        for parent in parents:
+            for child in children:
+                edges.append(
+                    SpaceEdge(
+                        from_member=child.actor_id,
+                        to_member=parent.actor_id,
+                        kind="child_of",
+                        weight=1.0,
+                    )
+                )
+
+        # Household-wide mesh: ensure every member is adjacent to every other
+        # member with a generic ``household_member`` edge. This covers
+        # extended-family roles (grandparent, aunt/uncle, caregiver) that the
+        # parent/child/sibling typed edges above do not connect. Without this
+        # mesh, _filter_adjacent_edges drops anyone whose relation does not
+        # map to one of the four typed kinds, and they vanish from the
+        # per-actor visible-space block even though the constitution permits
+        # the viewer to see them. Skip pairs already covered by a typed edge.
+        existing_pairs = {(e.from_member, e.to_member) for e in edges}
+        all_members = list(profile.members)
+        for i, m1 in enumerate(all_members):
+            for m2 in all_members[i + 1 :]:
+                if (m1.actor_id, m2.actor_id) not in existing_pairs:
+                    edges.append(
+                        SpaceEdge(
+                            from_member=m1.actor_id,
+                            to_member=m2.actor_id,
+                            kind="household_member",
+                            weight=0.5,
+                        )
+                    )
+                if (m2.actor_id, m1.actor_id) not in existing_pairs:
+                    edges.append(
+                        SpaceEdge(
+                            from_member=m2.actor_id,
+                            to_member=m1.actor_id,
+                            kind="household_member",
+                            weight=0.5,
+                        )
+                    )
 
         snapshot = SpaceGraphSnapshot(
             space_id=space_id,

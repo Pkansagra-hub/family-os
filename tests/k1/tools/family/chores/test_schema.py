@@ -19,6 +19,11 @@ def test_template_minimal_construction() -> None:
     assert t.is_active is True
 
 
+def test_template_custom_frequency_supported() -> None:
+    t = ChoreTemplate(id="t1", actor="u1", title="Water plants", frequency="custom")
+    assert t.frequency == "custom"
+
+
 def test_template_invalid_frequency() -> None:
     with pytest.raises(ValidationError):
         ChoreTemplate(id="t1", actor="u1", title="X", frequency="hourly")  # type: ignore[call-arg]

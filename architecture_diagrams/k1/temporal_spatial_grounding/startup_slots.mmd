@@ -1,0 +1,17 @@
+flowchart LR
+    S1[S1 Bus]
+    S2[S2 ModelHub]
+    S25[S2.5 HIL]
+    S26[S2.6 SelfModel]
+    S27[S2.7 Temporal]
+    S4[S4 Bridge]
+    S28[S2.8 Spatial]
+    S29[S2.9 Grounding]
+    S3[S3 Shared Fabric]
+    S5[S5 Orchestrator]
+    S6[S6 Planner]
+    S6B[S6b Planner binding]
+    S7[S7 Planner task]
+    S8[S8 Optional tools]
+
+    S1 --> S2 --> S25 --> S26 --> S27 --> S4 --> S28 --> S29 --> S3 --> S5 --> S6 --> S6B --> S7 --> S8

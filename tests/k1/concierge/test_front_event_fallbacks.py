@@ -38,7 +38,10 @@ def _mock_front_config() -> Any:
                 history_window_fallback=12,
             )
         ),
-        react=SimpleNamespace(front_degenerate_fallback="Let me think about that for a moment."),
+        react=SimpleNamespace(
+            front_degenerate_fallback="Let me think about that for a moment.",
+            front_budget_fallback="Let me get back to you on that.",
+        ),
     )
 
 
@@ -84,7 +87,50 @@ class _SuspendedSessionState:
 
 
 @pytest.mark.asyncio
-async def test_hitl_relay_degenerate_uses_question_not_generic_filler() -> None:
+async def test_hitl_relay_passes_through_llm_text() -> None:
+    bus = _RecordingBus()
+    env = _env(
+        "k1.hil.request.v1",
+        {
+            "hil_type": "clarification",
+            "question": "Should I use Riley's regular bedtime?",
+            "options": [],
+        },
+    )
+
+    with (
+        patch("k1.concierge.actors.front.determine_mode", return_value=PromptMode.HITL_RELAY),
+        patch("k1.concierge.actors.front.compute_affect_band", return_value="calm"),
+        patch("k1.concierge.actors.front.get_config", return_value=_mock_front_config()),
+        patch("k1.concierge.actors.front._write_runtime_prompt_dump"),
+        patch("k1.concierge.actors.front.DynamicPromptBuilder") as mock_builder,
+        patch("k1.concierge.actors.front.react_loop", new_callable=AsyncMock) as react_loop,
+    ):
+        mock_builder.return_value.build.return_value = _prompt_context()
+        react_loop.return_value = ReactResult(
+            status="complete",
+            text="Hey -- quick check: should I use Riley's regular bedtime?",
+            dispatched_tasks=[],
+        )
+
+        await front_handler(
+            envelope=env,
+            model=AsyncMock(),
+            ss=None,
+            bus=bus,  # type: ignore[arg-type]
+            tool_dispatcher=MagicMock(),
+            all_tool_schemas=[],
+            fsm_state="CLARIFYING_WORKER",
+        )
+
+    assert _final_text(bus) == "Hey -- quick check: should I use Riley's regular bedtime?"
+
+
+@pytest.mark.asyncio
+async def test_hitl_relay_falls_back_to_back_question_when_front_llm_empty() -> None:
+    """When Front LLM returns the deterministic fallback (or empty), we forward
+    the Back-LLM-generated hil_question verbatim instead of leaking the kernel
+    fallback string to the user."""
     bus = _RecordingBus()
     env = _env(
         "k1.hil.request.v1",
@@ -124,7 +170,7 @@ async def test_hitl_relay_degenerate_uses_question_not_generic_filler() -> None:
 
 
 @pytest.mark.asyncio
-async def test_weave_degenerate_sanitizes_internal_back_failure() -> None:
+async def test_weave_passes_through_llm_text() -> None:
     bus = _RecordingBus()
     env = _env(
         "k1.orchestration.async_results_ready.v1",
@@ -155,7 +201,7 @@ async def test_weave_degenerate_sanitizes_internal_back_failure() -> None:
         mock_builder.return_value.build.return_value = _prompt_context()
         react_loop.return_value = ReactResult(
             status="complete",
-            text="Let me think about that for a moment.",
+            text="Quick heads up -- I ran into a snag with that bedroom task.",
             dispatched_tasks=[],
         )
 
@@ -170,14 +216,52 @@ async def test_weave_degenerate_sanitizes_internal_back_failure() -> None:
         )
 
     text = _final_text(bus)
-    assert "couldn't finish add a task for Riley to clean her bedroom" in text
-    assert "WriteContext" not in text
-    assert "trace_id" not in text
-    assert "hit an error" not in text
+    assert text == "Quick heads up -- I ran into a snag with that bedroom task."
 
 
 @pytest.mark.asyncio
-async def test_hitl_resolve_replaces_model_completion_with_ack() -> None:
+async def test_weave_suppresses_kernel_fallback_string() -> None:
+    """Mandate: kernel-canned fallback strings must NEVER be published."""
+    bus = _RecordingBus()
+    env = _env(
+        "k1.orchestration.async_results_ready.v1",
+        {"results": [{"result": {"task_id": "t1", "final_answer": "done"}}]},
+    )
+
+    with (
+        patch("k1.concierge.actors.front.determine_mode", return_value=PromptMode.WEAVE),
+        patch("k1.concierge.actors.front.compute_affect_band", return_value="calm"),
+        patch("k1.concierge.actors.front.get_config", return_value=_mock_front_config()),
+        patch("k1.concierge.actors.front._write_runtime_prompt_dump"),
+        patch("k1.concierge.actors.front.DynamicPromptBuilder") as mock_builder,
+        patch("k1.concierge.actors.front.react_loop", new_callable=AsyncMock) as react_loop,
+    ):
+        mock_builder.return_value.build.return_value = _prompt_context()
+        react_loop.return_value = ReactResult(
+            status="complete",
+            text="Let me think about that for a moment.",
+            dispatched_tasks=[],
+        )
+
+        await front_handler(
+            envelope=env,
+            model=AsyncMock(),
+            ss=None,
+            bus=bus,  # type: ignore[arg-type]
+            tool_dispatcher=MagicMock(),
+            all_tool_schemas=[],
+            fsm_state="COMPANIONING",
+        )
+
+    # No response.final must be published when the LLM produced only the
+    # kernel-canned fallback string. Downstream chain will deliver the
+    # real LLM-authored response.
+    final_events = [e for e in bus.published if e.topic == "k1.session.response.final.v1"]
+    assert final_events == []
+
+
+@pytest.mark.asyncio
+async def test_hitl_resolve_passes_through_llm_text() -> None:
     bus = _RecordingBus()
     env = _env("k1.session.user.input.v1", {"text": "approve"})
 
@@ -206,5 +290,5 @@ async def test_hitl_resolve_replaces_model_completion_with_ack() -> None:
             fsm_state="CLARIFYING_WORKER",
         )
 
-    assert _final_text(bus) == "Got it. I'll keep going."
+    assert _final_text(bus) == "Done! Riley has a new task to clean her bedroom."
     assert [event.topic for event in bus.published].count(TOPIC_TASK_RESUME) == 1

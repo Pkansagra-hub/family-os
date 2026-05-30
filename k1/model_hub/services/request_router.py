@@ -280,7 +280,11 @@ class RequestRouter:
             trace_id=normalized.trace_id,
             consumer_id=normalized.consumer_id,
             reasoning_effort=normalized.reasoning_effort,
-            extra={**normalized.extra, "request_id": request.request_id},
+            extra={
+                **normalized.extra,
+                "request_id": request.request_id,
+                "session_id": request.session_id,
+            },
         )
 
         # Step 8: ProviderDispatcher -> execute
@@ -437,7 +441,7 @@ class RequestRouter:
             trace_id=normalized.trace_id,
             consumer_id=normalized.consumer_id,
             reasoning_effort=normalized.reasoning_effort,
-            extra=normalized.extra,
+            extra={**normalized.extra, "session_id": request.session_id},
         )
 
         # Step 8: Stream dispatch
@@ -445,6 +449,7 @@ class RequestRouter:
 
         accumulated_text = ""
         accumulated_tool_calls: list[Any] = []
+        accumulated_thought = ""
         async for chunk in self._dispatcher.stream(
             normalized,
             choice.provider_id,
@@ -452,6 +457,10 @@ class RequestRouter:
             token_estimate=request.constraints.max_tokens,
         ):
             accumulated_text += chunk.text
+            thought_text = ""
+            if isinstance(chunk.metadata, dict):
+                thought_text = str(chunk.metadata.get("thought_text") or "")
+            accumulated_thought += thought_text
             if chunk.tool_calls:
                 accumulated_tool_calls.extend(chunk.tool_calls)
             if chunk.done:
@@ -488,12 +497,13 @@ class RequestRouter:
                 )
                 yield HubChunk(
                     content=accumulated_text,
+                    thought=accumulated_thought,
                     done=True,
                     metadata=metadata,
                     tool_calls=accumulated_tool_calls or None,
                 )
             else:
-                yield HubChunk(content=chunk.text, done=False)
+                yield HubChunk(content=chunk.text, thought=thought_text, done=False)
 
     # -- Metrics helper --------------------------------------------------------
 

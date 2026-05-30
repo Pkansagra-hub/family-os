@@ -230,20 +230,13 @@ subgraph CONCIERGE["🧠 Concierge — Conversation Conductor (K1's Only User-Fa
       SIGNAL_LIBRARY["Signal Library<br/>Pronouns/conflicts/multi-entities/time vagueness"]:::engine
     end
 
-    subgraph TIME_RESOLUTION["Temporal Resolution Engine"]
+    subgraph TIME_RESOLUTION["Grounding Signal Extraction"]
       TIME_PARSER["Time Parser<br/>NER TIME/DATE/DURATION → parsed"]:::engine
       TIME_RESOLVER["Time Resolver<br/>Relative → Absolute<br/>'9' → '09:00' or '21:00'?"]:::engine
       TIMEZONE_CONTEXT["Timezone Context<br/>User TZ from device/profile"]:::engine
-      TEMPORAL_ANCHOR["Temporal Anchor<br/>now, today, this_week"]:::engine
     end
 
-    subgraph SPATIAL_RESOLUTION["Spatial Context Engine (ADR-0085/0085a)"]
-      LOCATION_INGRESS["Location Ingress<br/>GPS, BLE, Wi-Fi, IP → raw signal"]:::engine
-      LOCATION_RESOLVER["Location Resolver<br/>Raw coords → semantic place"]:::engine
-      PLACE_REGISTRY["Place Registry<br/>Learned places + geofences"]:::engine
-      MOTION_CLASSIFIER["Motion Classifier<br/>STATIONARY, WALKING, IN_VEHICLE"]:::engine
-      SPATIAL_ANCHOR["Spatial Anchor<br/>current_place, last_transition, dwell_time"]:::engine
-    end
+    SPATIAL_RUNTIME_REF["Spatial/Temporal/Grounding runtime<br/>See architecture_diagrams/k1/temporal_spatial_grounding/"]:::engine
 
     subgraph CONTEXT_INFERENCE["Context Inference & Validation"]
       CTX_INFERENCE["Context Inference<br/>SessionState fill + entity resolution"]:::engine
@@ -966,13 +959,9 @@ CONTRACT_SIGNAL_GAPS --> SIGNAL_LIBRARY
 ULTRABERT_NER -->|"TIME/DATE"| TIME_PARSER
 TIME_PARSER --> TIME_RESOLVER
 TIME_RESOLVER --> TIMEZONE_CONTEXT
-TIME_RESOLVER --> TEMPORAL_ANCHOR
 TIME_RESOLVER --> CTX_INFERENCE
-ULTRABERT_NER -->|"LOC"| LOCATION_RESOLVER
-LOCATION_INGRESS --> LOCATION_RESOLVER
-LOCATION_RESOLVER --> PLACE_REGISTRY
-LOCATION_RESOLVER --> SPATIAL_ANCHOR
-MOTION_CLASSIFIER --> SPATIAL_ANCHOR
+ULTRABERT_NER -->|"LOC conversational evidence"| CTX_INFERENCE
+SPATIAL_RUNTIME_REF --> CTX_INFERENCE
 ULTRABERT_NER -->|"entities"| CTX_INFERENCE
 ULTRABERT_RELATIONS --> CTX_INFERENCE
 CTX_INFERENCE --> TINY_SANITY_ARBITER
@@ -984,7 +973,7 @@ ENTROPY_QUESTION_PLANNER -->|"question_plan"| ST_CLARIFY_USER
 ULTRABERT_EMOTIONS --> WRITE_ELISION_GATE
 ULTRABERT_NER --> WRITE_ELISION_GATE
 TIME_RESOLVER --> WRITE_ELISION_GATE
-SPATIAL_ANCHOR --> WRITE_ELISION_GATE
+SPATIAL_RUNTIME_REF --> WRITE_ELISION_GATE
 ULTRABERT_SAFETY --> WRITE_ELISION_GATE
 ULTRABERT_INTENT --> WRITE_ELISION_GATE
 ULTRABERT_INGRESS --> WRITE_ELISION_GATE

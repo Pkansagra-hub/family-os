@@ -223,11 +223,11 @@ class TestBuilderCompressedContextReplacesHistory:
         )
         assert "CONVERSATION HISTORY (COMPRESSED)" in ctx.system_prompt
         assert "DYNAMIC IDENTITY CONTEXT" in ctx.system_prompt
-        # Order: compressed_context lives at Stage 8 (mid-prompt); identity
-        # block lives after Stage 9.5 promoted blocks -- i.e. later.
+        # Order: identity lives in the DYNAMIC IDENTITY seat; compressed
+        # context lives later in CONVERSATION STATE.
         c_idx = ctx.system_prompt.index("CONVERSATION HISTORY (COMPRESSED)")
         i_idx = ctx.system_prompt.index("DYNAMIC IDENTITY CONTEXT")
-        assert c_idx < i_idx
+        assert i_idx < c_idx
 
 
 # ---------------------------------------------------------------------------

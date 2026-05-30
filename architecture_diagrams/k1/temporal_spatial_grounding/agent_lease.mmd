@@ -1,0 +1,11 @@
+sequenceDiagram
+    participant Fabric
+    participant Grounding
+    participant AgentProvider
+    participant Agent
+
+    Fabric->>AgentProvider: spawn request with contract
+    AgentProvider->>Grounding: build_agent_lease(contract scope)
+    Grounding-->>AgentProvider: AgentGroundingLease
+    AgentProvider->>Agent: execute with lease
+    Agent->>AgentProvider: result with grounding references

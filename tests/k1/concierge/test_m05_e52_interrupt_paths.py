@@ -637,13 +637,13 @@ class TestE52TopicAndBuilderIntegration:
         assert TOPIC_TASK_MODIFY in registry
 
     def test_all_topics_count(self) -> None:
-        """ALL_TOPICS has 31 topics (29 orig + intent_arbitrated + task_modify)."""
+        """ALL_TOPICS includes section-update lifecycle events."""
         from k1.concierge.bus.topics import ALL_TOPICS
 
-        assert len(ALL_TOPICS) == 47
+        assert len(ALL_TOPICS) == 49
 
     def test_builders_count(self) -> None:
-        """BUILDERS dict has 31 entries."""
+        """BUILDERS includes section-update lifecycle builders."""
         from k1.concierge.bus.builders import BUILDERS
 
-        assert len(BUILDERS) == 47
+        assert len(BUILDERS) == 49

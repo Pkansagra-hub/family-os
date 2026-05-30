@@ -62,6 +62,7 @@ class SessionInstance:
     created_at: datetime
 
     # ── optional fields (set post-construction) ─────────────
+    section_update_worker: Any = None
     front_ctx: Any = None
     back_ctx: Any = None
     ledger: Any = None
@@ -76,6 +77,27 @@ class SessionInstance:
     # bridge gates) can reach the bundle without hopping back through
     # ``KernelService``.
     self_model: Any = None  # SelfModelHandle | None
+
+    # ── M1: per-session temporal handle ─────────────────────
+    # ``None`` when ``KernelConfig.enable_temporal`` is False. When
+    # enabled, ``create_session`` builds a ``TemporalHandle`` at P3.6,
+    # attaches it to Concierge before start, and stores it here for
+    # lifecycle teardown and inspection.
+    temporal: Any = None  # TemporalHandle | None
+
+    # ── M3: per-session spatial handle ──────────────────────
+    # ``None`` when ``KernelConfig.enable_spatial`` is False. When
+    # enabled, ``create_session`` builds a ``SpatialHandle`` at P3.7,
+    # attaches it before Concierge start, and stores it here for
+    # lifecycle teardown and inspection.
+    spatial: Any = None  # SpatialHandle | None
+
+    # ── M1.5: per-session grounding handle ───────────────────
+    # ``None`` when ``KernelConfig.enable_grounding`` is False. When
+    # enabled, ``create_session`` builds a ``GroundingHandle`` at P3.8,
+    # attaches it to Concierge before start, and stores it here for
+    # lifecycle teardown and inspection.
+    grounding: Any = None  # GroundingHandle | None
 
     # ── lifecycle helpers ───────────────────────────────────
 

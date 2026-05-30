@@ -25,7 +25,13 @@ from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Dict, List, Optional, Protocol, runtime_checkable
 
 from k1.model_hub.manifest import ProviderManifest
-from k1.model_hub.types import CapabilityType, FinishReason, HealthStatus, Message, ToolCallResult
+from k1.model_hub.types import (
+    CapabilityType,
+    FinishReason,
+    HealthStatus,
+    Message,
+    ToolCallResult,
+)
 
 # ===========================================================================
 # Plugin Data Types (provider-agnostic intermediate forms)
@@ -47,7 +53,7 @@ class NormalizedRequest:
     tools: Optional[List[Dict[str, Any]]] = None
     tool_choice: Optional[str] = None
     output_schema: Optional[Dict[str, Any]] = None
-    max_tokens: int = 65536
+    max_tokens: int = 65535
     timeout_ms: int = 30000
     temperature: float = 0.7
     model_id: str = ""

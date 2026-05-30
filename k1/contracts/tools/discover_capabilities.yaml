@@ -30,6 +30,10 @@ tool_contract:
     - "no_state_mutation"
     - "max_top_k_25"
 
+  context_precision:
+    temporal: "anchor"
+    spatial: "hidden"
+
   required_inputs:
     - name: "intent"
       type: "STRING"

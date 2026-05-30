@@ -84,6 +84,9 @@ class TurnCompletePayload:
     mentioned_location_type: str = ""
     mentioned_location_entity_id: str = ""
     mentioned_location_confidence: float = 0.0
+    # Active section-update boundary summary from Concierge. This is
+    # metadata only; detailed diagnostics remain on section_update.completed.
+    section_update: dict | None = None
     # Priority flags: if True, this turn must not be dropped by the
     # "newest wins" backpressure strategy in TurnDispatcher (MW-06)
     correction_signal: bool = False

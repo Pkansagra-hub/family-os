@@ -46,6 +46,8 @@ from k1.concierge.bus.builders import (
     build_hitl_requested,
     build_hitl_resolved,
     build_intent_arbitrated,
+    build_section_update_completed,
+    build_section_update_requested,
     build_state_updated,
     build_task_cancel,
     build_task_complete,
@@ -129,6 +131,22 @@ from k1.concierge.protocols.weave_policy import (
     sort_results_for_delivery,
 )
 from k1.concierge.react.control import BackControlEvent
+from k1.concierge.section_update.apply import apply_section_update_plan
+from k1.concierge.section_update.events import (
+    SectionUpdateCompletionStatus,
+    build_section_update_completed_payload,
+    build_section_update_requested_payload,
+)
+from k1.concierge.section_update.idempotency import SectionUpdateIdempotencyStore
+from k1.concierge.section_update.input_builder import build_section_update_input
+from k1.concierge.section_update.lifecycle import classify_section_update_blocking
+from k1.concierge.section_update.overlay import (
+    OVERLAY_TASK_PAYLOAD_KEY,
+    attach_overlay_to_task_payload,
+    normalize_turn_state_overlay_payload,
+)
+from k1.concierge.section_update.plan_compiler import PlanCompiler
+from k1.concierge.section_update.types import SectionUpdateInput
 from k1.concierge.task.complexity import ComplexityTier
 from k1.concierge.task.dispatch import TaskDispatch
 from k1.concierge.task.intent import TaskIntent
@@ -137,7 +155,6 @@ from k1.concierge.task.intent import TaskIntent
 from k1.hil.suspension import SuspensionManager
 from k1.sessionstate.public_types import (
     PrivacyBand,
-    compute_temporal_anchor,
 )
 
 logger = logging.getLogger(__name__)
@@ -248,6 +265,13 @@ def _task_dispatch_from_payload(payload: dict[str, Any]) -> TaskDispatch:
         "safety_band": payload.get("safety_band", "GREEN"),
         "depends_on": payload.get("depends_on"),
         "context_snapshot": payload.get("context_snapshot"),
+        "execution_profiles": payload.get("execution_profiles"),
+        "grounding_envelope_id": payload.get("grounding_envelope_id"),
+        "temporal_anchor_id": payload.get("temporal_anchor_id"),
+        "spatial_context_id": payload.get("spatial_context_id"),
+        "resolved_temporal_refs": payload.get("resolved_temporal_refs"),
+        "resolved_spatial_refs": payload.get("resolved_spatial_refs"),
+        "grounding": payload.get("grounding"),
     }
 
     # Gracefully strip bad depends_on (LLM may pass a description string)
@@ -516,6 +540,15 @@ class ConciergeController:
         self._pending_hil_subtasks: dict[str, HILSubTask] = (
             {}
         )  # M6 E6.1.2: task_id -> HILSubTask (single SOT for HITL context)
+        # GAP-HIL-005 -- late-answer recovery ring buffer. Stores the most
+        # recent expired/timed-out HIL requests so a user reply that
+        # arrives just after the timeout can still be recognised as an
+        # answer to the prior HIL question instead of a fresh turn.
+        # Entries: {"hil_request_id","hil_type","task_id","expired_at_ms"}.
+        from collections import deque as _deque
+
+        self._recently_expired_hil: _deque[dict[str, Any]] = _deque(maxlen=8)
+        self._late_hil_recovery_window_ms: int = 60_000
         self._running_tasks: dict[str, RunningTaskHandle] = (
             {}
         )  # M5 E5.5.4: inter-iteration injection
@@ -534,6 +567,18 @@ class ConciergeController:
         self._write_elision_gate = WriteElisionGate()
         # OPP Pipeline: wires all 8 OPP primitives into lifecycle hooks
         self._opp_pipeline: Any | None = None
+        # M4.I3: SectionUpdateClassifier normal ownership moved to the
+        # per-session background worker. The controller keeps only an
+        # explicit sync-overlay compatibility boundary for rare same-turn
+        # dispatch-critical cases.
+        self._section_update_classifier: Any | None = None
+        self._section_update_mode: str = "disabled"
+        self._section_update_timeout_ms: int = 250
+        self._section_update_classifier_version: str = "section-update-v0"
+        self._section_update_idempotency = SectionUpdateIdempotencyStore()
+        self._section_update_closed_turn_ids: set[str] = set()
+        self._section_update_completion_by_turn_id: dict[str, dict[str, Any]] = {}
+        self._section_update_overlay_by_turn_id: dict[str, dict[str, Any]] = {}
         logger.info(
             "ConciergeController.__init__: assembling sub-components "
             "(FrontLock, CancelHandler, SuspensionManager, ControlExtension, "
@@ -834,6 +879,72 @@ class ConciergeController:
             "ConciergeController.set_opp_pipeline: attached, status=%s",
             pipeline.status() if hasattr(pipeline, "status") else "unknown",
         )
+
+    def set_section_update_classifier(
+        self,
+        classifier: Any | None,
+        *,
+        mode: str = "shadow",
+        timeout_ms: int = 250,
+        classifier_version: str = "section-update-v0",
+    ) -> None:
+        """Attach the optional sync-overlay SectionUpdateClassifier dependency.
+
+        ``background_apply``, ``shadow``, and ``degraded_noop`` are worker
+        modes and never gate controller turn completion. ``sync_overlay`` is
+        the explicit compatibility path for same-turn dispatch-critical apply.
+        Legacy ``active`` is accepted as an alias for ``sync_overlay``.
+        """
+
+        normalized_mode = str(mode or "disabled").strip().lower()
+        if normalized_mode == "active":
+            normalized_mode = "sync_overlay"
+        if normalized_mode not in {
+            "disabled",
+            "shadow",
+            "background_apply",
+            "degraded_noop",
+            "sync_overlay",
+        }:
+            raise ValueError(f"unsupported section-update mode: {mode!r}")
+        self._section_update_classifier = classifier
+        self._section_update_mode = normalized_mode if classifier is not None else "disabled"
+        self._section_update_timeout_ms = max(1, int(timeout_ms or 1))
+        self._section_update_classifier_version = str(classifier_version or "section-update-v0")
+        logger.info(
+            "ConciergeController.set_section_update_classifier: mode=%s timeout_ms=%d version=%s",
+            self._section_update_mode,
+            self._section_update_timeout_ms,
+            self._section_update_classifier_version,
+        )
+
+    def register_turn_state_overlay(
+        self,
+        overlay: Any,
+        *,
+        provenance: str = "classifier:section_update",
+        snapshot_version: str = "",
+        snapshot_source_epoch: str = "",
+        durable: bool = False,
+        status: str = "",
+        degraded_reason: str = "",
+    ) -> dict[str, Any]:
+        """Register one bounded same-turn overlay for dispatch payloads."""
+
+        if isinstance(overlay, dict) and "provenance" in overlay and "sections" in overlay:
+            normalized = dict(overlay)
+        else:
+            normalized = normalize_turn_state_overlay_payload(
+                overlay,
+                provenance=provenance,
+                snapshot_version=snapshot_version,
+                snapshot_source_epoch=snapshot_source_epoch,
+                durable=durable,
+                status=status,
+                degraded_reason=degraded_reason,
+            )
+        self._section_update_overlay_by_turn_id[str(normalized["turn_id"])] = normalized
+        return normalized
 
     # ------------------------------------------------------------------
     # M8 E8.5.3: HITL pending check for WeaveSignal
@@ -1337,8 +1448,178 @@ class ConciergeController:
 
     def _finalize_turn(self, envelope: Envelope) -> None:
         """Emit turn.completed and drain FrontLock queue. Always called together."""
+        self._run_sync_section_update_overlay_boundary(envelope)
         self._emit_turn_completed(envelope)
         self._drain_front_lock_queue()
+
+    def _run_active_section_update_boundary(self, envelope: Envelope) -> None:
+        """Backward-compatible alias for the explicit sync-overlay boundary."""
+
+        self._run_sync_section_update_overlay_boundary(envelope)
+
+    def _run_sync_section_update_overlay_boundary(self, envelope: Envelope) -> None:
+        """Close the explicit sync-overlay boundary before turn.completed.
+
+        Normal M4 section updates run in the background worker after
+        turn.completed. This path exists only for explicit same-turn overlay
+        use and must not be used by the normal integrated lane.
+        """
+
+        if self._section_update_mode != "sync_overlay" or self._section_update_classifier is None:
+            return
+
+        try:
+            input_data = self._build_section_update_input(envelope)
+        except Exception:
+            logger.warning(
+                "FSM._run_sync_section_update_overlay_boundary: failed to build input; "
+                "continuing turn completion",
+                exc_info=True,
+            )
+            return
+        if input_data.turn_id in self._section_update_closed_turn_ids:
+            logger.debug(
+                "FSM._run_sync_section_update_overlay_boundary: already closed turn_id=%s",
+                input_data.turn_id,
+            )
+            return
+        self._section_update_closed_turn_ids.add(input_data.turn_id)
+        self._bus.publish(
+            build_section_update_requested(
+                build_section_update_requested_payload(
+                    input_data,
+                    mode="sync_overlay",
+                    classifier_version=self._section_update_classifier_version,
+                ),
+                parent_id=envelope.envelope_id,
+            )
+        )
+
+        try:
+            writer_port = getattr(self._ss, "_writer_port", None) if self._ss is not None else None
+            if writer_port is None:
+                self._publish_section_update_completed(
+                    envelope,
+                    input_data,
+                    status=SectionUpdateCompletionStatus.DEGRADED_NOOP,
+                    diagnostics=[
+                        {
+                            "code": "writer_unavailable",
+                            "message": "SessionState writer_port missing",
+                        }
+                    ],
+                )
+                return
+
+            classification = classify_section_update_blocking(
+                input_data=input_data,
+                classifier=self._section_update_classifier,
+                timeout_ms=self._section_update_timeout_ms,
+            )
+            if classification.plan is None:
+                self._publish_section_update_completed(
+                    envelope,
+                    input_data,
+                    status=classification.status,
+                    diagnostics=classification.diagnostics,
+                    elapsed_ms=classification.elapsed_ms,
+                )
+                return
+
+            compiler = PlanCompiler(idempotency_store=self._section_update_idempotency)
+            apply_result = apply_section_update_plan(
+                classification.plan,
+                writer_port=writer_port,
+                compiler=compiler,
+                current_snapshot_version=str(
+                    input_data.session_snapshot.get("snapshot_version", "") or ""
+                ),
+                current_snapshot_epoch=str(
+                    input_data.session_snapshot.get("snapshot_source_epoch", "") or ""
+                ),
+            )
+            self._publish_section_update_completed(
+                envelope,
+                input_data,
+                status=apply_result.status,
+                plan=classification.plan,
+                compile_result=apply_result.compile_result,
+                writer_summary=apply_result.writer_summary,
+                diagnostics=apply_result.diagnostics,
+                elapsed_ms=classification.elapsed_ms,
+            )
+        except Exception as exc:  # noqa: BLE001 - sync overlay degrades before turn.completed.
+            logger.warning(
+                "FSM._run_sync_section_update_overlay_boundary: degraded after boundary failure",
+                exc_info=True,
+            )
+            self._publish_section_update_completed(
+                envelope,
+                input_data,
+                status=SectionUpdateCompletionStatus.DEGRADED_NOOP,
+                diagnostics=[{"code": "sync_overlay_boundary_failed", "message": str(exc)}],
+            )
+
+    def _build_section_update_input(self, envelope: Envelope) -> SectionUpdateInput:
+        ledger_session_id = getattr(self._ledger, "session_id", "") if self._ledger else ""
+        envelope_session_id = getattr(envelope, "session_id", "") or ""
+        session_id = ledger_session_id or envelope_session_id
+        return build_section_update_input(
+            envelope=envelope,
+            ss=self._ss,
+            turn_number=self._turn_number,
+            session_id=session_id,
+            cognitive_trace_id=getattr(envelope, "cognitive_trace_id", "") or "",
+            user_text=self._current_turn_user_text,
+            assistant_text=self._current_turn_assistant_response,
+            prompt_mode="front_react",
+            fsm_state=self._state.value if hasattr(self._state, "value") else str(self._state),
+            constraints={
+                "mode": self._section_update_mode,
+                "classifier_mode": self._section_update_mode,
+                "timeout_ms": self._section_update_timeout_ms,
+                "classifier_version": self._section_update_classifier_version,
+            },
+        )
+
+    def _publish_section_update_completed(
+        self,
+        envelope: Envelope,
+        input_data: Any,
+        *,
+        status: SectionUpdateCompletionStatus,
+        plan: Any | None = None,
+        compile_result: Any | None = None,
+        writer_summary: dict[str, Any] | None = None,
+        diagnostics: list[dict[str, Any]] | None = None,
+        elapsed_ms: int = 0,
+    ) -> None:
+        payload = build_section_update_completed_payload(
+            input_data,
+            status=status,
+            mode=self._section_update_mode,
+            classifier_version=self._section_update_classifier_version,
+            plan=plan,
+            compile_result=compile_result,
+            writer_summary=writer_summary,
+            diagnostics=diagnostics,
+            elapsed_ms=elapsed_ms,
+        )
+        self._section_update_completion_by_turn_id[input_data.turn_id] = {
+            "mode": payload.get("mode", self._section_update_mode),
+            "status": payload.get("status", ""),
+            "plan_id": payload.get("plan_id", ""),
+            "plan_idempotency_key": payload.get("plan_idempotency_key", ""),
+            "mutation_count": int(payload.get("mutation_count", 0) or 0),
+            "rejected_candidate_count": int(payload.get("rejected_candidate_count", 0) or 0),
+            "elapsed_ms": int(payload.get("elapsed_ms", 0) or 0),
+        }
+        self._bus.publish(
+            build_section_update_completed(
+                payload,
+                parent_id=envelope.envelope_id,
+            )
+        )
 
     # ------------------------------------------------------------------
     # M2 E2.1.2: Guard dispatch gate
@@ -2157,7 +2438,6 @@ class ConciergeController:
                 "beliefs": [],
                 "affect_label": "neutral",
                 "affect_detected": False,
-                "temporal_anchor": True,
             }
         )
         if decision.elided_sections:
@@ -2166,23 +2446,6 @@ class ConciergeController:
                 sorted(decision.elided_sections),
                 decision.reason,
             )
-
-        # Temporal anchor (skeleton.mmd -> TIME_RESOLUTION). Reads tz from
-        # Persona preferences if available, falls back to UTC.
-        tz_name = "UTC"
-        try:
-            persona = self._ss.get_section("persona")
-            if persona is not None and hasattr(persona, "get_all_preferences"):
-                prefs = persona.get_all_preferences()
-                tz_name = prefs.get("timezone", "UTC") or "UTC"
-        except Exception:
-            pass
-        try:
-            anchor = compute_temporal_anchor(tz_name)
-            if hasattr(control, "set_temporal_anchor"):
-                control.set_temporal_anchor(anchor.to_dict())
-        except Exception:
-            logger.debug("_write_session_context_to_ss: temporal anchor failed", exc_info=True)
 
         # Crisis-band escalation (kernel keyword check; LLM-derived nuance
         # comes via cognitive tools later in the turn).
@@ -2252,12 +2515,35 @@ class ConciergeController:
         # 5. Arbiter classification (deterministic, no LLM)
         arbiter_result = self._arbiter.classify(text, inputs, inflight)
 
+        # GAP-HIL-005 -- late-HIL recovery. If a HIL just timed out within
+        # the recovery window, tag routing metadata so determine_mode()
+        # routes the reply through HITL_RESOLVE instead of opening a new
+        # turn. The user history entry below also carries the flag for
+        # downstream observability.
+        _late_hil = self._consume_recent_expired_hil()
+        if _late_hil is not None:
+            arbiter_result.routing_metadata["late_hil_recovery"] = True
+            arbiter_result.routing_metadata["late_hil_request_id"] = _late_hil.get(
+                "hil_request_id", ""
+            )
+            arbiter_result.routing_metadata["late_hil_type"] = _late_hil.get("hil_type", "")
+            arbiter_result.routing_metadata["late_hil_task_id"] = _late_hil.get("task_id", "")
+            logger.info(
+                "FSM._route_user_turn: late_hil_recovery armed (request=%s kind=%s)",
+                str(_late_hil.get("hil_request_id", ""))[:8],
+                _late_hil.get("hil_type", ""),
+            )
+
         # Annotate user history entry with arbiter snapshot
         if self._history:
             last = self._history[-1]
             if last.entry_type == "user":
                 last.metadata.update(inputs.to_metadata())
                 last.metadata["arbiter"] = arbiter_result.to_dict()
+                if _late_hil is not None:
+                    last.metadata["late_hil_recovery"] = True
+                    last.metadata["late_hil_request_id"] = _late_hil.get("hil_request_id", "")
+                    last.metadata["late_hil_type"] = _late_hil.get("hil_type", "")
 
         # 6. Emit intent.arbitrated BEFORE delivering to Front
         self._bus.publish(
@@ -2420,6 +2706,50 @@ class ConciergeController:
             self._task_bridge.set_pending_hil_data(task_id, None)
         except Exception:
             logger.debug("FSM: pending HIL cleanup skipped for %s", task_id, exc_info=True)
+
+    # GAP-HIL-005 -- late-answer recovery helpers.
+    def _record_expired_hil(
+        self,
+        *,
+        hil_request_id: str,
+        hil_type: str,
+        task_id: str,
+    ) -> None:
+        """Push an expired/timed-out HIL into the recovery ring buffer."""
+        if not hil_request_id:
+            return
+        try:
+            self._recently_expired_hil.append(
+                {
+                    "hil_request_id": hil_request_id,
+                    "hil_type": hil_type,
+                    "task_id": task_id,
+                    "expired_at_ms": int(time.time() * 1000),
+                }
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("FSM: _record_expired_hil failed", exc_info=True)
+
+    def _consume_recent_expired_hil(self) -> dict[str, Any] | None:
+        """Pop the most recent in-window expired HIL entry, if any.
+
+        Called by _route_user_turn so a user message that arrives shortly
+        after a HIL timeout can be tagged ``late_hil_recovery=True`` in
+        routing metadata. Stale entries (older than the recovery window)
+        are discarded.
+        """
+        if not self._recently_expired_hil:
+            return None
+        now_ms = int(time.time() * 1000)
+        window_ms = self._late_hil_recovery_window_ms
+        # Drop stale entries from the left.
+        while self._recently_expired_hil and (
+            now_ms - int(self._recently_expired_hil[0].get("expired_at_ms", 0)) > window_ms
+        ):
+            self._recently_expired_hil.popleft()
+        if not self._recently_expired_hil:
+            return None
+        return self._recently_expired_hil.popleft()
 
     def _deliver_crisis_response(self, envelope: Envelope) -> None:
         """Emit a canned safety-protocol response without invoking Front LLM.
@@ -2607,6 +2937,11 @@ class ConciergeController:
             canonical_payload["trace_id"] = getattr(dispatch, "trace_id")
         if getattr(dispatch, "session_id", ""):
             canonical_payload["session_id"] = getattr(dispatch, "session_id")
+        raw_dispatch_payload = _parse_payload(envelope)
+        if isinstance(raw_dispatch_payload.get(OVERLAY_TASK_PAYLOAD_KEY), dict):
+            canonical_payload[OVERLAY_TASK_PAYLOAD_KEY] = dict(
+                raw_dispatch_payload[OVERLAY_TASK_PAYLOAD_KEY]
+            )
 
         # Inject scoreboard referents if Front didn't include them.
         # This is the fallback mechanism (Section 6.2): even if the LLM
@@ -2635,6 +2970,11 @@ class ConciergeController:
                         canonical_payload["narrative_thread"] = thread_name
             except Exception:
                 logger.debug("FSM: failed to inject narrative thread", exc_info=True)
+
+        canonical_payload = self._attach_turn_state_overlay_to_dispatch(
+            canonical_payload,
+            envelope,
+        )
 
         canonical_env = build_task_dispatch(
             payload=canonical_payload,
@@ -2669,6 +3009,32 @@ class ConciergeController:
             dispatch.task_id,
         )
         self._deliver_to_back(canonical_env)
+
+    def _attach_turn_state_overlay_to_dispatch(
+        self,
+        payload: dict[str, Any],
+        envelope: Envelope,
+    ) -> dict[str, Any]:
+        explicit_overlay = payload.get(OVERLAY_TASK_PAYLOAD_KEY)
+        if isinstance(explicit_overlay, dict):
+            return attach_overlay_to_task_payload(payload, explicit_overlay)
+        ledger_session_id = getattr(self._ledger, "session_id", "") if self._ledger else ""
+        session_id = (
+            ledger_session_id
+            or getattr(envelope, "session_id", "")
+            or payload.get("session_id", "")
+        )
+        turn_id = f"{session_id}:{self._turn_number}" if session_id else ""
+        overlay = self._section_update_overlay_by_turn_id.get(turn_id)
+        if not overlay:
+            return attach_overlay_to_task_payload(payload, None)
+        logger.info(
+            "FSM._attach_turn_state_overlay_to_dispatch: attaching overlay turn_id=%s durable=%s degraded=%s",
+            turn_id,
+            overlay.get("durable"),
+            overlay.get("degraded_reason", ""),
+        )
+        return attach_overlay_to_task_payload(payload, overlay)
 
     async def _run_medium_orchestration(
         self,
@@ -3072,6 +3438,12 @@ class ConciergeController:
         self._remove_running_task(task_id)  # M5 E5.5.4
         # M3 E3.3.5: Clean up suspension context on terminal state
         self._after_task_cleanup(task_id, context="task_failed")
+        # GAP-HIL-004 -- atomic terminal cleanup of pending HIL state so a
+        # stale subtask record never outlives the task it belonged to.
+        # Mirrors _on_task_complete (L2898) which has performed this since
+        # M6; the failed path was the gap leaking into _has_pending_hitl()
+        # and the response-final STAY decision.
+        self._cleanup_terminal_hitl_state(task_id)
 
         # M4 E4.5.1: Ledger write BEFORE TaskBridge mutation
         self._write_history(
@@ -3104,6 +3476,10 @@ class ConciergeController:
             ConciergeState.COMPANIONING,
             ConciergeState.PROGRESSING,
             ConciergeState.CANCELLING,
+            # CLARIFYING_WORKER: HIL watchdog can cancel the suspended task
+            # before user resolution completes (or Front HITL_RESOLVE stalls).
+            # Surface the failure to the user instead of queuing it forever.
+            ConciergeState.CLARIFYING_WORKER,
         ):
             self._transition(
                 ConciergeState.DELIVERING,
@@ -3779,6 +4155,17 @@ class ConciergeController:
         self._after_task_cleanup(task_id, context="hitl_timeout")
         self._hitl_responded_tasks.pop(task_id, None)
 
+        # GAP-HIL-005 -- remember the expiry so a late user reply can be
+        # recognised as the answer to this HIL question rather than the
+        # start of a brand-new turn. Window is bounded by
+        # self._late_hil_recovery_window_ms; older entries are evicted by
+        # _consume_recent_expired_hil.
+        self._record_expired_hil(
+            hil_request_id=subtask.pending_hil_id,
+            hil_type=str(subtask.hil_type or ""),
+            task_id=task_id,
+        )
+
     def _on_hil_request(self, envelope: Envelope) -> None:
         """Handle k1.hil.request.v1 (HIL Unification E4 unified entry point).
 
@@ -4081,6 +4468,9 @@ class ConciergeController:
             has_active_tasks=bool(self._active_task_ids),
             is_fallback=is_fallback,
             weave_flush_running=bool(self._weave_flush_task and not self._weave_flush_task.done()),
+            # GAP-HIL-006 -- keep CLARIFYING_WORKER open while HIL is pending
+            # even after the worker task has gone terminal.
+            pending_hitl=self._has_pending_hitl(),
         )
 
         # M2 E2.5.4: Record response-final decision in ledger for audit trail
@@ -4326,17 +4716,23 @@ class ConciergeController:
             )
         else:
             self._emitted_turn_ids.add(turn_id)
+            turn_completed_payload = {
+                "turn_id": turn_id,
+                "session_id": session_id,
+                "cognitive_trace_id": cognitive_trace_id,
+                "user_message": self._current_turn_user_text,
+                "assistant_response": assistant_response,
+                "timestamp_ms": int(time.time() * 1000),
+                "turn_number": self._turn_number,
+                "prompt_mode": "front_react",
+                "fsm_state": self._state.value if hasattr(self._state, "value") else str(self._state),
+            }
+            section_update_summary = self._section_update_completion_by_turn_id.get(turn_id)
+            if section_update_summary:
+                turn_completed_payload["section_update"] = dict(section_update_summary)
             self._bus.publish(
                 build_turn_completed(
-                    payload={
-                        "turn_id": turn_id,
-                        "session_id": session_id,
-                        "cognitive_trace_id": cognitive_trace_id,
-                        "user_message": self._current_turn_user_text,
-                        "assistant_response": assistant_response,
-                        "timestamp_ms": int(time.time() * 1000),
-                        "turn_number": self._turn_number,
-                    },
+                    payload=turn_completed_payload,
                     parent_id=envelope.envelope_id,
                 )
             )

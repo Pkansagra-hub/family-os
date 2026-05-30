@@ -170,7 +170,7 @@ REMINDERS_DEFINITION = ToolDefinition(
                 avoid_when=[
                     "deadline-based to-do with no automatic firing → tasks.create_task",
                     "time-blocked appointment with start+end time → calendar.create_event",
-                    "recurring household duty → chores.create_chore",
+                    "recurring household duty → chores.create_template",
                     "user wants to add a shopping item → shopping.add_item",
                 ],
                 examples=[

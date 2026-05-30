@@ -19,8 +19,10 @@ Permission guards
 Design notes
 ------------
 * Templates and occurrences are stored in separate tables; the service
-  manages both.  ``assign_chore`` always creates a *new* occurrence (not
-  updates an existing pending one) so there is a clean audit trail.
+    manages both. ``create_template`` creates the first pending occurrence
+    immediately so list/board surfaces reflect the new chore. ``assign_chore``
+    claims that initial unassigned occurrence when available; otherwise it
+    creates a new occurrence.
 * ``complete_chore`` is idempotent: calling it on an already-done
   occurrence returns success with the existing ``completed_at`` timestamp.
 * ``chore_summary`` is a pure read aggregation — no writes, no SSE.
@@ -31,6 +33,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, ClassVar, Optional
@@ -54,6 +57,78 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _normalize_frequency(value: Any) -> tuple[str, dict[str, Any]]:
+    raw = str(value or "weekly").strip()
+    normalized = raw.lower().replace("_", "-")
+    compact = re.sub(r"\s+", " ", normalized)
+
+    exact: dict[str, str] = {
+        "daily": "daily",
+        "day": "daily",
+        "every day": "daily",
+        "each day": "daily",
+        "everyday": "daily",
+        "weekly": "weekly",
+        "week": "weekly",
+        "every week": "weekly",
+        "each week": "weekly",
+        "once a week": "weekly",
+        "monthly": "monthly",
+        "month": "monthly",
+        "every month": "monthly",
+        "each month": "monthly",
+        "once a month": "monthly",
+        "once": "once",
+        "one time": "once",
+        "one-time": "once",
+        "one off": "once",
+        "one-off": "once",
+        "custom": "custom",
+    }
+    if compact in exact:
+        return exact[compact], {}
+
+    match = re.fullmatch(r"every (\d+) (day|days|week|weeks|month|months)", compact)
+    if match:
+        count = int(match.group(1))
+        unit = match.group(2).rstrip("s")
+        if count == 1:
+            return {"day": "daily", "week": "weekly", "month": "monthly"}[unit], {}
+        return "custom", {"raw": raw, "interval_count": count, "interval_unit": unit}
+
+    return "custom", {"raw": raw}
+
+
+def _ui_interaction_metadata(params: dict[str, Any]) -> dict[str, Any]:
+    source = str(params.get("interaction_source") or "").strip()
+    kind = str(params.get("interaction_kind") or "").strip()
+    if not source and not kind:
+        return {}
+    stamp: dict[str, Any] = {"at": _now_iso()}
+    if source:
+        stamp["source"] = source[:80]
+    if kind:
+        stamp["kind"] = kind[:80]
+    return {"_last_ui_interaction": stamp}
+
+
+def _metadata_updates(params: dict[str, Any]) -> dict[str, Any]:
+    updates: dict[str, Any] = {}
+    if "metadata" in params and params["metadata"] is not None:
+        if not isinstance(params["metadata"], dict):
+            raise ValueError("chore metadata must be an object")
+        updates.update(params["metadata"])
+    updates.update(_ui_interaction_metadata(params))
+    return updates
+
+
+def _merged_metadata(existing: ChoreOccurrence, params: dict[str, Any]) -> dict[str, Any]:
+    updates = _metadata_updates(params)
+    if not updates:
+        return existing.metadata
+    return {**existing.metadata, **updates}
+
+
 class ChoresToolService(BaseToolService):
     """Family Chores adapter service."""
 
@@ -72,20 +147,46 @@ class ChoresToolService(BaseToolService):
         if not role_satisfies(ctx.role, "parent"):
             raise PermissionError("only a parent or system may create chore templates")
 
+        frequency, recurrence_metadata = _normalize_frequency(params.get("frequency", "weekly"))
+        metadata = (
+            dict(params.get("metadata") or {}) if isinstance(params.get("metadata"), dict) else {}
+        )
+        if recurrence_metadata:
+            metadata["recurrence"] = recurrence_metadata
+
         template = ChoreTemplate(
             id=_new_id(),
             space_id=ctx.space_id,
             actor=ctx.user_id,
             visibility=params.get("visibility", "family"),
+            metadata=metadata,
             title=params["title"],
             description=params.get("description"),
             assigned_to=params.get("assigned_to"),
-            frequency=params.get("frequency", "weekly"),
+            frequency=frequency,
             base_points=params.get("base_points", 0),
         )
+        occurrence = ChoreOccurrence(
+            id=_new_id(),
+            space_id=ctx.space_id,
+            actor=ctx.user_id,
+            visibility=template.visibility,
+            template_id=template.id,
+            title=template.title,
+            assigned_to=template.assigned_to,
+            due_at=params.get("due_at"),
+            points_awarded=template.base_points,
+        )
         self._upsert_template(template)
+        self._upsert_occurrence(occurrence)
         self.emit_entity_write("create", template, ctx, action=action)
-        return {"success": True, "template_id": template.id, "version": template.version}
+        self.emit_entity_write("create", occurrence, ctx, action=action)
+        return {
+            "success": True,
+            "template_id": template.id,
+            "occurrence_id": occurrence.id,
+            "version": template.version,
+        }
 
     async def update_template(self, params: dict[str, Any], ctx: WriteContext) -> dict[str, Any]:
         action = self._spec("update_template")
@@ -100,9 +201,17 @@ class ChoresToolService(BaseToolService):
             raise ValueError(f"template not found: {template_id}")
 
         updates: dict[str, Any] = {}
-        for field in ("title", "description", "assigned_to", "frequency", "base_points"):
+        for field in ("title", "description", "assigned_to", "base_points"):
             if field in params and params[field] is not None:
                 updates[field] = params[field]
+        if "frequency" in params and params["frequency"] is not None:
+            frequency, recurrence_metadata = _normalize_frequency(params["frequency"])
+            metadata = dict(existing.metadata)
+            metadata.pop("recurrence", None)
+            if recurrence_metadata:
+                metadata["recurrence"] = recurrence_metadata
+            updates["frequency"] = frequency
+            updates["metadata"] = metadata
         if "is_active" in params and params["is_active"] is not None:
             updates["is_active"] = bool(params["is_active"])
         if "visibility" in params and params["visibility"] is not None:
@@ -135,6 +244,7 @@ class ChoresToolService(BaseToolService):
             }
         )
         self._upsert_template(deleted)
+        self._soft_delete_pending_occurrences(template_id, ctx.space_id)
         self.emit_entity_write("delete", deleted, ctx, action=action)
         return {"success": True, "template_id": template_id}
 
@@ -158,17 +268,29 @@ class ChoresToolService(BaseToolService):
             raise ValueError(f"template not found: {template_id}")
 
         points = params.get("points_awarded", template.base_points)
-        occ = ChoreOccurrence(
-            id=_new_id(),
-            space_id=ctx.space_id,
-            actor=ctx.user_id,
-            visibility=params.get("visibility", "family"),
-            template_id=template_id,
-            title=template.title,
-            assigned_to=assigned_to,
-            due_at=params.get("due_at"),
-            points_awarded=points,
-        )
+        existing_pool_occ = self._select_pending_pool_occurrence(template_id, ctx.space_id)
+        if existing_pool_occ is not None:
+            occ = existing_pool_occ.model_copy(
+                update={
+                    "title": template.title,
+                    "assigned_to": assigned_to,
+                    "due_at": params.get("due_at"),
+                    "points_awarded": points,
+                    "visibility": params.get("visibility", existing_pool_occ.visibility),
+                }
+            ).bump(ctx.user_id)
+        else:
+            occ = ChoreOccurrence(
+                id=_new_id(),
+                space_id=ctx.space_id,
+                actor=ctx.user_id,
+                visibility=params.get("visibility", "family"),
+                template_id=template_id,
+                title=template.title,
+                assigned_to=assigned_to,
+                due_at=params.get("due_at"),
+                points_awarded=points,
+            )
         self._upsert_occurrence(occ)
         self.emit_entity_write("create", occ, ctx, action=action)
         return {"success": True, "occurrence_id": occ.id, "version": occ.version}
@@ -192,6 +314,8 @@ class ChoresToolService(BaseToolService):
                 "occurrence_id": occurrence_id,
                 "completed_at": existing.completed_at,
                 "points_awarded": existing.points_awarded,
+                "version": existing.version,
+                "chore": existing.model_dump(mode="json"),
             }
 
         completed_by = params.get("completed_by") or ctx.user_id
@@ -211,6 +335,7 @@ class ChoresToolService(BaseToolService):
                 "points_awarded": points,
                 "skipped_at": None,
                 "skip_reason": None,
+                "metadata": _merged_metadata(existing, params),
             }
         ).bump(ctx.user_id)
         self._upsert_occurrence(occ)
@@ -220,6 +345,8 @@ class ChoresToolService(BaseToolService):
             "occurrence_id": occ.id,
             "completed_at": now,
             "points_awarded": points,
+            "version": occ.version,
+            "chore": occ.model_dump(mode="json"),
         }
 
     async def skip_chore(self, params: dict[str, Any], ctx: WriteContext) -> dict[str, Any]:
@@ -235,7 +362,12 @@ class ChoresToolService(BaseToolService):
         self._assert_occurrence_gate(existing, ctx, action_name="skip")
 
         if existing.status == "skipped":
-            return {"success": True, "occurrence_id": occurrence_id}
+            return {
+                "success": True,
+                "occurrence_id": occurrence_id,
+                "version": existing.version,
+                "chore": existing.model_dump(mode="json"),
+            }
 
         now = _now_iso()
         occ = existing.model_copy(
@@ -245,11 +377,17 @@ class ChoresToolService(BaseToolService):
                 "skip_reason": params.get("skip_reason"),
                 "completed_at": None,
                 "completed_by": None,
+                "metadata": _merged_metadata(existing, params),
             }
         ).bump(ctx.user_id)
         self._upsert_occurrence(occ)
         self.emit_entity_write("update", occ, ctx, action=action)
-        return {"success": True, "occurrence_id": occ.id}
+        return {
+            "success": True,
+            "occurrence_id": occ.id,
+            "version": occ.version,
+            "chore": occ.model_dump(mode="json"),
+        }
 
     async def reopen_chore(self, params: dict[str, Any], ctx: WriteContext) -> dict[str, Any]:
         action = self._spec("reopen_chore")
@@ -264,7 +402,12 @@ class ChoresToolService(BaseToolService):
             raise ValueError(f"occurrence not found: {occurrence_id}")
 
         if existing.status == "pending":
-            return {"success": True, "occurrence_id": occurrence_id}
+            return {
+                "success": True,
+                "occurrence_id": occurrence_id,
+                "version": existing.version,
+                "chore": existing.model_dump(mode="json"),
+            }
 
         occ = existing.model_copy(
             update={
@@ -273,11 +416,17 @@ class ChoresToolService(BaseToolService):
                 "completed_by": None,
                 "skipped_at": None,
                 "skip_reason": None,
+                "metadata": _merged_metadata(existing, params),
             }
         ).bump(ctx.user_id)
         self._upsert_occurrence(occ)
         self.emit_entity_write("update", occ, ctx, action=action)
-        return {"success": True, "occurrence_id": occ.id}
+        return {
+            "success": True,
+            "occurrence_id": occ.id,
+            "version": occ.version,
+            "chore": occ.model_dump(mode="json"),
+        }
 
     async def list_chores(self, params: dict[str, Any], ctx: WriteContext) -> dict[str, Any]:
         rows = self._scan_occurrences(
@@ -487,6 +636,45 @@ class ChoresToolService(BaseToolService):
             return None
         row = _decode_cols(_row_to_dict(raw))
         return ChoreOccurrence(**row)
+
+    def _select_pending_pool_occurrence(
+        self,
+        template_id: str,
+        space_id: str,
+    ) -> Optional[ChoreOccurrence]:
+        cur = self._conn.execute(
+            """
+            SELECT * FROM chore_occurrences
+            WHERE template_id=?
+              AND space_id=?
+              AND assigned_to IS NULL
+              AND status='pending'
+              AND deleted_at IS NULL
+            ORDER BY created_at ASC
+            LIMIT 1
+            """,
+            (template_id, space_id),
+        )
+        raw = cur.fetchone()
+        if raw is None:
+            return None
+        row = _decode_cols(_row_to_dict(raw))
+        return ChoreOccurrence(**row)
+
+    def _soft_delete_pending_occurrences(self, template_id: str, space_id: str) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._conn:
+            self._conn.execute(
+                """
+                UPDATE chore_occurrences
+                SET deleted_at=?, updated_at=?, version=version+1
+                WHERE template_id=?
+                  AND space_id=?
+                  AND status='pending'
+                  AND deleted_at IS NULL
+                """,
+                (now, now, template_id, space_id),
+            )
 
     def _scan_occurrences(
         self,

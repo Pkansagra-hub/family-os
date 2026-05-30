@@ -334,10 +334,13 @@ class TestToPromptBlock:
         assert "== DYNAMIC IDENTITY CONTEXT ==" in block
         assert "== END IDENTITY ==" in block
 
-    def test_includes_user_name(self) -> None:
+    def test_omits_user_name_now_owned_by_self_block(self) -> None:
+        # The active user's name is rendered in the [self] grounding block;
+        # the dynamic identity overlay intentionally does not duplicate it.
         snap = IdentitySnapshot(active_user_name="Alice")
         block = snap.to_prompt_block()
-        assert "Speaking with: Alice" in block
+        assert "Speaking with:" not in block
+        assert "Alice" not in block
 
     def test_excludes_user_name_if_empty(self) -> None:
         snap = IdentitySnapshot()
@@ -347,7 +350,10 @@ class TestToPromptBlock:
     def test_includes_role(self) -> None:
         snap = IdentitySnapshot(conversational_role="expert")
         block = snap.to_prompt_block()
-        assert "Role: expert" in block
+        # Renamed from "Role:" to "Stance:" so it does not collide with the
+        # structural role= field rendered in the [self] block.
+        assert "Stance: expert" in block
+        assert "Role: expert" not in block
 
     def test_includes_expertise(self) -> None:
         snap = IdentitySnapshot(domain_expertise={"travel": 0.8, "finance": 0.3})

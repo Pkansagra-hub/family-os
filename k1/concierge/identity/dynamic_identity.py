@@ -84,13 +84,17 @@ class IdentitySnapshot:
     context_tags: list[str] = field(default_factory=list)
 
     def to_prompt_block(self) -> str:
-        """Format as prompt injection block for identity context."""
+        """Format as prompt injection block for identity context.
+
+        Note: the active user's name and structural role (guardian/child/etc.)
+        are already emitted in the ``[self]`` grounding block, so they are
+        intentionally omitted here. This block carries only the per-turn
+        interaction overlay: conversational stance, register, expertise,
+        attunement, and context tags.
+        """
         lines = ["== DYNAMIC IDENTITY CONTEXT =="]
 
-        if self.active_user_name:
-            lines.append(f"Speaking with: {self.active_user_name}")
-
-        lines.append(f"Role: {self.conversational_role}")
+        lines.append(f"Stance: {self.conversational_role}")
 
         if self.domain_expertise:
             top_domains = sorted(self.domain_expertise.items(), key=lambda x: x[1], reverse=True)[

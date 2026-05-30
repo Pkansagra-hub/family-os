@@ -105,7 +105,7 @@ class TestIdentityBlockPlacement:
         # The smuggled key name must never appear as raw text in the prompt.
         assert "identity_block:" not in ctx.system_prompt
 
-    def test_compressed_context_before_identity_block(self):
+    def test_identity_block_before_compressed_context_in_situation_frame(self):
         ctx = self._build(
             {
                 "compressed_context": "== CONVERSATION HISTORY (COMPRESSED) ==\nx",
@@ -114,7 +114,7 @@ class TestIdentityBlockPlacement:
         )
         c = ctx.system_prompt.index("CONVERSATION HISTORY (COMPRESSED)")
         i = ctx.system_prompt.index("DYNAMIC IDENTITY CONTEXT")
-        assert c < i, "compressed_context (Stage 8) must precede identity_block (post-9.5)"
+        assert i < c, "identity_block must sit before conversation state in Iteration 1"
 
 
 # ---------------------------------------------------------------------------

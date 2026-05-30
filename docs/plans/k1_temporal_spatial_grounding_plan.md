@@ -1010,6 +1010,426 @@ Dependencies: M2-E1-I1.
 pytest tests/k1/concierge/actors/test_front_resolve_relative_dates.py tests/k1/concierge/actors/test_back_uses_resolved_refs.py tests/k1/concierge/prompt/test_back_prompt_grounding.py -v
 ```
 
+## M0-M2 Implementation Context For M3
+
+This section is the handoff snapshot for the uncommitted work completed through
+M2. Scope is the temporal/spatial/grounding plan plus the device-context ingress
+needed to feed temporal grounding from the browser/runtime. It intentionally does
+not describe unrelated HIL, WEAVE, BackPool, UI polish, log, or SQLite sidecar
+changes that are also present in the working tree.
+
+### M0 Implemented: Design Lock, Flags, Ports, Scaffolds
+
+Purpose: establish the branch-local architecture contract, guarded flags, kernel
+ports, package skeletons, and diagrams before introducing runtime behavior.
+
+- `docs/plans/k1_temporal_spatial_grounding_plan.md` - this milestone plan and
+  issue checklist. Current section should be treated as the M3 context anchor.
+- `architecture_diagrams/k1/temporal_spatial_grounding/overview.mmd` - end-to-end
+  temporal, spatial, grounding overview matching the whiteboard lanes.
+- `architecture_diagrams/k1/temporal_spatial_grounding/startup_slots.mmd` -
+  documents S2.7/S2.8/S2.9 startup slot placement.
+- `architecture_diagrams/k1/temporal_spatial_grounding/session_slots.mmd` -
+  documents P3.6/P3.7/P3.8 session handle placement.
+- `architecture_diagrams/k1/temporal_spatial_grounding/runtime_turn.mmd` -
+  documents per-turn refresh/projection flow.
+- `architecture_diagrams/k1/temporal_spatial_grounding/agent_lease.mmd` -
+  documents grounding lease ownership and propagation.
+- `k1/concierge/config/kernel.py` - adds `enable_temporal`,
+  `enable_grounding`, and `enable_spatial` booleans, defaulting OFF.
+- `tests/k1/kernel/test_config_temporal_spatial_grounding_flags.py` - verifies
+  the three feature flags default OFF and can be overridden from config/env.
+- `k1/kernel/ports/temporal_port.py` - defines `ITemporalPort` and re-exports
+  temporal public types for kernel consumers.
+- `k1/kernel/ports/grounding_port.py` - defines `IGroundingPort` and re-exports
+  grounding public types.
+- `k1/kernel/ports/spatial_port.py` - defines `ISpatialPort` and re-exports
+  spatial public types.
+- `k1/kernel/ports/device_context_port.py` - defines `IDeviceContextPort` and
+  re-exports the canonical `DeviceContextSnapshot`.
+- `k1/kernel/ports/__init__.py` - re-exports the four new kernel Protocols.
+- `k1/kernel/adapters/device_context.py` - adds
+  `InMemoryDeviceContextPort`, the process-local latest-device snapshot store
+  used by temporal timezone resolution.
+- `tests/k1/kernel/ports/test_temporal_port_protocol.py` - protocol-shape test
+  for `ITemporalPort`.
+- `tests/k1/kernel/ports/test_grounding_port_protocol.py` - protocol-shape test
+  for `IGroundingPort`.
+- `tests/k1/kernel/ports/test_spatial_port_protocol.py` - protocol-shape test
+  for `ISpatialPort`.
+- `tests/k1/kernel/ports/test_device_context_port_protocol.py` - protocol-shape
+  test for `IDeviceContextPort`.
+- `k1/temporal/__init__.py`, `k1/temporal/config.py`,
+  `k1/temporal/types.py`, `k1/temporal/errors.py`,
+  `k1/temporal/constants.py` - temporal package scaffold later completed in M1.
+- `k1/grounding/__init__.py`, `k1/grounding/config.py`,
+  `k1/grounding/types.py`, `k1/grounding/errors.py`,
+  `k1/grounding/constants.py` - grounding package scaffold later completed in
+  M1.5; this package owns `DeviceContextSnapshot`.
+- `k1/spatial/__init__.py`, `k1/spatial/config.py`, `k1/spatial/types.py`,
+  `k1/spatial/errors.py`, `k1/spatial/constants.py` - spatial scaffold only;
+  M3 must still complete runtime types, events, ports, adapters, and service.
+- `tests/k1/temporal/test_package_imports.py`,
+  `tests/k1/grounding/test_package_imports.py`,
+  `tests/k1/spatial/test_package_imports.py` - import-cleanliness coverage for
+  the three new packages.
+
+### M1 Implemented: k1.temporal Foundation
+
+Purpose: replace the old POC temporal anchor with a kernel-owned temporal
+service, turn-scoped anchors/windows, typed expression resolution, projections,
+SessionState storage, and Concierge/Planner consumption.
+
+- `k1/temporal/types.py` - completes frozen public dataclasses:
+  `TemporalAnchor`, `TemporalWindow`, `ResolvedTemporalExpression`,
+  `TemporalProjection`, `TemporalTurnSnapshot`, and candidate/freshness/source
+  literals.
+- `k1/temporal/events.py` - defines temporal event topics and payload dataclasses
+  for anchor creation/refresh/stale, expression resolution, and projection use.
+- `k1/temporal/serialization.py` - provides round-trip dict conversion for
+  temporal anchors, windows, resolutions, projections, and turn snapshots.
+- `tests/k1/temporal/test_types.py`, `tests/k1/temporal/test_events.py`,
+  `tests/k1/temporal/test_serialization.py` - cover M1 temporal type/event
+  contracts and serialization.
+- `k1/temporal/ports/clock_port.py`,
+  `k1/temporal/ports/device_context_port.py`,
+  `k1/temporal/ports/timezone_port.py`,
+  `k1/temporal/ports/routine_port.py`,
+  `k1/temporal/ports/state_port.py`,
+  `k1/temporal/ports/event_port.py`,
+  `k1/temporal/ports/id_port.py`,
+  `k1/temporal/ports/metrics_port.py`,
+  `k1/temporal/ports/policy_port.py`, `k1/temporal/ports/__init__.py` - nine
+  runtime-checkable temporal Protocols and public exports.
+- `tests/k1/temporal/ports/test_protocol_shapes.py` - validates the temporal
+  port Protocol surface with lightweight fakes.
+- `k1/temporal/adapters/system_clock_adapter.py` - production clock adapter.
+- `k1/temporal/adapters/device_context_adapter.py` - adapts the kernel device
+  context port to temporal timezone/locale inputs.
+- `k1/temporal/adapters/persona_timezone_adapter.py` - reads persona/family
+  timezone as a fallback source.
+- `k1/temporal/adapters/spatial_timezone_adapter.py` - spatial timezone shim;
+  returns absent/none until M3 spatial is real.
+- `k1/temporal/adapters/session_state_adapter.py` - writes temporal anchors,
+  windows, and resolutions into the HOT temporal SessionState section.
+- `k1/temporal/adapters/event_bus_adapter.py` - publishes temporal events onto
+  the session bus.
+- `k1/temporal/adapters/null_routine_adapter.py` - no-op routine source.
+- `k1/temporal/adapters/selfmodel_routine_adapter.py` - routine source through
+  SelfModel when available.
+- `k1/temporal/adapters/uuid_id_adapter.py` - anchor/projection/resolution ID
+  generator.
+- `k1/temporal/adapters/null_metrics_adapter.py` - no-op temporal metrics port.
+- `k1/temporal/adapters/allow_all_policy_adapter.py` - permissive policy adapter
+  for initial service wiring.
+- `tests/k1/temporal/adapters/test_system_clock_adapter.py`,
+  `tests/k1/temporal/adapters/test_session_state_adapter.py`,
+  `tests/k1/temporal/adapters/test_event_bus_adapter.py`,
+  `tests/k1/temporal/adapters/test_timezone_adapters.py` - adapter coverage.
+- `k1/temporal/service/anchor_builder.py` - builds turn anchors from clock,
+  timezone, locale, device, and freshness inputs.
+- `k1/temporal/service/timezone_resolver.py` - resolves timezone in
+  device -> spatial -> persona -> UTC order.
+- `k1/temporal/service/locale_resolver.py` - resolves locale for anchor context.
+- `k1/temporal/service/clock_skew_checker.py` - detects skew between device and
+  kernel clocks.
+- `k1/temporal/service/window_builder.py` - builds the standard temporal windows
+  using `zoneinfo`.
+- `k1/temporal/service/daylight_boundary.py` - handles DST spring-forward and
+  fall-back boundary cases.
+- `k1/temporal/service/freshness_evaluator.py` - classifies live/stale/degraded
+  temporal freshness.
+- `k1/temporal/service/expression_candidates.py` - typed candidate extraction
+  surface used by M2 dispatch resolution; no regex parsing at the callsite.
+- `k1/temporal/service/phrase_catalog.py` - locale-keyed phrase/token catalog.
+- `k1/temporal/service/temporal_tokens.py` - token dataclasses for weekday,
+  offset, routine, and relative-day rules.
+- `k1/temporal/service/relative_day_rules.py`,
+  `k1/temporal/service/weekday_rules.py`,
+  `k1/temporal/service/offset_rules.py` - deterministic temporal rule engines.
+- `k1/temporal/service/routine_window_resolver.py` - resolves routine-named
+  windows through `IRoutinePort`.
+- `k1/temporal/service/ambiguity_resolver.py` - marks ambiguous expressions for
+  clarification rather than guessing.
+- `k1/temporal/service/expression_resolver.py` - orchestrates candidate -> rule
+  -> routine -> confidence -> `ResolvedTemporalExpression`.
+- `k1/temporal/service/projection_builder.py` - builds per-consumer
+  `TemporalProjection` objects.
+- `k1/temporal/service/projection_renderer.py` - renders temporal prompt blocks
+  for direct temporal consumers.
+- `k1/temporal/service/event_emitter.py` - emits temporal service lifecycle and
+  resolution events.
+- `k1/temporal/service/temporal_service.py` - top-level temporal API:
+  `refresh_turn`, `get_anchor`, `resolve_expression`, `build_projection`.
+- `k1/temporal/service/health.py` - temporal service health snapshot.
+- `tests/k1/temporal/service/test_anchor_builder.py`,
+  `tests/k1/temporal/service/test_window_builder.py`,
+  `tests/k1/temporal/service/test_timezone_resolver.py`,
+  `tests/k1/temporal/service/test_expression_resolver.py`,
+  `tests/k1/temporal/service/test_projection_builder.py`,
+  `tests/k1/temporal/service/test_temporal_service.py` - service coverage.
+- `k1/temporal/factory.py` - factory entrypoints for standalone, testing,
+  explicit-port, and production temporal service construction.
+- `k1/temporal/kernel/bootstrap.py` - `TemporalServiceBundle` and
+  `build_temporal_bundle()`.
+- `k1/temporal/kernel/handle.py` - `TemporalHandle` implementing the kernel
+  temporal port and session install/uninstall lifecycle.
+- `k1/temporal/kernel/session_binding.py` - immutable per-session temporal
+  binding data.
+- `tests/k1/temporal/test_factory_wiring.py`,
+  `tests/k1/temporal/kernel/test_bundle.py`,
+  `tests/k1/temporal/kernel/test_handle.py` - factory/bundle/handle coverage.
+- `k1/sessionstate/sections/temporal.py` - HOT `TemporalSection` storing the
+  current anchor, windows, resolutions, provenance, and turn metadata.
+- `k1/sessionstate/sections/__init__.py` - exports `TemporalSection`.
+- `k1/sessionstate/tiers/hot.py` - registers the HOT `temporal` section.
+- `k1/sessionstate/sizetracker.py` - adds temporal to section accounting and
+  budgets.
+- `tests/k1/sessionstate/sections/test_temporal_section.py`,
+  `tests/k1/sessionstate/test_temporal_registration.py` - SessionState temporal
+  coverage.
+- `k1/kernel/service.py` - adds temporal bundle storage, S2.7 startup bundle
+  construction, P3.6 per-session `TemporalHandle` installation, health reporting,
+  shutdown cleanup, and device-context port ownership.
+- `k1/concierge/session.py` - adds `set_temporal()` pre-start guard and forwards
+  the handle into Front and Back actor routing.
+- `k1/concierge/factory.py` - accepts `temporal_port` and installs it into the
+  Concierge runtime.
+- `k1/concierge/fsm/controller.py` - replaces the old inline POC temporal-anchor
+  computation path with `temporal_port.refresh_turn(...)` for user turns.
+- `k1/concierge/prompt/builder.py` - removes the old POC temporal renderer path
+  and routes temporal context through typed projections.
+- `k1/concierge/prompt/sections.py` - adds the grounding protocol text used by
+  projection-based prompt blocks.
+- `tests/k1/concierge/test_runtime_set_temporal.py`,
+  `tests/k1/concierge/test_front_temporal_session_id.py`,
+  `tests/k1/concierge/test_bus_temporal_topics.py`,
+  `tests/k1/concierge/prompt/test_builder_temporal.py` - Concierge temporal
+  wiring and prompt coverage.
+- `k1/planner/stages/expand_service.py` - migrates planning time context away
+  from ad-hoc string injection toward structured temporal/grounding constraints.
+- `tests/k1/planner/test_expand_service_temporal.py` - verifies structured
+  temporal planning constraint content.
+- `k1/contracts/tools/date_calc.yaml` - declares `required_context: [temporal]`.
+- `tests/k1/fabric/test_date_calc_context.py` - verifies Fabric context builder
+  injects the temporal section for `date_calc`.
+- `k1/sessionstate/sections/temporal_context.py` - deleted; old POC anchor module
+  is removed.
+- `k1/sessionstate/public_types.py` - removes POC temporal anchor re-exports.
+- `k1/sessionstate/sections/control.py` - removes control-section temporal anchor
+  field/API.
+- `tests/k1/sessionstate/test_public_types_no_poc.py`,
+  `tests/k1/sessionstate/sections/test_control_no_temporal.py` - regression
+  coverage for the POC removal.
+
+### M1.5 Implemented: k1.grounding Shell And Propagation
+
+Purpose: create the canonical grounding layer that composes temporal and spatial
+state, even while spatial remains `unknown` until M3, and propagate grounding IDs
+and projections across Front, Back, Orchestrator, Planner, and prompts.
+
+- `k1/grounding/types.py` - completes frozen grounding dataclasses:
+  `DeviceContextSnapshot`, `GroundingEnvelope`, `GroundingProjection`,
+  `AgentGroundingLease`, `GroundingFreshness`, `GroundingSource`, and
+  `ConsumerScope`.
+- `k1/grounding/events.py` - defines grounding event topics and payloads.
+- `k1/grounding/errors.py` - grounding error hierarchy, including projection and
+  stale-envelope failures.
+- `k1/grounding/constants.py` - consumer names, propagation field names, lease
+  status constants, and redaction reason constants.
+- `k1/grounding/serialization.py` - round-trip conversion for envelopes,
+  projections, leases, and snapshots.
+- `k1/grounding/__init__.py` - public package exports.
+- `tests/k1/grounding/test_package_imports.py`,
+  `tests/k1/grounding/test_m15_runtime.py` - package and M1.5 runtime coverage.
+- `k1/grounding/ports/temporal_port.py`,
+  `k1/grounding/ports/spatial_port.py`,
+  `k1/grounding/ports/identity_port.py`,
+  `k1/grounding/ports/policy_port.py`,
+  `k1/grounding/ports/state_port.py`,
+  `k1/grounding/ports/event_port.py`,
+  `k1/grounding/ports/id_port.py`,
+  `k1/grounding/ports/metrics_port.py`, `k1/grounding/ports/__init__.py` -
+  grounding port layer.
+- `k1/grounding/adapters/temporal_handle_adapter.py` - wraps `TemporalHandle` for
+  grounding service consumption.
+- `k1/grounding/adapters/spatial_handle_adapter.py` - null/unknown spatial
+  adapter used until M3 installs real spatial.
+- `k1/grounding/adapters/selfmodel_identity_adapter.py` - identity source from
+  SelfModel.
+- `k1/grounding/adapters/selfmodel_policy_adapter.py` - grounding policy source
+  from SelfModel.
+- `k1/grounding/adapters/session_state_adapter.py` - persists grounding metadata
+  into SessionState.
+- `k1/grounding/adapters/event_bus_adapter.py` - publishes grounding events.
+- `k1/grounding/adapters/uuid_id_adapter.py` - grounding ID generation.
+- `k1/grounding/adapters/null_metrics_adapter.py` - no-op grounding metrics.
+- `k1/grounding/service/envelope_builder.py` - builds `GroundingEnvelope` from
+  temporal plus current/null spatial state.
+- `k1/grounding/service/projection_policy.py` - consumer-scoped projection policy.
+- `k1/grounding/service/projection_builder.py` - creates per-consumer
+  `GroundingProjection` objects.
+- `k1/grounding/service/lease_builder.py` - creates `AgentGroundingLease`, always
+  carrying a spatial field even when status is `unknown`.
+- `k1/grounding/service/context_snapshot_builder.py` - assembles source context
+  snapshots for grounding.
+- `k1/grounding/service/reference_context_builder.py` - derives task
+  `reference_context["grounding"]` payloads.
+- `k1/grounding/service/invocation_metadata.py` - builds tool/model invocation
+  grounding metadata.
+- `k1/grounding/service/propagation.py` - canonical propagation field builder
+  for `grounding_envelope_id`, `temporal_anchor_id`, `spatial_context_id`, and
+  resolved refs.
+- `k1/grounding/service/prompt_block_renderer.py` - single renderer for
+  `== NOW ==`, `== PLACE ==`, `== EXECUTION GROUNDING ==`, and
+  `== PLANNING GROUNDING ==` blocks.
+- `k1/grounding/service/stale_envelope_checker.py` - detects stale grounding
+  envelopes.
+- `k1/grounding/service/event_emitter.py` - emits grounding lifecycle events.
+- `k1/grounding/service/grounding_service.py` - top-level grounding service API.
+- `k1/grounding/service/health.py` - grounding service health snapshot.
+- `k1/grounding/factory.py` - factory entrypoints matching temporal.
+- `k1/grounding/kernel/bootstrap.py` - `GroundingServiceBundle` and
+  `build_grounding_bundle()`.
+- `k1/grounding/kernel/handle.py` - `GroundingHandle` with session
+  install/uninstall and projection methods.
+- `k1/grounding/kernel/session_binding.py` - immutable per-session grounding
+  binding data.
+- `k1/sessionstate/sections/grounding.py` - HOT `GroundingSection` storing
+  envelope/projection IDs, section-version links, and redaction summary only; no
+  raw location payload.
+- `k1/sessionstate/sections/__init__.py`, `k1/sessionstate/tiers/hot.py`,
+  `k1/sessionstate/sizetracker.py` - register grounding in HOT SessionState and
+  accounting.
+- `tests/k1/sessionstate/sections/test_grounding_section.py` - grounding section
+  coverage.
+- `k1/kernel/service.py` - adds S2.9 grounding bundle construction using
+  `NullGroundingSpatialPort`, P3.8 per-session `GroundingHandle` installation,
+  health reporting, and shutdown cleanup.
+- `tests/k1/kernel/test_service_grounding_tier1.py`,
+  `tests/k1/kernel/test_service_grounding_tier2.py` - kernel tier coverage for
+  grounding bundle and handle wiring.
+- `k1/concierge/session.py` - adds `set_grounding()` pre-start guard and forwards
+  grounding handle into Front and Back processing.
+- `k1/concierge/factory.py` - accepts `grounding_port` and installs it into the
+  runtime.
+- `k1/concierge/prompt/builder.py` - accepts `grounding_projection` and routes
+  Front prompt live blocks through `prompt_block_renderer`.
+- `tests/k1/concierge/test_runtime_set_grounding.py`,
+  `tests/k1/concierge/prompt/test_builder_grounding.py` - runtime guard and
+  Front prompt grounding coverage.
+- `k1/concierge/task/dispatch.py` - extends `TaskDispatch` with
+  `grounding_envelope_id`, `temporal_anchor_id`, `spatial_context_id`,
+  `resolved_temporal_refs`, `resolved_spatial_refs`, and
+  `requires_temporal_clarification`; serializes/deserializes those fields.
+- `tests/k1/concierge/task/test_dispatch_grounding_fields.py`,
+  `tests/k1/concierge/test_grounding_dispatch_contract.py` - dispatch contract
+  coverage.
+- `k1/concierge/actors/front.py` - refreshes/builds Front grounding projections,
+  writes propagation metadata into dispatch payloads and `reference_context`, and
+  prepares the field path that M2 uses for resolved temporal refs.
+- `k1/concierge/actors/back.py` - reads task grounding data, falls back to live
+  Back projection if needed, and renders execution grounding through the shared
+  grounding renderer.
+- `tests/k1/concierge/actors/test_back_execution_grounding.py` - Back execution
+  grounding block coverage.
+- `k1/concierge/prompt/back_prompt.py` - accepts execution grounding content and
+  supports typed resolved refs in the Back prompt.
+- `k1/orchestrator/types.py` - adds optional `grounding` payloads to
+  `TaskEnvelope` and `PlanRequest` with serialization support.
+- `k1/orchestrator/orchestration/orchestrator_service.py` - carries grounding
+  from task envelopes into planner requests, with compatibility fallback from
+  task context.
+- `tests/k1/orchestrator/test_plan_request_grounding.py` - orchestrator grounding
+  round-trip/pass-through coverage.
+- `k1/planner/stages/expand_service.py` - renders planning grounding from
+  `request.grounding` via `dict_to_projection()` and
+  `render_planning_grounding_block()`; removes the old temporal-constraint
+  fallback path.
+- `tests/k1/planner/test_expand_service_grounding.py`,
+  `tests/k1/planner/test_planner_grounding_contract.py`,
+  `tests/k1/planner/test_no_constraint_temporal_fallback.py` - planner grounding
+  contract and fallback-removal coverage.
+
+### M2 Implemented: Resolve Relative Dates Before Dispatch
+
+Purpose: Front resolves relative dates while it still has fresh temporal and
+grounding context, then Back consumes those typed windows directly instead of
+spending another tool/LLM step to rediscover `tomorrow`, `next Friday`, etc.
+
+- `k1/temporal/types.py` - adds/uses typed candidate span and resolved expression
+  shapes needed by dispatch resolution.
+- `k1/temporal/service/expression_candidates.py` - provides
+  `extract_from_dispatch(dispatch_payload)` to pull typed candidates from dispatch
+  params and reference context.
+- `k1/concierge/actors/front.py` - after LLM `dispatch_task`, extracts temporal
+  candidates, calls `temporal.resolve_expression(...)`, writes
+  `resolved_temporal_refs`, and sets `requires_temporal_clarification` for
+  ambiguous candidates before publishing the task dispatch.
+- `k1/concierge/task/dispatch.py` - carries resolved temporal refs and the
+  clarification flag through `TaskDispatch` serialization.
+- `k1/concierge/fsm/controller.py` - preserves dispatch grounding/resolved-ref
+  metadata while routing task envelopes onward.
+- `k1/concierge/orchestrator/routing.py` - includes grounding and resolved-ref
+  fields when translating Concierge task dispatch into orchestrator-facing work.
+- `k1/concierge/actors/back.py` - exposes `dispatch.resolved_temporal_refs` to
+  Back prompt construction and the execution grounding block.
+- `k1/concierge/prompt/back_prompt.py` - renders
+  `resolved_temporal_refs_typed:` under `== EXECUTION GROUNDING ==` and instructs
+  Back to treat those refs as authoritative, skipping `date_calc` for already
+  resolved windows.
+- `tests/k1/concierge/actors/test_front_resolve_relative_dates.py` - golden
+  coverage for resolving `tomorrow` before dispatch and marking ambiguous
+  expressions.
+- `tests/k1/concierge/actors/test_back_uses_resolved_refs.py` - verifies Back
+  prompt receives typed resolved refs.
+- `tests/k1/concierge/prompt/test_back_prompt_grounding.py` - verifies Back
+  prompt merges resolved refs into execution grounding and carries the
+  clarification flag.
+
+### Device Context Ingress Implemented During M0-M2 Work
+
+Purpose: make browser-local timezone/device observations available to the kernel
+so temporal anchors are not UTC-only when the user is in a local family context.
+
+- `ui/web/static/app.js` - computes browser/family timezone, locale, observed UTC,
+  offset, device surface, and wall-clock metadata via `_browserDeviceContext()`;
+  sends it with user messages and uses the display timezone for UI timestamps.
+- `ui/web/app.py` - records `device_context` messages and records device context
+  before forwarding user messages to the coordinator/runtime.
+- `ui/web/coordinator.py` - normalizes browser context, falls back to family
+  timezone, builds `DeviceContextSnapshot`, and writes it to
+  `service.device_context_port.update_snapshot(...)`.
+- `k1/kernel/service.py` - owns the `InMemoryDeviceContextPort` and passes a
+  temporal `DeviceContextAdapter` into the temporal bundle.
+- `tests/ui/web/test_device_context.py` - verifies coordinator writes browser
+  device snapshots and falls back to family timezone.
+- `tests/ui/web/test_app.py` - verifies web message handling records device
+  context before dispatch.
+
+### Carry-Forward Notes Before Starting M3
+
+- `k1/spatial/` is still a scaffold. M3 must fill spatial runtime types,
+  serialization, events, ports, adapters, service, SessionState section, kernel
+  handle, and tests. Existing grounding uses the null/unknown spatial adapter.
+- M3 should replace `k1/grounding/adapters/spatial_handle_adapter.py` with a real
+  spatial handle adapter once P3.7 spatial is installed.
+- `k1/concierge/fsm/controller.py` still has a legacy
+  `"temporal_anchor": True` control/elision marker. It is not the old
+  `compute_temporal_anchor` path, but D-13 cleanup should finish removing the
+  misleading marker.
+- `k1/concierge/prompt/sections.py` still contains the old `TIME AWARENESS:`
+  identity paragraph while typed NOW/grounding blocks also exist. M3 should decide
+  whether this text remains policy language or should be removed under D-16.
+- The exact files `tests/k1/kernel/test_service_temporal_tier1.py` and
+  `tests/k1/kernel/test_service_temporal_tier2.py` are not present; temporal tier
+  behavior is covered through temporal factory/kernel/service tests plus Concierge
+  wiring tests. Add or rename focused tier tests if M3 requires exact plan-file
+  test names.
+- `tests/k1/bus/middleware/test_default_registry_temporal.py` exists for temporal
+  topic-registry coverage. Before M3 exit, verify default bus topic prefixes cover
+  both `k1.temporal.` and `k1.grounding.` event families.
+
 ---
 
 ## M3: k1.spatial Foundation
@@ -1030,6 +1450,38 @@ Dependencies: M1.5-E1-I1, M0-E3-I2.
 
 Scope (CREATE): per whiteboard.
 
+#### M3-E1 Completion Notes (2026-05-23)
+
+Implemented the spatial public contract without adding a duplicate
+`DeviceContextSnapshot`:
+
+- `k1/spatial/types.py` now carries the completed frozen payload surface:
+  surface kinds, permission/freshness/precision aliases, `DeviceSurface`,
+  `LocationFix`, `PlaceRef`, `Geofence`, `PlaceCandidate`, `PresenceRef`,
+  `SpatialRedaction`, `SpatialContext`, `SpatialProjection`, and
+  `SpatialTurnSnapshot`. It references the shared grounding device snapshot only
+  for typing and does not define a second device snapshot.
+- `k1/spatial/events.py` adds the whiteboard event topics and payloads:
+  context created/refreshed, place resolved, context redacted, and location
+  unavailable.
+- `k1/spatial/constants.py` now defines precision levels, permission states,
+  surface kinds, place kinds, candidate sources, redaction reasons, and default
+  consumer precision.
+- `k1/spatial/errors.py` now covers missing registry, stale location, invalid
+  fix, policy denial, permission denial, unknown place, and unavailable spatial
+  source.
+- `k1/spatial/serialization.py` adds explicit round-trip helpers for every M3-E1
+  spatial payload, including nested device context, places, fixes, projections,
+  and turn snapshots.
+- `k1/spatial/__init__.py` re-exports the stable public types, events, config,
+  and errors for downstream imports.
+- `k1/grounding/serialization.py` was updated only at the spatial conversion
+  boundary so M1.5 grounding projections still round-trip after the expanded M3
+  spatial dataclasses.
+
+Validation added: `tests/k1/spatial/test_types_events_serialization.py` plus the
+existing `tests/k1/spatial/test_package_imports.py`.
+
 ### Epic M3-E2: `k1/spatial/ports/` + `adapters/`
 
 #### Issue M3-E2-I1: All spatial ports
@@ -1040,6 +1492,49 @@ Per whiteboard file map.
 
 Per whiteboard file map. `local_place_registry_adapter.py` reads place registry from config/SessionState (no K0 yet — that's M5). `null_*` adapters are first-class.
 
+#### M3-E2 Completion Notes (2026-05-23)
+
+Implemented the spatial port/adapter boundary, keeping core services independent
+from production adapters:
+
+- `k1/spatial/ports/device_context_port.py` defines
+  `ISpatialDeviceContextPort` over the shared `DeviceContextSnapshot`.
+- `k1/spatial/ports/device_location_port.py` defines optional installed-device
+  raw/approximate fix input.
+- `k1/spatial/ports/place_registry_port.py` defines place, geofence, member
+  default, timezone, and registry metadata reads.
+- `k1/spatial/ports/geocoder_port.py`, `presence_port.py`, `policy_port.py`,
+  `state_port.py`, `event_port.py`, `id_port.py`, and `metrics_port.py` define
+  the remaining service boundaries.
+- `k1/spatial/ports/__init__.py` re-exports all M3 spatial Protocols for factory
+  validation and tests.
+- `k1/spatial/adapters/device_context_adapter.py` wraps the kernel
+  `IDeviceContextPort` for spatial.
+- `k1/spatial/adapters/browser_device_location_adapter.py` reads browser/app
+  `location_fix` payloads from `DeviceContextSnapshot`.
+- `k1/spatial/adapters/null_device_location_adapter.py`,
+  `null_geocoder_adapter.py`, and `null_presence_adapter.py` provide explicit
+  unavailable/default behavior.
+- `k1/spatial/adapters/local_place_registry_adapter.py` provides local/test
+  places, aliases, geofences, defaults, and timezone lookup until M5 Bridge
+  persistence.
+- `k1/spatial/adapters/bridge_place_registry_adapter.py` is the M5-ready bridge
+  adapter shell; it degrades to an unavailable/empty registry when no bridge
+  methods exist.
+- `k1/spatial/adapters/selfmodel_policy_adapter.py` maps SelfModel policy, when
+  present, to allowed spatial precision and redaction reasons; default behavior
+  remains private.
+- `k1/spatial/adapters/session_state_adapter.py` is the narrow SessionState
+  boundary for future `spatial` HOT and `place_registry` WARM sections.
+- `k1/spatial/adapters/event_bus_adapter.py`, `uuid_id_adapter.py`, and
+  `null_metrics_adapter.py` provide event, ID, and metrics adapters.
+- `k1/spatial/adapters/__init__.py` re-exports adapter classes for M3-E4 factory
+  wiring.
+
+Validation added: `tests/k1/spatial/test_ports_protocol_shapes.py`,
+`tests/k1/spatial/test_device_context.py`, `tests/k1/spatial/test_place_resolver.py`,
+and `tests/k1/spatial/test_session_state_adapter.py`.
+
 ### Epic M3-E3: `k1/spatial/service/`
 
 #### Issue M3-E3-I1: Core resolvers + privacy
@@ -1049,6 +1544,63 @@ Per whiteboard file map: `device_surface_resolver.py`, `permission_normalizer.py
 **Privacy invariant**: `projection_renderer.py` never receives raw coordinates unless `precision_selector.py` explicitly authorized them for that consumer.
 
 Test files: per whiteboard §"Focused Test File Map".
+
+#### M3-E3 Completion Notes (2026-05-23)
+
+Implemented the deterministic spatial service layer without kernel/session wiring
+yet. The service takes typed device context, registry, policy, and presence ports
+and returns explicit unknown/hidden/unavailable projections when sensors or policy
+do not allow more.
+
+- `k1/spatial/service/device_surface_resolver.py` classifies browser, mobile,
+  desktop, shared hub, voice, watch, car, and unknown surfaces from the device
+  snapshot.
+- `k1/spatial/service/permission_normalizer.py` normalizes granted, denied,
+  hidden, stale, degraded, unavailable, and unknown permission states.
+- `k1/spatial/service/location_normalizer.py` validates coordinates, accuracy,
+  permission, confidence, and unavailable fixes.
+- `k1/spatial/service/place_alias_catalog.py` provides deterministic alias
+  normalization for home/school/work/vehicle-style labels.
+- `k1/spatial/service/place_candidate_source.py` extracts typed place candidates
+  from `DeviceContextSnapshot` and structured dispatch/reference mappings.
+- `k1/spatial/service/place_registry_service.py` loads place/geofence registry
+  snapshots through `IPlaceRegistryPort`.
+- `k1/spatial/service/place_resolver.py` resolves candidates to `PlaceRef` with
+  registry alias matching and explicit unknown fallback.
+- `k1/spatial/service/geofence_matcher.py` implements coordinate-availability
+  checks, circle matching with accuracy radius, and polygon matching.
+- `k1/spatial/service/presence_resolver.py` reads co-presence candidates through
+  `IPresencePort` without making presence mandatory.
+- `k1/spatial/service/precision_selector.py` centralizes hidden/semantic/
+  approximate/place-id/raw precision ordering and policy clamping.
+- `k1/spatial/service/privacy_projector.py` applies precision/redaction policy;
+  semantic/front-style projections do not carry raw coordinates.
+- `k1/spatial/service/projection_builder.py` builds per-consumer
+  `SpatialProjection` objects after policy selection.
+- `k1/spatial/service/projection_renderer.py` renders prompt-safe PLACE,
+  execution place, and planning spatial blocks from `SpatialProjection` only.
+- `k1/spatial/service/event_emitter.py` emits spatial lifecycle/redaction events
+  through `ISpatialEventPort`.
+- `k1/spatial/service/health.py` defines the spatial health snapshot.
+- `k1/spatial/service/spatial_service.py` is the top-level API for refresh,
+  current context, place resolution, projection building, and health. It writes
+  through `ISpatialStatePort` when present but does not yet install kernel handles;
+  that remains M3-E4.
+- `k1/spatial/service/__init__.py` re-exports the service-layer entrypoints for
+  M3-E4 factory wiring.
+
+Validation added: `tests/k1/spatial/test_location_normalizer.py`,
+`tests/k1/spatial/test_place_resolver.py`, `tests/k1/spatial/test_geofence_matcher.py`,
+`tests/k1/spatial/test_privacy_projector.py`, and
+`tests/k1/spatial/test_session_state_adapter.py`.
+
+Targeted validation run:
+
+```bash
+pytest tests/k1/spatial/test_package_imports.py tests/k1/spatial/test_types_events_serialization.py tests/k1/spatial/test_ports_protocol_shapes.py tests/k1/spatial/test_device_context.py tests/k1/spatial/test_location_normalizer.py tests/k1/spatial/test_place_resolver.py tests/k1/spatial/test_geofence_matcher.py tests/k1/spatial/test_privacy_projector.py tests/k1/spatial/test_session_state_adapter.py -v
+```
+
+Result: 25 passed.
 
 ### Epic M3-E4: Factory + kernel + sections
 
@@ -1067,6 +1619,40 @@ Scope (CREATE):
 
 Insert Spatial at S2.8 after S4 Bridge and before S2.9 Grounding, because Spatial may use Bridge/K0-backed place registry. Insert SpatialHandle at P3.7 after P3.6 Temporal and before P3.8 Grounding. Rewire the existing Grounding bundle/handle from M1.5 so S2.9/P3.8 consumes the real Spatial service/handle instead of `NullGroundingSpatialPort`.
 
+#### M3-E4 Completion Notes (2026-05-24)
+
+Implemented Spatial as a real kernel service/bundle/handle without merging it
+into grounding:
+
+- Created `k1/spatial/factory.py` with standalone/testing/production entrypoints,
+  Protocol validation, and duplicate port identity rejection.
+- Created `k1/spatial/kernel/bootstrap.py`, `handle.py`, and
+  `session_binding.py`. `SpatialHandle` wraps `SpatialService`, refreshes the
+  current turn, builds projections, installs/uninstalls idempotently, and
+  refreshes if a projection is requested before context exists.
+- Added `SpatialSection` HOT and `PlaceRegistrySection` WARM under
+  `k1/sessionstate/sections/`, registered them in HOT/WARM tiers,
+  `sections/__init__.py`, and `sizetracker.py`.
+- Updated `SpatialEventBusAdapter` to publish K1 `Envelope` objects rather than
+  awaiting `bus.publish(topic, payload)`, matching temporal/grounding adapter
+  behavior.
+- Added Spatial lifecycle wiring in `k1/kernel/service.py`: S2.8 after Bridge and
+  before Grounding; P3.7 after Temporal and before Grounding; teardown/reset in
+  shutdown, partial cleanup, and session destroy.
+- Added `SessionInstance.spatial`, `KernelService.spatial_bundle`, and wiring
+  diagnostics in `describe_wiring()`.
+- Fixed two old duplicate skeleton footers in `k1/spatial/adapters/__init__.py`
+  and `k1/spatial/service/spatial_service.py` that blocked import collection.
+- Made new `k1.spatial` factory/kernel package-root exports lazy so
+  `k1.grounding.types -> k1.spatial.types` does not circularly import the
+  spatial factory.
+
+Validation added: `tests/k1/sessionstate/sections/test_spatial_section.py`,
+`tests/k1/sessionstate/sections/test_place_registry_section.py`,
+`tests/k1/spatial/test_factory_wiring.py`, `tests/k1/spatial/kernel/test_handle.py`,
+`tests/k1/kernel/test_service_spatial_tier1.py`, and
+`tests/k1/kernel/test_service_spatial_tier2.py`.
+
 ### Epic M3-E5: Concierge spatial wiring
 
 #### Issue M3-E5-I1: `ConciergeRuntime.set_spatial(handle)` + Front spatial consumption
@@ -1082,6 +1668,33 @@ Scope (MODIFY):
 
 Test files: `tests/k1/concierge/test_runtime_set_spatial.py`, `tests/k1/concierge/actors/test_front_spatial_projection.py`.
 
+#### M3-E5 Completion Notes (2026-05-24)
+
+Spatial is now a Concierge pre-start port, while Front still consumes current
+place through grounding as the projection aggregator:
+
+- `k1/concierge/session.py` now owns `_spatial`, exposes `spatial`, and has
+  `set_spatial(handle)` with the same pre-start guard as temporal/grounding.
+- `k1/concierge/factory.py` includes `spatial` in `PortBundle`, testing
+  adapters, and runtime attachment.
+- `k1/kernel/service.py` passes the P3.7 `SpatialHandle` into `PortBundle` before
+  `ConciergeRuntime.start()`.
+- `k1/concierge/actors/front.py` accepts optional `spatial` for session binding
+  symmetry and no longer injects persona `Location:` / `Timezone:` lines into
+  family context. Current place is sourced from grounding PLACE blocks.
+- `k1/grounding/service/prompt_block_renderer.py` renders a richer PLACE block
+  from `GroundingProjection.spatial`, including surface, place refs, and
+  redactions when present.
+- `k1/concierge/prompt/back_prompt.py` no longer contains the hardcoded Denton
+  restaurant example, satisfying the M3 no-hardcoded-place criterion for `k1/`.
+- Did not add a blind spatial refresh call to `ConciergeController._route_user_turn`;
+  that path is currently synchronous and the live refresh path already runs
+  through Front/grounding. This divergence should stay explicit until the FSM
+  owns typed async temporal/spatial ports.
+
+Validation added: `tests/k1/concierge/test_runtime_set_spatial.py` and
+`tests/k1/concierge/actors/test_front_spatial_projection.py`.
+
 ### Epic M3-E6: Grounding spatial adapter upgrade
 
 #### Issue M3-E6-I1: Replace spatial stub with real handle
@@ -1093,6 +1706,30 @@ Scope (MODIFY):
 - `k1/grounding/service/lease_builder.py`: populate spatial fields from handle, applying redactions.
 
 Test files: `tests/k1/grounding/adapters/test_spatial_handle_adapter_real.py`, `tests/k1/grounding/test_projection_policy_spatial.py`, `tests/k1/grounding/test_lease_spatial.py`.
+
+#### M3-E6 Completion Notes (2026-05-24)
+
+Grounding now consumes the real SpatialHandle and shapes precision by consumer:
+
+- `k1/grounding/adapters/spatial_handle_adapter.py` passes device/installation
+  IDs and `requested_precision` through to `SpatialHandle.build_projection()`;
+  the unknown fallback remains only for disabled/missing spatial handles.
+- `k1/grounding/ports/spatial_port.py` now includes optional
+  `requested_precision` so policy can drive spatial projection precision.
+- `k1/grounding/service/projection_policy.py` uses
+  `k1.spatial.constants.DEFAULT_CONSUMER_PRECISION` (`front/back=semantic`,
+  `planner/fabric/tool/memory=place_id`, `agent=semantic`) while preserving the
+  explicit raw override gate.
+- `k1/grounding/adapters/selfmodel_policy_adapter.py` now uses those defaults
+  and accepts optional SelfModel scope overrides via
+  `get_grounding_consumer_scope()` / `grounding_consumer_scope()` when present.
+- `k1/grounding/service/grounding_service.py` resolves policy before asking
+  spatial for a projection, then passes `scope.spatial_precision` into the
+  spatial port. Agent leases therefore carry policy-shaped `lease.spatial`.
+
+Validation added: `tests/k1/grounding/adapters/test_spatial_handle_adapter_real.py`,
+`tests/k1/grounding/test_projection_policy_spatial.py`, and
+`tests/k1/grounding/test_lease_spatial.py`.
 
 ### Epic M3-E7: M3 Evidence Integration And Diagram Cleanup
 
@@ -1114,6 +1751,48 @@ Test files: `tests/k1/spatial/test_place_candidate_source.py`, `tests/k1/session
 Scope (MODIFY):
 
 - Delete spatial/temporal/place nodes from `k1/concierge/concierge_unified.mmd` lines 236-245, 961 (D-17). Replace with reference link to `architecture_diagrams/k1/temporal_spatial_grounding/` diagrams.
+
+#### M3-E7 Completion Notes (2026-05-24)
+
+Mentioned locations are now explicitly conversational evidence, not current
+device place:
+
+- `k1/sessionstate/sections/beliefs_active.py` documentation and method
+  docstrings now describe `mentioned_location` as conversational evidence only.
+- `k1/spatial/service/place_candidate_source.py` reads
+  `beliefs_active.mentioned_location` as a low-confidence
+  `conversation_mention` candidate capped below device/registry evidence and
+  marks it `authoritative_current_place=False`.
+- `k1/concierge/prompt/builder.py` now labels the old HOT-section prompt line as
+  `[mentioned location: ...]` rather than `[location: ...]` to avoid confusing it
+  with authoritative PLACE grounding.
+- `k1/concierge/concierge_unified.mmd` removes diagram-only spatial resolver
+  nodes/edges and points to `architecture_diagrams/k1/temporal_spatial_grounding/`
+  as the runtime diagram source.
+
+Validation added: `tests/k1/spatial/test_place_candidate_source.py` and
+`tests/k1/sessionstate/sections/test_beliefs_active_mentioned_location_candidate.py`.
+
+Targeted validation run for M3-E4 through M3-E7:
+
+```bash
+pytest tests/k1/sessionstate/sections/test_spatial_section.py tests/k1/sessionstate/sections/test_place_registry_section.py tests/k1/spatial/test_factory_wiring.py tests/k1/spatial/kernel/test_handle.py tests/k1/kernel/test_service_spatial_tier1.py tests/k1/kernel/test_service_spatial_tier2.py tests/k1/concierge/test_runtime_set_spatial.py tests/k1/concierge/actors/test_front_spatial_projection.py tests/k1/grounding/adapters/test_spatial_handle_adapter_real.py tests/k1/grounding/test_projection_policy_spatial.py tests/k1/grounding/test_lease_spatial.py tests/k1/spatial/test_place_candidate_source.py tests/k1/sessionstate/sections/test_beliefs_active_mentioned_location_candidate.py -v
+```
+
+Result: 23 passed.
+
+Targeted nearby regression runs:
+
+```bash
+pytest tests/k1/spatial/test_package_imports.py tests/k1/spatial/test_device_context.py tests/k1/spatial/test_session_state_adapter.py tests/k1/kernel/test_service_grounding_tier1.py tests/k1/kernel/test_service_grounding_tier2.py tests/k1/concierge/test_runtime_set_temporal.py tests/k1/concierge/test_runtime_set_grounding.py -v
+pytest tests/k1/grounding/test_package_imports.py -v
+pytest tests/k1/concierge/prompt/test_back_prompt_capability_names.py tests/k1/concierge/prompt/test_builder_temporal.py -v
+```
+
+Result: 14 passed, then 3 passed, then 7 passed. A combined run with both spatial and grounding
+`test_package_imports.py` files hits pytest's duplicate-basename import mismatch,
+so those package-import files must be run in separate pytest processes unless
+the test module names are made unique.
 
 ## M3 Success Criteria
 
@@ -1172,6 +1851,49 @@ Scope (MODIFY):
 
 Test files: `tests/k1/fabric/contracts/test_context_precision.py`.
 
+#### M4-E1 Completion Notes (2026-05-24)
+
+Implemented Epic M4-E1 across the live Fabric boundaries, with code reality
+taking priority over the original synchronous wording in I1:
+
+- `k1/fabric/core/context_builder.py` now accepts an optional session
+  grounding port, exposes `set_grounding_port(...)`, and preserves the
+  existing synchronous `build(...)` API. The live Fabric execution path uses
+  `build_async(...)` so it can await `IGroundingPort.create_envelope(...)` and
+  `build_projection(...)` before attaching `context_override.grounding_invocation`.
+- `k1/grounding/service/invocation_metadata.py` now stamps baseline invocation
+  metadata with `invoked_at_utc` in addition to envelope/projection/temporal/
+  spatial references.
+- `k1/fabric/fabric.py` awaits the grounding-aware context build during real
+  `execute(...)` while keeping the legacy `_build_context(...)` helper
+  synchronous for existing tests and callers.
+- `k1/fabric/factory.py` threads an optional `grounding_port` into the shared
+  `ContextBuilder`, and `k1/kernel/service.py` binds the per-session
+  `GroundingHandle` into the already-created per-session Fabric once P3.8
+  grounding exists.
+- `k1/fabric/providers/base_provider.py` preserves
+  `context_override.grounding_invocation` through the existing shared provider
+  metadata helper, so Native/MCP/WASM/Agent provider transports inherit the
+  same baseline block without a duplicate or nonexistent `tool_provider.py`.
+- `k1/fabric/contracts/context_precision.py` adds the frozen
+  `ContextPrecision` value object. `CapabilityContract` and `AgentContract`
+  now serialize/deserialize `context_precision`, and both tool/agent parsers
+  preserve it from YAML bodies.
+- `k1/contracts/schemas/tool_contract.schema.json` and
+  `k1/contracts/schemas/agent_contract.schema.json` allow optional
+  `context_precision`; `context_precision.schema.json` and
+  `grounding.schema.json` document the standalone precision and invocation
+  payload shapes.
+
+Validation evidence:
+
+- `python -m pytest tests/k1/fabric/test_context_builder_grounding_invocation.py tests/k1/fabric/providers/test_base_provider_grounding_metadata.py tests/k1/fabric/contracts/test_context_precision.py -v` -> 8 passed.
+- Existing boundary regressions via test runner: `tests/k1/fabric/test_context_builder.py`, `tests/k1/fabric/test_capability_contract_prompt_metadata.py`, `tests/k1/fabric/providers/test_native_tool_provider_path.py`, `tests/k1/fabric/test_create_shared.py`, `tests/k1/fabric/test_fabric_factory_hil_port.py`, `tests/k1/fabric/test_fabric_execute_with_gate.py`, `tests/k1/fabric/test_execute_batch.py` -> 230 passed.
+- Existing parser/schema/type regressions via test runner: `tests/k1/fabric/test_tool_schema_validation.py`, `tests/k1/fabric/test_agent_schema_validation.py`, `tests/k1/fabric/test_contract_parsers.py`, `tests/k1/fabric/test_types.py` -> 294 passed.
+
+Remaining M4 work starts at M4-E2: agent leases and contract YAML updates are
+not implemented by this epic.
+
 ### Epic M4-E2: Agent provider lease
 
 #### Issue M4-E2-I1: `AgentProvider` requests lease
@@ -1212,6 +1934,50 @@ Test files: `tests/k1/contracts/test_tool_contracts_precision.py`.
 #### Issue M4-E3-I1: Remove ad-hoc context_override grounding paths
 
 Scope (MODIFY): any path that previously injected time/place via `context_override` is replaced by the baseline `grounding_invocation` block from M4-E1-I1.
+
+#### M4-E2 / M4-E3 Completion Notes (2026-05-24)
+
+Implemented Epic M4-E2 and Epic M4-E3 against the live provider and grounding
+boundaries:
+
+- `k1/fabric/providers/agent_provider.py` now requests an
+  `AgentGroundingLease` before `IAgentFactory.spawn_and_execute(...)` when a
+  session grounding port is present, attaches the lease to
+  `ExecutionContext.grounding_lease`, and mirrors lease identifiers into
+  `context_override.grounding_invocation` plus an `agent_grounding_lease`
+  session section for downstream transports and diagnostics.
+- `AgentFactory._spawn(...)` preserves provider-issued grounding lease state
+  and merges the provider's `context_override.grounding_invocation` through
+  the synchronous context rebuild path, so the lease is not lost while building
+  the agent's initial context.
+- `k1/fabric/factory.py` wires the shared session `grounding_port` into
+  `AgentProvider` through the existing `ProviderFactory` port-dependency path;
+  no duplicate provider-specific composition path was added.
+- `k1/grounding/service/lease_builder.py`,
+  `k1/grounding/service/grounding_service.py`, and
+  `k1/grounding/kernel/handle.py` now respect explicit `ttl_seconds` when
+  issuing agent leases instead of only recording TTL in metadata.
+- `ExecutionContext`, `CapabilityContract`, and `AgentContract` now
+  serialize/deserialize lease metadata. Tool and agent contract schemas allow
+  optional `lease` policies.
+- `build_agent.yaml` declares the required/optional context, execution/
+  semantic precision, and 900-second refreshable lease policy. `date_calc`,
+  `discover_capabilities`, `find_prompts`, and `unit_convert` declare explicit
+  precision policies; `date_calc` continues to require the `temporal` section.
+- For M4-E3, production search found no remaining production path that injects
+  ad-hoc time/place grounding through `context_override`. `ContextBuilder` now
+  also drops deprecated top-level grounding override keys (`now`, `time`,
+  `place`, `temporal`, `spatial`, `grounding`) while preserving the supported
+  `grounding_invocation` block.
+
+Validation evidence:
+
+- Focused new coverage:
+  `python -m pytest tests/k1/fabric/providers/test_agent_provider_lease.py tests/k1/contracts/test_tool_contracts_precision.py tests/k1/fabric/test_context_builder_grounding_invocation.py -v` -> 13 passed.
+- M4 exit gate:
+  `python -m pytest tests/k1/fabric/test_context_builder_grounding_invocation.py tests/k1/fabric/providers/test_base_provider_grounding_metadata.py tests/k1/fabric/contracts/test_context_precision.py tests/k1/fabric/providers/test_agent_provider_lease.py tests/k1/contracts/test_tool_contracts_precision.py tests/k1/fabric/test_date_calc_context.py -v` -> 21 passed.
+- Narrow touched-boundary regressions:
+  `python -m pytest tests/k1/fabric/test_agent_435.py tests/k1/fabric/test_agent_provider_wiring.py tests/k1/fabric/test_tool_schema_validation.py tests/k1/fabric/test_agent_schema_validation.py tests/k1/fabric/test_contract_parsers.py tests/k1/fabric/test_capability_contract_prompt_metadata.py tests/k1/grounding/test_m15_runtime.py::test_m15_e4_handle_protocol_aliases_preserve_envelope_for_agent_lease tests/k1/grounding/test_lease_spatial.py::test_issue_agent_lease_uses_agent_spatial_precision -v` -> 281 passed.
 
 ## M4 Success Criteria
 

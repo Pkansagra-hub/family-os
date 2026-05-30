@@ -27,6 +27,36 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _ui_interaction_metadata(params: dict[str, Any]) -> dict[str, Any]:
+    source = str(params.get("interaction_source") or "").strip()
+    kind = str(params.get("interaction_kind") or "").strip()
+    if not source and not kind:
+        return {}
+    stamp: dict[str, Any] = {"at": _now_iso()}
+    if source:
+        stamp["source"] = source[:80]
+    if kind:
+        stamp["kind"] = kind[:80]
+    return {"_last_ui_interaction": stamp}
+
+
+def _metadata_updates(params: dict[str, Any]) -> dict[str, Any]:
+    updates: dict[str, Any] = {}
+    if "metadata" in params and params["metadata"] is not None:
+        if not isinstance(params["metadata"], dict):
+            raise ValueError("shopping metadata must be an object")
+        updates.update(params["metadata"])
+    updates.update(_ui_interaction_metadata(params))
+    return updates
+
+
+def _merged_metadata(existing: ShoppingItem, params: dict[str, Any]) -> dict[str, Any]:
+    updates = _metadata_updates(params)
+    if not updates:
+        return existing.metadata
+    return {**existing.metadata, **updates}
+
+
 class ShoppingToolService(BaseToolService):
     """Family Shopping adapter service."""
 
@@ -148,15 +178,23 @@ class ShoppingToolService(BaseToolService):
             raise ValueError(f"shopping item not found: {item_id}")
 
         updates: dict[str, Any] = {}
-        for field in ("name", "quantity", "unit", "category", "notes", "priority"):
+        for field in ("name", "quantity", "unit", "category", "notes", "priority", "list_id"):
             if field in params and params[field] is not None:
                 updates[field] = params[field]
+        metadata = _merged_metadata(existing, params)
+        if metadata is not existing.metadata:
+            updates["metadata"] = metadata
         if updates:
             existing = existing.model_copy(update=updates)
         item = existing.bump(ctx.user_id)
         self._upsert_item(item)
         self.emit_entity_write("update", item, ctx, action=action)
-        return {"success": True, "item_id": item.id, "version": item.version}
+        return {
+            "success": True,
+            "item_id": item.id,
+            "version": item.version,
+            "item": item.model_dump(mode="json"),
+        }
 
     async def approve_item(self, params: dict[str, Any], ctx: WriteContext) -> dict[str, Any]:
         action = self._spec("approve_item")
@@ -171,6 +209,7 @@ class ShoppingToolService(BaseToolService):
                 "rejected_by": None,
                 "rejected_at": None,
                 "rejection_reason": None,
+                "metadata": _merged_metadata(existing, params),
             }
         ).bump(ctx.user_id)
         if params.get("approval_note"):
@@ -179,7 +218,13 @@ class ShoppingToolService(BaseToolService):
             item = item.model_copy(update={"metadata": metadata})
         self._upsert_item(item)
         self.emit_entity_write("update", item, ctx, action=action)
-        return {"success": True, "item_id": item.id, "approval_status": item.approval_status}
+        return {
+            "success": True,
+            "item_id": item.id,
+            "approval_status": item.approval_status,
+            "version": item.version,
+            "item": item.model_dump(mode="json"),
+        }
 
     async def reject_item(self, params: dict[str, Any], ctx: WriteContext) -> dict[str, Any]:
         action = self._spec("reject_item")
@@ -197,11 +242,18 @@ class ShoppingToolService(BaseToolService):
                 "status": "needed",
                 "checked_by": None,
                 "checked_at": None,
+                "metadata": _merged_metadata(existing, params),
             }
         ).bump(ctx.user_id)
         self._upsert_item(item)
         self.emit_entity_write("update", item, ctx, action=action)
-        return {"success": True, "item_id": item.id, "approval_status": item.approval_status}
+        return {
+            "success": True,
+            "item_id": item.id,
+            "approval_status": item.approval_status,
+            "version": item.version,
+            "item": item.model_dump(mode="json"),
+        }
 
     async def check_off_item(self, params: dict[str, Any], ctx: WriteContext) -> dict[str, Any]:
         action = self._spec("check_off_item")
@@ -223,11 +275,18 @@ class ShoppingToolService(BaseToolService):
                 "status": "checked",
                 "checked_by": params.get("checked_by") or ctx.user_id,
                 "checked_at": checked_at,
+                "metadata": _merged_metadata(existing, params),
             }
         ).bump(ctx.user_id)
         self._upsert_item(item)
         self.emit_entity_write("update", item, ctx, action=action)
-        return {"success": True, "item_id": item.id, "checked_at": checked_at}
+        return {
+            "success": True,
+            "item_id": item.id,
+            "checked_at": checked_at,
+            "version": item.version,
+            "item": item.model_dump(mode="json"),
+        }
 
     async def delete_item(self, params: dict[str, Any], ctx: WriteContext) -> dict[str, Any]:
         action = self._spec("delete_item")

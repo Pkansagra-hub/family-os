@@ -1,0 +1,134 @@
+base_url: http://127.0.0.1:8765
+preferred_provider: vertex
+preferred_model: gemini-2.5-flash-lite
+preferred_tier: FAST
+timeout_ms: 45000
+max_output_tokens: 2048
+session_id: web-live-m3-poc
+golden_cases_path: scripts/m3_section_update_golden_cases.json
+
+quota:
+  max_turns: 100
+  max_model_calls: 100
+  max_total_runtime_s: 7200
+  per_turn_timeout_s: 75
+  stop_on_turn_failure: true
+
+quality_gates:
+  golden_fixture_validity: 1.0
+  golden_pass_rate: 0.95
+  schema_validity: 1.0
+  guard_vocabulary_validity: 1.0
+  forbidden_section_op_rate: 0.0
+  noop_precision: 0.98
+  mutation_precision: 0.97
+  critical_recall: 0.90
+  shadow_golden_operation_agreement: 0.90
+  untriaged_high_risk_mismatches: 0
+  dangerous_false_writes: 0
+  consecutive_shadow_turns_without_dangerous_false_writes: 100
+  shadow_p95_ms: 10000
+  active_boundary_timeout_ms: 1500
+  provider_failure_degradation_rate: 0.01
+
+turns:
+  - golden_case_id: noop_ack_thanks_only
+  - golden_case_id: noop_ack_got_it
+  - golden_case_id: noop_ack_sounds_good
+  - golden_case_id: noop_ack_okay
+  - golden_case_id: noop_close_all_set
+  - golden_case_id: noop_close_dinner_done
+  - golden_case_id: noop_close_school_forms
+  - golden_case_id: noop_close_nevermind
+  - golden_case_id: noop_close_ignore_last_bit
+  - golden_case_id: noop_wrap_up_no_more
+  - golden_case_id: noop_forbidden_control_fsm_state_question
+  - golden_case_id: noop_forbidden_control_set_state_request
+  - golden_case_id: noop_forbidden_history_exact_transcript
+  - golden_case_id: noop_forbidden_temporal_current_date_question
+  - golden_case_id: noop_forbidden_spatial_location_question
+  - golden_case_id: noop_forbidden_grounding_context_question
+  - golden_case_id: noop_forbidden_telemetry_latency_question
+  - golden_case_id: noop_forbidden_meta_policy_question
+  - golden_case_id: noop_forbidden_task_state_question
+  - golden_case_id: noop_forbidden_task_artifact_question
+  - golden_case_id: noop_forbidden_archive_warm_memory_question
+  - golden_case_id: noop_forbidden_capability_calendar_read_question
+  - golden_case_id: noop_forbidden_capability_shopping_state_question
+  - golden_case_id: noop_forbidden_capability_reminder_status_question
+  - golden_case_id: noop_forbidden_external_account_state_question
+  - golden_case_id: noop_forbidden_device_state_question
+  - golden_case_id: noop_ambiguous_referent_move_it
+  - golden_case_id: noop_ambiguous_referent_tell_her
+  - golden_case_id: noop_ambiguous_referent_other_one
+  - golden_case_id: noop_ambiguous_referent_usual_way
+  - golden_case_id: noop_ambiguous_thread_switch_that
+  - golden_case_id: noop_ambiguous_deictic_that_better
+  - golden_case_id: noop_ambiguous_same_plan_before
+  - golden_case_id: noop_ambiguous_place_usual_place
+  - golden_case_id: noop_ambiguous_actor_make_sure_they_know
+  - golden_case_id: noop_ambiguous_time_then
+  - golden_case_id: noop_ambiguous_partial_correction_other_parent
+  - golden_case_id: noop_ambiguous_partial_time_earlier
+  - golden_case_id: noop_ambiguous_unspecified_pickup_contact
+  - golden_case_id: noop_ambiguous_unspecified_preference
+  - golden_case_id: belief_school_pickup_contact_maya
+  - golden_case_id: belief_ravi_plain_pasta_before_swim
+  - golden_case_id: belief_lena_no_peanuts_school_snacks
+  - golden_case_id: belief_sam_blue_homework_folder
+  - golden_case_id: belief_piano_teacher_contact_omar
+  - golden_case_id: belief_pet_feeding_owner_nina
+  - golden_case_id: belief_math_tutor_room_204
+  - golden_case_id: belief_art_supplies_hall_closet
+  - golden_case_id: belief_sam_left_handed_scissors
+  - golden_case_id: belief_cleats_mudroom_bin
+  - golden_case_id: belief_mira_bus_route_12
+  - golden_case_id: belief_detergent_fragrance_free
+  - golden_case_id: definition_blue_bag_means_diaper_bag
+  - golden_case_id: definition_snack_pack_means_apples_yogurt
+  - golden_case_id: definition_nana_means_alex_mother
+  - golden_case_id: definition_green_folder_means_field_trip_forms
+  - golden_case_id: definition_music_day_means_wednesday_band
+  - golden_case_id: definition_short_walk_means_park_loop
+  - golden_case_id: definition_pickup_window_means_315_330
+  - golden_case_id: definition_library_run_means_return_books
+  - golden_case_id: definition_primary_contact_means_priya
+  - golden_case_id: definition_homework_station_means_kitchen_counter
+  - golden_case_id: definition_late_practice_means_ends_630
+  - golden_case_id: definition_quiet_time_means_no_tablet_after_8
+  - golden_case_id: correction_ballet_pickup_maya_not_luis
+  - golden_case_id: correction_dinner_time_630_not_6
+  - golden_case_id: correction_form_folder_blue_not_green
+  - golden_case_id: correction_bus_stop_oak_not_pine
+  - golden_case_id: correction_sofia_spelling_not_sophia
+  - golden_case_id: correction_snack_apples_not_cookies
+  - golden_case_id: correction_practice_field_north_not_east
+  - golden_case_id: correction_parent_teacher_room_204_not_214
+  - golden_case_id: correction_key_location_drawer_not_hook
+  - golden_case_id: correction_party_saturday_not_sunday
+  - golden_case_id: correction_lunchbox_red_not_yellow
+  - golden_case_id: scoreboard_referent_this_form_field_trip
+  - golden_case_id: scoreboard_referent_that_bottle_blue
+  - golden_case_id: scoreboard_referent_their_teacher_ms_chen
+  - golden_case_id: scoreboard_question_pickup_plan_tradeoff
+  - golden_case_id: scoreboard_question_which_forms_due
+  - golden_case_id: scoreboard_topic_weekend_packing
+  - golden_case_id: scoreboard_topic_school_conference
+  - golden_case_id: scoreboard_referent_that_plan_saturday_carpool
+  - golden_case_id: clarification_request_which_emma_pickup
+  - golden_case_id: clarification_request_which_doctor_appointment
+  - golden_case_id: clarification_request_dinner_headcount
+  - golden_case_id: clarification_request_uniform_color
+  - golden_case_id: clarification_request_which_calendar_event
+  - golden_case_id: clarification_request_dropoff_location
+  - golden_case_id: clarification_request_reminder_time
+  - golden_case_id: narrative_create_birthday_planning
+  - golden_case_id: narrative_create_camp_registration
+  - golden_case_id: narrative_create_school_transition
+  - golden_case_id: narrative_create_weekend_trip
+  - golden_case_id: narrative_create_chore_reset
+  - golden_case_id: affect_frustrated_permission_slips
+  - golden_case_id: affect_relieved_pickup_covered
+  - golden_case_id: affect_excited_recital_news
+  - golden_case_id: affect_anxious_schedule_conflict
+  - golden_case_id: affect_overwhelmed_week_prep

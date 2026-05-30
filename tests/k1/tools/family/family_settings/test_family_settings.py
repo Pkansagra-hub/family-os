@@ -19,7 +19,6 @@ from pathlib import Path
 
 import pytest
 
-from k1.tools.family.acl import filter_rows
 from k1.tools.family.base import WriteContext
 from k1.tools.family.events import EventEmitter
 from k1.tools.family.family_settings.definition import FAMILY_SETTINGS_DEFINITION
@@ -314,6 +313,30 @@ class TestUpdateVisibilityPolicy:
         assert res["policy"]["rules"]["google_work"] == "adults"
         assert res["policy"]["rules"]["outlook_default"] == "adults"
 
+    async def test_update_policy_records_ui_interaction_metadata(self, svc):
+        service, _, _, _ = svc
+        ctx = _ctx(role="parent", band="GREEN")
+        res = await service.dispatch(
+            "update_visibility_policy",
+            {
+                "rules": {"google_personal": "private"},
+                "interaction_source": "settings_quick_presets",
+                "interaction_kind": "preset_apply",
+                "interaction_preset": "privacy_tight",
+            },
+            ctx,
+        )
+        assert res["success"] is True
+        interaction = res["policy"]["metadata"]["_last_ui_interaction"]
+        assert interaction["source"] == "settings_quick_presets"
+        assert interaction["kind"] == "preset_apply"
+        assert interaction["preset"] == "privacy_tight"
+
+        get_res = await service.dispatch("get_visibility_policy", {}, _ctx(role="parent"))
+        persisted = get_res["policy"]["metadata"]["_last_ui_interaction"]
+        assert persisted["source"] == "settings_quick_presets"
+        assert persisted["kind"] == "preset_apply"
+
 
 # ===========================================================================
 # Feature flags tests
@@ -358,6 +381,31 @@ class TestSetFeatureFlag:
         )
         assert res["success"] is True
         assert res["enabled"] is False
+
+    async def test_set_feature_flag_records_ui_interaction_metadata(self, svc):
+        service, _, _, _ = svc
+        ctx = _ctx(role="parent", band="GREEN")
+        res = await service.dispatch(
+            "set_feature_flag",
+            {
+                "flag_name": "settings.beta_control",
+                "enabled": True,
+                "interaction_source": "settings_feature_toggle",
+                "interaction_kind": "toggle_on",
+                "interaction_target": "settings.beta_control",
+            },
+            ctx,
+        )
+        assert res["success"] is True
+        interaction = res["flag"]["metadata"]["_last_ui_interaction"]
+        assert interaction["source"] == "settings_feature_toggle"
+        assert interaction["kind"] == "toggle_on"
+        assert interaction["target"] == "settings.beta_control"
+
+        list_res = await service.dispatch("list_feature_flags", {}, _ctx(role="parent"))
+        persisted = list_res["flags"][0]["metadata"]["_last_ui_interaction"]
+        assert persisted["source"] == "settings_feature_toggle"
+        assert persisted["kind"] == "toggle_on"
 
     async def test_missing_flag_name_fails(self, svc):
         service, _, _, _ = svc

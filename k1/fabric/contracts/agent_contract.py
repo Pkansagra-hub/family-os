@@ -35,6 +35,7 @@ from typing import Any, Dict, Optional, Union
 
 import yaml
 
+from k1.fabric.contracts.context_precision import parse_context_precision
 from k1.fabric.core.contract_validator import ContractValidator
 from k1.fabric.types import AgentContract, InputSpec
 
@@ -237,6 +238,8 @@ class AgentContractParser:
             provider_type=body.get("provider_type", "AGENT"),
             provider_id=body.get("provider_id", ""),
             provider_endpoint=body.get("provider_endpoint", ""),
+            context_precision=parse_context_precision(body.get("context_precision")),
+            lease=dict(body["lease"]) if isinstance(body.get("lease"), dict) else body.get("lease"),
             # ---- Base: Policy Metadata ----
             safety_band_min=body.get("safety_band_min", "GREEN"),
             cost_per_call=float(body.get("cost_per_call", 0.0)),

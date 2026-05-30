@@ -43,6 +43,10 @@ try {
         $env:PYTHONPATH = ".;$env:PYTHONPATH"
     }
 
+    if (-not $env:K1_SPATIAL_GEOCODER) {
+        $env:K1_SPATIAL_GEOCODER = "nominatim"
+    }
+
     $argList = @("-m", "ui.web", "--port", $Port, "--host", $WebHost, "--log-level", $LogLevel)
     if ($TestMode) {
         $argList += "--test-mode"
@@ -51,6 +55,7 @@ try {
     Write-Host ""
     Write-Host "  FamilyOS K1 Concierge -- Web UI" -ForegroundColor Cyan
     Write-Host "  http://$WebHost`:$Port" -ForegroundColor Green
+    Write-Host "  Spatial geocoder: $env:K1_SPATIAL_GEOCODER" -ForegroundColor DarkGray
     if ($TestMode) {
         Write-Host "  Mode: TEST (in-process LLM adapter)" -ForegroundColor Yellow
     }

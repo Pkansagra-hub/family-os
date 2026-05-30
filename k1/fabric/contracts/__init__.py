@@ -36,12 +36,30 @@ from typing import Any, Dict, Optional, Union
 
 import yaml
 
-from k1.fabric.contracts.agent_contract import AgentContractParseError, AgentContractParser
-from k1.fabric.contracts.prompt_contract import PromptContractParseError, PromptContractParser
+from k1.fabric.contracts.agent_contract import (
+    AgentContractParseError,
+    AgentContractParser,
+)
+from k1.fabric.contracts.context_precision import (
+    ContextPrecision,
+    parse_context_precision,
+)
+from k1.fabric.contracts.prompt_contract import (
+    PromptContractParseError,
+    PromptContractParser,
+)
 from k1.fabric.contracts.tool_contract import ToolContractParseError, ToolContractParser
-from k1.fabric.contracts.workflow_contract import WorkflowContractParseError, WorkflowContractParser
+from k1.fabric.contracts.workflow_contract import (
+    WorkflowContractParseError,
+    WorkflowContractParser,
+)
 from k1.fabric.core.contract_validator import ContractValidator, detect_contract_type
-from k1.fabric.types import AgentContract, CapabilityContract, PromptContract, WorkflowContract
+from k1.fabric.types import (
+    AgentContract,
+    CapabilityContract,
+    PromptContract,
+    WorkflowContract,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +220,9 @@ __all__ = [
     # Agent
     "AgentContractParser",
     "AgentContractParseError",
+    # Grounding precision
+    "ContextPrecision",
+    "parse_context_precision",
     # Prompt
     "PromptContractParser",
     "PromptContractParseError",

@@ -93,7 +93,12 @@ class ConciergeRuntime:
         self._ledger_store = ledger_store
         self._dead_letter_consumer = dead_letter_consumer
         self._consumer_task: asyncio.Task[None] | None = None
+        self._front_consumer_task: asyncio.Task[None] | None = None
+        self._back_consumer_task: asyncio.Task[None] | None = None
         self._started = False
+        self._temporal: Any = None
+        self._spatial: Any = None
+        self._grounding: Any = None
         # M5.E4: per-session SelfModelHandle (set by KernelService after
         # P3.5 install). When None, front_handler runs with no grounding
         # capsule (pre-M4 baseline).
@@ -104,25 +109,42 @@ class ConciergeRuntime:
     # ------------------------------------------------------------------
 
     async def start(self) -> None:
-        """Start the mailbox consumer task."""
+        """Start the mailbox consumer tasks.
+
+        GAP-HIL-001 / GAP-HIL-002: Front and Back are drained on independent
+        asyncio tasks so that a Back HIL await cannot starve Front presentation.
+        The umbrella ``_consumer_task`` attribute is preserved (set to the Back
+        task) for legacy callers/tests that introspect ``consumer_task``.
+        """
         if self._started:
             return
-        self._consumer_task = asyncio.create_task(self._mailbox_consumer())
+        self._front_consumer_task = asyncio.create_task(self._front_consumer())
+        self._back_consumer_task = asyncio.create_task(self._back_consumer())
+        # Legacy alias -- some tests/observers read .consumer_task. Point at
+        # the Back task because the original single-loop body invoked Back
+        # last per iteration; semantics are best preserved by exposing it.
+        self._consumer_task = self._back_consumer_task
         self._started = True
-        logger.info("ConciergeRuntime.start: consumer task created")
+        logger.info("ConciergeRuntime.start: front+back consumer tasks created")
 
     async def stop(self) -> None:
         """Stop consumer, flush delta, teardown FSM, close session state."""
         if not self._started:
             return
 
-        # 1. Cancel consumer task
-        if self._consumer_task and not self._consumer_task.done():
-            self._consumer_task.cancel()
+        # 1. Cancel consumer tasks (front + back are independent under GAP-HIL-001).
+        for _task in (self._front_consumer_task, self._back_consumer_task):
+            if _task is not None and not _task.done():
+                _task.cancel()
+        for _task in (self._front_consumer_task, self._back_consumer_task):
+            if _task is None:
+                continue
             try:
-                await self._consumer_task
+                await _task
             except asyncio.CancelledError:
                 pass
+            except Exception:
+                logger.debug("Consumer task cleanup failed", exc_info=True)
 
         # 2. Flush ledger
         if self._ledger is not None:
@@ -268,6 +290,39 @@ class ConciergeRuntime:
         return self._back_ctx
 
     @property
+    def temporal(self) -> Any | None:
+        """Per-session TemporalHandle, or None when temporal is disabled."""
+        return self._temporal
+
+    def set_temporal(self, handle: Any) -> None:
+        """Attach a TemporalHandle before runtime start."""
+        if self._started:
+            raise RuntimeError("set_temporal() must be called before start()")
+        self._temporal = handle
+
+    @property
+    def spatial(self) -> Any | None:
+        """Per-session SpatialHandle, or None when spatial is disabled."""
+        return self._spatial
+
+    def set_spatial(self, handle: Any) -> None:
+        """Attach a SpatialHandle before runtime start."""
+        if self._started:
+            raise RuntimeError("set_spatial() must be called before start()")
+        self._spatial = handle
+
+    @property
+    def grounding(self) -> Any | None:
+        """Per-session GroundingHandle, or None when grounding is disabled."""
+        return self._grounding
+
+    def set_grounding(self, handle: Any) -> None:
+        """Attach a GroundingHandle before runtime start."""
+        if self._started:
+            raise RuntimeError("set_grounding() must be called before start()")
+        self._grounding = handle
+
+    @property
     def self_model(self) -> Any | None:
         """Per-session SelfModelHandle, or None when disabled."""
         return self._self_model
@@ -307,12 +362,17 @@ class ConciergeRuntime:
         return self._ledger_store
 
     # ------------------------------------------------------------------
-    # Mailbox consumer (extracted from bootstrap._mailbox_consumer)
+    # Mailbox consumers (split per GAP-HIL-001 / GAP-HIL-002)
     # ------------------------------------------------------------------
 
-    async def _mailbox_consumer(self) -> None:
-        """Poll front/back mailboxes and invoke actor handlers."""
-        from k1.concierge.actors.back import route_back_envelope
+    async def _front_consumer(self) -> None:
+        """Drain the Front mailbox independently of Back.
+
+        Front presentation must never be blocked by a Back actor that is
+        awaiting human input. Running in its own asyncio task ensures the
+        Back ``await hil_port.needs_human(...)`` never starves a queued
+        Front HIL relay envelope.
+        """
         from k1.concierge.actors.front import front_handler
         from k1.concierge.config import get_config
         from k1.concierge.tools.schemas_front import FRONT_TOOL_SCHEMAS
@@ -321,12 +381,8 @@ class ConciergeRuntime:
         poll_interval = _kcfg.poll_interval_s
         dedup_limit = _kcfg.dedup_cache_size
         seen_front_ids: set[int] = set()
-        seen_back_ids: set[int] = set()
 
         while True:
-            did_work = False
-
-            # --- Front mailbox ---
             front_env = self._front_mailbox.receive(timeout_ms=0)
             if front_env is not None:
                 env_id = int(getattr(front_env, "envelope_id", 0) or 0)
@@ -338,13 +394,11 @@ class ConciergeRuntime:
                         if len(seen_front_ids) > dedup_limit:
                             seen_front_ids.clear()
 
-            if front_env is not None:
-                did_work = True
-                # M6.E1.I2: route the per-session OppPipeline ONLY to Front.
-                # Back never sees OPP -- it builds its own prompt via
-                # build_back_prompt and must not receive identity/compression
-                # enrichment. getattr() default keeps tests that stub the FSM
-                # without ``_opp_pipeline`` working.
+            if front_env is None:
+                await asyncio.sleep(poll_interval)
+                continue
+
+            try:
                 await front_handler(
                     envelope=front_env,
                     model=self._model,
@@ -353,12 +407,35 @@ class ConciergeRuntime:
                     tool_dispatcher=self._front_dispatcher,
                     all_tool_schemas=FRONT_TOOL_SCHEMAS,
                     fsm_state=self._fsm.state.name,
+                    temporal=self._temporal,
+                    spatial=self._spatial,
+                    grounding=self._grounding,
                     self_model=self._self_model,
                     opp_pipeline=getattr(self._fsm, "_opp_pipeline", None),
                 )
                 await self._tick_experience()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("front_consumer: front_handler raised")
+            await asyncio.sleep(0)
 
-            # --- Back mailbox ---
+    async def _back_consumer(self) -> None:
+        """Drain the Back mailbox independently of Front.
+
+        Back may await ``hil_port.needs_human(...)`` for the full human
+        timeout. Running here in its own task means the Front consumer can
+        keep delivering HIL relay envelopes to the user during that wait.
+        """
+        from k1.concierge.actors.back import route_back_envelope
+        from k1.concierge.config import get_config
+
+        _kcfg = get_config().kernel
+        poll_interval = _kcfg.poll_interval_s
+        dedup_limit = _kcfg.dedup_cache_size
+        seen_back_ids: set[int] = set()
+
+        while True:
             back_env = self._back_mailbox.receive(timeout_ms=0)
             if back_env is not None:
                 env_id = int(getattr(back_env, "envelope_id", 0) or 0)
@@ -370,33 +447,45 @@ class ConciergeRuntime:
                         if len(seen_back_ids) > dedup_limit:
                             seen_back_ids.clear()
 
-            if back_env is not None:
-                did_work = True
-                try:
-                    await route_back_envelope(
-                        envelope=back_env,
-                        model=self._model,
-                        ss=self._session_state,
-                        bus=self._bus,
-                        tool_dispatcher=self._back_dispatcher,
-                        fsm_state=self._fsm,
-                        hil_port=self._hil_port,
-                    )
-                except SuspensionResolutionNotFound as exc:
-                    # M6 E6.2 (C08): back_resume_handler raises this when
-                    # no resume_context is available for the task. The
-                    # handler has already published `task_failed` on the
-                    # bus before raising, so observers see the failure.
-                    # Absorb here to keep the session loop alive.
-                    logger.warning(
-                        "session: back resume failed -- " "SuspensionResolutionNotFound task_id=%s",
-                        exc.task_id,
-                    )
-
-            if did_work:
-                await asyncio.sleep(0)
-            else:
+            if back_env is None:
                 await asyncio.sleep(poll_interval)
+                continue
+
+            try:
+                await route_back_envelope(
+                    envelope=back_env,
+                    model=self._model,
+                    ss=self._session_state,
+                    bus=self._bus,
+                    tool_dispatcher=self._back_dispatcher,
+                    fsm_state=self._fsm,
+                    hil_port=self._hil_port,
+                    grounding=self._grounding,
+                )
+            except SuspensionResolutionNotFound as exc:
+                # M6 E6.2 (C08): back_resume_handler already published
+                # task_failed on the bus before raising. Absorb to keep the
+                # Back consumer alive.
+                logger.warning(
+                    "back_consumer: back resume failed -- "
+                    "SuspensionResolutionNotFound task_id=%s",
+                    exc.task_id,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("back_consumer: route_back_envelope raised")
+            await asyncio.sleep(0)
+
+    async def _mailbox_consumer(self) -> None:
+        """Legacy single-loop consumer kept for compatibility.
+
+        Pre-GAP-HIL-001 this was the only consumer. ``start()`` now spawns
+        ``_front_consumer`` and ``_back_consumer`` instead. This entry point
+        remains so external code or tests that monkeypatch / call into it
+        directly continue to work; it simply delegates to both.
+        """
+        await asyncio.gather(self._front_consumer(), self._back_consumer())
 
     # ------------------------------------------------------------------
     # Experience layer tick (extracted from bootstrap._tick_experience)

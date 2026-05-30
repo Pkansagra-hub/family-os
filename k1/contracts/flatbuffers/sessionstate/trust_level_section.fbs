@@ -1,0 +1,36 @@
+// ============================================================================
+// trust_level_section.fbs - Trust Level Section Schema
+// ============================================================================
+// Location: k1/contracts/flatbuffers/sessionstate/trust_level_section.fbs
+// Purpose: HOT conversational trust calibration snapshot
+// Size Budget: 2KB max
+// Tier: HOT CORE
+// ============================================================================
+
+include "common.fbs";
+
+namespace K1.SessionState;
+
+table TrustSignal {
+    signal: string;
+    delta: float = 0.0;
+    score: float = 0.5;
+    confidence: float = 0.5;
+    reason: string;
+    source: string;
+    timestamp_ms: int64;
+}
+
+table TrustLevelSection {
+    header: SectionHeader;
+    trust_score: float = 0.5;
+    confidence: float = 0.5;
+    band: string;
+    stance: string;
+    last_signal: string;
+    last_reason: string;
+    recent_signals: [TrustSignal];
+    last_updated_ms: int64;
+}
+
+root_type TrustLevelSection;

@@ -173,7 +173,7 @@ TASKS_DEFINITION = ToolDefinition(
                     "user wants to track something that needs to happen once (not recurring)",
                 ],
                 avoid_when=[
-                    "task recurs weekly/daily → use chores.create_chore",
+                    "task recurs weekly/daily → use chores.create_template",
                     "an alert must fire at a specific time → use reminders.create_reminder",
                     "user wants to block time with start+end → use calendar.create_event",
                     "user wants to track something to buy → use shopping.add_item",
@@ -207,6 +207,12 @@ TASKS_DEFINITION = ToolDefinition(
                 FieldSpec(name="title", type="string", required=False),
                 FieldSpec(name="due_at", type="datetime", required=False),
                 FieldSpec(name="priority", type="string", required=False),
+                FieldSpec(
+                    name="status",
+                    type="string",
+                    required=False,
+                    description="Lifecycle state: open | in_progress | done | cancelled.",
+                ),
                 FieldSpec(name="list_id", type="string", required=False),
                 FieldSpec(name="linked_event_id", type="string", required=False),
             ],

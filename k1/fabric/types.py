@@ -22,7 +22,63 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from k1.grounding.types import AgentGroundingLease
+
+
+def _context_precision_to_dict(value: Any) -> Any:
+    if value is None:
+        return None
+    to_dict = getattr(value, "to_dict", None)
+    if callable(to_dict):
+        return to_dict()
+    if isinstance(value, dict):
+        return dict(value)
+    return value
+
+
+def _coerce_context_precision(value: Any) -> Any:
+    if value is None:
+        return None
+    if hasattr(value, "temporal") and hasattr(value, "spatial"):
+        return value
+    if isinstance(value, dict):
+        try:
+            from k1.fabric.contracts.context_precision import ContextPrecision
+
+            return ContextPrecision.from_dict(value)
+        except Exception:
+            return dict(value)
+    return value
+
+
+def _lease_to_dict(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return dict(value)
+    try:
+        from k1.grounding.serialization import lease_to_dict
+
+        return lease_to_dict(value)
+    except Exception:
+        return value
+
+
+def _dict_to_lease(value: Any) -> Any:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        return value
+    try:
+        from k1.grounding.serialization import dict_to_lease
+
+        return dict_to_lease(value)
+    except Exception:
+        return dict(value)
+
 
 # ---------------------------------------------------------------------------
 # Enums (1.3.10 completes the full set; earlier issues defined the subset)
@@ -711,6 +767,10 @@ class CapabilityContract:
     tool_instructions: Optional[str] = None
     prompt_variables_schema: Optional[Dict[str, Any]] = None
 
+    # ---- Grounding Precision Metadata ----
+    context_precision: Any = None
+    lease: Optional[Dict[str, Any]] = None
+
     # ---- Policy Metadata ----
     safety_band_min: str = SafetyBand.GREEN.value
     cost_per_call: float = 0.0
@@ -776,6 +836,8 @@ class CapabilityContract:
                 if isinstance(self.prompt_variables_schema, dict)
                 else self.prompt_variables_schema
             ),
+            "context_precision": _context_precision_to_dict(self.context_precision),
+            "lease": dict(self.lease) if isinstance(self.lease, dict) else self.lease,
             "safety_band_min": self.safety_band_min,
             "cost_per_call": self.cost_per_call,
             "avg_latency_ms": self.avg_latency_ms,
@@ -817,6 +879,8 @@ class CapabilityContract:
             activity_profile=data.get("activity_profile"),
             tool_instructions=data.get("tool_instructions"),
             prompt_variables_schema=data.get("prompt_variables_schema"),
+            context_precision=_coerce_context_precision(data.get("context_precision")),
+            lease=dict(data["lease"]) if isinstance(data.get("lease"), dict) else data.get("lease"),
             safety_band_min=data.get("safety_band_min", SafetyBand.GREEN.value),
             cost_per_call=data.get("cost_per_call", 0.0),
             avg_latency_ms=data.get("avg_latency_ms", 0),
@@ -910,6 +974,8 @@ class AgentContract(CapabilityContract):
             provider_type=data.get("provider_type", ProviderType.AGENT.value),
             provider_id=data.get("provider_id", ""),
             provider_endpoint=data.get("provider_endpoint", ""),
+            context_precision=_coerce_context_precision(data.get("context_precision")),
+            lease=dict(data["lease"]) if isinstance(data.get("lease"), dict) else data.get("lease"),
             safety_band_min=data.get("safety_band_min", SafetyBand.GREEN.value),
             cost_per_call=data.get("cost_per_call", 0.0),
             avg_latency_ms=data.get("avg_latency_ms", 0),
@@ -1467,6 +1533,9 @@ class ExecutionContext:
     # ---- Tracing ----
     trace_id: str = ""
 
+    # ---- Grounding lease for spawned agent execution ----
+    grounding_lease: "AgentGroundingLease | None" = None
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
@@ -1475,6 +1544,7 @@ class ExecutionContext:
             "prompt": self.prompt,
             "token_count": self.token_count,
             "trace_id": self.trace_id,
+            "grounding_lease": _lease_to_dict(self.grounding_lease),
         }
 
     @classmethod
@@ -1486,6 +1556,7 @@ class ExecutionContext:
             prompt=data.get("prompt"),
             token_count=data.get("token_count", 0),
             trace_id=data.get("trace_id", ""),
+            grounding_lease=_dict_to_lease(data.get("grounding_lease")),
         )
 
 

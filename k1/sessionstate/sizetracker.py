@@ -60,7 +60,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, FrozenSet, List, Optional, Tuple
 
-from .config import SessionStateConfig, TiersConfig
+from .config import TiersConfig
 
 if TYPE_CHECKING:
     pass
@@ -176,6 +176,34 @@ SECTION_BUDGETS: Dict[str, SectionBudget] = {
         eviction_priority=None,  # NEVER EVICT
         can_migrate=False,
     ),
+    "temporal": SectionBudget(
+        name="temporal",
+        tier=Tier.HOT,
+        max_bytes=4 * 1024,
+        eviction_priority=None,  # NEVER EVICT
+        can_migrate=False,
+    ),
+    "grounding": SectionBudget(
+        name="grounding",
+        tier=Tier.HOT,
+        max_bytes=2 * 1024,
+        eviction_priority=None,  # NEVER EVICT
+        can_migrate=False,
+    ),
+    "trust_level": SectionBudget(
+        name="trust_level",
+        tier=Tier.HOT,
+        max_bytes=2 * 1024,
+        eviction_priority=None,  # NEVER EVICT
+        can_migrate=False,
+    ),
+    "spatial": SectionBudget(
+        name="spatial",
+        tier=Tier.HOT,
+        max_bytes=4 * 1024,
+        eviction_priority=None,  # NEVER EVICT
+        can_migrate=False,
+    ),
     "task_state": SectionBudget(
         name="task_state",
         tier=Tier.HOT,
@@ -224,6 +252,13 @@ SECTION_BUDGETS: Dict[str, SectionBudget] = {
         tier=Tier.WARM,
         max_bytes=8 * 1024,
         eviction_priority=2,  # Evict after telemetry
+        can_migrate=True,
+    ),
+    "place_registry": SectionBudget(
+        name="place_registry",
+        tier=Tier.WARM,
+        max_bytes=8 * 1024,
+        eviction_priority=4,
         can_migrate=True,
     ),
 }

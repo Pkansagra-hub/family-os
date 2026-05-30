@@ -1,0 +1,19 @@
+{
+  "$id": "context_precision.schema.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Context Precision Schema",
+  "description": "Temporal and spatial precision policy for Fabric contracts.",
+  "type": "object",
+  "required": ["temporal", "spatial"],
+  "additionalProperties": false,
+  "properties": {
+    "temporal": {
+      "type": "string",
+      "enum": ["anchor", "windows", "execution"]
+    },
+    "spatial": {
+      "type": "string",
+      "enum": ["hidden", "semantic", "approximate", "place_id", "raw"]
+    }
+  }
+}

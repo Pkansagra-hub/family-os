@@ -163,4 +163,9 @@ class TurnDispatcher:
             mentioned_location_type=str(raw.get("mentioned_location_type", "")),
             mentioned_location_entity_id=str(raw.get("mentioned_location_entity_id", "")),
             mentioned_location_confidence=float(raw.get("mentioned_location_confidence", 0.0)),
+            section_update=(
+                dict(raw.get("section_update"))
+                if isinstance(raw.get("section_update"), dict)
+                else None
+            ),
         )

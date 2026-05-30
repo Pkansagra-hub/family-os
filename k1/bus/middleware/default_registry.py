@@ -44,6 +44,7 @@ _DEFAULT_PREFIXES: tuple[str, ...] = (
     "k1.delta.",
     "k1.fabric.",
     "k1.feedback.",
+    "k1.grounding.",
     "k1.hil.",
     "k1.hipp.",
     "k1.hitl.",
@@ -67,7 +68,9 @@ _DEFAULT_PREFIXES: tuple[str, ...] = (
     "k1.risk.",
     "k1.selfmodel.",
     "k1.session.",
+    "k1.spatial.",
     "k1.task.",
+    "k1.temporal.",
     "k1.test.",  # synthetic test topics (silences warnings in unit tests)
     "k1.tool.",
     "k1.ui.",

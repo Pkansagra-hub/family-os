@@ -443,6 +443,11 @@ async def websocket_endpoint(ws: WebSocket) -> None:
 
             if msg_type == "message":
                 await _handle_user_message(coord, ws, msg)
+            elif msg_type == "device_context":
+                await coord._record_device_context(
+                    device=msg.get("device", _current_device),
+                    device_context=msg.get("device_context") or {},
+                )
             elif msg_type == "switch_member":
                 _handle_switch_member(msg)
                 await ws.send_text(
@@ -486,6 +491,14 @@ async def _handle_user_message(coord: UiCoordinator, ws: WebSocket, msg: dict) -
 
     member = msg.get("member", _current_member)
     device = msg.get("device", _current_device)
+
+    try:
+        await coord._record_device_context(
+            device=device,
+            device_context=msg.get("device_context") or {},
+        )
+    except Exception:
+        logger.debug("WEB: device context record failed", exc_info=True)
 
     _turn_counter += 1
     turn = _turn_counter

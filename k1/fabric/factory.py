@@ -228,10 +228,15 @@ def _register_provider_handlers(
             delta_bus=deps.get("delta_bus"),
             contract_loader=contract_loader,
         )
+        grounding_port = deps.get("grounding_port")
+        if grounding_port is None:
+            context_builder = deps.get("context_builder")
+            grounding_port = getattr(context_builder, "grounding_port", None)
         return AgentProvider(
             config,
             agent_factory=agent_factory,
             capability_names=capability_names,
+            grounding_port=grounding_port,
         )
 
     # Workflow: takes config + workflow_registry + capability_lookup + orchestrator
@@ -429,6 +434,7 @@ class FabricFactory:
         wasm_runtime: Optional[Any] = None,
         hil_port: Optional[Any] = None,
         conscience_port: Optional[Any] = None,
+        grounding_port: Optional[Any] = None,
     ) -> Fabric:
         """
         Create Fabric with test adapters + event capture mode.
@@ -472,6 +478,7 @@ class FabricFactory:
             wasm_runtime=wasm_runtime,
             hil_port=hil_port,
             conscience_port=conscience_port,
+            grounding_port=grounding_port,
         )
 
     @staticmethod
@@ -494,6 +501,7 @@ class FabricFactory:
         wasm_runtime: Optional[Any] = None,
         hil_port: Optional[Any] = None,
         conscience_port: Optional[Any] = None,
+        grounding_port: Optional[Any] = None,
     ) -> Fabric:
         """
         Create Fabric with custom adapter injection.
@@ -537,6 +545,7 @@ class FabricFactory:
             wasm_runtime=wasm_runtime,
             hil_port=hil_port,
             conscience_port=conscience_port,
+            grounding_port=grounding_port,
         )
 
     @staticmethod
@@ -557,6 +566,7 @@ class FabricFactory:
         wasm_runtime: Optional[Any] = None,
         hil_port: Optional[Any] = None,
         conscience_port: Optional[Any] = None,
+        grounding_port: Optional[Any] = None,
     ) -> Fabric:
         """
         Create a shared Fabric instance.
@@ -618,6 +628,7 @@ class FabricFactory:
             wasm_runtime=wasm_runtime,
             hil_port=hil_port,
             conscience_port=conscience_port,
+            grounding_port=grounding_port,
         )
 
 
@@ -642,6 +653,7 @@ def _construct_fabric(
     capability_registry: Optional[Any] = None,
     hil_port: Optional[Any] = None,
     conscience_port: Optional[Any] = None,
+    grounding_port: Optional[Any] = None,
 ) -> Fabric:
     """
     Internal: Build a Fabric instance in dependency-safe order.
@@ -728,6 +740,7 @@ def _construct_fabric(
     context_builder = ContextBuilder(
         state_reader=state_reader,
         prompt_system=prompt_system,
+        grounding_port=grounding_port,
     )
 
     # ===== STEP 9: ProviderFactory (port_deps) =====
@@ -769,6 +782,7 @@ def _construct_fabric(
         state_reader=state_reader,
         delta_bus=delta_bus,
         context_builder=context_builder,
+        grounding_port=grounding_port,
         registry=registry,
         mcp_transport=effective_mcp_transport,
         wasm_runtime=effective_wasm_runtime,
@@ -993,6 +1007,7 @@ def _construct_fabric(
         event_port=event_port,
         event_emitter=event_emitter,
         gap_detector=gap_detector,
+        context_builder=context_builder,
     )
 
     logger.info("Fabric construction complete (production_mode=%s)", production_mode)
