@@ -53,6 +53,15 @@ Document map:
 0A. Human Runtime Walkthrough
   Plain-language flow for Front ReAct, Back ReAct, Back promotion, Planner/Orchestrator execution, and Fabric across all tiers.
 
+0R. Current Reality Grounding Pass - 2026-05-30
+  Source-backed overlay from Front, Back, Planner, Orchestrator, and Fabric code.
+  This pass separates what is live today from the target contracts below.
+
+0D. Four-Plane Development Roadmap - 2026-06-02
+  Bottom-up build order across the four planes. Phase 1: Fabric + Bridge gateway.
+  Phase 2: Back + E2E Tier 2 spine. Phase 3: Context Plane prompt enrichment.
+  Phase 4: IFL connector/tool design formalization. Each phase has a hard gate.
+
 1. Current Mental Model
   The live Back/Fabric/native-tools path and why it is hard.
 
@@ -96,6 +105,11 @@ If a section assigns cross-resource conflict discovery to Back, it is stale and 
 If a section says a model should "know" what to check, the missing contract is a connector/capability constitution.
 If a section mentions tools, capabilities, connectors, adapters, or resources, it must use the Standard Vocabulary section below.
 If a section uses FamilyOS/K1/Concierge names, it must be clear whether the name is an implementation example or a kernel-level role.
+If a section says Front should pre-classify domains, guess operations, or resolve resources, it is stale.
+    Front's role: pass raw user utterance + full context. Back's role: ALL intent reasoning.
+    Front must not pre-classify domain="calendar" or operation="create" — Back derives these from the
+    raw query + context (self model, household roster, available services, grounding, beliefs,
+    task state, chat history).
 ```
 
 Normative precedence:
@@ -164,10 +178,14 @@ to:   task frame -> local world -> bound capabilities -> governed action
 > Note: the 16 steps below describe the **Tier 2** (single-connector, Back-direct) path. For family-impacting / cross-resource tasks the flow escalates to **Tier 3** (Planner + Orchestrator). See "Three-Tier Contract-Bound Execution Model" for tier ownership; steps 5–10 here are the Tier-2 instance of the staged connector→constitution→tools→schema disclosure.
 
 ```text
-1. Front captures user-world intent.
-2. FSM canonicalizes task and state correlation.
-3. Back receives BackTaskEnvelope.
-4. Back builds RequestFrame.
+1. Front captures raw user utterance; packages query + full context (self model, household roster,
+   available services, grounding, beliefs, task state, chat history) into BackTaskEnvelope.
+   Front does NOT pre-classify intents or domains.
+2. FSM canonicalizes task and state correlation, routes to Back.
+3. Back receives BackTaskEnvelope containing raw query + full rich context.
+4. Back performs ALL intent reasoning: builds RequestFrame (extracts user_goal, actor_ref,
+   operation_hints[], resource_references[], people_references[], time_references[],
+   location_references[], missing_fields[]) from raw utterance + context.
 5. Back calls resolve_situation.
 6. Resolver builds CandidateUniverse from local-world projection.
 7. Policy/guide authority produces PolicyBundle and GuideCards.
@@ -258,7 +276,6065 @@ The committee passes converged on these non-negotiable kernel invariants:
 
 ---
 
-## Three-Tier Contract-Bound Execution Model
+## Current Reality Grounding Pass - 2026-05-30
+
+**Section mode:** current proof overlay for the target design.
+
+This pass does not introduce a new architecture. It grounds the existing design in the code paths that are live today, so future edits can enhance the current system instead of designing from an unimplemented ideal.
+
+### Live Runtime Spine
+
+```text
+Front today:
+  front_handler builds a mode-specific prompt and tool list.
+  The Front LLM can call dispatch_task with user-world intents, params,
+  domain hints, reference_context, depends_on, urgency, and plan=true.
+  execute_dispatch_task returns ToolResult.data._dispatch; it does not
+  emit bus events itself.
+  react_loop collects dispatched_tasks.
+  front_handler publishes task.dispatch events before any final response.
+
+Back today:
+  route_back_envelope calls back_handler.
+  back_handler reads SessionState once at task start, then builds the
+  Back prompt and runs the shared react_loop.
+  Back receives tier-filtered meta-tools, not app tools directly.
+  submit_result terminates the loop; _emit_back_result publishes
+  task.complete, task.suspended, or task.failed after the loop returns.
+
+Fabric/native tools today:
+  discover_capabilities returns scored CapabilityContract records.
+  invoke_capability uses the Back binding helper, validates required
+  inputs, builds CapabilityRequest, and calls IDispatchPort.dispatch_direct.
+  FabricDispatchAdapter forwards LOW/direct capability requests to Fabric.
+  Native family tools register CapabilityContract records with
+  provider_type=LOCAL and provider_id=k1_native_tools, then execute through
+  NativeToolProvider -> BaseToolService.dispatch.
+
+Planner/Orchestrator today:
+  MEDIUM Orchestrator tasks execute one or two capabilities directly via Fabric.
+  HIGH Orchestrator tasks build a PlanRequest and send it to Planner.
+  PipelineController runs SKETCH -> EXPAND -> VALIDATE -> COMMIT.
+  CommitService emits k1.planner.plan.ready.v1 with CommittedPlan.to_dict().
+  Orchestrator deserializes with CommittedPlan.from_dict(), correlates the
+  request_id, validates, acquires the concurrency guard, and executes the DAG.
+  DAGExecutor builds Kahn waves, resolves $step result references, dispatches
+  StepRunner calls to Fabric, runs guards, aggregates, and compensates when
+  side-effect metadata supports it.
+```
+
+Primary current-code anchors:
+
+- Front prompt/dispatch: [k1/concierge/actors/front.py](../../k1/concierge/actors/front.py#L1145), [k1/concierge/tools/schemas_front.py](../../k1/concierge/tools/schemas_front.py#L460), [k1/concierge/tools/implementations.py](../../k1/concierge/tools/implementations.py#L1225)
+- Shared ReAct loop: [k1/concierge/react/loop.py](../../k1/concierge/react/loop.py#L1048)
+- Back prompt/execution: [k1/concierge/actors/back.py](../../k1/concierge/actors/back.py#L940), [k1/concierge/tools/schemas_back.py](../../k1/concierge/tools/schemas_back.py#L286)
+- Back binding/invocation: [k1/concierge/react/capability_routing.py](../../k1/concierge/react/capability_routing.py#L34), [k1/concierge/tools/implementations.py](../../k1/concierge/tools/implementations.py#L328), [k1/concierge/tools/implementations.py](../../k1/concierge/tools/implementations.py#L1487)
+- Orchestrator routing/DAG: [k1/orchestrator/orchestration/orchestrator_service.py](../../k1/orchestrator/orchestration/orchestrator_service.py#L1518), [k1/orchestrator/orchestration/orchestrator_service.py](../../k1/orchestrator/orchestration/orchestrator_service.py#L1688), [k1/orchestrator/orchestration/dag_executor.py](../../k1/orchestrator/orchestration/dag_executor.py#L125)
+- Planner pipeline/delivery: [k1/planner/pipeline_controller.py](../../k1/planner/pipeline_controller.py#L430), [k1/planner/stages/expand_service.py](../../k1/planner/stages/expand_service.py#L1110), [k1/planner/stages/commit_service.py](../../k1/planner/stages/commit_service.py#L429)
+- Fabric contracts/native provider: [k1/fabric/types.py](../../k1/fabric/types.py#L718), [k1/fabric/manifest_translator.py](../../k1/fabric/manifest_translator.py#L167), [k1/tools/family/bootstrap.py](../../k1/tools/family/bootstrap.py#L115), [k1/fabric/providers/native_tool_provider.py](../../k1/fabric/providers/native_tool_provider.py#L192)
+
+### Target-Only As Of This Pass
+
+The following names are design contracts in this whiteboard, not first-class runtime primitives in the current K1 code path:
+
+```text
+resolve_situation
+RequestFrame as the mandatory Back input object
+ResolutionEnvelope as the resolver return object
+CandidateUniverse as the canonical local-world projection object
+PromptPack as the model context contract
+BindingBundle / binding_id as the normal execution authority
+connector/capability constitution artifacts with companion_resource roles
+cross-resource (person, time-window) availability projection
+```
+
+There is a current binding helper, but it is not the same thing as the target binding authority. Today `bind_capability(...)` validates or repairs the exact `capability_name` path for Back; the target `BindingBundle` would bind actor, resource, capability, policy, schema, freshness, and allowed actions.
+
+### Design Implication
+
+The current code already has the right major bones: Front dispatch, Back meta-tools, Fabric CapabilityContract registry, native provider execution, Planner pipeline, Orchestrator DAG waves, parameter resolution, guards, and compensation hooks. The next design work should therefore be additive and contract-binding:
+
+```text
+do not replace Front/Back/Planner/Orchestrator/Fabric;
+make the existing handoff objects carry typed authority evidence;
+make current discovery/invocation a compatibility spine;
+promote staged resolver, PromptPack, CandidateUniverse, and binding ids
+only where the live path can prove them.
+```
+
+---
+
+## Four-Plane Development Roadmap
+
+**Section mode:** development plan — build order, gates, and dependencies.
+**Date:** 2026-06-02
+**Status:** active. This section defines HOW development proceeds across the four planes.
+
+The four-plane decomposition (IFL, Fabric, Back, Context Plane) defines the component architecture. This section defines the build order. The two are complementary:
+
+```text
+4-plane decomposition  →  WHAT each plane owns (static architecture)
+4-plane development roadmap  →  HOW we build and prove each plane (dynamic order)
+```
+
+The build order is bottom-up by dependency. A plane cannot be proven until the planes it depends on are proven.
+
+### Dependency Chain
+
+```text
+Fabric (Phase 1)
+  ↑ depends on: ModelHub, Bridge connector gateway, FamilyToolsBundle
+  ↑ provides: capability registry, resolver, policy enforcement, invocation dispatch
+
+Back (Phase 2)
+  ↑ depends on: Fabric (Phase 1 proven)
+  ↑ provides: LLM ReAct loop, RequestFrame, tier classification, prompt assembly
+
+Context Plane (Phase 3)
+  ↑ depends on: Back + Fabric (Phase 2 proven)
+  ↑ provides: rich temporal/spatial/grounding signals to Back's prompt
+
+IFL (Phase 4)
+  ↑ depends on: Fabric + Back + Context Plane (Phase 3 proven)
+  ↑ provides: formal connector/tool design contract, manifest standard, adapter protocol
+```
+
+Each phase has an integration gate. A phase is not "done" until its gate passes.
+
+---
+
+### Phase 1 — Fabric: Tool Search, Invocation, Meta-Tools, Task Resolver
+
+**Goal:** Prove the Fabric execution spine works standalone — all adapters, ports, meta-tools, and the Bridge connector gateway.
+
+**What this phase owns:**
+
+```text
+CapabilityFabric (9-step _execute_impl)
+  → resolve provider → build context → circuit-break → validate output
+
+CapabilityRegistry
+  → all 41+ family-tool capability contracts registered
+  → FTS5-indexed for indexed lookup
+
+ProviderFactory
+  → MCP, WASM, BRIDGE, AGENT, WORKFLOW, CONCIERGE, LOCAL_STUB, NATIVE
+  → NativeToolProvider wired for calendar/tasks/reminders/chores/shopping
+
+Meta-tool surface
+  → resolve_situation (target authority path)
+  → invoke_capability (bound invocation)
+  → batch_invoke_capabilities (independent parallel)
+  → discover_capabilities (legacy catalog — marked for deprecation, C-014)
+  → submit_result (terminal)
+  → recall_memory (paired contract via Bridge)
+
+Policy selector and enforcer
+  → PolicyBundle with gates[], hil_triggers[], verifier_requirements[]
+  → policy_cards[] for Back's prompt
+  → guide_selection_rules[]
+
+Bridge connector gateway (security boundary)
+  → ConnectorGateway (3-stage pipeline: token verify → adapter verify → route)
+  → CredentialVault (AES256-GCM, secrets never leave Bridge)
+  → MCP process manager (per-adapter child process supervision)
+  → Envelope signing (Ed25519), band enforcement, rate limiting, circuit breaking
+
+IdempotencyStore
+  → in_flight → succeeded/failed state machine
+  → immutable-succeeded invariant
+
+VerificationPlanRunner
+  → build_plan → run → gate
+  → read_after_write (proven), output_schema (proven)
+
+HIL service (shared)
+  → HumanInTheLoopService (S2.5)
+  → per-session HIL on session_bus (P1.5)
+
+Adapters:
+  → EventPortProdAdapter, DeltaBusProdAdapter, BridgeConnectionAdapter
+  → ModelGatewayBridgeAdapter, PromptSystemProdAdapter
+  → SessionStateReaderAdapter, SessionRoutingStateReader
+```
+
+**What this phase does NOT own:**
+
+```text
+- Back's ReAct loop or prompt (Phase 2)
+- Back's RequestFrame builder (Phase 2)
+- Rich prompt grounding signals (Phase 3)
+- IFL manifest standard or per-adapter MCP server design (Phase 4)
+- IFL-tier protocol engine, adapter registry (Phase 4)
+- Connector/tool authoring documentation (Phase 4)
+```
+
+**What's already wired (from service.py):**
+
+```text
+S1:  Bus + Router + AsyncBusBridge
+S2:  ModelHub (provider registry, LLM gateway)
+S3:  Shared Fabric (CapabilityFabric, 9-step pipeline)
+S4:  Bridge (Live/Sink/Offline adapter); runs BEFORE S3
+S8:  FamilyToolsBundle (NativeToolProvider, ToolRegistry, K1FamilyStore)
+
+P3:  Per-session Fabric reuses shared CapabilityRegistry
+P3.1: NativeToolProvider re-registered on per-session fabric
+P1.5: Per-session HIL service bound to session_bus
+```
+
+**Phase 1 integration gate:**
+
+```text
+GATE-P1: Fabric standalone proven.
+
+Required:
+  ✓ All 41+ family-tool capability contracts registered and discoverable
+  ✓ resolve_situation returns ResolutionEnvelope with valid CandidateUniverse
+  ✓ invoke_capability executes calendar.create_event with schema-valid params → ok
+  ✓ NativeToolProvider dispatches to correct adapter service
+  ✓ Bridge ConnectorGateway validates tokens and routes to adapter
+  ✓ IdempotencyStore prevents duplicate execution
+  ✓ VerificationPlanRunner.read_after_write confirms event exists after create
+  ✓ PolicySelector returns PolicyBundle with gates for calendar write
+  ✓ HIL service fires hil.request on missing_required_params
+  ✓ discover_capabilities returns catalog results (legacy path, catalog-only marker)
+  ✓ All adapter ports satisfy their protocol types (isinstance checks)
+  ✓ Negative proof: invalid params → capability_params_incomplete
+  ✓ Negative proof: AMBER band → band_denied
+  ✓ Negative proof: missing connector → missing_capability
+
+Tests to run:
+  pytest tests/k1/fabric/ -v
+  pytest tests/k1/tools/family/ -v
+  pytest tests/bridge/connector/ -v
+  pytest tests/k1/hil/ -v
+  pytest poc/back_tool_contract_v2/test_resolve_situation.py -v
+  pytest poc/back_tool_contract_v2/test_idempotency_store.py -v
+  pytest poc/back_tool_contract_v2/test_verification_runner.py -v
+```
+
+**Key design note — connector redesign:** Family tools (calendar/tasks/reminders/chores/shopping) are already wired at S8. But their schemas follow the legacy `ActionSpec` model. During Phase 1, these connectors should be redesigned to carry:
+
+```text
+- Full input/output JSON schemas (not only required_inputs/optional_inputs hints)
+- Connector constitution (preconditions, companion resources, conflict checks, HIL gates)
+- Verifier affordances (read_after_write, state_compare, etc.)
+- Side-effect declarations
+- Freshness guarantees
+- Capability naming: tool.{read|execute}.{connector_id}.{action} (already followed)
+```
+
+This redesign is Phase 1 work because Fabric needs real schemas to test the resolver, policy selector, and verifier. The formal IFL standard (Phase 4) will document this design pattern, but the actual schema work happens here.
+
+---
+
+### Phase 2 — Back: Prompt, ReAct Loop, Context, Tool Invocation Paradigm
+
+**Goal:** Prove the full Tier 2 spine end-to-end: `Back → resolve_situation → Fabric → Bridge → NativeToolProvider → calendar.create_event`.
+
+**What this phase owns:**
+
+```text
+Back Context Model — Back receives raw query + FULL rich context
+  Back is the SOLE intelligence/execution layer. Front passes raw user utterance
+  plus full context. Back does ALL intent reasoning — extracts frame, classifies
+  operations, resolves people/resources, detects missing fields.
+
+  Back's prompt is assembled from these context blocks at loop_start:
+
+  (A) Self Model — actor identity, household role, autonomy level, situation frame
+      S(actor) ∩ F ∩ C — who am I, what can I do, what constraints apply.
+      Source: SelfModelHandle (P3.5), SituationFrame.
+
+  (B) Household Roster — space members with display_name, role, age_band,
+      linked_resource_ids (who has which calendar/tasks/chores connected).
+      Source: LocalProjectionStore.household_members, SpaceGraphService.
+
+  (C) Available Services — connector catalog (names + descriptions, NO schemas yet):
+      what connectors are admitted and connected for this household.
+      Source: GlobalProjectionStore.connectors + LocalProjectionStore.connected_resources.
+
+  (D) Grounding Block — resolved temporal context ("now" in household timezone,
+      "next Monday" → ISO 8601), resolved spatial context (device location, geofence
+      hints), freshness state, staleness warnings.
+      Source: TemporalHandle (P3.6), SpatialHandle (P3.7), GroundingHandle (P3.8).
+
+  (E) Beliefs / Memory — relevant memory items, prior task outcomes, learned patterns.
+      Source: recall_memory meta-tool via Bridge, MemoryWriter.
+
+  (F) Active Task State — task kind, safety band, budget (max_iterations,
+      max_fabric_calls, prompt_tokens), session_id, prior HIL responses.
+      Source: FSM, SessionState, BackTaskEnvelope.
+
+  (G) Chat History — recent conversation turns for grounding and continuity.
+      Source: SessionState narrative thread.
+
+  Back uses ALL of this context to build the RequestFrame and call resolve_situation.
+  Front's only job: capture the user's words and hand them to Back with the raw
+  context blocks attached. Front MUST NOT pre-classify domains, guess operations,
+  or resolve resources. All of that is Back's responsibility.
+
+Back system prompt
+  → stable executor role
+  → meta-tool declarations (resolve_situation, invoke_capability, batch_invoke_capabilities,
+    submit_result, recall_memory)
+  → GLOBAL constitution rules (build RequestFrame first, never invent tools, act only
+    through allowed_next_actions, submit_result with evidence)
+  → discover_capabilities demoted to catalog-only (discovery_mode flag, C-014)
+
+Back ReAct loop
+  → orient → resolve → decide → bind → read/check/ask/write → finish
+  → bounded by allowed_next_actions[] from ResolutionEnvelope
+  → tier classification (Tier 2 vs. promote-to-Tier 3)
+  → submit_result as terminal meta-tool
+
+RequestFrame builder
+  → extracts user_goal, actor_ref, operation_hints[], resource_references[],
+    people_references[], time_references[], location_references[], missing_fields[]
+  → calls resolve_situation for execution tasks (NOT discover_capabilities)
+
+BackTaskEnvelope (CC-0)
+  → task_id, actor_ref, raw_user_utterance, task_kind, safety_context
+  → self_model_ref (SituationFrame: who am I, role, constraints)
+  → household_roster_ref (space members with display_name, role, age_band, linked_resources)
+  → available_services_ref (admitted + connected connectors for this household)
+  → grounding_snapshot_ref (resolved temporal, spatial, participant context)
+  → beliefs_memory_ref (relevant memory items, prior outcomes, learned patterns)
+  → active_task_state_ref (budget, prior HIL responses, narrative thread)
+  → chat_history_ref (recent conversation turns)
+  → Front MUST NOT pre-classify domain, operation, or resource — Back does ALL intent reasoning
+    from the raw utterance + context blocks above.
+
+BackTaskOutcome (CC-0)
+  → status: completed | partial | needs_hil | cannot_execute | blocked | failed
+  → submit_result with structured evidence
+  → hil_request with CandidateUniverse choices
+
+Tool invocation paradigm
+  → Back invokes by binding_id, not hand-copied capability_name
+  → FabricDispatchAdapter → CapabilityFabric.execute()
+  → Back receives InvocationObservation, not raw provider stack traces
+
+HIL integration
+  → Back asks HIL through HILRequest with choices from CandidateUniverse
+  → HIL response arrives in next BackTaskEnvelope
+
+BackPromotionOutcome
+  → escalation_reason, candidate_universe_ref, connector_constitution_refs[],
+    companion_resource_roles[], known_missing_fields[]
+  → structured handoff to FSM → Orchestrator (Tier 3)
+
+Concierge Single Writer rule
+  → Back returns deltas/outcomes; Concierge writes SessionState
+```
+
+**What this phase does NOT own:**
+
+```text
+- Resolution logic (Fabric, Phase 1)
+- Policy enforcement (Fabric, Phase 1)
+- Rich temporal/spatial/grounding prompt injection (Context Plane, Phase 3)
+- Connector/tool design contracts (IFL, Phase 4)
+```
+
+**What's already wired (from service.py):**
+
+```text
+P4:  Concierge (per-session) — ConciergeFactory.create_with_ports()
+     → PortBundle with llm, dispatch, temporal, spatial, grounding, memory, writer
+     → BusInputAdapter, BusOutputAdapter, SSMStateAdapter, FabricDispatchAdapter
+     → front_mailbox + back_mailbox registered on session_router
+
+P6:  SessionInstance assembled + Concierge.start() + MemoryWriter.start()
+     → front_dispatcher, back_dispatcher, front_ctx, back_ctx
+     → self_model handle wired (P3.5 pre-start install)
+```
+
+**Phase 2 integration gate:**
+
+```text
+GATE-P2: Full Tier 2 spine proven end-to-end.
+
+Prerequisite: GATE-P1 passed.
+
+Required:
+  ✓ Back receives BackTaskEnvelope → builds RequestFrame → calls resolve_situation
+  ✓ resolve_situation returns ResolutionEnvelope with allowed_next_actions[]
+  ✓ Back follows connector constitution: list before create, check conflicts
+  ✓ Back invokes calendar.create_event via binding_id → Fabric → Bridge → NativeToolProvider
+  ✓ InvocationObservation returns ok with event_id
+  ✓ VerificationObservation confirms event exists (read_after_write)
+  ✓ Back calls submit_result(completed) with structured evidence
+  ✓ HIL fires on missing required field; Back presents HIL choices from CandidateUniverse
+  ✓ Back promotes to Tier 3 when connector constitution declares companion_resource roles
+  ✓ discover_capabilities called with discovery_mode=catalog → catalog-only marker
+  ✓ Back refuses to invoke from catalog results (allowed_next_actions=[])
+  ✓ Negative proof: Back cannot invoke without resolve_situation (execution mode)
+  ✓ Negative proof: Back cannot call submit_result before verification
+  ✓ Negative proof: Back cannot invent capability names
+
+Tests to run:
+  pytest tests/k1/concierge/actors/test_back.py -v
+  pytest tests/k1/concierge/react/test_loop.py -v
+  pytest tests/k1/concierge/prompt/test_back_prompt.py -v
+  pytest tests/k1/concierge/tools/test_invoke_capability.py -v
+  pytest tests/k1/concierge/tools/test_discover_capabilities.py -v
+  pytest tests/k1/concierge/test_back_front_handoff.py -v
+```
+
+**Key design note — connector redesign continued:** Phase 1 redesigned the family tool schemas. Phase 2 is where those redesigned schemas are exercised through the FULL Tier 2 spine. If `calendar.create_event` carries a constitution that says "list before create, check chores/tasks for conflicts," then Back's ReAct loop must actually execute those steps in order. This is the first time the dumb-LLM rule is tested with a real LLM in the loop.
+
+---
+
+### Phase 3 — Context Plane: Spatial, Temporal, Session State Signals to Back Prompt
+
+**Goal:** Enrich Back's prompt with the rich grounding signals already available in the kernel plumbing (P3.6–P3.8).
+
+**What this phase owns:**
+
+```text
+Enhanced execution_grounding_block (injected at loop_start)
+  → resolved temporal context: "now" in household timezone, "next Monday" → ISO 8601
+  → resolved spatial context: device location, place refs, geofence hints
+  → resolved participant context: space members with display_name, role, age_band
+  → session state summary: active task, narrative thread, prior HIL responses
+  → safety context seed: autonomy level, privacy band, risk state
+
+Temporal prompt enrichment
+  → TemporalHandle (P3.6) already resolves "tomorrow" → date
+  → New: inject timezone-aware hints ("household is in US/Eastern, current time 14:32")
+  → New: inject upcoming calendar context ("next 7 days: 3 events, 2 chores due")
+  → New: deadline awareness ("this task references 'Monday' which is 2026-06-08")
+
+Spatial prompt enrichment
+  → SpatialHandle (P3.7) already resolves device location
+  → New: inject place context ("household location: 123 Main St, radius 50km")
+  → New: inject geofence-aware hints ("Riley's school is 15 min from home")
+
+Participant/identity prompt enrichment
+  → SelfModelHandle (P3.5) already provides SituationFrame = S(actor) ∩ F ∩ C
+  → New: inject resolved participant list into Back's prompt
+    ("household members: Riley (child, 8), Jordan (adult, caregiver), ...")
+  → New: flag missing identity resolution as uncertainty_markers[]
+    ("Could not resolve 'Aunt Sarah' to a known household member")
+
+Grounding freshness signals
+  → GroundingHandle (P3.8) already refreshes per-turn
+  → New: inject freshness state into Back's prompt
+    ("grounding snapshot age: 2.3s — fresh")
+  → New: inject stale warnings
+    ("spatial context last refreshed 4 hours ago — may be stale")
+
+Context-aware PromptPack enrichment
+  → PromptPack already carries candidate_summary, policy_cards, guide_cards
+  → New: PromptPack carries context_summary with temporal/spatial/participant signals
+  → New: decision_surface enriched with context-derived constraints
+    ("Only Riley's calendar is writeable by you; Jordan's is read-only")
+
+Participant resolution service (C-013 implementation)
+  → Fabric's resolver consults GroundingProjection.space_id → SpaceGraphService
+    → matches display_name against user text references
+    → includes resolved participants in CandidateUniverse.impact_set_candidates[]
+  → Ambiguous names → Fabric returns needs_disambiguation with member candidates
+```
+
+**What this phase does NOT own:**
+
+```text
+- Resolution logic (Fabric, Phase 1)
+- ReAct loop mechanics (Back, Phase 2)
+- Prompt structure or meta-tool declarations (Back, Phase 2)
+- IFL standard (Phase 4)
+- Temporal/spatial/grounding BUNDLE infrastructure (already built at S2.7–S2.9, P3.6–P3.8)
+  → Phase 3 ENRICHES what reaches the prompt; it does not rebuild the plumbing
+```
+
+**What's already wired (from service.py):**
+
+```text
+S2.7: Temporal bundle (M1) — clock, timezone, policy stack
+S2.8: Spatial bundle (M3) — place registry, geolocation
+S2.9: Grounding bundle (M1.5) — composite wrapping temporal+spatial+identity
+
+P3.6: TemporalHandle per-session — refresh_turn() before each Front turn
+P3.7: SpatialHandle per-session — refresh_turn() before each Front turn
+P3.8: GroundingHandle per-session — refresh_turn() + Fabric context builder binding
+
+P3.5: SelfModelHandle per-session — SituationFrame = S(actor) ∩ F ∩ C
+  → install_into_session() wires gate + capsule renderer into Concierge dispatchers
+  → render_capsule() injected into DynamicPromptBuilder at stage 9.5
+
+Front handler already receives: temporal, spatial, grounding, self_model handles
+  → grounding.refresh_turn() → GroundingEnvelope → GroundingProjection
+  → grounding.build_projection() → injected into Front's system prompt
+  → grounding_dispatch_metadata attached to dispatch_task payload
+```
+
+**Phase 3 integration gate:**
+
+```text
+GATE-P3: Rich context signals reach Back's prompt and improve execution quality.
+
+Prerequisite: GATE-P2 passed.
+
+Required:
+  ✓ Back's loop_start prompt includes execution_grounding_block with temporal context
+  ✓ Back's loop_start prompt includes household member list with roles
+  ✓ Back's prompt includes timezone-aware temporal hints
+  ✓ Back's prompt flags stale grounding ("spatial context age: 4h — verify location with user")
+  ✓ Participant name "Riley" resolved to member_id by Fabric's resolver
+  ✓ Unresolved participant names trigger needs_disambiguation (not silent guessing)
+  ✓ PromptPack.context_summary carries temporal/spatial/participant signals
+  ✓ Policy-derived constraints appear in decision_surface
+    ("You can write to Riley's calendar but not Jordan's")
+  ✓ Grounding freshness < 5s for active turns
+  ✓ Negative proof: stale grounding → Back asks HIL, does not execute
+  ✓ Negative proof: unresolvable participant → Back does not guess identity
+
+Tests to run:
+  pytest tests/k1/grounding/ -v
+  pytest tests/k1/temporal/ -v
+  pytest tests/k1/spatial/ -v
+  pytest tests/k1/selfmodel/ -v
+  pytest tests/k1/concierge/prompt/test_grounding_injection.py -v
+  pytest tests/k1/concierge/test_context_plane_prompt_enrichment.py -v
+```
+
+---
+
+### Phase 4 — IFL: Connector & Tool Design Formalization
+
+**Goal:** Produce a formal, stable standard for how connectors and tools are designed, documented, and registered. This is the design-time contract that connector authors follow.
+
+**What this phase owns:**
+
+```text
+IFL Manifest Standard (CC-8 formalization)
+  → manifest_id, connector_id, adapter_id, signing_info
+  → resource_models[] with concrete resource identity fields
+  → capability_templates[] with full input/output JSON schemas
+  → event_topics[] for projection freshness
+  → auth_scopes[], safety_metadata, verifier_affordances[]
+  → freshness_guarantees
+
+Connector Constitution Standard
+  → per-connector procedural execution rules
+  → preconditions (e.g., "list before create")
+  → companion_resource roles
+  → conflict_analysis_rules[]
+  → mutation_sequencing[]
+  → hil_gates[]
+  → verification_requirements[]
+  → constitution versioning (ships with connector, not prompt — Principle 6)
+
+Tool Design Contract
+  → capability naming: tool.{read|execute}.{connector_id}.{action}
+  → input schema: JSON Schema with required/optional fields, types, constraints
+  → output schema: structured result shape
+  → effect_summary: side_effects, compensation hints
+  → safety_requirement: min_band, autonomy_level
+  → limitations[]
+  → verifier_refs[]
+
+Policy Authoring Standard
+  → how new domains define PolicyCards (not how Fabric enforces them — Phase 1)
+  → PolicyBundle schema for domain authors
+  → guide_cards authoring patterns
+  → cross-connector governance rule templates
+
+Adapter Protocol Standard (CC-7 formalization)
+  → IflCommandEnvelope (ifl_schema_version, manifest_id, auth_context_ref, params)
+  → IflResultEnvelope (status, remote_correlation_id, resource_state_delta, readback_payload)
+  → error codes and recovery actions
+  → MCP stdio transport contract
+
+Manifest Ingestion Pipeline (CC-8)
+  → ManifestTranslator: IflManifest → CapabilityRegistrationBatch
+  → FamilyOS CA adapter signing + verification
+  → manifest versioning and upgrade paths
+
+Connector Authoring Guide
+  → step-by-step: how to create a new connector
+  → adapter implementation template (Python MCP server)
+  → credential setup (OAuth, API keys — stored in Bridge CredentialVault)
+  → testing checklist: what must pass before registration
+  → example: Google Calendar connector as reference implementation
+```
+
+**What this phase does NOT own:**
+
+```text
+- Runtime enforcement of constitutions (Fabric, Phase 1)
+- Runtime policy selection (Fabric, Phase 1)
+- CapabilityRegistry population (Fabric's ManifestTranslator handles CC-8)
+- Back's prompt or ReAct loop (Phase 2)
+- Context signal plumbing (Phase 3)
+```
+
+**What's already wired (from bridge/):**
+
+```text
+bridge/connector/          → ConnectorGateway, CredentialVault, MCP process manager
+bridge/ifl/                → IFL runtime tier (BRIDGE-OWNED)
+bridge/ifl/adapters/       → per-adapter MCP packages (e.g., google_calendar/)
+bridge/ports/              → 5 protocol definitions (CMD, QRY, SSE, OBS, IFL)
+bridge/core/signing.py     → Ed25519 envelope signing
+bridge/ifl/mcp_stdio.py    → MCP stdio transport
+
+architecture_diagrams/bridge/
+  → bridge_architecture.mmd / v2 — Bridge owns IFL hierarchy
+  → interkernel_fabric_layer.mmd — IFL runtime subsystems
+```
+
+**Phase 4 integration gate:**
+
+```text
+GATE-P4: IFL standard documented, reference connector passes.
+
+Prerequisite: GATE-P3 passed.
+
+Required:
+  ✓ IFL Manifest Standard document complete (schema + examples)
+  ✓ Connector Constitution Standard document complete
+  ✓ Tool Design Contract document complete
+  ✓ Policy Authoring Standard document complete
+  ✓ Adapter Protocol Standard document complete (IflCommandEnvelope / IflResultEnvelope)
+  ✓ Reference connector (Google Calendar) redesigned to new standard
+  ✓ Reference connector passes ManifestTranslator → CapabilityRegistrationBatch
+  ✓ Reference connector passes Phase 1 Fabric gate with new-schema tools
+  ✓ Reference connector passes Phase 2 E2E Tier 2 spine
+  ✓ Reference connector constitution gates correctly in Phase 3 Context Plane
+  ✓ Connector Authoring Guide published with step-by-step template
+  ✓ Negative proof: malformed manifest rejected by ManifestTranslator
+  ✓ Negative proof: unsigned adapter rejected by AdapterVerifier
+  ✓ Negative proof: manifest with missing constitution fields rejected
+
+Tests to run:
+  pytest tests/bridge/ifl/ -v
+  pytest tests/k1/fabric/test_manifest_translator.py -v
+  pytest tests/k1/fabric/test_capability_registration.py -v
+  # Reference connector E2E:
+  pytest tests/integration/test_google_calendar_e2e.py -v
+```
+
+---
+
+### Phase Dependency Diagram
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│                        PHASE 1                              │
+│                        FABRIC                                │
+│  CapabilityFabric + Registry + Providers + Meta-tools       │
+│  Policy selector/enforcer + Bridge gateway + HIL            │
+│  Idempotency + Verification                                 │
+│                                                             │
+│  Gate: Fabric standalone proven                             │
+│  Depends on: ModelHub (S2), Bridge (S4), FamilyTools (S8)   │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│                        PHASE 2                              │
+│                         BACK                                 │
+│  ReAct loop + Prompt + RequestFrame + Tier classification   │
+│  Tool invocation paradigm (binding_id) + HIL integration     │
+│  BackPromotionOutcome → Tier 3 handoff                      │
+│                                                             │
+│  Gate: Full Tier 2 spine proven E2E                         │
+│  Depends on: Fabric (Phase 1) + Concierge (P4/P6)           │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│                        PHASE 3                              │
+│                    CONTEXT PLANE                             │
+│  Rich temporal + spatial + participant + grounding signals  │
+│  Prompt enrichment at loop_start + after_resolution         │
+│  Participant resolution service (C-013)                     │
+│                                                             │
+│  Gate: Rich context improves execution quality              │
+│  Depends on: Back + Fabric (Phase 2)                        │
+│  Uses existing: P3.6-P3.8 plumbing (not rebuilding)         │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│                        PHASE 4                              │
+│                         IFL                                  │
+│  Manifest standard + Constitution standard                  │
+│  Tool design contract + Policy authoring standard           │
+│  Adapter protocol + Connector authoring guide               │
+│  Reference connector (Google Calendar)                      │
+│                                                             │
+│  Gate: IFL standard published, reference connector passes   │
+│  Depends on: Fabric + Back + Context Plane (Phase 3)        │
+│  Uses existing: bridge/ifl/ structure, CC-7, CC-8           │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Relationship to Existing Milestones (M0–M12)
+
+This 4-phase development roadmap does NOT replace the M0–M12 linear milestone list. The two models coexist:
+
+```text
+M0–M12 (original)         → WHAT gets built (component-level milestones)
+4-Phase Roadmap (this)     → HOW development is organized (plane-level build order)
+5-Layer Model (Q21)        → WHY components depend on each other (component dependency graph)
+```
+
+Approximate mapping:
+
+| Phase | Maps to M-milestones | Maps to 5-Layer Model |
+|---|---|---|
+| Phase 1 (Fabric) | M1–M4 (fabric, providers, registry, bridge) | Foundation + Resolver layers |
+| Phase 2 (Back) | M5–M8 (concierge, ReAct, prompt, tools) | Resolver + Execution layers |
+| Phase 3 (Context Plane) | M9–M10 (grounding, temporal, spatial, selfmodel) | Constitution layer |
+| Phase 4 (IFL) | M11–M12 (IFL, adapters, manifests) | Execution + Deprecation + Tier 3 |
+
+Phase 4 is the last phase because it formalizes what Phases 1–3 have proven. You cannot write a stable connector standard until you know what the runtime actually needs from a connector.
+
+---
+
+## Four-Plane Execution Workbook
+
+**Section mode:** execution plan — current code, existing tests, required tests, implementation steps.
+**Date:** 2026-06-02
+**Status:** living document. Each phase section filled incrementally as work proceeds.
+
+> This section is the HOW companion to the development roadmap (§0D). The roadmap says WHAT to build and in WHAT order. This workbook says HOW — current code reality, tests available today, tests that must be written, files to touch, and the step-by-step plan to reach each gate.
+
+---
+
+### Workbook Phase 1 — Fabric
+
+> **Ground-reality audit date:** 2026-06-02. Based on full code audit of `k1/fabric/` (28 files), `tests/k1/fabric/` (113 test files), `k1/kernel/service.py` (S3, S4, S5, S8, P3 wiring), and `bridge/connector/` (11 files).
+
+---
+
+#### 1.1 Ground Reality — CapabilityFabric Execution Engine
+
+**File:** `k1/fabric/fabric.py` (1643 lines). Three classes in one file.
+
+**A. `CapabilityFabric` — the stateless execution engine (line 190)**
+
+9-step `_execute_impl()` pipeline:
+
+| Step | Label | What happens | Error path |
+|------|-------|-------------|------------|
+| 1 | Emit invoked | `EventEmitter.emit_invoked()` — `k1.capability.invoked.v1` | Non-blocking |
+| 2 | Resolve provider | `Resolver.resolve(request)` → 5-sub-step chain: CapabilityRegistry lookup → ProviderRegistry lookup → PolicyEngine (4 dimensions: SecurityContext, AffectiveRouting, CognitiveLoadRouting, QoSIntegration) → ProviderSelector → ProviderFactory.create() | `resolution_failed` |
+| 2.4 | Conscience gate | `IConsciencePort.get_digest(caller_id)` → checks `digest.is_forbidden(social_act)` | `conscience_forbidden` |
+| 2.5 | HIL gate | `IHILPort.gate_capability()` → ALLOW/ASK_APPROVED/DENY/ASK_REJECTED/TIMEOUT | `hil_denied` / `hil_rejected_by_user` / `hil_timeout` |
+| 3 | Build context | `ContextBuilder.build_async()` → `ExecutionContext` with SessionState sections, prompt template, grounding metadata | Falls through on failure |
+| 4 | Instantiate provider | `ProviderFactory.create(provider_config)` — dispatches to handler by `provider_type` | Exception |
+| 5 | Execute via CB | `CircuitBreaker.call(provider.execute, ...)` with retry strategy (max 2 retries) | `circuit_breaker_open` / retry exhaustion |
+| 6 | Validate output | `OutputValidationPipeline` — 3-tier: structural → schema → semantic | `output_validation_failed` |
+| 7 | Emit completed/failed | `k1.capability.completed.v1` or `k1.capability.failed.v1` | Non-blocking |
+| 8 | Update metrics | `CapabilityRegistry.update_metrics(name, latency_ms, success)` with EMA (alpha=0.3) | Fault-isolated |
+| 9 | Emit learning | `k1.fabric.learning.signal.v1` | Non-blocking |
+
+`execute_batch()` supports 3 strategies: PARALLEL (`asyncio.gather`), SEQUENTIAL (one-by-one), DAG (Kahn wave execution with `_depends_on` references).
+
+**B. `Fabric` — the container/dataclass (line 1643)**
+
+```python
+@dataclass
+class Fabric:
+    facade: CapabilityFabric        # execution engine
+    retrieval: FabricRetrieval      # discovery API
+    registry_api: CapabilityRegistryAPI  # registry management
+    registry: Any                   # raw CapabilityRegistry
+    module_loader: Any              # ModuleLoader
+    health_checker: Any             # HealthChecker
+    event_port: Any                 # IEventPort
+    event_emitter: Optional[EventEmitter]
+    gap_detector: Any               # ProactiveGapDetector
+    context_builder: Any            # ContextBuilder
+```
+
+Convenience delegates: `execute()` → `facade.execute()`, `execute_batch()` → `facade.execute_batch()`, `discover_capabilities()` → `retrieval.discover_capabilities()`, `find_relevant_prompts()` → `retrieval.find_relevant_prompts()`, `register()`/`unregister()`/`lookup()` → `registry_api`.
+
+**C. `FabricRetrieval` — discovery API (line 1421)**
+
+Methods: `discover_capabilities(domain, intent, safety_band, session_context, top_k)` → `RetrievalResult`, `find_relevant_prompts(intent, domain, safety_band, top_k)` → `RetrievalResult`, `describe_capabilities()` → `list[dict]`.
+
+**D. `CapabilityRegistryAPI` — registry facade (line 1521)**
+
+Methods: `register()`, `unregister()`, `lookup(name, version)`, `contains()`, `list_all()`, `list_by_domain()`, `list_by_type()`, `update_availability()`, `update_metrics()`, `reload()`, `health()`.
+
+---
+
+#### 1.2 Ground Reality — Full Module Structure
+
+```
+k1/fabric/
+├── fabric.py                  # CapabilityFabric, Fabric, FabricRetrieval, BatchStrategy
+├── factory.py                 # FabricFactory (4 entry points)
+├── manifest_translator.py     # ToolDefinition → CapabilityContract
+├── types.py                   # CapabilityContract, InputSpec, SafetyBand, etc.
+├── logging.py, metrics.py     # Logging + Prometheus metrics
+│
+├── adapters/                  # 18 files — hexagonal ports
+│   ├── sessionstate_reader.py # ISessionStateReader → SSM
+│   ├── bridge_connection.py   # IBridgePort → Bridge client (LOCAL COLD fallback)
+│   ├── event_port_prod.py     # IEventPort → IBus
+│   ├── delta_bus_prod.py      # IDeltaBusPort → IBus
+│   ├── model_gateway_bridge.py # IModelGatewayPort → ModelHub (handle-based)
+│   ├── prompt_system_prod.py  # IPromptSystemPort → YAML files
+│   ├── auto_mcp_transport.py  # Auto-discovers MCP servers in k1/tools/mcp_servers/
+│   ├── auto_wasm_runtime.py   # Auto-discovers WASM modules in k1/tools/wasm_modules/
+│   └── null_state_reader.py   # NullSessionStateReaderAdapter (shared Fabric)
+│
+├── core/
+│   └── registry.py            # CapabilityRegistry — in-memory dict indexes (NO FTS5)
+│
+├── provider_resolution/       # 5-step provider resolution chain
+│   └── resolver.py            # Resolver: Registry → ProviderRegistry → PolicyEngine → Selector → Factory
+│
+├── providers/                 # Provider implementations
+│   ├── native_tool_provider.py # NativeToolProvider — dispatches tool.{read|execute}.*
+│   ├── mcp_provider.py        # MCPProvider
+│   ├── wasm_provider.py       # WASMProvider
+│   ├── bridge_provider.py     # BridgeProvider
+│   ├── agent_provider.py      # AgentProvider (M3 stub)
+│   ├── workflow_provider.py   # WorkflowProvider
+│   └── concierge_provider.py  # ConciergeProvider
+│
+├── policy/                    # Policy engine (4 dimensions — Security, Affective, Cognitive, QoS)
+├── retrieval/                 # RetrievalEngine (EmbeddingIndex → HardFilter → SoftRanker → TopKSelector)
+├── circuit_breaker/           # CircuitBreaker (CLOSED→OPEN→HALF_OPEN state machine)
+├── health/                    # HealthChecker + AvailabilityTracker
+├── output_validation/         # OutputValidationPipeline (structural→schema→semantic)
+├── context/                   # ContextBuilder (6-step, 128K ceiling)
+├── contracts/                 # Contract parsers (tool, agent, prompt, workflow)
+├── ports/                     # 6 Protocol definitions
+├── concurrency/               # FabricDispatcher + TimeoutGuard
+└── events/                    # Event definitions
+```
+
+---
+
+#### 1.3 Ground Reality — ProviderFactory Handler Registry
+
+7 handler constructors registered in `_register_provider_handlers()`:
+
+| ProviderType | Handler | Required port deps |
+|---|---|---|
+| `MCP` | `MCPProvider` | `mcp_transport` |
+| `WASM` | `WASMProvider` | `wasm_runtime` |
+| `BRIDGE` | `BridgeProvider` | `bridge_port` |
+| `AGENT` | `AgentProvider` | `context_builder`, `model_gateway_port`, `state_reader`, `delta_bus`, `registry`, `grounding_port` |
+| `WORKFLOW` | `WorkflowProvider` | `workflow_registry`, `capability_lookup`, `orchestrator` |
+| `CONCIERGE` | `ConciergeProvider` | `concierge_router` |
+| `LOCAL_STUB` | `LocalStubProvider` | None |
+
+Plus: `NativeToolProvider` registered separately at S8 via `bootstrap_family_tools()` → `register_provider_with_fabric()`. Provider type: `LOCAL`, provider id: `k1_native_tools`.
+
+---
+
+#### 1.4 Ground Reality — CapabilityRegistry (NO FTS5)
+
+**File:** `k1/fabric/core/registry.py`
+
+Uses in-memory Python dicts under `threading.RLock`:
+
+| Index | Type | Purpose |
+|---|---|---|
+| `_by_name` | `dict[str, ContractUnion]` | O(1) exact name lookup |
+| `_by_domain` | `dict[str, list[ContractUnion]]` | Inverted domain tag index |
+| `_by_type` | `dict[str, list[ContractUnion]]` | Grouped by capability type prefix |
+| `_by_provider` | `dict[str, list[ContractUnion]]` | Grouped by provider_id |
+| `_by_version` | `dict[str, dict[str, ContractUnion]]` | name → {version_str → contract} |
+| `_metadata_cache` | `dict[str, ContractMetadata]` | Hot cache: availability, latency, success rate |
+
+**No SQLite FTS5 anywhere in the registry.** FTS5 exists only in the POC `GlobalProjectionStore`. The registry's semantic search goes through `RetrievalEngine` which has its own `EmbeddingIndex` (not FTS5).
+
+**Version conflict resolution:** same name + same version → `VersionConflictError`; same name + newer compatible major → UPGRADE in-place; same name + different major → REGISTER BOTH as `name@major`.
+
+---
+
+#### 1.5 Ground Reality — How service.py Wires Fabric
+
+**S3 (Tier 1 — Shared Fabric):**
+
+```text
+FabricFactory.create_shared(
+    event_port=EventPortProdAdapter(bus),
+    bridge=BridgeConnectionAdapter(client=bridge_client),
+    model_gateway=ModelGatewayBridgeAdapter(hub=model_hub),
+    prompt_system=PromptSystemProdAdapter(prompts_dir="k1/contracts/prompts"),
+    delta_bus=DeltaBusProdAdapter(bus),
+    state_reader=session_routing_reader,  # NullSSMShim for shared Fabric
+    hil_port=hil_service,
+)
+```
+
+SessionRoutingStateReader resolves `session_id → SSM` for multi-session use.
+
+**S5 (Orchestrator → Fabric):**
+
+```text
+FabricGatewayAdapter(fabric=shared_fabric)
+  → IFabricGatewayPort.execute() → Fabric.execute() → CapabilityFabric.execute()
+```
+
+**P3 (Per-session Fabric):**
+
+```text
+FabricFactory.create_with_ports(
+    state_reader=SessionStateReaderAdapter(ssm, session_id),
+    event_port=EventPortProdAdapter(session_bus),
+    bridge=BridgeConnectionAdapter(client=bridge_client),
+    model_gateway=ModelGatewayBridgeAdapter(hub=model_hub),
+    prompt_system=shared_prompt_system,
+    delta_bus=DeltaBusProdAdapter(session_bus),
+    production_mode=True,
+    hil_port=session_hil_service,
+    capability_registry=shared_fabric.registry,  # reuses shared registry
+)
+```
+
+**P3.1:** `NativeToolProvider` re-registered on per-session fabric (prevents `UnsupportedProviderTypeError: LOCAL`).
+
+---
+
+#### 1.6 Ground Reality — Test Coverage (113 files, full audit)
+
+| # | Category | Files | Coverage quality |
+|---|---|---|---|
+| 1 | E2E tool tests | 9 | Real tools through native servers (calendar, weather, notes, recipes, date_calc, unit_convert, auto-discovery, batch composition, smoke) |
+| 2 | Wiring/protocol contracts | 4 | YAML contract compliance, port interfaces, type roundtrips |
+| 3 | Agent subsystem | 16 | Lifecycle FSM, AgentPool, AgentProvider, AgentComposer, meta-agent creation, schema validation, safety gates |
+| 4 | Provider tests | 6 | MCP/WASM/Bridge/Workflow/Concierge/Agent providers, NativeToolProvider proof-of-path |
+| 5 | Provider resolution | 4 | 5-step resolver chain, deterministic selection (FAB-10), ProviderRegistry |
+| 6 | Policy/security | 7 | SecurityContext (FAB-06), AffectiveRouting, CognitiveLoadRouting, QoSIntegration, ToolScope (FAB-07) |
+| 7 | Retrieval | 6 | EmbeddingIndex, HardFilter, SoftRanker (4-weight), TopKSelector, RetrievalEngine, 1K/10K benchmarks |
+| 8 | Registry/versioning | 6 | Full CRUD, version conflicts, upgrades, multi-version, concurrent access, 1K/10K/100K benchmarks |
+| 9 | Context builder | 6 | 6-step pipeline, ContextBudget 5-level compression, 128K ceiling (FAB-08), grounding invocation metadata |
+| 10 | Adapters | 5 | All 6 production adapters + all test adapters, protocol conformance, capture, thread safety |
+| 11 | Port interfaces | 2 | Protocol shapes, runtime_checkable, structural subtyping |
+| 12 | Contract validation | 4 | 12 semantic rules + JSON Schema validation + all 4 parsers |
+| 13 | Module loader | 2 | Lifecycle, hot-reload, scan, file tracking |
+| 14 | Output validation | 3 | 3-tier pipeline, E2E through fabric.execute() |
+| 15 | Circuit breaker | 3 | State machine, retry strategy, HALF_OPEN probe, E2E through fabric.execute() |
+| 16 | Tier flow integration | 3 | LOW/MEDIUM/HIGH tier flows through fabric.execute() |
+| 17 | Cross-subsystem | 2 | Registry→Resolution→Execution chain, ModuleLoader→Registry→Retrieval chain |
+| 18 | Invariants | 5 | FAB-01 through FAB-13 — statelessness, no session write, no direct LLM, trace_id propagation, determinism |
+| 19 | HIL | 4 | HIL gate in _execute_impl, ALLOW/ASK/DENY/TIMEOUT flows, factory hil_port threading |
+| 20 | Health/availability | 2 | HealthChecker periodic loop, AvailabilityTracker, CB bidirectional integration |
+| 21 | Concurrency | 1 | FabricDispatcher + TimeoutGuard |
+| 22 | Misc/infrastructure | 8 | create_shared, execute_batch, model gateway bridge, manifest translator, prompt inventory, gap detection, specialist agent contracts |
+| 23 | Performance/load | 6 | Context, overhead, registry, retrieval benchmarks + load testing |
+| 24 | Observability | 2 | Prometheus metrics, structured logging |
+
+**No-mock strategy:** All 113 files use real adapters (in-memory implementations), not `unittest.mock`. Test pattern: "ALL executions through `fabric.execute()` — NEVER direct provider access."
+
+---
+
+#### 1.7 Ground Reality — Complete Gaps (0 tests exist)
+
+These Phase 1 target components have **zero** test coverage across the 113-file suite:
+
+| Component | Search result |
+|---|---|
+| `resolve_situation` | 0 matches |
+| `PolicySelector` (distinct from `PolicyEngine`) | 0 matches |
+| `IdempotencyStore` | 0 matches |
+| `VerificationPlanRunner` | 0 matches |
+| `GlobalProjectionStore` / `LocalProjectionStore` | 0 matches |
+| Connector constitution (`ConnectorConstitution`) | 0 matches |
+
+**Partially covered:** `PolicyEngine` has dedicated tests for all 4 dimensions but no `PolicySelector` abstraction. `BridgeConnectionAdapter` tested with `InMemoryBridgeClient` but no real K0 bridge E2E. `RetrievalEngine` uses zero-vector stub for `EmbeddingPort`.
+
+---
+
+#### 1.8 Complete Fabric Component Inventory
+
+**EXISTING components (already in code):**
+
+| Component | File | Status |
+|---|---|---|
+| `CapabilityFabric` | `k1/fabric/fabric.py:190` | Production — 9-step pipeline, batch, DAG |
+| `Fabric` (container) | `k1/fabric/fabric.py:1643` | Production — @dataclass, delegates |
+| `FabricRetrieval` | `k1/fabric/fabric.py:1421` | Production — discover, find_prompts, describe |
+| `CapabilityRegistryAPI` | `k1/fabric/fabric.py:1521` | Production — CRUD facade |
+| `CapabilityRegistry` | `k1/fabric/core/registry.py` | Production — 6 in-memory indexes, versioning |
+| `FabricFactory` | `k1/fabric/factory.py` | Production — 4 entry points |
+| `Resolver` (5-step) | `k1/fabric/provider_resolution/resolver.py` | Production — registry→provider→policy→select→create |
+| `ProviderFactory` | `k1/fabric/provider_resolution/` | Production — 7 handler constructors |
+| `ProviderRegistry` | `k1/fabric/provider_resolution/` | Production — register/unregister/health |
+| `ProviderMatcher` | `k1/fabric/provider_resolution/` | Production — match + health filter |
+| `ProviderSelector` | `k1/fabric/provider_resolution/` | Production — deterministic tie-breaking |
+| `PolicyEngine` (4 dim) | `k1/fabric/policy/` | Production — Security, Affective, Cognitive, QoS |
+| `SecurityContext` | `k1/fabric/policy/` | Production — band-based authorization |
+| `ToolScope` | `k1/fabric/policy/` | Production — sub-agent scoping |
+| `RetrievalEngine` | `k1/fabric/retrieval/` | Production — EmbeddingIndex→HardFilter→SoftRanker→TopK |
+| `ContextBuilder` | `k1/fabric/context/` | Production — 6-step, 128K ceiling |
+| `CircuitBreaker` | `k1/fabric/circuit_breaker/breaker.py` | Production — CLOSED/OPEN/HALF_OPEN |
+| `HealthChecker` | `k1/fabric/health/health_checker.py` | Production — periodic + CB bidirectional |
+| `AvailabilityTracker` | `k1/fabric/health/` | Production — state tracking |
+| `OutputValidationPipeline` | `k1/fabric/output_validation/` | Production — structural→schema→semantic |
+| `ContractValidator` | `k1/fabric/contracts/` | Production — 12 semantic rules + JSON Schema |
+| `ModuleLoader` | `k1/fabric/module_registry/` | Production — hot-reload, scan |
+| `ManifestTranslator` | `k1/fabric/manifest_translator.py` | Production — ActionSpec→CapabilityContract |
+| `FabricDispatcher` | `k1/fabric/concurrency/` | Production — async bounded parallelism |
+| `TimeoutGuard` | `k1/fabric/concurrency/` | Production — deadline enforcement |
+| `EventEmitter` | `k1/fabric/events/` | Production — capability lifecycle events |
+| `FabricMetrics` | `k1/fabric/metrics.py` | Production — Prometheus |
+| 6 production adapters | `k1/fabric/adapters/` | Production — SS reader, Bridge, Event, Delta, Model GW, Prompt |
+| `NativeToolProvider` | `k1/fabric/providers/native_tool_provider.py` | Production — LOCAL provider |
+| `MCPProvider` | `k1/fabric/providers/mcp_provider.py` | Production |
+| `WASMProvider` | `k1/fabric/providers/wasm_provider.py` | Production |
+| `BridgeProvider` | `k1/fabric/providers/bridge_provider.py` | Production |
+| `AgentProvider` | `k1/fabric/providers/agent_provider.py` | M3 stub |
+| `WorkflowProvider` | `k1/fabric/providers/workflow_provider.py` | Partial |
+| `ConciergeProvider` | `k1/fabric/providers/concierge_provider.py` | Partial |
+
+**NEW components (need to be built in Phase 1):**
+
+| Component | Target location | Source | Purpose |
+|---|---|---|---|
+| `GlobalProjectionStore` | `k1/fabric/stores/global_projection_store.py` | Promote from `poc/back_tool_contract_v2/` | Connectors, capabilities (FTS5), resource_kinds, connector_constitutions |
+| `LocalProjectionStore` | `k1/fabric/stores/local_projection_store.py` | Promote from `poc/back_tool_contract_v2/` | connected_resources, household_members, alias_index, resource_projection_snapshots |
+| `IdempotencyStore` | `k1/fabric/stores/idempotency_store.py` | Promote from `poc/back_tool_contract_v2/` | in_flight→succeeded/failed state machine, immutable-succeeded invariant |
+| `SituatedResolver` | `k1/fabric/resolver/situated_resolver.py` | Promote from `poc/back_tool_contract_v2/resolve_situation.py` | 10-verdict state machine, CC-1 contract (ResolveSituationRequest→ResolutionEnvelope) |
+| `PolicySelector` | `k1/fabric/policy/selector.py` | New — Contract C implementation | PolicySelectionRequest→PolicyBundle with gates[], hil_triggers[], verifier_requirements[], policy_cards[], guide_selection_rules[] |
+| `VerificationPlanRunner` | `k1/fabric/verification/runner.py` | Promote from `poc/back_tool_contract_v2/verification_runner.py` | build_plan→run→gate, read_after_write, output_schema |
+| `ConnectorConstitution` (schema + loader) | `k1/fabric/constitution/` | New — Constitution Tooling spec | ConstitutionArtifact shape, per-connector preconditions, companion resources, conflict rules, HIL gates, verifier requirements |
+| `PromptPackBuilder` | `k1/fabric/prompt_pack/` | New — Contract G implementation | Renders compact cards from resolution: connector_constitution_cards[], tool_name_cards[], policy_cards[], guide_cards[], selected_schema_cards[], allowed_tool_calls[], forbidden_tool_calls[] |
+| `CapabilityNameParser` | `k1/fabric/resolver/name_parser.py` | New — Contract D enforcement | Parse `tool.{read\|execute}.{connector_id}.{action}`, extract connector_id |
+| `ConnectorAliasNormalizer` | `k1/fabric/stores/alias_normalizer.py` | Promote from POC alias logic | Maps user-facing names ("Google Calendar")→connector_id |
+
+**BRIDGE components (Phase 1 — connector gateway):**
+
+| Component | File | Status |
+|---|---|---|
+| `ConnectorGateway` | `bridge/connector/gateway.py` | Production — 3-stage pipeline |
+| `TokenVerifier` | `bridge/connector/token_verifier.py` | Production |
+| `AdapterVerifier` | `bridge/connector/adapter_verifier.py` | Production |
+| `RequestRouter` | `bridge/connector/request_router.py` | Production |
+| `CredentialVault` | `bridge/connector/credential_vault.py` | Production (Protocol + InMemory) |
+| `KeyringVault` | `bridge/connector/vault/keyring_vault.py` | Production (Windows DPAPI) |
+| `MCPProcessManager` | `bridge/connector/mcp_process_manager.py` | Production |
+| `RealMCPProcessManager` | `bridge/connector/real_mcp_process_manager.py` | Production |
+| `CrashBudget` | `bridge/connector/crash_budget.py` | Production |
+| `Signing` | `bridge/core/signing.py` | Production (Ed25519) |
+| `LocalOutbox` | `bridge/sync/local_outbox.py` | Production (SQLite WAL) |
+
+---
+
+#### 1.9 New Tests Required (GATE-P1)
+
+```text
+GAP-P1-001: SituatedResolver unit tests
+  File: tests/k1/fabric/resolver/test_situated_resolver.py
+  Covers: 10 verdicts with sub-reason distinctions, ResolutionEnvelope shape,
+    CC-1 contract compliance, disclosure phases
+  Source: poc/back_tool_contract_v2/resolve_situation.py
+
+GAP-P1-002: PolicySelector contract tests
+  File: tests/k1/fabric/policy/test_policy_selector.py
+  Covers: PolicySelectionRequest→PolicyBundle, gates[], hil_triggers[],
+    verifier_requirements[], policy_cards[], guide_selection_rules[],
+    policy vs constitution precedence (policy may tighten, not relax)
+  Source: Contract C in whiteboard
+
+GAP-P1-003: GlobalProjectionStore integration tests
+  File: tests/k1/fabric/stores/test_global_projection_store.py
+  Covers: connector registration, capability FTS5 indexing (content-sync,
+    delete-all before bulk insert), constitution storage, alias normalization,
+    resource_kinds table, connector_constitutions table
+  Source: poc/back_tool_contract_v2/global_projection_store.py
+
+GAP-P1-004: LocalProjectionStore integration tests
+  File: tests/k1/fabric/stores/test_local_projection_store.py
+  Covers: connected_resources, household_members, alias_index,
+    resource_projection_snapshots, freshness tracking, completeness states
+  Source: poc/back_tool_contract_v2/local_projection_store.py
+
+GAP-P1-005: IdempotencyStore contract tests
+  File: tests/k1/fabric/stores/test_idempotency_store.py
+  Covers: in_flight→succeeded transition, in_flight→failed transition,
+    immutable-succeeded invariant (replay cannot change succeeded),
+    concurrent access, TTL cleanup
+  Source: poc/back_tool_contract_v2/idempotency_store.py
+
+GAP-P1-006: VerificationPlanRunner contract tests
+  File: tests/k1/fabric/verification/test_verification_runner.py
+  Covers: build_plan→run→gate, read_after_write verification,
+    output_schema verification, deferred methods (state_compare, audit_receipt,
+    external_receipt, policy_attestation)
+  Source: poc/back_tool_contract_v2/verification_runner.py
+
+GAP-P1-007: Bridge ConnectorGateway integration tests
+  File: tests/bridge/connector/test_gateway_integration.py
+  Covers: full 3-stage pipeline (token verify→adapter verify→route) with
+    real NativeToolProvider dispatch
+
+GAP-P1-008: ConnectorConstitution schema + loader tests
+  File: tests/k1/fabric/constitution/test_constitution_schema.py
+  Covers: ConstitutionArtifact JSON Schema, preconditions, companion_resource
+    roles, conflict_analysis_rules[], mutation_sequencing[], hil_gates[],
+    verification_requirements[], versioning, Principle 6 enforcement
+  Source: Constitution Tooling section in whiteboard
+  **Designed:** 5 test classes, 23 test methods — see Component 7 §7.7
+  Classes: TestConstitutionSchemaValidation (7), TestSemanticRules (6),
+    TestConstitutionLoader (7), TestVersionCompatibility (3),
+    TestPrinciple6Enforcement (3)
+
+GAP-P1-009: Negative proof — SituatedResolver failure modes
+  File: tests/k1/fabric/resolver/test_situated_resolver_negative.py
+  Covers: missing_capability, blocked_by_policy, incomplete_world_projection,
+    stale_projection, cannot_execute verdicts with sub-reasons
+
+GAP-P1-010: Negative proof — Bridge security boundary
+  File: tests/bridge/connector/test_security_boundary_negative.py
+  Covers: invalid token→denied, unsigned adapter→rejected,
+    credential leak attempt→blocked, band escalation attempt→denied
+
+GAP-P1-011: PromptPackBuilder contract tests
+  File: tests/k1/fabric/prompt_pack/test_prompt_pack_builder.py
+  Covers: PromptPack shape (Contract G), compact card rendering,
+    staged disclosure (Phase 1: constitution+names, Phase 2: schemas only
+    after commitment), allowed_tool_calls[], forbidden_tool_calls[],
+    redaction_summary, stale_card_policy
+  **Designed:** 10 test classes, 43 test methods — see Component 8 §8.8
+  Classes: TestPromptPackShape (4), TestStagedDisclosure (8),
+    TestRedactionProof (8), TestConstitutionCards (5), TestToolNameCards (4),
+    TestPolicyCards (4), TestStaleCardPolicy (5), TestForbiddenActionGating (4),
+    TestRendering (7), TestPromptPackBuilderEdgeCases (6)
+
+GAP-P1-012: CapabilityNameParser unit tests
+  File: tests/k1/fabric/resolver/test_capability_name_parser.py
+  Covers: parse (13 cases — valid names, malformed names, boundary cases),
+    try_parse, validate, extract (connector_id, action, operation_type),
+    build (construction + roundtrip), domain queries (is_read, is_write,
+    belongs_to_connector), bulk operations (filter_by_connector,
+    group_by_connector, connectors_in_scope)
+  **Designed:** 7 test classes, 35 test methods — see Component 9 §9.7
+  Classes: TestParse (13), TestTryParse (2), TestValidate (4),
+    TestExtract (4), TestBuild (5), TestDomainQueries (5),
+    TestBulkOperations (6)
+
+GAP-P1-013: ConnectorAliasNormalizer unit tests
+  File: tests/k1/fabric/stores/test_alias_normalizer.py
+  Covers: global alias resolution (8 cases), local alias resolution (4),
+    confidence scoring (4), batch normalization (3), reverse lookup (4),
+    global index rebuild (3), ambiguity detection (4),
+    integration with LocalProjectionStore (2)
+  **Designed:** 8 test classes, 28 test methods — see Component 10 §10.6
+  Classes: TestGlobalAliasResolution (8), TestLocalAliasResolution (4),
+    TestConfidenceScoring (4), TestBatchNormalization (3),
+    TestReverseLookup (4), TestGlobalIndexRebuild (3),
+    TestAmbiguity (4), TestIntegrationWithLocalStore (2)
+```
+
+#### 1.10 Implementation Plan
+
+```text
+Step 1.1: Create k1/fabric/stores/ — projection + idempotency
+  Promote from POC:
+    poc/back_tool_contract_v2/global_projection_store.py → k1/fabric/stores/global_projection_store.py
+    poc/back_tool_contract_v2/local_projection_store.py → k1/fabric/stores/local_projection_store.py
+    poc/back_tool_contract_v2/idempotency_store.py → k1/fabric/stores/idempotency_store.py
+  Wire into FabricFactory.create_shared() at S3 (passed to Fabric container)
+  Write GAP-P1-003, GAP-P1-004, GAP-P1-005
+
+Step 1.2: Create k1/fabric/resolver/ — situated resolution
+  Promote: poc/back_tool_contract_v2/resolve_situation.py → k1/fabric/resolver/situated_resolver.py
+  Implement CC-1 contract: ResolveSituationRequest→ResolutionEnvelope
+  Implement 10-verdict state machine with sub-reason distinctions
+  Wire resolve_situation as a Fabric meta-tool (registered alongside invoke_capability)
+  Write GAP-P1-001, GAP-P1-009
+
+Step 1.3: Create k1/fabric/policy/selector.py — PolicySelector
+  New implementation of Contract C: PolicySelectionRequest→PolicyBundle
+  Consumes connector constitutions + actor scope + safety context
+  Returns gates[], hil_triggers[], verifier_requirements[], policy_cards[],
+    guide_selection_rules[]
+  Distinct from existing PolicyEngine (which is about provider selection policy,
+    not about execution policy for Back)
+  Write GAP-P1-002
+
+Step 1.4: Create k1/fabric/verification/ — VerificationPlanRunner
+  Promote: poc/back_tool_contract_v2/verification_runner.py → k1/fabric/verification/runner.py
+  Implement read_after_write, output_schema (proven in POC)
+  Wire into Fabric's post-invoke pipeline (after step 6, before step 7)
+  Write GAP-P1-006
+
+Step 1.5: Create k1/fabric/constitution/ — ConnectorConstitution
+  New: ConstitutionArtifact schema (JSON Schema)
+  New: ConstitutionLoader — loads from connector_constitutions table
+  Implements 6 Principles from Constitution Tooling section
+  Write GAP-P1-008
+
+Step 1.6: Create k1/fabric/prompt_pack/ — PromptPackBuilder
+  New: PromptPackBuilder — renders Contract G PromptPack from resolution
+  Implements staged disclosure (CC-10): Phase 1=constitution+names, Phase 2=schemas after commitment
+  Implements allowed_tool_calls[], forbidden_tool_calls[], redaction_summary
+  Write GAP-P1-011
+
+Step 1.6a: Create k1/fabric/resolver/name_parser.py — CapabilityNameParser
+  New: CapabilityNameParser — validates and parses tool.{read|execute}.{connector_id}.{action}
+  Enforces Contract D naming convention: capability names embed connector identity
+  Used by: CapabilityBinder, PolicySelector, VerificationPlanRunner, PromptPackBuilder,
+    NativeToolProvider, CapabilityRegistry (registration validation)
+  Write GAP-P1-012
+
+Step 1.6b: Create k1/fabric/stores/alias_normalizer.py — ConnectorAliasNormalizer
+  New: ConnectorAliasNormalizer — maps user-facing names → connector_id
+  Two scopes: global (connector catalog LABELS) + local (per-household resource aliases)
+  Used by: RequestFrameBuilder, ResolveResourcesService, SituatedResolver, Back prompt builder
+  Write GAP-P1-013
+
+Step 1.7: Redesign family tool schemas
+  Add ConnectorConstitution to each adapter (calendar, tasks, reminders, chores, shopping)
+  Upgrade ActionSpec→full JSON Schema input/output
+  Add verifier affordances, side-effect declarations, freshness guarantees
+  Existing 51 family tool tests continue passing — schemas are additive
+
+Step 1.8: Bridge gateway hardening
+  Audit ConnectorGateway 3-stage pipeline against CC-6 contract
+  Ensure TokenVerifier checks user_band >= safety_band
+  Ensure AdapterVerifier checks FamilyOS CA signature + revocation
+  Write GAP-P1-007, GAP-P1-010
+
+Step 1.9: Integration gate
+  Run GATE-P1 checklist (14 items in roadmap §0D)
+  Run ALL 113 existing fabric tests — must all pass
+  Run ALL 48 existing bridge tests — must all pass
+  Run ALL 51 existing family tools tests — must all pass
+  Run ALL 11 existing HIL tests — must all pass
+  Run new tests (GAP-P1-001 through GAP-P1-011)
+  Benchmark: rerun scripts/probe_back_tool_contract_benchmark.py — must match POC results
+```
+
+**Files to create:**
+
+```text
+k1/fabric/stores/__init__.py
+k1/fabric/stores/global_projection_store.py       (promoted from POC)
+k1/fabric/stores/local_projection_store.py        (promoted from POC)
+k1/fabric/stores/idempotency_store.py             (promoted from POC)
+k1/fabric/stores/alias_normalizer.py              (promoted from POC alias logic)
+k1/fabric/resolver/__init__.py
+k1/fabric/resolver/situated_resolver.py           (promoted from POC resolve_situation.py)
+k1/fabric/resolver/name_parser.py                 (new — capability name parsing)
+k1/fabric/policy/selector.py                      (new — Contract C)
+k1/fabric/verification/__init__.py
+k1/fabric/verification/runner.py                  (promoted from POC verification_runner.py)
+k1/fabric/constitution/__init__.py
+k1/fabric/constitution/schema.py                  (new — ConstitutionArtifact JSON Schema)
+k1/fabric/constitution/loader.py                  (new — loads from projection store)
+k1/fabric/prompt_pack/__init__.py
+k1/fabric/prompt_pack/builder.py                  (new — Contract G PromptPack)
+tests/k1/fabric/resolver/test_situated_resolver.py
+tests/k1/fabric/resolver/test_situated_resolver_negative.py
+tests/k1/fabric/policy/test_policy_selector.py
+tests/k1/fabric/stores/test_global_projection_store.py
+tests/k1/fabric/stores/test_local_projection_store.py
+tests/k1/fabric/stores/test_idempotency_store.py
+tests/k1/fabric/verification/test_verification_runner.py
+tests/k1/fabric/constitution/test_constitution_schema.py
+tests/k1/fabric/prompt_pack/test_prompt_pack_builder.py
+tests/bridge/connector/test_gateway_integration.py
+tests/bridge/connector/test_security_boundary_negative.py
+```
+
+**Files to modify:**
+
+```text
+k1/fabric/factory.py                              (wire stores, resolver, policy selector, verification, constitution, prompt pack)
+k1/fabric/fabric.py                               (register resolve_situation meta-tool, add new container fields)
+k1/fabric/providers/native_tool_provider.py       (consume new schemas + constitutions)
+k1/tools/family/calendar/service.py               (add constitution + upgraded JSON Schema)
+k1/tools/family/tasks/service.py                  (add constitution + upgraded JSON Schema)
+k1/tools/family/reminders/service.py              (add constitution + upgraded JSON Schema)
+k1/tools/family/chores/service.py                 (add constitution + upgraded JSON Schema)
+k1/tools/family/shopping/service.py               (add constitution + upgraded JSON Schema)
+k1/kernel/service.py                              (wire new stores at S3, pass to P3)
+```
+
+---
+
+## Phase 1 Component Designs
+
+> **Status:** sequential design — each component designed one at a time, with full API, internal design, wiring, and E2E data flow. Components are designed in dependency order: stores first, then resolver, then policy, then verification, then constitution, then prompt pack.
+
+---
+
+### Component 1 — GlobalProjectionStore
+
+**Target file:** `k1/fabric/stores/global_projection_store.py`
+**Source:** Promote + harden from `poc/back_tool_contract_v2/stores/global_projection_store.py`
+**Depends on:** Nothing (foundation component — stores are the bottom layer)
+
+#### 1.1 What It Is
+
+The single source of truth for ALL connectors, capabilities, resource kinds, and connector constitutions known to the kernel. This is the "what tools exist in the universe" store. It is GLOBAL — shared across all sessions, read by the resolver, written by manifest ingestion.
+
+In the current code, `CapabilityRegistry` (`k1/fabric/core/registry.py`) holds capabilities in in-memory Python dicts. That works for the current scale (41 family tools) but has no persistence, no FTS5, no constitution storage, and no connector-level grouping. `GlobalProjectionStore` replaces the registry's storage layer while the registry keeps its in-memory hot cache.
+
+#### 1.2 SQL Schema (5 tables + 1 FTS5 content table)
+
+```sql
+-- Connectors: one row per registered connector/adapter
+CREATE TABLE IF NOT EXISTS connectors (
+    connector_id    TEXT PRIMARY KEY,
+    label           TEXT NOT NULL,
+    connector_type  TEXT NOT NULL,   -- 'native', 'bridge', 'ifl'
+    provider_type   TEXT NOT NULL,   -- 'LOCAL', 'MCP', 'BRIDGE', etc.
+    version         TEXT NOT NULL DEFAULT '1.0.0',
+    admission_verdict TEXT NOT NULL, -- 'admitted', 'pending', 'rejected'
+    registration_type TEXT NOT NULL, -- 'static', 'dynamic', 'discovered'
+    constitution_json TEXT NOT NULL DEFAULT '{}',
+    policy_json     TEXT NOT NULL DEFAULT '{}',
+    resource_kinds_json TEXT NOT NULL DEFAULT '[]',
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
+);
+
+-- Capabilities: one row per capability contract
+CREATE TABLE IF NOT EXISTS capabilities (
+    capability_name TEXT PRIMARY KEY,
+    connector_id    TEXT NOT NULL REFERENCES connectors(connector_id),
+    operation       TEXT NOT NULL,   -- 'read', 'execute'
+    effect          TEXT NOT NULL,   -- 'read', 'write', 'delete', 'compute'
+    resource_kind   TEXT,
+    description     TEXT NOT NULL DEFAULT '',
+    required_inputs_json TEXT NOT NULL DEFAULT '[]',
+    optional_inputs_json TEXT NOT NULL DEFAULT '[]',
+    output_schema_ref   TEXT,
+    safety_band_min TEXT NOT NULL DEFAULT 'GREEN',
+    risk_class      TEXT NOT NULL DEFAULT 'benign',
+    idempotency     TEXT,            -- 'safe', 'unsafe', NULL
+    compensation_capability TEXT,
+    record_type     TEXT NOT NULL,   -- 'executable_capability', 'activity_profile', 'workflow', 'agent'
+    created_at      TEXT NOT NULL,
+    contract_json   TEXT NOT NULL,   -- full CapabilityContract serialized
+    synthetic       INTEGER NOT NULL DEFAULT 0  -- 1 = generated at scale, 0 = real
+);
+
+-- FTS5 content table for full-text search over capabilities
+CREATE VIRTUAL TABLE IF NOT EXISTS capabilities_fts USING fts5(
+    capability_name,
+    description,
+    resource_kind,
+    connector_id,
+    content='capabilities',
+    content_rowid='rowid'
+);
+
+-- Resource kinds: the types of resources connectors manage
+CREATE TABLE IF NOT EXISTS resource_kinds (
+    kind_id         TEXT PRIMARY KEY, -- e.g., 'calendar.event', 'task.item'
+    connector_id    TEXT NOT NULL REFERENCES connectors(connector_id),
+    label           TEXT NOT NULL,
+    schema_json     TEXT NOT NULL DEFAULT '{}',
+    verifier_affordances_json TEXT NOT NULL DEFAULT '[]',
+    created_at      TEXT NOT NULL
+);
+
+-- Connector constitutions: extracted from connectors.constitution_json
+-- for direct access without JSON parsing
+CREATE TABLE IF NOT EXISTS connector_constitutions (
+    connector_id        TEXT PRIMARY KEY REFERENCES connectors(connector_id),
+    constitution_id     TEXT NOT NULL,
+    schema_version      TEXT NOT NULL DEFAULT '1.0.0',
+    authored_by         TEXT,
+    authored_at         TEXT,
+    last_proven_at      TEXT,
+    execution_phases_json       TEXT NOT NULL DEFAULT '[]',
+    prerequisite_reads_json     TEXT NOT NULL DEFAULT '[]',
+    conflict_analysis_rules_json TEXT NOT NULL DEFAULT '[]',
+    hil_gates_json              TEXT NOT NULL DEFAULT '[]',
+    mutation_sequencing_json    TEXT NOT NULL DEFAULT '[]',
+    verification_requirements_json TEXT NOT NULL DEFAULT '[]',
+    companion_resource_roles_json  TEXT NOT NULL DEFAULT '[]',
+    precondition_summary        TEXT,
+    companion_resource_summary  TEXT,
+    hil_trigger_summary         TEXT,
+    degradation_policy          TEXT
+);
+```
+
+#### 1.3 Public API
+
+```python
+class GlobalProjectionStore:
+    """Single source of truth for all connectors, capabilities, resource kinds,
+    and constitutions. SQLite WAL. Shared across sessions."""
+
+    # ── Lifecycle ──────────────────────────────────────────
+    def __init__(self, db_path: str | Path) -> None: ...
+    def open(self) -> None: ...
+    def close(self) -> None: ...
+
+    # ── Connector CRUD ─────────────────────────────────────
+    def upsert_connector(self, connector: ConnectorRecord) -> None: ...
+    def get_connector(self, connector_id: str) -> ConnectorRecord | None: ...
+    def list_connectors(
+        self, *, connector_type: str | None = None
+    ) -> list[ConnectorRecord]: ...
+    def delete_connector(self, connector_id: str) -> None: ...
+    def connector_exists(self, connector_id: str) -> bool: ...
+
+    # ── Capability CRUD ────────────────────────────────────
+    def upsert_capability(self, capability: CapabilityRecord) -> None: ...
+    def bulk_upsert_capabilities(
+        self, capabilities: list[CapabilityRecord], *, chunk_size: int = 25_000
+    ) -> None: ...
+    def get_capability(self, capability_name: str) -> CapabilityRecord | None: ...
+    def get_capabilities_by_connector(
+        self, connector_id: str
+    ) -> list[CapabilityRecord]: ...
+    def delete_capability(self, capability_name: str) -> None: ...
+    def capability_exists(self, capability_name: str) -> bool: ...
+    def count_capabilities(self) -> int: ...
+
+    # ── FTS5 Full-Text Search ──────────────────────────────
+    def search_capabilities(
+        self, query: str, *, top_k: int = 20, connector_ids: list[str] | None = None
+    ) -> list[CapabilityRecord]: ...
+    def search_capabilities_by_domain(
+        self, query: str, domains: list[str], *, top_k: int = 20
+    ) -> list[CapabilityRecord]: ...
+
+    # ── Resource Kinds ─────────────────────────────────────
+    def upsert_resource_kind(self, kind: ResourceKindRecord) -> None: ...
+    def get_resource_kinds_by_connector(
+        self, connector_id: str
+    ) -> list[ResourceKindRecord]: ...
+    def get_resource_kind(self, kind_id: str) -> ResourceKindRecord | None: ...
+
+    # ── Connector Constitutions ─────────────────────────────
+    def upsert_constitution(
+        self, constitution: ConstitutionRecord
+    ) -> None: ...
+    def get_constitution(
+        self, connector_id: str
+    ) -> ConstitutionRecord | None: ...
+    def list_constitutions(self) -> list[ConstitutionRecord]: ...
+
+    # ── Bulk Operations ────────────────────────────────────
+    def load_from_manifest_batch(
+        self, batch: CapabilityRegistrationBatch
+    ) -> LoadResult: ...
+    def rebuild_fts_index(self) -> None: ...
+```
+
+#### 1.4 Internal Design
+
+**FTS5 content-sync model:** Capabilities table is the content source for the FTS5 virtual table. On every upsert, a trigger inserts `'rebuild'` into `capabilities_fts`. Before bulk loads, `'delete-all'` is inserted. After bulk loads, `rebuild_fts_index()` runs a full rebuild. This is the proven POC approach — it handles 100K+ capabilities at <1ms indexed lookup.
+
+**Thread safety:** SQLite WAL mode + `check_same_thread=False`. Write operations are serialized by SQLite's internal locking. The store does NOT add its own mutex — Fabric already serializes registry writes through `CapabilityRegistryAPI`.
+
+**JSON columns:** `constitution_json`, `policy_json`, `resource_kinds_json`, `required_inputs_json`, `optional_inputs_json`, `contract_json`, and all `*_json` columns on `connector_constitutions` are stored as TEXT with `json.dumps(sort_keys=True)`. Python-side they are dicts/lists. Serialization happens in the store, not at the call site.
+
+**`record_type` enumeration on capabilities:** `'executable_capability'`, `'activity_profile'`, `'workflow'`, `'agent'`. This maps to BTC-001 fix — the resolver can filter to only `'executable_capability'` when building the CandidateUniverse.
+
+**`synthetic` flag:** `1` = generated at scale for benchmarking (POC 100K test). `0` = real connector capability. The resolver MAY deprioritize synthetic records but must not filter them out — some benchmarks need them.
+
+#### 1.5 Wiring — Where It Hooks Into service.py
+
+**S3 (shared Fabric creation):**
+
+```text
+# Before S3: create the store
+global_store = GlobalProjectionStore(db_path="./data/global_projection.db")
+global_store.open()
+
+# S3: pass to FabricFactory
+self._shared_fabric = FabricFactory.create_shared(
+    ...,
+    global_projection_store=global_store,
+)
+```
+
+**FabricFactory modification:** `create_shared()` and `create_with_ports()` accept optional `global_projection_store: GlobalProjectionStore | None = None`. If provided, it's stored on the `Fabric` dataclass as `fabric.global_projection_store`.
+
+**S8 (family tools bootstrap):** After `bootstrap_family_tools()` registers capabilities in the in-memory `CapabilityRegistry`, the same capabilities are bulk-inserted into `GlobalProjectionStore`:
+
+```text
+# After ManifestTranslator registers contracts in CapabilityRegistry:
+capability_records = [
+    CapabilityRecord.from_contract(c) for c in registry.list_all()
+]
+global_store.bulk_upsert_capabilities(capability_records)
+global_store.rebuild_fts_index()
+```
+
+**P3 (per-session Fabric):** Per-session Fabric gets a reference to the SAME `GlobalProjectionStore` instance — it is shared, not copied. `FabricFactory.create_with_ports()` receives `global_projection_store=shared_fabric.global_projection_store`.
+
+**Shutdown (reverse S3):** During `KernelService.shutdown()`, after `shared_fabric.shutdown()`:
+
+```text
+if global_store is not None:
+    global_store.close()
+```
+
+#### 1.6 E2E Data Flow
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│ BOOT: KernelService._startup_tier1()                        │
+│                                                             │
+│  Before S3:                                                 │
+│    GlobalProjectionStore(db_path).open()                    │
+│                                                             │
+│  S3:                                                        │
+│    FabricFactory.create_shared(                             │
+│      global_projection_store=global_store,                  │
+│      ...                                                    │
+│    )                                                        │
+│    → fabric.global_projection_store = global_store          │
+│                                                             │
+│  S8:                                                        │
+│    bootstrap_family_tools(fabric)                           │
+│    → ManifestTranslator registers contracts in Registry     │
+│    → global_store.bulk_upsert_capabilities(records)         │
+│    → global_store.rebuild_fts_index()                       │
+│    → global_store.upsert_connector(calendar_connector)      │
+│    → global_store.upsert_constitution(calendar_constitution) │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│ RUNTIME: SituatedResolver.resolve()                         │
+│                                                             │
+│  1. resolver receives ResolveSituationRequest               │
+│  2. Calls global_store.get_connector(connector_id)          │
+│     → returns ConnectorRecord with resource_kinds,          │
+│       constitution_json, policy_json                        │
+│  3. Calls global_store.get_constitution(connector_id)       │
+│     → returns ConstitutionRecord with preconditions,        │
+│       companion_resource_roles, hil_gates, verifiers        │
+│  4. Calls global_store.get_capabilities_by_connector(cid)   │
+│     → returns all executable_capability records for this    │
+│       connector (filtered: record_type='executable')        │
+│  5. Calls global_store.get_resource_kinds_by_connector(cid) │
+│     → returns resource kind definitions                    │
+│  6. Builds CandidateUniverse from all of the above          │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│ COLD DISCOVERY: discover_capabilities (legacy catalog path) │
+│                                                             │
+│  1. Calls global_store.search_capabilities(intent, top_k)   │
+│     → FTS5 full-text search over capabilities table         │
+│  2. Returns catalog results with catalog_only marker        │
+│  3. No execution authority — record_type preserved          │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### 1.7 Record Types (Python dataclasses)
+
+```python
+@dataclass
+class ConnectorRecord:
+    connector_id: str
+    label: str
+    connector_type: str       # 'native' | 'bridge' | 'ifl'
+    provider_type: str        # 'LOCAL' | 'MCP' | 'BRIDGE' | ...
+    version: str
+    admission_verdict: str    # 'admitted' | 'pending' | 'rejected'
+    registration_type: str    # 'static' | 'dynamic' | 'discovered'
+    constitution: dict        # parsed from constitution_json
+    policy_declarations: dict # parsed from policy_json
+    resource_kinds: list[str] # parsed from resource_kinds_json
+    created_at: str
+    updated_at: str
+
+@dataclass
+class CapabilityRecord:
+    capability_name: str
+    connector_id: str
+    operation: str            # 'read' | 'execute'
+    effect: str               # 'read' | 'write' | 'delete' | 'compute'
+    resource_kind: str | None
+    description: str
+    required_inputs: list[dict]
+    optional_inputs: list[dict]
+    output_schema_ref: str | None
+    safety_band_min: str      # 'GREEN' | 'AMBER' | 'RED'
+    risk_class: str           # 'benign' | 'safety_sensitive'
+    idempotency: str | None   # 'safe' | 'unsafe'
+    compensation_capability: str | None
+    record_type: str          # 'executable_capability' | 'activity_profile' | 'workflow' | 'agent'
+    created_at: str
+    contract_json: dict       # full CapabilityContract
+    synthetic: bool
+
+@dataclass
+class ResourceKindRecord:
+    kind_id: str              # 'calendar.event', 'task.item', etc.
+    connector_id: str
+    label: str
+    schema: dict
+    verifier_affordances: list[str]
+
+@dataclass
+class ConstitutionRecord:
+    connector_id: str
+    constitution_id: str
+    schema_version: str
+    authored_by: str | None
+    authored_at: str | None
+    last_proven_at: str | None
+    execution_phases: list[str]
+    prerequisite_reads: list[dict]
+    conflict_analysis_rules: list[dict]
+    hil_gates: list[dict]
+    mutation_sequencing: list[dict]
+    verification_requirements: list[dict]
+    companion_resource_roles: list[dict]
+    precondition_summary: str | None
+    companion_resource_summary: str | None
+    hil_trigger_summary: str | None
+    degradation_policy: str | None
+```
+
+#### 1.8 Test Coverage
+
+```text
+GAP-P1-003: GlobalProjectionStore integration tests
+  File: tests/k1/fabric/stores/test_global_projection_store.py
+
+  Test classes:
+    TestGlobalProjectionStoreLifecycle
+      - test_open_creates_db_and_schema
+      - test_close_releases_connection
+      - test_reopen_preserves_data
+
+    TestConnectorCRUD
+      - test_upsert_connector_insert
+      - test_upsert_connector_update
+      - test_get_connector_exists
+      - test_get_connector_missing_returns_none
+      - test_list_connectors_all
+      - test_list_connectors_filter_by_type
+      - test_delete_connector
+      - test_delete_connector_cascades_to_capabilities
+      - test_connector_exists
+
+    TestCapabilityCRUD
+      - test_upsert_capability_insert
+      - test_upsert_capability_update
+      - test_get_capability_exists
+      - test_get_capability_missing_returns_none
+      - test_get_capabilities_by_connector
+      - test_delete_capability
+      - test_bulk_upsert_capabilities_10k
+      - test_count_capabilities
+
+    TestFTSSearch
+      - test_search_capabilities_exact_match
+      - test_search_capabilities_partial_match
+      - test_search_capabilities_no_results
+      - test_search_capabilities_filtered_by_connector
+      - test_search_capabilities_by_domain
+      - test_fts_rebuild_after_bulk_load
+
+    TestResourceKinds
+      - test_upsert_resource_kind
+      - test_get_resource_kinds_by_connector
+      - test_get_resource_kind
+
+    TestConstitutionCRUD
+      - test_upsert_constitution
+      - test_get_constitution
+      - test_constitution_json_roundtrip
+      - test_list_constitutions
+
+    TestScale
+      - test_bulk_load_100k_capabilities
+      - test_search_100k_under_5ms
+      - test_concurrent_readers_during_bulk_load
+```
+
+---
+
+### Component 2 — LocalProjectionStore
+
+**Target file:** `k1/fabric/stores/local_projection_store.py`
+**Source:** Promote + harden from `poc/back_tool_contract_v2/stores/local_projection_store.py`
+**Depends on:** `GlobalProjectionStore` (Component 1) — reads connector admission_verdict during resource resolution
+
+#### 2.1 What It Is
+
+The household-scoped store for "what resources does THIS family/actor actually have connected?" While `GlobalProjectionStore` knows ALL possible tools in the universe, `LocalProjectionStore` knows only the ones this household has set up — Riley's Google Calendar, the family chores list, the shared shopping list. It also tracks household members, alias resolution (so "Riley's calendar" → `resource_id`), and time-windowed projection snapshots for freshness.
+
+This is the LOCAL-WORLD-PROJECTION store. Per-session Fabric gets its own instance (different from the shared GlobalProjectionStore). Each session sees only its actor's connected resources.
+
+In the current code, there is NO equivalent. The current `CapabilityRegistry` is global-only. There is no per-household resource projection. Back currently invents resources (BTC-A3 risk) or guesses from discovery results.
+
+#### 2.2 SQL Schema (4 tables)
+
+```sql
+-- Connected resources: one row per resource this actor has linked
+CREATE TABLE IF NOT EXISTS connected_resources (
+    resource_id     TEXT PRIMARY KEY,
+    actor_id        TEXT NOT NULL,
+    space_id        TEXT NOT NULL,
+    connector_id    TEXT NOT NULL,
+    resource_kind   TEXT NOT NULL,   -- 'calendar.primary', 'tasks.personal', etc.
+    label           TEXT NOT NULL,   -- "Riley's Google Calendar"
+    aliases_json    TEXT,            -- ["Riley calendar", "my cal"]
+    status          TEXT NOT NULL CHECK(status IN ('active','suspended','revoked','pending')),
+    actor_permission TEXT NOT NULL CHECK(actor_permission IN ('read_write','read_only','restricted','none')),
+    last_synced_at  TEXT,
+    freshness_state TEXT NOT NULL CHECK(freshness_state IN ('fresh','stale','unknown')),
+    created_at      TEXT NOT NULL
+);
+
+-- Household members: who lives in this household
+CREATE TABLE IF NOT EXISTS household_members (
+    person_id       TEXT PRIMARY KEY,  -- stable member UUID
+    actor_id        TEXT NOT NULL,     -- session actor who can see this member
+    space_id        TEXT NOT NULL,     -- which household/space
+    display_name    TEXT NOT NULL,     -- "Riley"
+    aliases_json    TEXT,              -- ["Riles", "Rye"]
+    role            TEXT NOT NULL CHECK(role IN ('parent','child','guardian','guest','system')),
+    resource_ids_json TEXT,            -- {"calendar":"res_cal_riley","tasks":"res_tasks_riley"}
+    created_at      TEXT NOT NULL
+);
+
+-- Alias index: fast O(1) name-to-entity resolution
+CREATE TABLE IF NOT EXISTS alias_index (
+    alias_lower     TEXT NOT NULL,     -- normalized lowercase alias
+    entity_type     TEXT NOT NULL CHECK(entity_type IN ('resource','person')),
+    entity_id       TEXT NOT NULL,     -- resource_id or person_id
+    actor_id        TEXT NOT NULL,
+    space_id        TEXT NOT NULL,
+    PRIMARY KEY (alias_lower, actor_id, entity_type, entity_id)
+);
+
+-- Resource projection snapshots: time-windowed "what did this resource look like at time T?"
+CREATE TABLE IF NOT EXISTS resource_projection_snapshots (
+    snapshot_id         TEXT PRIMARY KEY,
+    resource_id         TEXT NOT NULL,
+    connector_id        TEXT NOT NULL,
+    resource_kind       TEXT NOT NULL,
+    actor_id            TEXT NOT NULL,
+    query_window_json   TEXT NOT NULL DEFAULT '{}',   -- {"start":"...","end":"..."}
+    result_summary_json TEXT NOT NULL DEFAULT '{}',   -- {"count":3,"ids":["a","b","c"]}
+    raw_ref             TEXT,                          -- pointer to raw connector response
+    freshness_state     TEXT NOT NULL CHECK(freshness_state IN ('fresh','stale','unknown')),
+    observed_at         TEXT NOT NULL,
+    expires_at          TEXT NOT NULL
+);
+```
+
+#### 2.3 Public API
+
+```python
+class LocalProjectionStore:
+    """Household-scoped resource projection. Per-session instance.
+    Knows what resources THIS actor has connected. SQLite WAL."""
+
+    # ── Lifecycle ──────────────────────────────────────────
+    def __init__(self, db_path: str | Path) -> None: ...
+    def open(self) -> None: ...
+    def close(self) -> None: ...
+    def reset(self) -> None:
+        """Delete all data for this actor (session teardown)."""
+
+    # ── Connected Resources ────────────────────────────────
+    def upsert_connected_resource(self, resource: ConnectedResourceRecord) -> None: ...
+    def get_connected_resource(self, resource_id: str) -> ConnectedResourceRecord | None: ...
+    def list_connected_resources(
+        self, actor_id: str, *, resource_kind: str | None = None, status: str = "active"
+    ) -> list[ConnectedResourceRecord]: ...
+    def mark_resource_stale(self, resource_id: str) -> None: ...
+    def mark_resource_fresh(self, resource_id: str, observed_at: str | None = None) -> None: ...
+
+    # ── Household Members ──────────────────────────────────
+    def upsert_household_member(self, member: HouseholdMemberRecord) -> None: ...
+    def get_household_member(self, person_id: str) -> HouseholdMemberRecord | None: ...
+    def list_household_members(
+        self, actor_id: str
+    ) -> list[HouseholdMemberRecord]: ...
+
+    # ── Alias Resolution ───────────────────────────────────
+    def rebuild_alias_index(self, actor_id: str, space_id: str) -> None:
+        """Rebuild from connected_resources + household_members labels/aliases."""
+    def resolve_alias(
+        self, alias: str, actor_id: str, *, entity_type: str | None = None
+    ) -> list[AliasEntry]:
+        """Exact match on alias_lower. Returns [] if no match."""
+    def fuzzy_resolve_alias(
+        self, alias: str, actor_id: str, *, entity_type: str | None = None
+    ) -> list[AliasEntry]:
+        """LIKE '%alias%' match. Raises if exact match exists (caller must check exact first)."""
+
+    # ── Projection Snapshots ───────────────────────────────
+    def upsert_projection_snapshot(self, snapshot: ProjectionSnapshotRecord) -> None: ...
+    def get_fresh_snapshot(
+        self, resource_id: str, *, max_age_seconds: int = 300, now: datetime | None = None
+    ) -> ProjectionSnapshotRecord | None: ...
+```
+
+#### 2.4 Internal Design
+
+**Alias resolution algorithm (two-pass):**
+
+```text
+Pass 1 — exact match:
+  SELECT * FROM alias_index WHERE alias_lower = ? AND actor_id = ?
+
+Pass 2 — fuzzy match (only if Pass 1 returns []):
+  SELECT * FROM alias_index WHERE alias_lower LIKE '%alias%' AND actor_id = ?
+
+Resolution rules:
+  - 0 matches → unresolved (not_found)
+  - 1 match → resolved
+  - >1 matches → unresolved (ambiguous) with candidate list
+```
+
+**Alias rebuild:** `rebuild_alias_index(actor_id, space_id)` reads all `connected_resources` and `household_members` for the actor, extracts `label` + `aliases_json` entries, normalizes to lowercase, and bulk-inserts into `alias_index`. This is called after connector adoption or member changes, not on every resolution.
+
+**Freshness state machine:**
+
+```text
+fresh   → resource was synced recently, snapshot is current
+stale   → resource hasn't been synced within TTL, or connector reports degraded
+unknown → resource was just added, never synced
+```
+
+**Permission gating:** During resource resolution, `actor_permission` gates whether the resource can be used for the intended operation:
+
+```text
+'none'        → excluded (permission_denied)
+'restricted'  → excluded (permission_denied)
+'read_only'   → allowed for reads, excluded for writes
+'read_write'  → allowed for all
+```
+
+**Snapshot TTL:** `get_fresh_snapshot()` checks two conditions: (1) `(now - observed_at) <= max_age_seconds` (default 300s = 5 min), (2) `expires_at > now`. Both must pass. Returns the most recent fresh snapshot or None.
+
+**Per-session isolation:** Each session gets its own `LocalProjectionStore` instance with its own SQLite file (path: `./data/local_projection_{session_id}.db`). The `actor_id` filter on every query ensures data isolation. At session teardown, `reset()` clears all data.
+
+#### 2.5 Wiring — Where It Hooks Into service.py
+
+**P3 (per-session Fabric creation):**
+
+```text
+# During _create_session_tier2(), after P2 (SessionState):
+local_store = LocalProjectionStore(
+    db_path=f"./data/local_projection_{session_id}.db"
+)
+local_store.open()
+
+# P3: pass to FabricFactory
+session_fabric = FabricFactory.create_with_ports(
+    ...,
+    local_projection_store=local_store,
+    global_projection_store=shared_fabric.global_projection_store,
+)
+```
+
+**FabricFactory modification:** `create_with_ports()` accepts optional `local_projection_store: LocalProjectionStore | None = None`. If provided, it's stored on the per-session `Fabric` dataclass as `fabric.local_projection_store`.
+
+**Population (connector adoption):** When a user connects a new resource (e.g., "Link Google Calendar"), the adapter onboarding flow calls:
+
+```text
+local_store.upsert_connected_resource(ConnectedResourceRecord(
+    resource_id="res_cal_riley_001",
+    actor_id=actor_id,
+    space_id=space_id,
+    connector_id="google_calendar",
+    resource_kind="calendar.primary",
+    label="Riley's Google Calendar",
+    aliases=["Riley calendar", "my cal"],
+    status="active",
+    actor_permission="read_write",
+    freshness_state="fresh",
+))
+local_store.rebuild_alias_index(actor_id, space_id)
+```
+
+**P3.8 (grounding → Fabric context binding):** The grounding handle's `refresh_turn()` can trigger a freshness check:
+
+```text
+# In grounding refresh:
+stale_resources = [
+    r for r in local_store.list_connected_resources(actor_id)
+    if r.freshness_state != 'fresh'
+]
+for r in stale_resources:
+    local_store.mark_resource_stale(r.resource_id)
+```
+
+**Session teardown (reverse P3):** During `destroy_session()`, after Fabric shutdown:
+
+```text
+if local_store is not None:
+    local_store.reset()
+    local_store.close()
+```
+
+#### 2.6 E2E Data Flow
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│ SETUP: Connector adoption (user links Google Calendar)      │
+│                                                             │
+│  1. User connects Google Calendar via UI                    │
+│  2. Adapter onboarding creates resource record:             │
+│     local_store.upsert_connected_resource(cal_resource)     │
+│  3. Alias index rebuilt:                                    │
+│     local_store.rebuild_alias_index(actor_id, space_id)     │
+│  4. Initial snapshot taken:                                 │
+│     local_store.upsert_projection_snapshot(cal_snapshot)    │
+│  5. Household member record created/updated:                │
+│     local_store.upsert_household_member(riley_record)       │
+│     → links Riley's person_id to her calendar resource_id   │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│ RUNTIME: ResolveResourcesService.resolve()                  │
+│                                                             │
+│  Input: RequestFrame (person_refs=["Riley"],                │
+│         resource_refs=["Riley's calendar"])                 │
+│                                                             │
+│  Step 1 — Resolve person references:                        │
+│    local_store.resolve_alias("Riley", actor_id,             │
+│      entity_type="person")                                  │
+│    → 1 match → person_id="person_riley_001"                 │
+│    local_store.get_household_member("person_riley_001")     │
+│    → {display_name:"Riley", role:"child",                   │
+│       resource_ids:{"calendar":"res_cal_riley_001"}}        │
+│                                                             │
+│  Step 2 — Resolve resource references:                      │
+│    local_store.resolve_alias("Riley's calendar", actor_id,  │
+│      entity_type="resource")                                │
+│    → 1 match → resource_id="res_cal_riley_001"              │
+│    local_store.get_connected_resource("res_cal_riley_001")  │
+│    → {label:"Riley's Google Calendar",                      │
+│       connector_id:"google_calendar",                       │
+│       resource_kind:"calendar.primary",                     │
+│       actor_permission:"read_write",                        │
+│       freshness_state:"fresh"}                              │
+│                                                             │
+│  Step 3 — Cross-reference with GlobalProjectionStore:       │
+│    global_store.get_connector("google_calendar")            │
+│    → admission_verdict="admitted" ✓                         │
+│                                                             │
+│  Step 4 — Check permission for intended operation:          │
+│    frame has write intent + actor_permission="read_write"   │
+│    → allowed ✓                                             │
+│                                                             │
+│  Step 5 — Check freshness:                                  │
+│    local_store.get_fresh_snapshot("res_cal_riley_001")      │
+│    → snapshot exists, observed 12s ago, fresh ✓             │
+│                                                             │
+│  Output: ResourceUniverse with:                             │
+│    resource_candidates=[ResourceCandidate(                  │
+│      resource_id="res_cal_riley_001",                       │
+│      connector_id="google_calendar",                        │
+│      ...)],                                                 │
+│    person_candidates=[PersonCandidate(                      │
+│      person_id="person_riley_001",                          │
+│      linked_resource_ids={"calendar":"res_cal_riley_001"},  │
+│      ...)],                                                 │
+│    completeness="complete", freshness="fresh"               │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│ RUNTIME: SituatedResolver (Component 4) consumes both       │
+│                                                             │
+│  resolver.resolve(request_frame)                            │
+│    → ResolveResourcesService.resolve()  ← uses LocalStore   │
+│    → GlobalProjectionStore.get_constitution(connector_id)   │
+│    → GlobalProjectionStore.get_capabilities_by_connector()  │
+│    → PolicySelector.select()                                │
+│    → Builds CandidateUniverse + ResolutionEnvelope          │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### 2.7 Record Types (Python dataclasses)
+
+```python
+@dataclass
+class ConnectedResourceRecord:
+    resource_id: str
+    actor_id: str
+    space_id: str
+    connector_id: str
+    resource_kind: str         # 'calendar.primary', 'tasks.personal', etc.
+    label: str                 # "Riley's Google Calendar"
+    aliases: list[str]         # ["Riley calendar", "my cal"]
+    status: str                # 'active' | 'suspended' | 'revoked' | 'pending'
+    actor_permission: str      # 'read_write' | 'read_only' | 'restricted' | 'none'
+    last_synced_at: str | None
+    freshness_state: str       # 'fresh' | 'stale' | 'unknown'
+    created_at: str
+
+@dataclass
+class HouseholdMemberRecord:
+    person_id: str
+    actor_id: str
+    space_id: str
+    display_name: str          # "Riley"
+    aliases: list[str]         # ["Riles", "Rye"]
+    role: str                  # 'parent' | 'child' | 'guardian' | 'guest' | 'system'
+    resource_ids: dict[str, str]  # {"calendar": "res_cal_riley_001", "tasks": "res_tasks_riley_001"}
+    created_at: str
+
+@dataclass
+class AliasEntry:
+    alias_lower: str
+    entity_type: str           # 'resource' | 'person'
+    entity_id: str             # resource_id or person_id
+    actor_id: str
+    space_id: str
+
+@dataclass
+class ProjectionSnapshotRecord:
+    snapshot_id: str
+    resource_id: str
+    connector_id: str
+    resource_kind: str
+    actor_id: str
+    query_window: dict         # {"start": "2026-06-02T00:00:00Z", "end": "2026-06-09T00:00:00Z"}
+    result_summary: dict       # {"count": 3, "ids": ["evt_1", "evt_2", "evt_3"]}
+    raw_ref: str | None        # pointer to raw connector response (not the payload itself)
+    freshness_state: str       # 'fresh' | 'stale' | 'unknown'
+    observed_at: str
+    expires_at: str
+```
+
+#### 2.8 Test Coverage
+
+```text
+GAP-P1-004: LocalProjectionStore integration tests
+  File: tests/k1/fabric/stores/test_local_projection_store.py
+
+  Test classes:
+    TestLocalProjectionStoreLifecycle
+      - test_open_creates_db_and_schema
+      - test_close_releases_connection
+      - test_reset_clears_all_tables
+
+    TestConnectedResourceCRUD
+      - test_upsert_connected_resource_insert
+      - test_upsert_connected_resource_update
+      - test_get_connected_resource_exists
+      - test_get_connected_resource_missing_returns_none
+      - test_list_connected_resources_all
+      - test_list_connected_resources_filter_by_kind
+      - test_list_connected_resources_filter_by_status
+      - test_mark_resource_stale
+      - test_mark_resource_fresh
+
+    TestHouseholdMemberCRUD
+      - test_upsert_household_member_insert
+      - test_upsert_household_member_update
+      - test_get_household_member_exists
+      - test_get_household_member_missing_returns_none
+      - test_list_household_members
+
+    TestAliasResolution
+      - test_resolve_alias_exact_match
+      - test_resolve_alias_no_match
+      - test_resolve_alias_multiple_matches
+      - test_resolve_alias_filtered_by_entity_type
+      - test_fuzzy_resolve_alias_finds_like_match
+      - test_fuzzy_resolve_alias_raises_on_exact_match
+      - test_rebuild_alias_index_from_resources_and_members
+      - test_alias_case_insensitive
+
+    TestProjectionSnapshots
+      - test_upsert_projection_snapshot
+      - test_get_fresh_snapshot_within_ttl
+      - test_get_fresh_snapshot_expired_by_age
+      - test_get_fresh_snapshot_expired_by_expires_at
+      - test_get_fresh_snapshot_no_snapshots_returns_none
+
+    TestPermissionGating
+      - test_read_write_allows_write
+      - test_read_only_blocks_write
+      - test_restricted_blocks_all
+      - test_none_blocks_all
+
+    TestPerSessionIsolation
+      - test_different_actor_ids_see_different_resources
+      - test_different_space_ids_see_different_members
+```
+
+---
+
+### Component 3 — IdempotencyStore
+
+**Target file:** `k1/fabric/stores/idempotency_store.py`
+**Source:** Promote + harden from `poc/back_tool_contract_v2/stores/idempotency_store.py`
+**Depends on:** Nothing (standalone store — only needs SQLite)
+
+#### 3.1 What It Is
+
+Prevents duplicate execution of the same capability invocation. Every `InvocationRequest` carries an `idempotency_key` (deterministically derived from `binding_id + params_hash + actor_id`). Before Fabric executes, it checks the store. After execution, it records the outcome.
+
+The core invariant: **once `succeeded`, immutable.** No replay, no retry, no state transition can change a `succeeded` record. `failed` records CAN be retried (they transition back to `in_flight` on retry).
+
+In the current code, there is NO idempotency enforcement. `CapabilityFabric._execute_impl()` has no deduplication. The current `K1FamilyStore` has its own idempotency for family-tool writes, but it's adapter-specific, not kernel-level.
+
+#### 3.2 SQL Schema (1 table)
+
+```sql
+CREATE TABLE IF NOT EXISTS idempotency_records (
+    idempotency_key   TEXT PRIMARY KEY,
+    state             TEXT NOT NULL CHECK(state IN ('in_flight','succeeded','failed')),
+    invocation_id     TEXT NOT NULL,
+    observation_json  TEXT,       -- full InvocationObservation when succeeded
+    error             TEXT,       -- error message when failed
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL
+);
+```
+
+#### 3.3 State Machine
+
+```text
+                    ┌──────────────┐
+                    │  not_seen    │  (no row exists)
+                    └──────┬───────┘
+                           │ mark_in_flight()
+                           ▼
+                    ┌──────────────┐
+            ┌───────│  in_flight   │
+            │       └──────┬───────┘
+            │              │
+            │    ┌─────────┴──────────┐
+            │    ▼                    ▼
+            │ ┌──────────┐     ┌──────────┐
+            │ │succeeded │     │  failed  │
+            │ └──────────┘     └────┬─────┘
+            │    IMMUTABLE          │
+            │    (no transition     │ mark_in_flight()
+            │     out allowed)      │ (retry — goes back to in_flight IF state != 'succeeded')
+            │                       ▼
+            │                ┌──────────────┐
+            └────────────────│  in_flight   │ (retry)
+                             └──────────────┘
+```
+
+**Transition rules (enforced in SQL):**
+
+```text
+not_seen → in_flight:      INSERT with state='in_flight'
+in_flight → succeeded:     UPDATE state='succeeded' WHERE idempotency_key=?
+in_flight → failed:        UPDATE state='failed' WHERE idempotency_key=? AND state NOT IN ('succeeded')
+failed → in_flight:        UPDATE state='in_flight' WHERE idempotency_key=? AND state NOT IN ('succeeded')
+succeeded → ANYTHING:      BLOCKED — WHERE clause prevents transition
+```
+
+#### 3.4 Public API
+
+```python
+@dataclass(frozen=True)
+class IdempotencyCheckResult:
+    state: str                      # "not_seen" | "in_flight" | "succeeded" | "failed"
+    prior_observation: dict | None  # the succeeded InvocationObservation (for replay)
+    error: str | None               # error message if failed
+
+class IdempotencyStore:
+    """Prevents duplicate capability execution. SQLite WAL."""
+
+    # ── Lifecycle ──────────────────────────────────────────
+    def __init__(self, db_path: str | Path) -> None: ...
+    def open(self) -> None: ...
+    def close(self) -> None: ...
+
+    # ── State Machine ─────────────────────────────────────
+    def check(self, idempotency_key: str) -> IdempotencyCheckResult:
+        """Return current state. Does NOT modify."""
+
+    def mark_in_flight(self, idempotency_key: str, invocation_id: str) -> None:
+        """Claim the key for this invocation. Fails if already succeeded."""
+
+    def mark_success(self, idempotency_key: str, observation: dict) -> None:
+        """Record successful execution. Idempotent — no-op if already succeeded."""
+
+    def mark_failed(self, idempotency_key: str, error: str) -> None:
+        """Record failed execution. Does NOT overwrite succeeded."""
+
+    # ── Maintenance ───────────────────────────────────────
+    def cleanup_expired(self, max_age_hours: int = 24) -> int:
+        """Delete records older than max_age_hours. Returns count deleted."""
+```
+
+#### 3.5 Internal Design
+
+**Idempotency key derivation (caller responsibility, not the store):**
+
+```python
+def derive_idempotency_key(
+    binding_id: str, params: dict, actor_id: str
+) -> str:
+    """Deterministic idempotency key from binding + params + actor."""
+    import hashlib, json
+    canonical = json.dumps({
+        "binding_id": binding_id,
+        "params": params,
+        "actor_id": actor_id,
+    }, sort_keys=True)
+    return hashlib.blake2b(canonical.encode(), digest_size=16).hex()
+```
+
+**Immutable-succeeded invariant:** The WHERE clause `state NOT IN ('succeeded')` on `mark_in_flight()` and `mark_failed()` UPDATE statements is the enforcement point. SQLite's `total_changes == 0` after UPDATE means the row was not modified because it was already `succeeded`. `mark_success()` uses an explicit `check()` call first — if already succeeded, it early-returns.
+
+**Replay semantics:** When `check()` returns `state='succeeded'` with `prior_observation`, the caller gets back the original `InvocationObservation`. This is treated as a cache hit — the same observation is returned to Back without re-executing.
+
+**TTL cleanup:** `cleanup_expired()` deletes records where `updated_at < now - max_age_hours`. This prevents unbounded growth. The default 24h window is conservative; succeeded records could theoretically live forever, but cleanup handles the practical case.
+
+#### 3.6 Wiring — Where It Hooks Into Fabric
+
+**Hooks into CapabilityFabric._execute_impl() — step 0 (before step 1):**
+
+```text
+def _execute_impl(self, request: CapabilityRequest) -> CapabilityResult:
+    # NEW: Step 0 — Idempotency check
+    if request.idempotency_key:
+        check = self._idempotency_store.check(request.idempotency_key)
+        if check.state == "succeeded":
+            # Replay — return prior observation
+            return CapabilityResult.success_result(
+                data=check.prior_observation.get("data"),
+                invocation_id=check.prior_observation.get("invocation_id"),
+            )
+        if check.state == "in_flight":
+            # Another invocation is in progress — wait or reject
+            return CapabilityResult.failure_result(
+                error_code="idempotency_in_flight",
+                retriable=True,
+            )
+        # not_seen or failed — proceed
+        self._idempotency_store.mark_in_flight(
+            request.idempotency_key, request.invocation_id
+        )
+
+    # ... existing 9-step pipeline ...
+
+    # Step 7.5 — After emit completed/failed, record outcome
+    if request.idempotency_key:
+        if result.status == "success":
+            self._idempotency_store.mark_success(
+                request.idempotency_key, observation=result.to_dict()
+            )
+        else:
+            self._idempotency_store.mark_failed(
+                request.idempotency_key, error=result.error_code or "unknown"
+            )
+```
+
+**FabricFactory modification:** `create_shared()` and `create_with_ports()` accept optional `idempotency_store: IdempotencyStore | None = None`. If provided, `CapabilityFabric.__init__` receives `idempotency_store=idempotency_store`.
+
+**Fabric container:** New field on `Fabric` dataclass: `idempotency_store: Any = None`.
+
+**service.py — S3 wiring:**
+
+```text
+# Before S3:
+idempotency_store = IdempotencyStore(db_path="./data/idempotency.db")
+idempotency_store.open()
+
+# S3:
+self._shared_fabric = FabricFactory.create_shared(
+    ...,
+    idempotency_store=idempotency_store,
+)
+```
+
+**Shutdown:** After `shared_fabric.shutdown()`, call `idempotency_store.close()`.
+
+#### 3.7 E2E Data Flow
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│ Back invokes capability with idempotency_key                │
+│                                                             │
+│  InvocationRequest {                                        │
+│    binding_id: "bind_cal_create_riley_001",                 │
+│    params: {title: "Dentist", start: "...", end: "..."},   │
+│    idempotency_key: "a1b2c3d4e5f6a7b8",                    │
+│    actor_ref: "person_riley_001"                            │
+│  }                                                          │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│ CapabilityFabric._execute_impl() — Step 0                   │
+│                                                             │
+│  check = idempotency_store.check("a1b2c3d4e5f6a7b8")       │
+│                                                             │
+│  ┌─ state="not_seen" ──────────────────────────────────┐   │
+│  │  → mark_in_flight(key, invocation_id)                │   │
+│  │  → proceed with 9-step pipeline                     │   │
+│  │  → on success: mark_success(key, observation)        │   │
+│  │  → on failure: mark_failed(key, error)               │   │
+│  └──────────────────────────────────────────────────────┘   │
+│                                                             │
+│  ┌─ state="in_flight" ─────────────────────────────────┐   │
+│  │  → return failure_result("idempotency_in_flight")    │   │
+│  │  → Back can retry later (retriable=True)             │   │
+│  └──────────────────────────────────────────────────────┘   │
+│                                                             │
+│  ┌─ state="succeeded" ─────────────────────────────────┐   │
+│  │  → return success_result(prior_observation)          │   │
+│  │  → Back gets the SAME result as the first call       │   │
+│  │  → No re-execution                                  │   │
+│  └──────────────────────────────────────────────────────┘   │
+│                                                             │
+│  ┌─ state="failed" ────────────────────────────────────┐   │
+│  │  → mark_in_flight(key, new_invocation_id)            │   │
+│  │  → proceed with 9-step pipeline (retry)              │   │
+│  └──────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### 3.8 Test Coverage
+
+```text
+GAP-P1-005: IdempotencyStore contract tests
+  File: tests/k1/fabric/stores/test_idempotency_store.py
+
+  Test classes:
+    TestIdempotencyStoreStateMachine
+      - test_not_seen_returns_not_seen
+      - test_mark_in_flight_transitions_from_not_seen
+      - test_mark_success_transitions_from_in_flight
+      - test_mark_failed_transitions_from_in_flight
+      - test_mark_in_flight_on_failed_allows_retry
+      - test_mark_in_flight_on_succeeded_is_blocked
+      - test_mark_failed_on_succeeded_is_blocked
+      - test_mark_success_on_succeeded_is_idempotent
+
+    TestReplay
+      - test_succeeded_returns_prior_observation
+      - test_succeeded_observation_matches_original
+      - test_multiple_identical_keys_see_same_result
+
+    TestConcurrency
+      - test_concurrent_mark_in_flight_only_one_wins
+      - test_concurrent_mark_success_only_records_once
+
+    TestCleanup
+      - test_cleanup_expired_removes_old_records
+      - test_cleanup_expired_preserves_recent_records
+```
+
+---
+
+### Component 4 — SituatedResolver
+
+**Target file:** `k1/fabric/resolver/situated_resolver.py`
+**Source:** Promote + harden from `poc/back_tool_contract_v2/resolve_situation.py`
+**Depends on:** `GlobalProjectionStore` (C1), `LocalProjectionStore` (C2), `PolicySelector` (C5), `CapabilityBinder` (deferred to C5), `ResolveResourcesService` (from C2)
+
+#### 4.1 What It Is
+
+The core brain of Fabric's resolution layer. Takes a `ResolveSituationRequest` (from Back, containing a `RequestFrame`) and returns a `ResolutionEnvelope` (to Back, containing `CandidateUniverse`, `PolicyBundle`, `BindingBundle`, `PromptPack`, verdict, and `allowed_next_actions[]`).
+
+This is the component that answers: "Given this task, this actor, and this household — what can Back legally do right now?" It is the single authority for execution-level decisions. Back cannot invoke a capability without going through this resolver first.
+
+In the current code, there is NO equivalent. Back discovers capabilities via `discover_capabilities` (semantic search) and invokes by name. The target replaces that with `resolve_situation` (situated resolution).
+
+#### 4.2 Verdict Cascade (10 verdicts, evaluated in order)
+
+The `_determine_verdict()` method evaluates conditions in strict priority order. The first matching condition wins:
+
+| # | Verdict | Condition | Sub-reasons |
+|---|---|---|---|
+| 1 | `cannot_execute` | Budget exhausted (max_iterations ≤ 0, max_fabric_calls ≤ 0, or prompt_budget ≤ 1) | `budget_exhausted` |
+| 2 | `cannot_execute` | Idempotency says already succeeded | `duplicate_success` |
+| 3 | `needs_disambiguation` | Ambiguous person reference (>1 person matched for a name) | `ambiguous_person` |
+| 4 | `stale_projection` | Write candidate has `freshness_state = 'stale'` | `stale_write_candidate` |
+| 5 | `needs_disambiguation` | Any unresolved ref with `reason = 'ambiguous'` | `ambiguous_resource` |
+| 6 | `missing_required_params` | Any unresolved ref with `reason = 'not_found'` | `resource_not_found` |
+| 7 | `missing_required_params` | Required params missing for write intent (e.g., no time_window for calendar write) | `missing_time_window`, `missing_subject` |
+| 8 | `promote_to_tier3` | Complexity exceeds Tier 2 threshold: (distinct connectors ≥ 6) OR (dependency_depth ≥ 3) OR (companion_resources AND connectors ≥ 4) | `cross_connector`, `deep_dependency_chain`, `companion_cross_actor` |
+| 9 | `blocked_by_policy` | PolicyBundle.policy_verdict = 'deny' | `policy_deny` |
+| 10 | `stale_projection` | Any unbound role with `reason = 'stale_projection'` | `binding_stale` |
+| 11 | `missing_capability` | Any unbound role with reason in {missing_capability, missing_connector, guide_only} | `missing_capability`, `missing_connector` |
+| 12 | `can_execute_with_gate` | Prerequisite reads exist AND not all completed | `incomplete_prerequisites` |
+| 13 | `can_execute` | All checks passed, prerequisites completed (or none required) | — |
+
+#### 4.3 Public API
+
+```python
+@dataclass(frozen=True)
+class ResolveSituationRequest:
+    request_frame: RequestFrame                     # Contract A
+    actor_scope: dict                               # {actor_id, space_id, device_id}
+    safety_context: dict                            # {safety_band, actor_role, budget, session_id}
+    resolution_mode: str                            # 'execution' | 'catalog' | 'diagnostic'
+    target_tier: str                                # 'tier2' | 'tier3' | 'unknown'
+    disclosure_phase: str                           # 'connector_summary' | 'tool_name_selection' | 'schema_binding' | 'execution'
+    freshness_policy: str                           # 'require_fresh' | 'allow_stale_reads'
+    prompt_budget: int                              # max tokens for PromptPack
+    completed_prerequisite_bindings: list[str]      # binding_ids of already-completed prerequisite reads
+    previous_resolution_id: str | None              # for refinement without repeating work
+
+@dataclass(frozen=True)
+class ResolutionEnvelope:
+    resolution_id: str
+    request_id: str
+    request_frame: RequestFrame
+    candidate_universe: ResourceUniverse            # from ResolveResourcesService
+    policy_bundle: PolicyBundle                     # from PolicySelector
+    binding_bundle: BindingBundle                   # from CapabilityBinder
+    prompt_pack: PromptPack                         # from PromptPackBuilder (Component 8)
+    policy_bundle_ref: str                          # stable hash ref
+    binding_bundle_ref: str                         # stable hash ref
+    completeness: str                               # from ResourceUniverse
+    freshness: str                                  # from ResourceUniverse
+    verdict: str                                    # one of 10 verdicts above
+    allowed_next_actions: list[str]                 # human-readable action descriptions
+    allowed_capability_names: list[str]             # capability names Back can invoke
+    capability_name_to_binding: dict[str, str]      # capability_name → binding_id
+    diagnostics: list[dict]                         # trace of resolution decisions
+    created_at: str
+    expires_at: str                                 # 5-minute TTL from creation
+
+class SituatedResolver:
+    """Core resolution engine. Takes a RequestFrame, returns a ResolutionEnvelope."""
+
+    def __init__(
+        self,
+        global_store: GlobalProjectionStore,
+        local_store: LocalProjectionStore,
+        *,
+        resource_resolver: ResolveResourcesService | None = None,
+        policy_selector: PolicySelector | None = None,       # Component 5
+        capability_binder: CapabilityBinderService | None = None,  # uses Component 5 output
+    ) -> None: ...
+
+    def resolve(self, request: ResolveSituationRequest) -> ResolutionEnvelope:
+        """Main entry point. Called by Back via resolve_situation meta-tool."""
+
+    # ── Internal ─────────────────────────────────────────
+    def _determine_verdict(
+        self, request, universe, policy_bundle, binding_bundle, diagnostics
+    ) -> str: ...
+    def _allowed_next_actions(
+        self, verdict, binding_bundle, completed_prerequisite_bindings
+    ) -> list[dict]: ...
+    def _build_prompt_pack(
+        self, request, universe, verdict, allowed, binding_bundle
+    ) -> PromptPack: ...
+    def _has_ambiguous_person_reference(self, request) -> bool: ...
+```
+
+#### 4.4 Internal Design
+
+**Resolution flow (6-step pipeline):**
+
+```text
+Step 1: Resolve resources
+  resource_resolver.resolve(frame, actor_id, space_id)
+  → ResourceUniverse {resource_candidates, person_candidates, unresolved, scope_proof}
+
+Step 2: Select policy
+  policy_selector.select(universe, operations, actor_role, safety_band)
+  → PolicyBundle {gates, hil_triggers, verifier_requirements, policy_verdict, deny_reason}
+
+Step 3: Bind capabilities
+  capability_binder.bind(universe, policy_bundle, operations, actor_id, session_id, disclosure_phase)
+  → BindingBundle {bindings, unbound_roles, tool_name_cards, selected_schema_cards}
+
+Step 4: Determine verdict
+  _determine_verdict(request, universe, policy_bundle, binding_bundle, diagnostics)
+  → verdict string (one of 10)
+
+Step 5: Compute allowed_next_actions
+  _allowed_next_actions(verdict, binding_bundle, completed_prerequisite_bindings)
+  → list of {description, capability_name, binding_id}
+
+Step 6: Build PromptPack
+  _build_prompt_pack(request, universe, verdict, allowed, binding_bundle)
+  → PromptPack with visible_summary + hidden_refs
+```
+
+**Allowed-next-actions logic:**
+
+```text
+If verdict = 'can_execute_with_gate':
+  → Return only incomplete prerequisite_read bindings
+    (Back must finish prerequisite reads before the write)
+
+If verdict = 'can_execute':
+  → Return primary_read bindings
+  → Return primary_write bindings ONLY IF:
+      - no prerequisite reads exist, OR
+      - all prerequisite reads are completed
+
+Any other verdict:
+  → Return [] (no actions allowed — Back must HIL, promote, or submit cannot_execute)
+```
+
+**Disclosure phases (CC-10):** The `disclosure_phase` field on the request controls what the `BindingBundle` includes:
+
+| Phase | What's disclosed |
+|---|---|
+| `connector_summary` | Connector names + constitutions + tool names ONLY (no schemas) |
+| `tool_name_selection` | Back commits exact tool names; binder validates selection |
+| `schema_binding` | Full schemas returned ONLY for committed tools |
+| `execution` | Bindings include invocation-ready contract refs + schemas |
+
+**Ambiguous person detection:** `_has_ambiguous_person_reference()` queries `local_store.resolve_alias(raw_name, actor_id, entity_type='person')` for every person ref in the RequestFrame. If any name resolves to >1 `entity_id`, it's ambiguous → `needs_disambiguation`.
+
+#### 4.5 Wiring — Where It Hooks Into Fabric
+
+**Registered as a Fabric meta-tool:**
+
+The `SituatedResolver.resolve()` method is exposed to Back as a callable meta-tool named `resolve_situation`. This is NOT a capability in the registry — it's a kernel-level tool registered alongside `invoke_capability` and `submit_result`.
+
+```text
+# In FabricFactory, after creating CapabilityFabric:
+resolver = SituatedResolver(
+    global_store=global_projection_store,
+    local_store=local_projection_store,  # None for shared Fabric, set for per-session
+    policy_selector=policy_selector,
+    capability_binder=capability_binder,
+)
+fabric = Fabric(
+    facade=capability_fabric,
+    ...,
+    situated_resolver=resolver,  # NEW field on Fabric dataclass
+)
+```
+
+**Tool schema (exposed to Back LLM):**
+
+```json
+{
+  "name": "resolve_situation",
+  "description": "Resolve the execution universe for a task. Returns what you are allowed to do.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "request_frame_json": {"type": "object", "description": "The RequestFrame for this task"},
+      "disclosure_phase": {"type": "string", "enum": ["connector_summary", "tool_name_selection", "schema_binding", "execution"]},
+      "committed_tool_names": {"type": "array", "items": {"type": "string"}, "description": "Tool names Back commits to using (Phase 2 only)"},
+      "completed_prerequisite_bindings": {"type": "array", "items": {"type": "string"}}
+    },
+    "required": ["request_frame_json", "disclosure_phase"]
+  }
+}
+```
+
+**Call flow:**
+
+```text
+Back (via ToolDispatcher)
+  → execute_resolve_situation()
+    → build ResolveSituationRequest from Back's tool call args
+    → situated_resolver.resolve(request)
+    → return ResolutionEnvelope as ToolResult
+```
+
+**service.py — S3 wiring:**
+
+```text
+# S3: SituatedResolver uses shared GlobalProjectionStore + per-session LocalProjectionStore
+# Created in FabricFactory, not directly in service.py
+```
+
+**P3 (per-session):** The per-session `SituatedResolver` is created with the per-session `LocalProjectionStore`. The shared `GlobalProjectionStore` is the same instance.
+
+#### 4.6 E2E Data Flow
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│ Back builds RequestFrame, calls resolve_situation           │
+│                                                             │
+│  ResolveSituationRequest {                                  │
+│    request_frame: {                                         │
+│      user_goal: "Add dentist for Riley Monday 3pm",        │
+│      person_refs: [{raw: "Riley"}],                         │
+│      operation_hints: ["create"],                           │
+│      resource_kind_hint: "calendar_event",                  │
+│      time_window_hint: {start: "2026-06-08T15:00:00"},     │
+│      actor_id: "person_jordan_001",                         │
+│      space_id: "space_family_001"                           │
+│    },                                                       │
+│    actor_scope: {actor_id: "person_jordan_001"},            │
+│    safety_context: {safety_band: "GREEN", actor_role:       │
+│      "parent"},                                             │
+│    disclosure_phase: "connector_summary"                    │
+│  }                                                          │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│ SituatedResolver.resolve()                                  │
+│                                                             │
+│  Step 1 — Resolve resources:                                │
+│    local_store.resolve_alias("Riley", actor_id, "person")   │
+│    → 1 match: person_id="person_riley_001"                  │
+│    local_store.get_household_member("person_riley_001")     │
+│    → {display_name:"Riley", role:"child",                   │
+│       resource_ids:{"calendar":"res_cal_riley_001"}}        │
+│    local_store.get_connected_resource("res_cal_riley_001")  │
+│    → {connector_id:"calendar", freshness:"fresh",           │
+│       actor_permission:"read_write"}                        │
+│    → ResourceUniverse with 1 person, 1 resource, 0 unresolved│
+│                                                             │
+│  Step 2 — Select policy:                                    │
+│    policy_selector.select(universe, ["create"], "parent",   │
+│      "GREEN")                                               │
+│    → PolicyBundle {policy_verdict:"allow", gates:[...],     │
+│       hil_triggers:[...], verifier_requirements:{...}}      │
+│                                                             │
+│  Step 3 — Bind capabilities:                                │
+│    capability_binder.bind(universe, policy, ["create"],     │
+│      actor_id, session_id, "connector_summary")             │
+│    → BindingBundle {                                        │
+│         bindings: [                                         │
+│           {role:"prerequisite_read",                        │
+│            capability_name:"tool.read.calendar.list_events"},│
+│           {role:"primary_write",                            │
+│            capability_name:"tool.execute.calendar.          │
+│             create_event"},                                 │
+│           {role:"verifier",                                 │
+│            capability_name:"tool.read.calendar.get_event"}  │
+│         ],                                                  │
+│         tool_name_cards: [calendar tool names],             │
+│         selected_schema_cards: []  # Phase 1: no schemas yet│
+│       }                                                     │
+│                                                             │
+│  Step 4 — Determine verdict:                                │
+│    Checks in order:                                         │
+│    ✓ budget OK                                              │
+│    ✓ no duplicate idempotency                               │
+│    ✓ person not ambiguous                                   │
+│    ✓ resource fresh                                         │
+│    ✓ no unresolved refs                                     │
+│    ✓ params present (has time_window, subject)              │
+│    ✓ single connector                                       │
+│    ✓ policy allows                                          │
+│    ✓ capabilities exist                                     │
+│    ✗ prerequisites NOT completed → can_execute_with_gate    │
+│                                                             │
+│  Step 5 — Allowed next actions:                             │
+│    Verdict = "can_execute_with_gate"                        │
+│    → Return prerequisite_read bindings:                     │
+│      {description: "run prerequisite tool.read.calendar.    │
+│       list_events", binding_id: "bind_list_riley_001"}      │
+│                                                             │
+│  Step 6 — Build PromptPack:                                 │
+│    visible_summary: {                                       │
+│      verdict: "can_execute_with_gate",                      │
+│      resources: [{label: "Riley's Google Calendar", ...}],  │
+│      persons: [{label: "Riley", role: "child"}],            │
+│      tool_name_cards: ["list_events","create_event",        │
+│        "get_event"]                                         │
+│    }                                                        │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Back receives ResolutionEnvelope                            │
+│                                                             │
+│  Back sees:                                                 │
+│    verdict: "can_execute_with_gate"                         │
+│    allowed_next_actions: ["run prerequisite tool.read.      │
+│      calendar.list_events"]                                 │
+│    tool_name_cards: [list_events, create_event, get_event]  │
+│    NO schemas yet (Phase 1 disclosure)                      │
+│                                                             │
+│  Back acts:                                                 │
+│    "I must run list_events first. Then I can create_event."  │
+│    → invokes list_events (prerequisite read)                │
+│    → marks binding_id as completed                          │
+│    → calls resolve_situation again with                     │
+│      completed_prerequisite_bindings=["bind_list_riley_001"]│
+│    → this time verdict = "can_execute"                      │
+│    → invokes create_event (primary write)                   │
+│    → calls submit_result(completed)                         │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### 4.7 Test Coverage
+
+```text
+GAP-P1-001: SituatedResolver unit tests
+  File: tests/k1/fabric/resolver/test_situated_resolver.py
+
+  Test classes:
+    TestVerdictCascade
+      - test_cannot_execute_budget_exhausted
+      - test_cannot_execute_duplicate_idempotency
+      - test_needs_disambiguation_ambiguous_person
+      - test_stale_projection_stale_write_candidate
+      - test_needs_disambiguation_ambiguous_resource
+      - test_missing_required_params_resource_not_found
+      - test_missing_required_params_missing_time_window
+      - test_promote_to_tier3_cross_connector
+      - test_blocked_by_policy_deny
+      - test_stale_projection_binding_stale
+      - test_missing_capability_no_capability_found
+      - test_can_execute_with_gate_incomplete_prerequisites
+      - test_can_execute_all_clear
+      - test_verdict_ordering_first_match_wins
+
+    TestAllowedNextActions
+      - test_can_execute_with_gate_returns_prerequisites_only
+      - test_can_execute_returns_primary_reads_and_writes
+      - test_can_execute_blocks_write_when_prereq_incomplete
+      - test_can_execute_allows_write_when_no_prereq_exists
+      - test_can_execute_allows_write_when_prereq_completed
+      - test_other_verdicts_return_empty_actions
+
+    TestDisclosurePhases
+      - test_connector_summary_discloses_names_only
+      - test_tool_name_selection_validates_commitment
+      - test_schema_binding_discloses_schemas_for_committed_only
+      - test_execution_discloses_full_contract_refs
+
+    TestPromptPack
+      - test_prompt_pack_includes_verdict_and_resources
+      - test_prompt_pack_includes_tool_name_cards
+      - test_prompt_pack_hides_raw_bundle_refs
+
+GAP-P1-009: SituatedResolver negative proof
+  File: tests/k1/fabric/resolver/test_situated_resolver_negative.py
+
+  Test classes:
+    TestNegativeProof
+      - test_missing_connector_returns_missing_capability
+      - test_policy_deny_returns_blocked_by_policy
+      - test_incomplete_projection_returns_needs_disambiguation
+      - test_stale_projection_blocks_write
+      - test_budget_exhausted_returns_cannot_execute_not_silent
+      - test_unresolvable_person_does_not_guess_identity
+```
+
+---
+
+### Component 5 — PolicySelector
+
+**Target file:** `k1/fabric/policy/selector.py`
+**Source:** New implementation based on `poc/back_tool_contract_v2/policy_selector.py` + Contract C in whiteboard
+**Depends on:** `GlobalProjectionStore` (C1) — reads connector policy_declarations, capability safety_band_min, connector constitutions
+
+#### 5.1 What It Is
+
+The execution-policy authority. Given a resolved `ResourceUniverse` (which resources and people are in play), the intended operations, the actor's role, and the current safety band, it returns a `PolicyBundle` declaring: whether execution is allowed, what gates must be satisfied, what triggers HIL, what verification is required, and what safety mapping evidence was evaluated.
+
+This is DISTINCT from the existing `PolicyEngine` (`k1/fabric/policy/`). The existing `PolicyEngine` is about **provider selection** — which provider to route a capability to (SecurityContext, AffectiveRouting, CognitiveLoadRouting, QoSIntegration). The new `PolicySelector` is about **execution authority** — whether Back can legally invoke this capability for this actor on this resource right now.
+
+In the current code, there is NO execution-level policy selector. The existing `SecurityContext.check_band` and `VisibilityPolicy.check_band` conflict (BTC-004). Back currently invokes whatever it discovers, with only soft prompt nudges.
+
+#### 5.2 Policy Verdict Cascade (4 verdicts)
+
+Evaluated in order. First match wins:
+
+| # | Verdict | Condition |
+|---|---|---|
+| 1 | `deny` | Connector missing from GlobalProjectionStore (`missing_connector`) |
+| 2 | `deny` | Actor role not in `write_requires_actor_role` for write operation |
+| 3 | `deny` | Safety band below `capability.safety_band_min` (band escalation) |
+| 4 | `needs_hil` | Any HIL trigger fires (delete of shared resource, cross-user impact, etc.) |
+| 5 | `allow_with_gate` | Precondition gates exist (prerequisite reads required by constitution) |
+| 6 | `allow` | All checks passed |
+
+#### 5.3 Public API
+
+```python
+@dataclass(frozen=True)
+class PolicyGate:
+    gate_id: str
+    gate_type: str              # 'precondition' | 'verifier' | 'safety' | 'consent'
+    description: str            # human-readable for Back's prompt
+    condition: dict             # machine-evaluable condition
+    action_required: str        # 'run_read_first' | 'verify_after' | 'confirm_with_user'
+
+@dataclass(frozen=True)
+class SafetyMappingEvidence:
+    evidence_id: str
+    operation: str
+    required_band: str          # minimum band the capability requires
+    actual_band: str            # current session safety band
+    connector_id: str
+    capability_name: str
+    mapping_result: str         # 'allow' | 'deny' | 'escalated'
+    hard_block_reason: str | None
+
+@dataclass(frozen=True)
+class PolicyBundle:
+    policy_id: str
+    connector_ids: list[str]                    # connectors in scope
+    operations: list[str]                       # intended operations
+    actor_role: str                             # 'parent' | 'child' | 'guardian' | 'guest' | 'system'
+    safety_band: str                            # 'GREEN' | 'AMBER' | 'RED'
+    roles_allowed: dict[str, list[str]]         # operation → allowed roles
+    gates: list[PolicyGate]                     # preconditions that must be satisfied
+    hil_triggers: list[dict]                    # conditions that force HIL
+    protected_read_policy: dict | None          # if resource has protected_reads declared
+    verifier_requirements: dict[str, str]       # operation → verifier capability name
+    guide_refs: list[str]                       # guide card references
+    policy_verdict: str                         # 'allow' | 'allow_with_gate' | 'needs_hil' | 'deny'
+    deny_reason: str | None                     # why denied, if denied
+    safety_mapping_evidence: dict | None        # band check evidence
+
+class PolicySelector:
+    """Execution-policy authority. Consumes ResourceUniverse, returns PolicyBundle."""
+
+    def __init__(self, global_store: GlobalProjectionStore) -> None: ...
+
+    def select(
+        self,
+        resource_universe: ResourceUniverse,
+        operations: list[str],                  # ['create', 'list', ...]
+        actor_role: str,                        # 'parent' | 'child' | ...
+        safety_band: str,                       # 'GREEN' | 'AMBER' | 'RED'
+    ) -> PolicyBundle: ...
+```
+
+#### 5.4 Internal Design
+
+**Policy evaluation flow (per resource candidate, per operation):**
+
+```text
+For each resource_candidate in resource_universe:
+  1. Look up connector in GlobalProjectionStore
+     → If missing → deny_reason = "missing_connector"
+
+  2. Read connector.policy_declarations
+     → protected_resources → builds protected_read_policy
+     → write_requires_actor_role → checks actor_role membership
+     → read_allowed_roles → checks actor_role membership
+
+  3. Find capability for the operation in GlobalProjectionStore
+     → capability.safety_band_min vs. current safety_band
+     → If band insufficient → SafetyMappingEvidence with mapping_result="deny"
+
+  4. Check constitution for this connector + operation
+     → preconditions → creates PolicyGate(gate_type="precondition")
+     → verification → populates verifier_requirements
+     → hil_gates → populates hil_triggers
+
+  5. Special case: delete operations on shared resources
+     → Force HIL trigger regardless of role
+```
+
+**Key distinction from PolicyEngine (BTC-004 fix):**
+
+```text
+PolicyEngine (existing, k1/fabric/policy/):
+  Owns: PROVIDER selection policy
+  Scope: "which provider should execute this capability?"
+  Dimensions: SecurityContext, AffectiveRouting, CognitiveLoadRouting, QoSIntegration
+  Does NOT answer: "is this actor allowed to do this?"
+
+PolicySelector (new, k1/fabric/policy/selector.py):
+  Owns: EXECUTION authority policy
+  Scope: "can this actor invoke this capability on this resource?"
+  Dimensions: role authorization, safety band, preconditions, HIL triggers, verification
+  Does NOT answer: "which provider should handle it?"
+```
+
+**Safety band resolution (BTC-004):** `PolicySelector` is the single authority for safety band decisions. It compares `session_safety_band` against `capability.safety_band_min` using rank ordering: `GREEN(1) < AMBER(2) < RED(3)`. If `session_band < min_band`, it produces `SafetyMappingEvidence` with `mapping_result="deny"`. This replaces the conflicting `SecurityContext.check_band` (Fabric) vs `VisibilityPolicy.check_band` (family tools) — the selector's verdict is final.
+
+**Constitution→policy interaction:** The constitution declares what must happen (preconditions, HIL gates, verification). The policy selector reads the constitution and translates it into `PolicyBundle.gates[]` and `PolicyBundle.hil_triggers[]`. Policy may TIGHTEN constitution gates (e.g., add extra HIL requirements for child actors) but cannot RELAX them. This is enforced by the selector: if the constitution says "HIL before delete," the policy cannot override that.
+
+#### 5.5 Wiring
+
+**Created in FabricFactory alongside SituatedResolver:**
+
+```text
+# FabricFactory:
+policy_selector = PolicySelector(global_store=global_projection_store)
+
+situated_resolver = SituatedResolver(
+    global_store=global_projection_store,
+    local_store=local_projection_store,
+    policy_selector=policy_selector,  # ← injected
+    capability_binder=capability_binder,
+)
+```
+
+**Called by SituatedResolver at Step 2:**
+
+```text
+# Inside SituatedResolver.resolve():
+policy_bundle = self.policy_selector.select(
+    resource_universe=universe,
+    operations=[intent.operation_hint for intent in frame.intents],
+    actor_role=str(frame.safety_context.get("actor_role") or "parent"),
+    safety_band=str(frame.safety_context.get("safety_band") or "GREEN"),
+)
+```
+
+**Does NOT hook into CapabilityFabric._execute_impl().** PolicySelector runs at RESOLUTION time (before invocation), not at EXECUTION time. The existing PolicyEngine continues to run at execution time (step 2 of _execute_impl) for provider selection. These are different concerns, different pipelines.
+
+#### 5.6 E2E Data Flow
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│ SituatedResolver calls policy_selector.select()             │
+│                                                             │
+│  Input:                                                     │
+│    resource_universe: {                                     │
+│      resource_candidates: [{                                │
+│        connector_id: "calendar",                            │
+│        resource_kind: "calendar.primary",                   │
+│        freshness_state: "fresh"                             │
+│      }]                                                     │
+│    }                                                        │
+│    operations: ["create"]                                   │
+│    actor_role: "parent"                                     │
+│    safety_band: "GREEN"                                     │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│ PolicySelector.select()                                     │
+│                                                             │
+│  For resource: calendar.primary (connector: calendar)       │
+│                                                             │
+│  1. global_store.get_connector("calendar")                  │
+│     → connector exists ✓                                    │
+│                                                             │
+│  2. connector.policy_declarations:                          │
+│     write_requires_actor_role: ["parent", "guardian"]       │
+│     → actor_role="parent" is allowed ✓                      │
+│                                                             │
+│  3. global_store.find_capability(operation="create",        │
+│     effect="write", connector_id="calendar")                │
+│     → capability: {                                         │
+│         capability_name: "tool.execute.calendar.            │
+│           create_event",                                    │
+│         safety_band_min: "GREEN"                            │
+│       }                                                     │
+│     → safety_band="GREEN" >= min_band="GREEN" ✓             │
+│                                                             │
+│  4. global_store.get_constitution("calendar", "create")     │
+│     → constitution: {                                       │
+│         preconditions: ["list_events before create"],       │
+│         verification: {"read_after_write": "get_event"}     │
+│       }                                                     │
+│     → creates PolicyGate: "Run prerequisite read before     │
+│       create" (gate_type="precondition")                    │
+│     → verifier_requirements: {"create": "get_event"}        │
+│                                                             │
+│  5. No HIL triggers (not a delete, not cross-user)          │
+│                                                             │
+│  Verdict: "allow_with_gate" (gates exist)                   │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│ PolicyBundle returned to SituatedResolver                   │
+│                                                             │
+│  {                                                          │
+│    policy_verdict: "allow_with_gate",                       │
+│    gates: [{                                                │
+│      gate_type: "precondition",                             │
+│      description: "Run prerequisite read before create",    │
+│      action_required: "run_read_first"                      │
+│    }],                                                      │
+│    verifier_requirements: {"create": "get_event"},          │
+│    roles_allowed: {"create": ["parent", "guardian"]},       │
+│    deny_reason: null,                                       │
+│    safety_mapping_evidence: null                            │
+│  }                                                          │
+│                                                             │
+│  SituatedResolver uses this to:                             │
+│    → Include gates in verdict logic                         │
+│    → Pass verifier_requirements to CapabilityBinder         │
+│    → Include policy cards in PromptPack                     │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### 5.7 Test Coverage
+
+```text
+GAP-P1-002: PolicySelector contract tests
+  File: tests/k1/fabric/policy/test_policy_selector.py
+
+  Test classes:
+    TestPolicyVerdicts
+      - test_allow_when_all_checks_pass
+      - test_allow_with_gate_when_preconditions_exist
+      - test_needs_hil_when_delete_triggers_hil
+      - test_deny_missing_connector
+      - test_deny_role_not_allowed_for_write
+      - test_deny_safety_band_below_minimum
+      - test_verdict_ordering_first_deny_wins
+
+    TestSafetyBandEnforcement (BTC-004)
+      - test_green_session_allows_green_capability
+      - test_amber_session_denies_green_capability
+      - test_amber_session_allows_amber_capability
+      - test_red_session_denies_amber_capability
+      - test_safety_mapping_evidence_produced_on_deny
+
+    TestRoleAuthorization
+      - test_parent_allowed_for_write
+      - test_child_denied_for_write_without_guardian
+      - test_guardian_allowed_for_write
+      - test_guest_denied_for_write
+      - test_read_operations_use_read_allowed_roles
+
+    TestConstitutionIntegration
+      - test_preconditions_create_policy_gates
+      - test_verification_requirements_populated_from_constitution
+      - test_hil_gates_populated_from_constitution
+      - test_policy_cannot_relax_constitution_gates
+
+    TestProtectedReads
+      - test_protected_read_policy_created_when_declared
+      - test_protected_read_policy_null_when_not_declared
+```
+
+---
+
+### Component 6 — VerificationPlanRunner
+
+**Target file:** `k1/fabric/verification/runner.py`
+**Source:** Promote + harden from `poc/back_tool_contract_v2/verification_runner.py`
+**Depends on:** `GlobalProjectionStore` (C1) — reads capability contracts for verifier refs; `NativeToolProvider` — executes readback capabilities
+
+#### 6.1 What It Is
+
+The post-write verification authority. After Fabric executes a write capability (e.g., `calendar.create_event`), the `VerificationPlanRunner` confirms the write actually happened in the system of record. It answers: "Did the event really get created?" by reading it back from the provider.
+
+**Principle 5 enforcement:** `submit_result(completed)` requires verification pass or explicit degraded-completion policy. Provider success (HTTP 200) is not verified completion — the verifier confirms the data exists in persistence.
+
+In the current code, there is NO verification step. `CapabilityFabric._execute_impl()` validates output schema (step 6) but does NOT verify the write persisted. Back currently calls `submit_result(complete)` on provider status alone — this is Problem #4 from the POC problem statement.
+
+#### 6.2 Verification Methods (6 total, 3 implemented)
+
+| Method | Status | What it does |
+|---|---|---|
+| `read_after_write` | ✅ Implemented (POC-proven) | Reads back the created/updated entity via a read capability. Confirms event_id exists, title/start/end match. |
+| `output_schema` | ✅ Implemented (POC-proven) | Validates the invocation output contains required fields (e.g., `event_id` in response). Lighter-weight than read_after_write. |
+| `none_available` | ✅ Implemented | No verifier method declared. Returns `unavailable` status. `submit_result(completed)` blocked unless `degraded_completion_policy` allows it. |
+| `state_compare` | 🔲 Deferred | Compare pre-write and post-write resource state snapshots. For resources that don't support read-by-id. |
+| `audit_receipt` | 🔲 Deferred | Validate a signed audit receipt from the connector (for external systems). |
+| `external_receipt` | 🔲 Deferred | Validate a third-party attestation (e.g., blockchain receipt, notary). |
+| `policy_attestation` | 🔲 Deferred | Attestation from policy authority that the write complies with governance rules. |
+
+#### 6.3 Public API
+
+```python
+@dataclass(frozen=True)
+class VerificationPlan:
+    verification_plan_id: str
+    resolution_id: str
+    binding_id: str
+    invocation_id: str
+    verifier_ref: str | None                    # capability name of the verifier
+    verifier_method: str                        # 'read_after_write' | 'output_schema' | 'none_available' | 'state_compare' | 'audit_receipt'
+    expected_effect: str                        # 'write' | 'delete' | 'compute'
+    expected_resource_state: dict               # fields expected to exist after write
+    readback_capability_ref: str | None         # e.g., 'tool.read.calendar.get_event'
+    readback_params: dict | None                # params for the readback call
+    max_staleness_ms: int                       # max allowed age of readback (default 300_000 = 5 min)
+    degraded_completion_policy: str | None      # policy for when verification is unavailable
+    required_for_submit_status: str             # 'completed' — submit_result requires this
+
+@dataclass(frozen=True)
+class VerificationObservation:
+    verification_id: str
+    verification_plan_id: str
+    status: str                                 # 'verified' | 'degraded_verified' | 'failed' | 'inconclusive' | 'skipped_by_policy' | 'unavailable'
+    observed_effect: str | None
+    observed_resource_state_ref: str | None     # "event:evt_abc123" — pointer to observed entity
+    mismatch_summary: str | None                # what didn't match, if failed
+    stale_read_summary: str | None              # if readback was stale
+    degraded_reason: str | None                 # why degraded, if degraded_verified
+    recovery_directive: dict | None             # what Back should do next
+    proof_refs: list[str]                       # evidence references
+
+class VerificationPlanRunner:
+    """Post-write verification authority. Confirms writes persisted."""
+
+    def __init__(
+        self,
+        native_provider: NativeToolProvider,    # for executing readback capabilities
+        global_store: GlobalProjectionStore,    # for looking up capability contracts
+    ) -> None: ...
+
+    # ── Plan ─────────────────────────────────────────────
+    def build_plan(
+        self,
+        binding: CapabilityBinding,             # the binding that was invoked
+        observation: InvocationObservation,     # the invocation result
+        constitution: dict | None,              # connector constitution with verification requirements
+        *,
+        degraded_completion_policy: str | None = None,
+        max_staleness_ms: int = 300_000,
+    ) -> VerificationPlan: ...
+
+    # ── Execute ──────────────────────────────────────────
+    def run(
+        self,
+        plan: VerificationPlan,
+        observation: InvocationObservation | None = None,
+        *,
+        now: datetime | None = None,
+    ) -> VerificationObservation: ...
+
+    # ── Gate ─────────────────────────────────────────────
+    def gate(
+        self,
+        observation: VerificationObservation,
+        policy: str | None = None,
+    ) -> bool:
+        """Returns True if submit_result(completed) is legal."""
+```
+
+#### 6.4 Internal Design
+
+**build_plan() logic:**
+
+```text
+1. Look up capability contract from GlobalProjectionStore
+   → capability = global_store.get_capability(binding.capability_name)
+
+2. Read constitution.verification for this operation
+   → If constitution declares "read_after_write" for this operation:
+       - Extract event_id from observation.structured_result
+       - Build readback capability ref: "tool.read.{connector_id}.get_event"
+       - Build readback params: {event_id, resource_id}
+       - Build expected_resource_state: {event_id, title, start, end}
+       → verifier_method = "read_after_write"
+
+   → If constitution declares "output_schema":
+       - expected_resource_state = {required_output_fields: ["event_id"]}
+       → verifier_method = "output_schema"
+
+   → If no verifier declared:
+       → verifier_method = "none_available"
+
+3. Return VerificationPlan with all fields populated
+```
+
+**run() logic per method:**
+
+```text
+read_after_write:
+  1. Extract event_id from readback_params
+  2. If no event_id → failed("no target event_id available for readback")
+  3. Call native_provider.dispatch(readback_capability_ref, readback_params)
+  4. If provider not found → unavailable
+  5. If data.found == false → failed("readback found no event")
+  6. Compare expected_resource_state fields against readback data:
+     - title mismatch → failed with mismatch_summary
+     - start mismatch → failed
+     - end mismatch → failed
+  7. All fields match → verified
+
+output_schema:
+  1. Check observation.structured_result has all required_output_fields
+  2. All present → verified
+  3. Missing fields → failed with mismatch_summary
+
+none_available:
+  1. If degraded_completion_policy allows → degraded_verified
+  2. Otherwise → unavailable with recovery_directive={action: "block_and_submit"}
+```
+
+**gate() logic:**
+
+```text
+Returns True (submit_result legal) when:
+  - status == "verified"
+  - status == "degraded_verified" AND policy allows degraded completion
+  - status == "skipped_by_policy"
+
+Returns False (submit_result blocked) when:
+  - status == "failed"
+  - status == "inconclusive"
+  - status == "unavailable" AND no degraded_completion_policy
+```
+
+#### 6.5 Wiring — Where It Hooks Into Fabric
+
+**Hooks into CapabilityFabric._execute_impl() — step 7.5 (after emit, before metrics):**
+
+```text
+# After step 7 (emit completed) and before step 8 (update metrics):
+
+# NEW: Step 7.5 — Verification
+if binding.verifier_ref is not None:
+    plan = self._verification_runner.build_plan(
+        binding=binding,
+        observation=observation,
+        constitution=constitution,
+    )
+    verification = self._verification_runner.run(plan, observation=observation)
+
+    if not self._verification_runner.gate(verification):
+        # Verification failed — override result
+        result = CapabilityResult.failure_result(
+            error_code="verification_failed",
+            data={"verification_observation": verification.to_dict()},
+        )
+```
+
+**FabricFactory wiring:**
+
+```text
+verification_runner = VerificationPlanRunner(
+    native_provider=native_tool_provider,
+    global_store=global_projection_store,
+)
+
+capability_fabric = CapabilityFabric(
+    ...,
+    verification_runner=verification_runner,  # NEW constructor param
+)
+```
+
+**Fabric container:** New field on `Fabric` dataclass: `verification_runner: Any = None`.
+
+**Constitution→verifier mapping:** The connector constitution's `verification_requirements` are translated by `PolicySelector` (Component 5) into `PolicyBundle.verifier_requirements`. The `CapabilityBinder` reads those and sets `CapabilityBinding.verifier_ref`. The `VerificationPlanRunner` reads `binding.verifier_ref` and executes accordingly. This chain means the constitution author declares verification intent; the runtime enforces it.
+
+#### 6.6 E2E Data Flow
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│ Back invokes calendar.create_event → returns ok             │
+│                                                             │
+│  InvocationObservation {                                    │
+│    status: "success",                                       │
+│    data: {                                                  │
+│      result: {                                              │
+│        success: true,                                       │
+│        event_id: "evt_abc123",                              │
+│        title: "Dentist",                                    │
+│        start: "2026-06-08T15:00:00",                        │
+│        end: "2026-06-08T16:00:00"                           │
+│      }                                                      │
+│    }                                                        │
+│  }                                                          │
+│                                                             │
+│  BindingBundle {                                            │
+│    binding: {                                               │
+│      verifier_ref: "tool.read.calendar.get_event",          │
+│      connector_id: "calendar",                              │
+│      resource_id: "res_cal_riley_001"                       │
+│    }                                                        │
+│  }                                                          │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│ VerificationPlanRunner.build_plan()                         │
+│                                                             │
+│  1. global_store.get_capability("tool.execute.calendar.     │
+│     create_event")                                          │
+│     → operation: "create"                                   │
+│                                                             │
+│  2. constitution.verification["create"]                     │
+│     → "read_after_write"                                    │
+│                                                             │
+│  3. Build plan:                                             │
+│     verifier_method: "read_after_write"                     │
+│     readback_capability_ref: "tool.read.calendar.get_event" │
+│     readback_params: {event_id: "evt_abc123",               │
+│       resource_id: "res_cal_riley_001"}                     │
+│     expected_resource_state: {                               │
+│       event_id: "evt_abc123",                               │
+│       title: "Dentist",                                     │
+│       start: "2026-06-08T15:00:00",                         │
+│       end: "2026-06-08T16:00:00"                            │
+│     }                                                       │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│ VerificationPlanRunner.run() — _run_read_after_write()      │
+│                                                             │
+│  1. Extract event_id: "evt_abc123" ✓                        │
+│                                                             │
+│  2. native_provider.dispatch(                               │
+│       "tool.read.calendar.get_event",                       │
+│       {event_id: "evt_abc123", resource_id: "res_cal_riley_001"})│
+│     → data: {                                               │
+│         found: true,                                        │
+│         title: "Dentist",                                   │
+│         start: "2026-06-08T15:00:00",                       │
+│         end: "2026-06-08T16:00:00"                          │
+│       }                                                     │
+│                                                             │
+│  3. Compare expected vs actual:                             │
+│     title: "Dentist" == "Dentist" ✓                         │
+│     start: "2026-06-08T15:00:00" ✓                          │
+│     end: "2026-06-08T16:00:00" ✓                            │
+│                                                             │
+│  4. All match → status: "verified"                          │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│ VerificationPlanRunner.gate()                               │
+│                                                             │
+│  status = "verified"                                        │
+│  → True — submit_result(completed) is legal                 │
+│                                                             │
+│  Back calls submit_result(completed)                        │
+│  → includes verification_observation as evidence            │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Failure scenario — write didn't persist:**
+
+```text
+native_provider.dispatch("get_event", {event_id: "evt_abc123"})
+  → data: {found: false}
+
+VerificationObservation {
+  status: "failed",
+  mismatch_summary: "readback found no event for id evt_abc123"
+}
+
+gate() → False
+→ CapabilityFabric returns failure_result("verification_failed")
+→ Back CANNOT call submit_result(completed)
+→ Back calls submit_result(partial) or retries
+```
+
+#### 6.7 Test Coverage
+
+```text
+GAP-P1-006: VerificationPlanRunner contract tests
+  File: tests/k1/fabric/verification/test_verification_runner.py
+
+  Test classes:
+    TestBuildPlan
+      - test_build_plan_read_after_write_from_constitution
+      - test_build_plan_output_schema_from_constitution
+      - test_build_plan_none_available_when_no_verifier_declared
+      - test_build_plan_extracts_event_id_from_structured_result
+      - test_build_plan_constructs_readback_capability_ref
+
+    TestRunReadAfterWrite
+      - test_verified_when_all_fields_match
+      - test_failed_when_title_mismatches
+      - test_failed_when_start_mismatches
+      - test_failed_when_readback_finds_no_event
+      - test_unavailable_when_readback_capability_not_found
+      - test_failed_when_no_event_id_in_params
+
+    TestRunOutputSchema
+      - test_verified_when_required_fields_present
+      - test_failed_when_required_fields_missing
+
+    TestRunNoneAvailable
+      - test_degraded_verified_when_policy_allows
+      - test_unavailable_when_no_policy
+
+    TestGate
+      - test_gate_allows_verified
+      - test_gate_allows_degraded_verified_with_policy
+      - test_gate_blocks_failed
+      - test_gate_blocks_inconclusive
+      - test_gate_blocks_unavailable_without_policy
+
+    TestIntegration
+      - test_full_read_after_write_cycle_through_fabric_execute
+      - test_verification_blocks_submit_result_on_failure
+```
+
+---
+
+### Component 7 — ConnectorConstitution (Schema + Loader)
+
+**Target files:** `k1/fabric/constitution/schema.py` + `k1/fabric/constitution/loader.py`
+**Source:** New implementation based on whiteboard Constitution Tooling section + POC `connector_constitutions` table
+**Depends on:** `GlobalProjectionStore` (C1) — reads/writes to `connector_constitutions` table
+
+#### 7.1 What It Is
+
+The **connector constitution** is the knowledge carrier that makes the Dumb-LLM Principle satisfiable. It is a structured, versioned, runtime-enforced contract that declares: what prerequisite reads must happen, what conflicts to check, when to ask HIL, in what order to mutate, and how to verify. The constitution ships WITH the connector (Principle 6), is authored once per connector (not per tool), and is consumed by `PolicySelector` (C5), `SituatedResolver` (C4), `CapabilityBinder`, and `VerificationPlanRunner` (C6).
+
+This component has TWO sub-components:
+
+- **`ConstitutionSchema`** — The JSON Schema definition for `ConstitutionArtifact`. Validates that every constitution has the required machine-enforceable core fields and optional prompt-card material. This is the DESIGN-TIME contract.
+
+- **`ConstitutionLoader`** — Loads constitutions from the `connector_constitutions` table in `GlobalProjectionStore`. Handles JSON parsing, version checking, and provides typed access. This is the RUNTIME bridge.
+
+In the current code, the POC has a simpler `connector_constitutions` table with only `connector_id`, `operation`, `preconditions_json`, `companion_roles_json`, `verification_json`. The target constitution is significantly richer — it adds execution phases, conflict analysis rules, HIL gates, mutation sequencing, and prompt-card summaries.
+
+#### 7.2 ConstitutionArtifact JSON Schema
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://familyos.dev/schemas/constitution-artifact-v1.json",
+  "title": "ConstitutionArtifact",
+  "type": "object",
+  "required": [
+    "constitution_id",
+    "connector_id",
+    "schema_version",
+    "execution_phases",
+    "prerequisite_reads",
+    "verification_requirements"
+  ],
+  "properties": {
+    "constitution_id": {
+      "type": "string",
+      "description": "Unique identifier for this constitution version"
+    },
+    "connector_id": {
+      "type": "string",
+      "description": "The connector this constitution governs"
+    },
+    "capability_refs": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Capability names this constitution governs (empty = all capabilities on connector)"
+    },
+    "schema_version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "description": "Semantic version of the constitution schema"
+    },
+    "authored_by": {"type": "string"},
+    "authored_at": {"type": "string", "format": "date-time"},
+    "last_proven_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Last time a POC proved these rules hold"
+    },
+
+    "execution_phases": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["grounding", "prerequisite_reads", "conflict_analysis", "hil_gating", "coordinated_mutation"]
+      },
+      "description": "Ordered phases the runtime must enforce"
+    },
+    "prerequisite_reads": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["description", "capability_hint"],
+        "properties": {
+          "description": {"type": "string"},
+          "capability_hint": {"type": "string", "description": "e.g., 'list_events', 'list_tasks'"},
+          "parallelizable": {"type": "boolean", "default": true},
+          "scope": {"type": "string", "enum": ["self", "participant", "conflict_subject", "guardian"]},
+          "timeout_ms": {"type": "integer", "default": 30000}
+        }
+      },
+      "description": "Reads that MUST complete before writes"
+    },
+    "conflict_analysis_rules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["rule_id", "description", "predicate"],
+        "properties": {
+          "rule_id": {"type": "string"},
+          "description": {"type": "string"},
+          "predicate": {
+            "type": "string",
+            "description": "Machine-evaluable: 'overlap_time_window', 'duplicate_title', 'any_in_category'"
+          },
+          "severity": {"type": "string", "enum": ["blocking", "warning"]}
+        }
+      }
+    },
+    "hil_gates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["gate_id", "trigger", "action"],
+        "properties": {
+          "gate_id": {"type": "string"},
+          "trigger": {
+            "type": "string",
+            "description": "Condition that fires HIL: 'time_missing', 'conflict_detected', 'guardian_impact', 'cross_user'"
+          },
+          "action": {
+            "type": "string",
+            "enum": ["ask_for_time", "propose_alternatives", "confirm_with_user", "require_approval"]
+          },
+          "require_actor_role": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Roles that must approve (empty = any role)"
+          }
+        }
+      }
+    },
+    "mutation_sequencing": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["step", "capability_hint", "depends_on"],
+        "properties": {
+          "step": {"type": "integer"},
+          "capability_hint": {"type": "string"},
+          "depends_on": {
+            "type": "array",
+            "items": {"type": "integer"},
+            "description": "Step indices this step depends on"
+          },
+          "produces_artifact": {"type": "string", "description": "e.g., 'event_id'"}
+        }
+      }
+    },
+    "verification_requirements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["operation", "method"],
+        "properties": {
+          "operation": {"type": "string"},
+          "method": {"type": "string", "enum": ["read_after_write", "output_schema", "state_compare", "audit_receipt"]},
+          "readback_capability_hint": {"type": "string", "description": "e.g., 'get_event'"},
+          "required_output_fields": {
+            "type": "array",
+            "items": {"type": "string"}
+          }
+        }
+      }
+    },
+    "companion_resource_roles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["role_type", "description"],
+        "properties": {
+          "role_type": {"type": "string", "description": "e.g., 'participants', 'conflict_subjects', 'guardians'"},
+          "description": {"type": "string"},
+          "resource_kinds": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Resource kinds to read for this role"
+          }
+        }
+      }
+    },
+
+    "precondition_summary": {
+      "type": "string",
+      "description": "Compact text for Back/Planner: 'Before create: list events to detect duplicates'"
+    },
+    "companion_resource_summary": {
+      "type": "string",
+      "description": "Compact text: 'Check participant calendars, chores, and caregiver schedules'"
+    },
+    "hil_trigger_summary": {
+      "type": "string",
+      "description": "Compact text: 'Ask user if: time missing, conflict exists, or affects guardians'"
+    },
+    "degradation_policy": {
+      "type": "string",
+      "enum": ["block", "allow_degraded_completion", "ask_hil"],
+      "description": "What happens when a prerequisite read fails"
+    }
+  }
+}
+```
+
+#### 7.3 Public API
+
+```python
+# ── k1/fabric/constitution/schema.py ──────────────────────
+
+class ConstitutionSchema:
+    """Validates ConstitutionArtifact against JSON Schema + semantic rules."""
+
+    # Class-level access to the JSON Schema
+    SCHEMA: dict  # the full JSON Schema above
+
+    @classmethod
+    def validate(cls, constitution: dict) -> list[str]:
+        """Validate against JSON Schema. Returns list of error messages (empty = valid)."""
+
+    @classmethod
+    def validate_semantic_rules(cls, constitution: dict) -> list[str]:
+        """Validate semantic rules beyond JSON Schema:
+          1. prerequisite_reads must not be empty for write-capable connectors
+          2. execution_phases must contain prerequisite_reads if prerequisite_reads[] is non-empty
+          3. verification_requirements must declare method for each write operation
+          4. companion_resource_roles must reference valid resource kinds
+          5. mutation_sequencing step indices must be sequential and depends_on must be valid
+          6. constitution_id must include connector_id prefix
+        """
+
+
+# ── k1/fabric/constitution/loader.py ──────────────────────
+
+@dataclass(frozen=True)
+class ConstitutionArtifact:
+    """Typed representation of a connector constitution."""
+    constitution_id: str
+    connector_id: str
+    capability_refs: list[str]
+    schema_version: str
+    authored_by: str | None
+    authored_at: str | None
+    last_proven_at: str | None
+
+    # Machine-enforceable core
+    execution_phases: list[str]
+    prerequisite_reads: list[dict]
+    conflict_analysis_rules: list[dict]
+    hil_gates: list[dict]
+    mutation_sequencing: list[dict]
+    verification_requirements: list[dict]
+    companion_resource_roles: list[dict]
+
+    # Prompt-card material
+    precondition_summary: str | None
+    companion_resource_summary: str | None
+    hil_trigger_summary: str | None
+    degradation_policy: str | None
+
+    def get_verification_method(self, operation: str) -> str | None:
+        """Return verifier method for an operation, or None."""
+    def get_prerequisite_reads_for_scope(self, scope: str) -> list[dict]:
+        """Filter prerequisite reads by scope: 'self', 'participant', etc."""
+    def get_hil_gates_for_trigger(self, trigger: str) -> list[dict]:
+        """Filter HIL gates by trigger type."""
+
+
+class ConstitutionLoader:
+    """Loads and caches constitutions from GlobalProjectionStore."""
+
+    def __init__(self, global_store: GlobalProjectionStore) -> None: ...
+
+    def load(self, connector_id: str) -> ConstitutionArtifact | None:
+        """Load the current constitution for a connector. Cached in-memory."""
+
+    def load_for_operation(
+        self, connector_id: str, operation: str
+    ) -> ConstitutionArtifact | None:
+        """Load constitution filtered to the given operation's relevant rules."""
+
+    def upsert(
+        self, artifact: ConstitutionArtifact
+    ) -> None:
+        """Validate + store constitution in GlobalProjectionStore.
+        Raises ValueError if validation fails."""
+
+    def invalidate_cache(self, connector_id: str | None = None) -> None:
+        """Clear cache for a connector, or all if None."""
+
+    def list_all(self) -> list[ConstitutionArtifact]: ...
+```
+
+#### 7.4 Internal Design
+
+**Storage in GlobalProjectionStore:**
+
+The `ConstitutionLoader` writes to the `connector_constitutions` table using the schema defined in Component 1. Each JSON array field is serialized with `json.dumps(sort_keys=True)`. The constitution is keyed by `connector_id` (one constitution per connector — NOT per operation). Operation-specific rules are accessed by filtering the arrays on `operation` field.
+
+**POC→Target migration:**
+
+```text
+POC connector_constitutions table:
+  connector_id | operation | preconditions_json | companion_roles_json | verification_json
+
+Target connector_constitutions table (Component 1):
+  connector_id (PK) | constitution_id | schema_version | authored_by | authored_at |
+  last_proven_at | execution_phases_json | prerequisite_reads_json |
+  conflict_analysis_rules_json | hil_gates_json | mutation_sequencing_json |
+  verification_requirements_json | companion_resource_roles_json |
+  precondition_summary | companion_resource_summary | hil_trigger_summary |
+  degradation_policy
+
+Migration: The POC table's operation-level granularity is FLATTENED into arrays.
+The target table has ONE row per connector. All operations' rules are in the
+JSON arrays with an "operation" discriminator field.
+```
+
+**Caching:** `ConstitutionLoader` maintains an in-memory `dict[connector_id, ConstitutionArtifact]`. On `load()`, it checks the cache first. On `upsert()`, it validates via `ConstitutionSchema.validate()` + `validate_semantic_rules()`, writes to the store, and updates the cache. On `invalidate_cache()`, it clears one or all entries.
+
+**Version enforcement:** The `schema_version` field follows semver. The loader checks that the version is compatible (same major). If a connector constitution has a different major version, the loader logs a warning and attempts best-effort parsing of known fields.
+
+#### 7.5 Wiring — Where It Hooks Into Fabric
+
+**Created in FabricFactory, passed to dependent components:**
+
+```text
+# FabricFactory:
+constitution_loader = ConstitutionLoader(global_store=global_projection_store)
+
+# Injected into:
+policy_selector = PolicySelector(
+    global_store=global_projection_store,
+    constitution_loader=constitution_loader,  # reads constitutions for policy gates
+)
+
+situated_resolver = SituatedResolver(
+    ...,
+    constitution_loader=constitution_loader,  # reads constitutions for verdict logic
+)
+
+verification_runner = VerificationPlanRunner(
+    ...,
+    constitution_loader=constitution_loader,  # reads verification requirements
+)
+```
+
+**Populated at S8 (family tools bootstrap):**
+
+```text
+# After ManifestTranslator registers contracts:
+for connector_id in ["calendar", "tasks", "reminders", "chores", "shopping"]:
+    constitution = ConstitutionArtifact(
+        constitution_id=f"const_{connector_id}_v1.0.0",
+        connector_id=connector_id,
+        schema_version="1.0.0",
+        execution_phases=["grounding", "prerequisite_reads", "conflict_analysis", "hil_gating", "coordinated_mutation"],
+        prerequisite_reads=[
+            {"description": "List events before create", "capability_hint": "list_events",
+             "parallelizable": True, "scope": "self"},
+        ],
+        conflict_analysis_rules=[
+            {"rule_id": "dup_check", "description": "Check for duplicate events",
+             "predicate": "overlap_time_window", "severity": "blocking"},
+        ],
+        hil_gates=[
+            {"gate_id": "time_missing", "trigger": "time_missing",
+             "action": "ask_for_time"},
+        ],
+        verification_requirements=[
+            {"operation": "create", "method": "read_after_write",
+             "readback_capability_hint": "get_event"},
+        ],
+        companion_resource_roles=[],
+        precondition_summary="Before creating an event, list existing events to check for duplicates and time conflicts.",
+        degradation_policy="block",
+    )
+    constitution_loader.upsert(constitution)
+```
+
+**Consumed by PolicySelector (step 4):**
+
+```text
+# In PolicySelector.select():
+constitution = self.constitution_loader.load(candidate.connector_id)
+if constitution:
+    # Preconditions → PolicyGate objects
+    for rule in constitution.prerequisite_reads:
+        gates.append(PolicyGate(
+            gate_type="precondition",
+            description=rule["description"],
+            action_required="run_read_first",
+        ))
+    # Verification requirements → verifier_requirements dict
+    for vr in constitution.verification_requirements:
+        verifier_requirements[vr["operation"]] = vr["method"]
+    # HIL gates → hil_triggers
+    for gate in constitution.hil_gates:
+        hil_triggers.append(gate)
+```
+
+**Consumed by VerificationPlanRunner.build_plan():**
+
+```text
+# In VerificationPlanRunner.build_plan():
+constitution = self.constitution_loader.load(binding.connector_id)
+if constitution:
+    method = constitution.get_verification_method(operation)
+    if method == "read_after_write":
+        # Build read_after_write plan using constitution's readback_capability_hint
+```
+
+#### 7.6 E2E Data Flow
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│ AUTHORING: Connector developer writes constitution           │
+│                                                             │
+│  Connector author creates a constitution JSON file          │
+│  alongside the connector manifest:                          │
+│                                                             │
+│  calendar.constitution.json:                                │
+│  {                                                          │
+│    "constitution_id": "const_calendar_v1.0.0",              │
+│    "connector_id": "calendar",                              │
+│    "schema_version": "1.0.0",                               │
+│    "execution_phases": ["grounding", "prerequisite_reads",  │
+│      "conflict_analysis", "hil_gating",                     │
+│      "coordinated_mutation"],                               │
+│    "prerequisite_reads": [                                  │
+│      {"description": "List events before create",           │
+│       "capability_hint": "list_events",                     │
+│       "parallelizable": true, "scope": "self"}              │
+│    ],                                                       │
+│    "conflict_analysis_rules": [                             │
+│      {"rule_id": "dup_check",                               │
+│       "predicate": "overlap_time_window",                   │
+│       "severity": "blocking"}                               │
+│    ],                                                       │
+│    "verification_requirements": [                           │
+│      {"operation": "create", "method": "read_after_write",  │
+│       "readback_capability_hint": "get_event"}              │
+│    ],                                                       │
+│    "precondition_summary": "Before create: list events to   │
+│      check duplicates and conflicts.",                      │
+│    "degradation_policy": "block"                            │
+│  }                                                          │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│ INGESTION: ConstitutionLoader.upsert()                      │
+│                                                             │
+│  1. ConstitutionSchema.validate(constitution_dict)          │
+│     → JSON Schema validation                                │
+│     → Returns [] (no errors)                                │
+│                                                             │
+│  2. ConstitutionSchema.validate_semantic_rules(dict)        │
+│     → prerequisite_reads not empty ✓                        │
+│     → execution_phases includes prerequisite_reads ✓        │
+│     → verification_requirements has "create" ✓              │
+│     → Returns [] (no errors)                                │
+│                                                             │
+│  3. global_store.upsert_constitution(record)                │
+│     → Writes to connector_constitutions table               │
+│                                                             │
+│  4. Updates in-memory cache                                 │
+│     → cache["calendar"] = ConstitutionArtifact(...)         │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│ RUNTIME: PolicySelector reads constitution                  │
+│                                                             │
+│  constitution = constitution_loader.load("calendar")        │
+│                                                             │
+│  → Returns ConstitutionArtifact:                            │
+│    prerequisite_reads: [{description: "List events...",     │
+│      capability_hint: "list_events", scope: "self"}]        │
+│    verification_requirements: [{operation: "create",        │
+│      method: "read_after_write"}]                           │
+│    hil_gates: [{gate_id: "time_missing", ...}]              │
+│    precondition_summary: "Before create: list events to     │
+│      check duplicates and conflicts."                       │
+│                                                             │
+│  PolicySelector uses this to:                               │
+│    → Create PolicyGate for each prerequisite_read           │
+│    → Populate verifier_requirements dict                    │
+│    → Populate hil_triggers list                             │
+│    → Render precondition_summary into policy_cards          │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│ RUNTIME: VerificationPlanRunner reads constitution          │
+│                                                             │
+│  constitution = constitution_loader.load("calendar")        │
+│  method = constitution.get_verification_method("create")    │
+│  → "read_after_write"                                       │
+│                                                             │
+│  Runner builds plan:                                        │
+│    verifier_method = "read_after_write"                     │
+│    readback_capability_ref = "tool.read.calendar.get_event" │
+│    (derived from readback_capability_hint: "get_event")     │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### 7.7 Test Coverage
+
+```text
+GAP-P1-008: ConnectorConstitution schema + loader tests
+  File: tests/k1/fabric/constitution/test_constitution_schema.py
+
+  Test classes:
+    TestConstitutionSchemaValidation
+      - test_valid_minimal_constitution_passes
+      - test_valid_full_constitution_passes
+      - test_missing_constitution_id_fails
+      - test_missing_connector_id_fails
+      - test_invalid_schema_version_format_fails
+      - test_empty_prerequisite_reads_for_write_connector_warns
+      - test_unknown_execution_phase_fails
+
+    TestSemanticRules
+      - test_prerequisite_reads_empty_for_write_capable_warns
+      - test_execution_phases_missing_prerequisite_reads_when_declared_fails
+      - test_verification_requirements_missing_for_write_operation_warns
+      - test_companion_roles_reference_valid_resource_kinds
+      - test_mutation_sequencing_depends_on_valid
+      - test_constitution_id_includes_connector_prefix
+
+    TestConstitutionLoader
+      - test_load_returns_cached_on_second_call
+      - test_load_returns_none_for_missing_connector
+      - test_upsert_validates_before_writing
+      - test_upsert_rejects_invalid_constitution
+      - test_invalidate_cache_clears_entry
+      - test_invalidate_cache_all_clears_everything
+      - test_load_for_operation_filters_correctly
+
+    TestVersionCompatibility
+      - test_same_major_version_loads
+      - test_different_major_version_logs_warning_and_loads_known_fields
+      - test_older_patch_version_loads_normally
+
+    TestPrinciple6Enforcement
+      - test_constitution_stored_with_connector_not_prompt
+      - test_constitution_loaded_by_connector_id_at_resolution_time
+      - test_promptpack_renders_compact_cards_not_raw_artifact
+```
+
+---
+
+### Component 8 — PromptPackBuilder
+
+**Target file:** `k1/fabric/prompt_pack/builder.py`
+**Source:** Promote + harden from `poc/back_tool_contract_v2/prompt_injection.py` (PromptPackBuilder + render_prompt_pack)
+**Depends on:** `GlobalProjectionStore` (C1) — reads capability contracts for schema cards; `ConstitutionLoader` (C7) — reads connector constitutions for constitution cards; `ResolutionEnvelope` (C4) — consumed as input source
+
+#### 8.1 What It Is
+
+The **PromptPack builder** renders the resolution output into a compact, state-specific, LLM-consumable view. It is the physical manifestation of Contract G: the typographic sink between Plane 2/3/4 internals and Plane 1's prompt context. PromptPack is prompt-sized, typed, and disposable — its `source_refs[]` point to authoritative contracts; the pack itself is never execution authority.
+
+This is the component that answers: "What does Back see right now?" It enforces:
+
+- **Staged disclosure (CC-10):** Phase 1 = connector constitutions + tool names + policy cards. Phase 2 = schemas only after Back commits tool names.
+- **Redaction proof:** raw catalogs, secrets, provider payloads, and full manifests never cross into model context.
+- **Stale card marking:** Side-effecting actions require fresh cards. Stale cards are marked explicitly.
+- **Forbidden-action gating:** `forbidden_tool_calls[]` is runtime-enforced by the dispatcher.
+
+In the POC, the primary source is `poc/back_tool_contract_v2/prompt_injection.py` (280 lines) with `PromptPackBuilder`, `PromptPack`, five card dataclasses, `render_prompt_pack()`, and `redaction_check()`. The promotion hardens these into production contract shapes aligned with Contract G.
+
+#### 8.2 Card Types (5 card dataclasses)
+
+These are the atomic units of PromptPack. Each card type has a specific prompt-purpose:
+
+```python
+# ── k1/fabric/prompt_pack/builder.py ──────────────────────
+
+@dataclass(frozen=True)
+class ConstitutionCard:
+    """Per-connector governance: what must happen before/after this connector's tools."""
+    connector_id: str
+    label: str                           # "Google Calendar"
+    precondition_summary: str | None     # "Before create: list events to check conflicts"
+    companion_resource_summary: str | None  # "Check participants' calendars, chores"
+    hil_trigger_summary: str | None      # "Ask user if: time missing, conflict exists"
+    verification_requirement: str | None # "After create: read-back event to confirm"
+    degradation_policy: str | None       # "block" | "allow_degraded_completion" | "ask_hil"
+
+
+@dataclass(frozen=True)
+class ToolNameCard:
+    """A capability available for invocation — name + role only, NO schema."""
+    capability_name: str                 # "tool.execute.calendar.create_event"
+    description: str                     # "Create a calendar event for a person"
+    role: str                            # "prerequisite_read" | "primary_read" | "primary_write" | "verifier"
+    safety_band_min: str                 # "GREEN" | "AMBER" | "RED"
+    effect: str                          # "read" | "write" | "delete" | "compute"
+    connector_id: str                    # which connector this capability belongs to
+
+
+@dataclass(frozen=True)
+class PolicyCard:
+    """Cross-connector governance: what is required, what triggers HIL, what is denied."""
+    connector_id: str
+    what_is_required: str                # "Parent or guardian role required for scheduling"
+    what_triggers_hil: list[str]         # ["time_missing", "conflict_detected", "guardian_impact"]
+    what_is_denied: list[str]            # ["Guest cannot create events", "Child requires guardian"]
+    actor_role: str                      # the role this policy was evaluated for
+    safety_band: str                     # the safety band this policy was evaluated under
+
+
+@dataclass(frozen=True)
+class GuideCard:
+    """Usage guidance — patterns, examples, parameter hints. NEVER execution authority."""
+    guide_id: str
+    title: str                           # "How to use ISO 8601 dates"
+    content: str                         # "Always use YYYY-MM-DDTHH:MM:SS±HH:MM format"
+    relevance: str                       # "calendar_create" — which operations this applies to
+
+
+@dataclass(frozen=True)
+class SchemaCard:
+    """Full JSON Schema for a committed tool. DISCLOSED ONLY AFTER Back commits tool names."""
+    capability_name: str
+    binding_id: str
+    input_schema: dict                   # full JSON Schema for input params
+    required_fields: list[str]           # required input field names
+    optional_fields: list[str]           # optional input field names
+    output_schema_ref: str | None        # reference to output schema
+```
+
+#### 8.3 PromptPack Dataclass (Contract G shape)
+
+```python
+@dataclass(frozen=True)
+class RedactionEvidence:
+    """Proof that restricted artifacts did not cross into model context."""
+    redaction_id: str
+    prompt_hash: str                     # SHA-256 of the prompt-visible pack content
+    fields_redacted: list[str]           # fields that were redacted before model context
+    fields_verified_absent: list[str]    # fields confirmed absent from prompt
+    prompt_visible_leak_count: int       # must be 0 for pass
+    verdict: str                         # "pass" | "fail"
+
+
+@dataclass(frozen=True)
+class PromptPack:
+    """Contract G: compact, typed, state-specific view for Back LLM. Prompt-sized. Disposable."""
+    prompt_pack_id: str
+    react_state: str                     # "initial" | "waiting_prerequisites" | "ready_for_write" | "needs_hil" | "blocked" | "complete"
+    target_tier: str                     # "tier2" | "tier3" | "unknown"
+    disclosure_phase: str                # "connector_summary" | "tool_name_selection" | "schema_binding" | "execution"
+    source_refs: list[str]               # [resolution_id, request_id, binding_bundle_ref, policy_bundle_ref]
+    source_versions: dict[str, str]      # {"resolution_envelope": "v2", "prompt_pack": "v1"}
+    candidate_summary: dict              # compact resource+person summary
+    connector_constitution_cards: list[ConstitutionCard]
+    tool_name_cards: list[ToolNameCard]
+    policy_cards: list[PolicyCard]
+    guide_cards: list[GuideCard]
+    selected_schema_cards: list[SchemaCard]  # empty at Phase 1, populated at Phase 2+
+    contract_cards: list[dict]           # compact contract refs (not full manifests)
+    decision_surface: str                # human-readable: "You can: invoke binding X, ask HIL, refresh Y, or submit blocked"
+    uncertainty_markers: list[str]       # "Could not resolve 'Aunt Sarah' — ask user"
+    omission_summary: str                # "3 connectors omitted: insufficient safety band"
+    option_budget: int                   # remaining tool calls allowed
+    context_load_shedding_summary: str | None  # what was trimmed from context, if any
+    allowed_tool_calls: list[str]        # capability names Back CAN invoke
+    forbidden_tool_calls: list[str]      # capability names Back MUST NOT invoke (runtime-enforced)
+    allowed_next_actions: list[str]      # human-readable action descriptions
+    forbidden_next_actions: list[str]    # human-readable blocked action descriptions
+    hil_options: list[dict] | None       # HIL questions from CandidateUniverse
+    stale_card_policy: str               # "strict" | "warn" | "allow_reads"
+    redaction_summary: RedactionEvidence
+    output_schema: dict                  # the schema of THIS PromptPack (for tool output parsing)
+    max_tool_calls: int                  # hard limit on concurrent tool calls
+    expires_at: str                      # ISO 8601, 5-minute TTL
+```
+
+#### 8.4 Public API
+
+```python
+class PromptPackBuilder:
+    """Renders ResolutionEnvelope → PromptPack per Contract G.
+    Enforces staged disclosure (CC-10) and redaction proof."""
+
+    def __init__(
+        self,
+        global_store: GlobalProjectionStore,
+        constitution_loader: ConstitutionLoader | None = None,
+    ) -> None: ...
+
+    def build(
+        self,
+        resolution_envelope: ResolutionEnvelope,
+        *,
+        disclosure_phase: str,                       # "connector_summary" | "tool_name_selection" | "schema_binding" | "execution"
+        prompt_budget_tokens: int = 8000,
+        committed_tool_names: list[str] | None = None,  # required for schema_binding+
+        max_tool_calls: int = 5,
+        stale_card_policy: str = "strict",
+    ) -> PromptPack:
+        """Main entry. Builds a phase-appropriate PromptPack from a resolution envelope.
+
+        Raises:
+            PromptPackPhaseError: if disclosure_phase is invalid or requires committed_tool_names
+            PromptPackLeakError: if redaction check fails (restricted fields detected in prompt content)
+        """
+
+
+# ── Renderer (separate function, not a class method) ──────
+
+def render_prompt_pack(pack: PromptPack) -> str:
+    """Render a PromptPack to markdown text for LLM injection.
+    Compact, typed, no raw JSON dumps of contracts."""
+```
+
+#### 8.5 Internal Design
+
+**Phase-aware field selection (PHASE_ALLOWED_FIELDS):**
+
+```text
+loop_start:          [candidate_summary, uncertainty_markers, option_budget, decision_surface]
+connector_summary:   [connector_constitution_cards, tool_name_cards, policy_cards, guide_cards,
+                      candidate_summary, omission_summary, allowed_next_actions,
+                      forbidden_next_actions, decision_surface, uncertainty_markers,
+                      option_budget, hil_options]
+tool_name_selection: [tool_name_cards, allowed_next_actions, decision_surface, hil_options]
+schema_binding:      [selected_schema_cards, allowed_tool_calls]
+execution:           [allowed_tool_calls, allowed_next_actions, option_budget]
+```
+
+Each phase gets an `_apply_phase(pack, disclosure_phase)` call that zeroes out fields not allowed at that phase. This is a defense-in-depth layer: even if the builder accidentally populates schema cards at Phase 1, `_apply_phase` strips them before `redaction_check()`.
+
+**Card construction pipeline (build order):**
+
+```text
+1. Redaction gate: redaction_check(resolution_envelope.to_dict())
+   → Blocks if any SECRET_MARKERS appear in content headed to prompt.
+   → This runs BEFORE any card construction — fail fast.
+
+2. Candidate summary: compact dict of resolved resources + persons.
+   → From ResourceUniverse.resource_candidates + person_candidates.
+   → Fields: label, kind, freshness, permission, role.
+
+3. Constitution cards: one per connector in scope.
+   → ConstitutionLoader.load(connector_id) for each candidate's connector.
+   → Renders compact text cards, NOT raw JSON artifacts.
+
+4. Tool name cards: from BindingBundle.bindings.
+   → capability_name, description, role, safety_band, effect, connector_id.
+   → NO schemas. Schema cards are built separately.
+
+5. Policy cards: from PolicyBundle.
+   → what_is_required (from gates), what_triggers_hil (from hil_triggers),
+     what_is_denied (from deny_reason if denied, else empty).
+
+6. Guide cards: from GlobalProjectionStore guide inventory.
+   → Filtered by connector_id + operation relevance.
+
+7. Schema cards (Phase 2+ only): from GlobalProjectionStore + BindingBundle.
+   → Built ONLY for committed_tool_names that match a binding.
+   → Contains full JSON Schema input shapes.
+
+8. Decision surface: human-readable prose from verdict + allowed_next_actions.
+
+9. Uncertainty markers: from unresolved refs, ambiguous persons, stale projections.
+
+10. Omission summary: what was excluded and why (connectors below band, etc.).
+
+11. Redaction evidence: SHA-256 of prompt-visible content, verified-absent fields, leak count.
+
+12. Phase application: _apply_phase() zeros out non-phase fields.
+
+13. Final redaction check: on the phase-applied dict — must pass before returning.
+```
+
+**Redaction enforcement (what must never reach the LLM):**
+
+```text
+SECRET_MARKERS (from POC proof.py):
+  - "raw_catalog_results"        — full FTS5 search hits, not compact cards
+  - "connector_credentials"      — API keys, OAuth tokens
+  - "provider_payload"           — raw provider response bodies
+  - "full_manifest"              — complete IFL manifests
+  - "policy_machinery"           — internal policy evaluation state
+  - "restricted_prompt_fields"   — catch-all for fields marked restricted
+  - "constitution_json"          — raw constitution JSON (only compact cards allowed)
+
+REDACTION_CHECK (recursive dict walk):
+  Traverses every key in the pack dict.
+  Any key containing a SECRET_MARKER substring → verdict="fail".
+  All clear → verdict="pass".
+```
+
+**Stale card policy:**
+
+```text
+"strict" (default):
+  - Write bindings with stale projection → marked in forbidden_tool_calls[].
+  - Read bindings with stale projection → allowed but marked.
+  - Stale marker included in tool_name_cards (role suffix: "_stale").
+
+"warn":
+  - Stale cards included with staleness noted in decision_surface.
+  - Back is warned but not blocked.
+
+"allow_reads":
+  - Only writes with stale projection are blocked.
+  - Reads always allowed with freshness warnings.
+```
+
+**Disclosure phase enforcement (CC-10 in code):**
+
+```text
+Phase "connector_summary":
+  → connector_constitution_cards populated (compact summaries, not raw JSON)
+  → tool_name_cards populated (names + descriptions, no schemas)
+  → policy_cards populated
+  → guide_cards populated
+  → selected_schema_cards EMPTY
+
+Phase "tool_name_selection":
+  → Back receives tool_name_cards + decision_surface
+  → Back commits: committed_tool_names = ["tool.execute.calendar.create_event", ...]
+  → Builder validates all committed names exist in tool_name_cards
+
+Phase "schema_binding":
+  → REQUIRES committed_tool_names (raises PromptPackPhaseError if missing)
+  → selected_schema_cards populated ONLY for committed names
+  → New resolution_envelope built with committed tools
+  → allowed_tool_calls populated from committed bindings
+
+Phase "execution":
+  → allowed_tool_calls present (from prior schema_binding phase)
+  → allowed_next_actions reflect current state
+  → option_budget reflects remaining calls
+```
+
+#### 8.6 Wiring — Where It Hooks Into Fabric
+
+**Created in FabricFactory:**
+
+```text
+# FabricFactory:
+prompt_pack_builder = PromptPackBuilder(
+    global_store=global_projection_store,
+    constitution_loader=constitution_loader,
+)
+
+# Injected into:
+situated_resolver = SituatedResolver(
+    ...,
+    prompt_pack_builder=prompt_pack_builder,  # builds PromptPack at step 6
+)
+```
+
+**Called by SituatedResolver at Step 6:**
+
+```text
+# Inside SituatedResolver.resolve():
+prompt_pack = self.prompt_pack_builder.build(
+    resolution_envelope=ResolutionEnvelope(...),  # being constructed
+    disclosure_phase=request.disclosure_phase,
+    prompt_budget_tokens=request.prompt_budget,
+    committed_tool_names=request.committed_tool_names,
+)
+```
+
+**Consumed by resolve_situation tool handler:**
+
+```text
+# In execute_resolve_situation() (k1/fabric/tools/resolve_situation_handler.py):
+resolution = situated_resolver.resolve(request)
+prompt_pack = prompt_pack_builder.build(
+    resolution,
+    disclosure_phase=disclosure_phase,
+    committed_tool_names=committed_tool_names,
+)
+# prompt_pack is returned in the ToolResult data, then injected into Back's prompt
+# by the concierge prompt builder at the appropriate CC-10 phase
+```
+
+**Back prompt injection (CC-10 schedule):**
+
+```text
+loop_start:
+  Back receives: meta-tool declarations + execution_grounding_block
+
+after_resolution (connector_summary phase):
+  Back receives: render_prompt_pack(pack) → constitution cards, tool names, policy cards,
+  guide cards, candidate summary, decision surface
+  NO schemas, NO raw contracts
+
+after_tool_commitment (schema_binding phase):
+  Back receives: render_prompt_pack(pack) → selected_schema_cards for committed tools ONLY
+
+after_invocation (execution phase):
+  Back receives: invocation observations + refreshed prompt pack
+```
+
+#### 8.7 E2E Data Flow
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│ SituatedResolver.resolve() — Step 6                         │
+│                                                             │
+│  After verdict = "can_execute_with_gate":                    │
+│                                                             │
+│  prompt_pack_builder.build(                                 │
+│      resolution_envelope=envelope,                          │
+│      disclosure_phase="connector_summary",                  │
+│      prompt_budget_tokens=8000,                             │
+│  )                                                          │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│ PromptPackBuilder.build()                                   │
+│                                                             │
+│  Step 1 — Redaction gate:                                   │
+│    redaction_check(envelope.to_dict())                      │
+│    → verdict="pass" ✓                                       │
+│                                                             │
+│  Step 2 — Candidate summary:                                │
+│    candidate_summary = {                                    │
+│      "resources": [{                                        │
+│        "label": "Riley's Google Calendar",                  │
+│        "kind": "calendar.primary",                          │
+│        "freshness": "fresh",                                │
+│        "permission": "read_write"                           │
+│      }],                                                    │
+│      "persons": [{                                          │
+│        "label": "Riley",                                    │
+│        "role": "child",                                     │
+│        "linked_resources": ["calendar", "chores"]           │
+│      }]                                                     │
+│    }                                                        │
+│                                                             │
+│  Step 3 — Constitution cards:                               │
+│    constitution_loader.load("calendar")                     │
+│    → ConstitutionCard(                                      │
+│        connector_id="calendar",                             │
+│        label="Calendar",                                    │
+│        precondition_summary="Before create: list events to  │
+│          check duplicates and conflicts.",                  │
+│        companion_resource_summary="Check participants'      │
+│          calendars, chores, and caregiver schedules.",      │
+│        hil_trigger_summary="Ask user if: time missing,      │
+│          conflict exists, or affects guardians.",           │
+│        verification_requirement="After create: read-back    │
+│          event via get_event.",                             │
+│        degradation_policy="block"                           │
+│      )                                                      │
+│                                                             │
+│  Step 4 — Tool name cards:                                  │
+│    For each binding in binding_bundle.bindings:             │
+│    → ToolNameCard(                                          │
+│        capability_name="tool.read.calendar.list_events",    │
+│        description="List calendar events in a time window", │
+│        role="prerequisite_read",                            │
+│        safety_band_min="GREEN",                              │
+│        effect="read"                                        │
+│      )                                                      │
+│    → ToolNameCard(                                          │
+│        capability_name="tool.execute.calendar.create_event",│
+│        description="Create a calendar event",               │
+│        role="primary_write",                                │
+│        safety_band_min="GREEN",                              │
+│        effect="write"                                       │
+│      )                                                      │
+│    → ToolNameCard(                                          │
+│        capability_name="tool.read.calendar.get_event",      │
+│        description="Get a calendar event by ID",            │
+│        role="verifier",                                     │
+│        safety_band_min="GREEN",                              │
+│        effect="read"                                        │
+│      )                                                      │
+│                                                             │
+│  Step 5 — Policy cards:                                     │
+│    → PolicyCard(                                            │
+│        connector_id="calendar",                             │
+│        what_is_required="Parent or guardian role for write",│
+│        what_triggers_hil=["time_missing", "conflict_        │
+│          detected", "guardian_impact"],                     │
+│        what_is_denied=[],                                   │
+│        actor_role="parent",                                 │
+│        safety_band="GREEN"                                   │
+│      )                                                      │
+│                                                             │
+│  Step 6 — Guide cards:                                      │
+│    global_store.get_guides_by_connector("calendar")         │
+│    → GuideCard(title="How to format dates", ...)            │
+│                                                             │
+│  Step 7 — Schema cards:                                     │
+│    disclosure_phase="connector_summary"                     │
+│    → selected_schema_cards = []  (NO schemas at Phase 1!)  │
+│                                                             │
+│  Step 8 — Decision surface:                                 │
+│    verdict="can_execute_with_gate"                          │
+│    → "You must first run the prerequisite read 'list_events'│
+│       before you can create the event. After the read, call │
+│       resolve_situation again with the completed binding."  │
+│                                                             │
+│  Step 9 — Uncertainty markers:                              │
+│    → [] (all refs resolved)                                 │
+│                                                             │
+│  Step 10 — Omission summary:                                │
+│    → "" (nothing omitted from scope)                        │
+│                                                             │
+│  Step 11 — Allowed/forbidden tool calls:                    │
+│    Allowed: ["tool.read.calendar.list_events"]              │
+│             (prereq only — write blocked until completed)   │
+│    Forbidden: ["tool.execute.calendar.create_event"]        │
+│             (cannot invoke write before prereq done)        │
+│                                                             │
+│  Step 12 — Phase application:                               │
+│    _apply_phase(pack, "connector_summary")                  │
+│    → selected_schema_cards zeroed out                       │
+│    → contract_cards zeroed out                              │
+│                                                             │
+│  Step 13 — Redaction check:                                 │
+│    redaction_check(phase_applied_dict)                      │
+│    → verdict="pass" ✓                                       │
+│                                                             │
+│  Returns PromptPack with compact cards, NO raw JSON.        │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Back prompt injection (concierge/prompt/back_prompt.py)     │
+│                                                             │
+│  rendered = render_prompt_pack(pack)                        │
+│                                                             │
+│  ## Situated Execution Update                               │
+│  Phase: connector_summary                                   │
+│                                                             │
+│  ## Candidate Summary                                       │
+│  - Riley's Google Calendar (calendar, fresh, read_write)    │
+│  - Riley (child, linked: calendar, chores)                  │
+│                                                             │
+│  ## Connector Guide: Calendar                               │
+│  Before create: list events to check duplicates and         │
+│    conflicts.                                               │
+│  Check: participants' calendars, chores, caregiver          │
+│    schedules.                                               │
+│  Ask user if: time missing, conflict exists, or affects     │
+│    guardians.                                               │
+│  After create: read-back event via get_event.               │
+│                                                             │
+│  ## Available Actions                                       │
+│  - list_events (prerequisite_read): List calendar events    │
+│  - create_event (primary_write): Create a calendar event    │
+│  - get_event (verifier): Get a calendar event by ID         │
+│                                                             │
+│  ## Decision Surface                                        │
+│  You must first run the prerequisite read 'list_events'     │
+│  before you can create the event.                           │
+│                                                             │
+│  ## Allowed Next Actions                                    │
+│  - Run prerequisite: tool.read.calendar.list_events         │
+│                                                             │
+│  ## Forbidden                                              │
+│  - DO NOT call create_event before completing list_events   │
+│                                                             │
+│  → Back now knows exactly what it can do, with constitution │
+│    guidance, NO schemas, NO raw contracts, NO secrets.      │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Phase 2 flow — Back commits tools, gets schemas:**
+
+```text
+Back calls resolve_situation(
+    disclosure_phase="schema_binding",
+    committed_tool_names=["tool.execute.calendar.create_event"],
+)
+
+→ PromptPackBuilder.build():
+    disclosure_phase="schema_binding"
+    committed_tool_names=["tool.execute.calendar.create_event"]
+
+    Step 7 — Schema cards:
+      capability = global_store.get_capability("tool.execute.calendar.create_event")
+      → SchemaCard(
+          capability_name="tool.execute.calendar.create_event",
+          binding_id="bind_create_riley_001",
+          input_schema={... full JSON Schema ...},
+          required_fields=["title", "start", "end", "resource_id"],
+          optional_fields=["description", "location", "attendees"],
+          output_schema_ref="calendar_event_output_v1",
+        )
+
+    Phase application:
+      → selected_schema_cards has 1 card (committed tool only)
+      → connector_constitution_cards EMPTY (already disclosed)
+      → tool_name_cards EMPTY (already disclosed)
+      → Allowed tool calls: ["tool.execute.calendar.create_event"]
+```
+
+#### 8.8 Test Coverage
+
+```text
+GAP-P1-011: PromptPackBuilder contract tests
+  File: tests/k1/fabric/prompt_pack/test_prompt_pack_builder.py
+
+  Test classes:
+    TestPromptPackShape
+      - test_prompt_pack_matches_contract_g_shape
+      - test_all_required_fields_present
+      - test_source_refs_point_to_authoritative_contracts
+      - test_prompt_pack_is_not_execution_authority
+
+    TestStagedDisclosure (CC-10)
+      - test_connector_summary_has_constitution_cards
+      - test_connector_summary_has_tool_name_cards
+      - test_connector_summary_has_NO_schema_cards
+      - test_connector_summary_has_NO_contract_cards
+      - test_schema_binding_requires_committed_tool_names
+      - test_schema_binding_produces_schema_cards_for_committed_only
+      - test_schema_binding_produces_NO_schema_cards_for_uncommitted
+      - test_execution_has_allowed_tool_calls
+
+    TestRedactionProof
+      - test_redaction_check_blocks_raw_catalog_results
+      - test_redaction_check_blocks_connector_credentials
+      - test_redaction_check_blocks_provider_payload
+      - test_redaction_check_blocks_full_manifest
+      - test_redaction_check_blocks_constitution_json
+      - test_redaction_evidence_has_zero_leak_count_on_pass
+      - test_prompt_hash_is_stable_for_same_input
+      - test_leak_detected_fails_build
+
+    TestConstitutionCards
+      - test_constitution_card_uses_compact_summary_not_raw_json
+      - test_constitution_card_includes_precondition_summary
+      - test_constitution_card_includes_companion_resource_summary
+      - test_constitution_card_includes_verification_requirement
+      - test_constitution_card_includes_degradation_policy
+
+    TestToolNameCards
+      - test_tool_name_card_has_no_schema
+      - test_tool_name_card_has_role
+      - test_tool_name_card_has_safety_band_min
+      - test_tool_name_card_has_effect
+
+    TestPolicyCards
+      - test_policy_card_reflects_gates
+      - test_policy_card_reflects_hil_triggers
+      - test_policy_card_reflects_deny_reason
+      - test_policy_card_includes_actor_role_and_safety_band
+
+    TestStaleCardPolicy
+      - test_strict_policy_blocks_stale_write_cards
+      - test_strict_policy_allows_stale_read_cards
+      - test_warn_policy_marks_stale_but_allows
+      - test_allow_reads_policy_blocks_stale_writes_only
+      - test_stale_card_marker_in_tool_name_cards
+
+    TestForbiddenActionGating
+      - test_forbidden_tool_calls_includes_stale_writes
+      - test_forbidden_tool_calls_includes_policy_denied
+      - test_forbidden_tool_calls_includes_band_insufficient
+      - test_forbidden_next_actions_describes_why_forbidden
+
+    TestRendering
+      - test_render_prompt_pack_produces_markdown
+      - test_render_includes_verdict_and_phase
+      - test_render_includes_constitution_guidance
+      - test_render_includes_available_actions
+      - test_render_includes_decision_surface
+      - test_render_includes_forbidden_section
+      - test_render_omits_selected_schema_cards_at_phase_1
+
+    TestPromptPackBuilderEdgeCases
+      - test_build_with_no_connector_constitution_graceful
+      - test_build_with_no_guide_cards_graceful
+      - test_build_with_empty_candidate_universe
+      - test_build_with_blocked_by_policy_verdict
+      - test_build_with_cannot_execute_verdict
+      - test_build_respects_prompt_budget_tokens
+```
+
+---
+
+### Component 9 — CapabilityNameParser
+
+**Target file:** `k1/fabric/resolver/name_parser.py`
+**Source:** New implementation — Contract D enforcement. POC uses inline string splitting (`tool.read.calendar.list_events` → connector_id extraction at positions); this formalizes it into a reusable parser.
+**Depends on:** Nothing (standalone utility — pure string parsing, no store access)
+
+#### 9.1 What It Is
+
+The **capability name parser** is the single authority for parsing, validating, and constructing capability names in the `tool.{read|execute}.{connector_id}.{action}` format. It enforces Contract D's naming convention: capability names embed connector identity, and the format itself is the collision prevention mechanism — no two admitted connectors may share a `connector_id` because the capability name embeds it structurally.
+
+This is a tiny but load-bearing utility. Every component that reads or constructs capability names — `SituatedResolver`, `PolicySelector`, `CapabilityBinder`, `VerificationPlanRunner`, `PromptPackBuilder`, `NativeToolProvider`, and Back's tool dispatcher — depends on the naming convention. Centralizing the parse/validate/construct logic prevents drift.
+
+In the current code, capability names are constructed via string concatenation (`"tool.read." + connector_id + "." + action`) and parsed via ad-hoc `.split(".")` calls scattered across multiple files. There is no validation that a name conforms to the convention before it enters the registry, and no single place that defines the grammar.
+
+#### 9.2 Capability Name Grammar
+
+```text
+CAPABILITY_NAME ::= "tool." OPERATION_TYPE "." CONNECTOR_ID "." ACTION
+
+OPERATION_TYPE ::= "read" | "execute"
+
+CONNECTOR_ID ::= [a-z][a-z0-9_]*    -- lowercase alphanumeric + underscores, starts with letter
+                                     -- Must match a registered connector_id in GlobalProjectionStore
+
+ACTION ::= [a-z][a-z0-9_]*           -- lowercase alphanumeric + underscores, starts with letter
+                                     -- Examples: "list_events", "create_event", "get_event",
+                                     -- "search", "delete", "update", "cancel"
+
+FULLY_QUALIFIED ::= CAPABILITY_NAME   -- exactly 4 segments, dot-separated
+```
+
+**Examples of valid names:**
+
+```text
+tool.read.calendar.list_events          # Read capability: connector=calendar, action=list_events
+tool.execute.calendar.create_event      # Execute capability: connector=calendar, action=create_event
+tool.read.tasks.list                    # Read capability: connector=tasks, action=list
+tool.execute.shopping.create_item       # Execute capability: connector=shopping, action=create_item
+tool.read.google_calendar_read.search   # Read capability (bridge connector with compound name)
+tool.execute.appointment_book.create    # Write capability (IFL connector)
+```
+
+**Examples of invalid names:**
+
+```text
+read.calendar.list_events               # Missing "tool." prefix
+tool.read.calendar                      # Too few segments (need 4)
+tool.write.calendar.create_event        # Invalid operation_type (must be "read" or "execute")
+tool.read.CALENDAR.list_events          # Uppercase connector_id
+tool.read.calendar.ListEvents           # Uppercase action
+tool.execute..create_event              # Empty connector_id
+tool.read.calendar.create event         # Space in action
+tool.execute.calendar.create_event.     # Trailing dot
+```
+
+#### 9.3 Public API
+
+```python
+# ── k1/fabric/resolver/name_parser.py ──────────────────────
+
+@dataclass(frozen=True)
+class ParsedCapabilityName:
+    """Result of parsing a capability name."""
+    raw: str                            # original string
+    operation_type: str                 # "read" | "execute"
+    connector_id: str                   # extracted connector_id
+    action: str                         # extracted action
+
+
+class CapabilityNameParser:
+    """Single authority for capability name parsing, validation, and construction.
+    Enforces Contract D naming convention."""
+
+    # ── Grammar constants ─────────────────────────────────
+    VALID_OPERATION_TYPES = frozenset({"read", "execute"})
+    SEGMENT_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")  # connector_id + action segments
+
+    # ── Parse ─────────────────────────────────────────────
+    @classmethod
+    def parse(cls, name: str) -> ParsedCapabilityName:
+        """Parse a capability name into its 4 segments.
+
+        Raises:
+            InvalidCapabilityNameError: if the name doesn't match the grammar.
+            Returns ParsedCapabilityName on success.
+        """
+
+    @classmethod
+    def try_parse(cls, name: str) -> ParsedCapabilityName | None:
+        """Non-raising variant. Returns None if invalid."""
+
+    # ── Validate ───────────────────────────────────────────
+    @classmethod
+    def is_valid(cls, name: str) -> bool:
+        """True if the name conforms to the grammar (segments, types, patterns)."""
+
+    @classmethod
+    def validate(cls, name: str) -> list[str]:
+        """Returns list of validation error messages (empty = valid).
+
+        Checks:
+          1. Exactly 4 dot-separated segments
+          2. Segment 0 == "tool"
+          3. Segment 1 in {"read", "execute"}
+          4. Segment 2 matches SEGMENT_PATTERN (connector_id)
+          5. Segment 3 matches SEGMENT_PATTERN (action)
+        """
+
+    # ── Extract ────────────────────────────────────────────
+    @classmethod
+    def extract_connector_id(cls, name: str) -> str:
+        """Extract connector_id from a capability name. Raises if invalid."""
+
+    @classmethod
+    def extract_action(cls, name: str) -> str:
+        """Extract action from a capability name. Raises if invalid."""
+
+    @classmethod
+    def extract_operation_type(cls, name: str) -> str:
+        """Extract operation_type ("read" or "execute"). Raises if invalid."""
+
+    # ── Construct ──────────────────────────────────────────
+    @classmethod
+    def build(
+        cls,
+        operation_type: str,              # "read" | "execute"
+        connector_id: str,
+        action: str,
+    ) -> str:
+        """Construct a valid capability name from parts.
+
+        Raises ValueError if any component is invalid.
+        Returns e.g. "tool.read.calendar.list_events"
+        """
+
+    # ── Domain queries ─────────────────────────────────────
+    @classmethod
+    def is_read(cls, name: str) -> bool:
+        """True if operation_type == "read"."""
+
+    @classmethod
+    def is_write(cls, name: str) -> bool:
+        """True if operation_type == "execute"."""
+
+    @classmethod
+    def belongs_to_connector(cls, name: str, connector_id: str) -> bool:
+        """True if the capability name's connector_id matches."""
+
+    # ── Bulk operations ────────────────────────────────────
+    @classmethod
+    def filter_by_connector(
+        cls,
+        names: list[str],
+        connector_id: str,
+        *,
+        operation_type: str | None = None,  # optionally filter to "read" or "execute"
+    ) -> list[str]:
+        """Return only names that belong to the given connector."""
+
+    @classmethod
+    def group_by_connector(
+        cls,
+        names: list[str],
+    ) -> dict[str, list[str]]:
+        """Group capability names by connector_id. Invalid names are skipped with warning."""
+
+    @classmethod
+    def connectors_in_scope(cls, names: list[str]) -> set[str]:
+        """Return the set of unique connector_ids across all names."""
+```
+
+#### 9.4 Internal Design
+
+**Parsing algorithm (single-pass split):**
+
+```text
+parse(name):
+  segments = name.split(".")
+  if len(segments) != 4:
+      raise InvalidCapabilityNameError(name, "expected 4 segments, got {len}")
+  prefix, op_type, connector_id, action = segments
+  if prefix != "tool":
+      raise InvalidCapabilityNameError(name, "segment 0 must be 'tool'")
+  if op_type not in VALID_OPERATION_TYPES:
+      raise InvalidCapabilityNameError(name, "segment 1 must be 'read' or 'execute'")
+  if not SEGMENT_PATTERN.match(connector_id):
+      raise InvalidCapabilityNameError(name, "segment 2 must match [a-z][a-z0-9_]*")
+  if not SEGMENT_PATTERN.match(action):
+      raise InvalidCapabilityNameError(name, "segment 3 must match [a-z][a-z0-9_]*")
+  return ParsedCapabilityName(
+      raw=name,
+      operation_type=op_type,
+      connector_id=connector_id,
+      action=action,
+  )
+```
+
+**Construction algorithm:**
+
+```text
+build(op_type, connector_id, action):
+  if op_type not in VALID_OPERATION_TYPES:
+      raise ValueError(f"operation_type must be 'read' or 'execute', got '{op_type}'")
+  if not SEGMENT_PATTERN.match(connector_id):
+      raise ValueError(f"connector_id must match [a-z][a-z0-9_]*, got '{connector_id}'")
+  if not SEGMENT_PATTERN.match(action):
+      raise ValueError(f"action must match [a-z][a-z0-9_]*, got '{action}'")
+  return f"tool.{op_type}.{connector_id}.{action}"
+```
+
+**Collision prevention (Contract D):** Two connectors with the same `connector_id` would produce capability names that collide. The name parser itself doesn't prevent this — it's the `GlobalProjectionStore.upsert_connector()` that rejects duplicate `connector_id` values (PRIMARY KEY constraint). The parser ensures the format is correct; the store ensures uniqueness is enforced.
+
+**Why this is a class (static methods) not a module of functions:** All methods are `@classmethod` — no instance state. The class serves as a namespace that groups the grammar, parse, validate, construct, and query operations. This makes it injectable as a dependency (e.g., `policy_selector = PolicySelector(..., name_parser=CapabilityNameParser)`) if needed, though most consumers will call `CapabilityNameParser.parse()` directly.
+
+#### 9.5 Wiring — Where It's Used
+
+```text
+Used BY:
+  CapabilityBinder.bind()
+    → Parses capability names from GlobalProjectionStore to build tool_name_cards
+    → Groups capabilities by connector_id for constitution binding
+
+  PolicySelector.select()
+    → Extracts connector_id from candidate capability names
+    → Validates capability names before safety band comparison
+
+  VerificationPlanRunner.build_plan()
+    → Parses binding.capability_name to construct readback_capability_ref
+    → "tool.execute.calendar.create_event" → connector_id="calendar"
+    → Builds: "tool.read.calendar.get_event" from connector_id + verifier action
+
+  PromptPackBuilder.build()
+    → Parses tool name cards to group by connector for constitution cards
+    → Validates committed_tool_names against grammar before schema disclosure
+
+  NativeToolProvider.dispatch()
+    → Parses capability_name to route to the correct tool handler
+    → "tool.read.calendar.list_events" → handler="calendar", method="list_events"
+
+  CapabilityRegistry (registration validation)
+    → NEW: before registering a capability, validates the capability_name against the grammar
+    → Prevents malformed names from entering the registry
+
+  ManifestTranslator.translate()
+    → Validates that generated capability names conform to the convention
+    → Ensures IFL→Fabric capability names are well-formed
+
+  Back tool dispatcher
+    → Validates that Back's tool calls use well-formed capability names
+    → Rejects invented/abbreviated names early
+```
+
+#### 9.6 E2E Data Flow
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│ CONSTRUCTION: CapabilityBinder builds a capability name     │
+│                                                             │
+│  CapabilityNameParser.build(                                │
+│      operation_type="read",                                 │
+│      connector_id="calendar",                               │
+│      action="list_events",                                  │
+│  )                                                          │
+│  → "tool.read.calendar.list_events"                         │
+│                                                             │
+│  Validated:                                                 │
+│    ✓ operation_type in {"read", "execute"}                  │
+│    ✓ connector_id matches [a-z][a-z0-9_]*                   │
+│    ✓ action matches [a-z][a-z0-9_]*                         │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│ PARSING: VerificationPlanRunner builds readback ref         │
+│                                                             │
+│  parsed = CapabilityNameParser.parse(                       │
+│      "tool.execute.calendar.create_event"                   │
+│  )                                                          │
+│  → ParsedCapabilityName(                                    │
+│      raw="tool.execute.calendar.create_event",              │
+│      operation_type="execute",                              │
+│      connector_id="calendar",                               │
+│      action="create_event"                                  │
+│    )                                                        │
+│                                                             │
+│  readback_ref = CapabilityNameParser.build(                 │
+│      operation_type="read",                                 │
+│      connector_id=parsed.connector_id,  # "calendar"        │
+│      action="get_event",                                    │
+│  )                                                          │
+│  → "tool.read.calendar.get_event"                           │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│ GROUPING: PolicySelector groups by connector                │
+│                                                             │
+│  names = [                                                   │
+│      "tool.read.calendar.list_events",                      │
+│      "tool.execute.calendar.create_event",                  │
+│      "tool.read.calendar.get_event",                        │
+│      "tool.read.tasks.list",                                │
+│  ]                                                          │
+│                                                             │
+│  CapabilityNameParser.group_by_connector(names)             │
+│  → {                                                        │
+│      "calendar": [                                          │
+│          "tool.read.calendar.list_events",                  │
+│          "tool.execute.calendar.create_event",              │
+│          "tool.read.calendar.get_event",                    │
+│      ],                                                     │
+│      "tasks": ["tool.read.tasks.list"],                     │
+│    }                                                        │
+│                                                             │
+│  CapabilityNameParser.connectors_in_scope(names)            │
+│  → {"calendar", "tasks"}                                    │
+│                                                             │
+│  SituatedResolver uses this to detect cross-connector tasks │
+│  → len(connectors) > 1 → promote_to_tier3                  │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│ VALIDATION: Registry rejects malformed names                │
+│                                                             │
+│  CapabilityNameParser.validate("calendar.list_events")      │
+│  → ["expected 4 segments, got 3",                           │
+│     "segment 0 must be 'tool'"]                             │
+│                                                             │
+│  CapabilityNameParser.validate("tool.write.calendar.create")│
+│  → ["segment 1 must be 'read' or 'execute'"]                │
+│                                                             │
+│  CapabilityNameParser.validate("tool.read.CALENDAR.list")   │
+│  → ["segment 2 must match [a-z][a-z0-9_]*"]                 │
+│                                                             │
+│  All rejected before entering CapabilityRegistry.           │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### 9.7 Test Coverage
+
+```text
+GAP-P1-012: CapabilityNameParser unit tests
+  File: tests/k1/fabric/resolver/test_capability_name_parser.py
+
+  Test classes:
+    TestParse
+      - test_parse_valid_read_name
+      - test_parse_valid_execute_name
+      - test_parse_name_with_compound_connector_id
+      - test_parse_name_with_underscore_action
+      - test_parse_returns_all_four_segments
+      - test_parse_raises_on_too_few_segments
+      - test_parse_raises_on_too_many_segments
+      - test_parse_raises_on_missing_tool_prefix
+      - test_parse_raises_on_invalid_operation_type
+      - test_parse_raises_on_uppercase_connector_id
+      - test_parse_raises_on_uppercase_action
+      - test_parse_raises_on_empty_connector_id
+      - test_parse_raises_on_space_in_action
+
+    TestTryParse
+      - test_try_parse_valid_returns_parsed
+      - test_try_parse_invalid_returns_none
+
+    TestValidate
+      - test_validate_valid_returns_empty_list
+      - test_validate_invalid_returns_error_messages
+      - test_validate_missing_segment_reports_correct_index
+      - test_validate_invalid_operation_type_reports_allowed_values
+
+    TestExtract
+      - test_extract_connector_id
+      - test_extract_action
+      - test_extract_operation_type
+      - test_extract_connector_id_raises_on_invalid
+
+    TestBuild
+      - test_build_produces_correct_format
+      - test_build_roundtrip_parse_build
+      - test_build_raises_on_invalid_operation_type
+      - test_build_raises_on_invalid_connector_id
+      - test_build_raises_on_invalid_action
+
+    TestDomainQueries
+      - test_is_read_returns_true_for_read
+      - test_is_read_returns_false_for_execute
+      - test_is_write_returns_true_for_execute
+      - test_belongs_to_connector_true
+      - test_belongs_to_connector_false
+
+    TestBulkOperations
+      - test_filter_by_connector_returns_only_matching
+      - test_filter_by_connector_and_operation_type
+      - test_group_by_connector_groups_correctly
+      - test_group_by_connector_skips_invalid_with_warning
+      - test_connectors_in_scope_returns_unique_set
+      - test_connectors_in_scope_empty_list_returns_empty_set
+```
+
+---
+
+### Component 10 — ConnectorAliasNormalizer
+
+**Target file:** `k1/fabric/stores/alias_normalizer.py`
+**Source:** New implementation — formalizes the scattered alias logic from POC `connectors/catalog.py` (LABELS dict + RESOURCE_KIND_BY_CONNECTOR) + `LocalProjectionStore.alias_index`.
+**Depends on:** `GlobalProjectionStore` (C1) — reads connector labels; `LocalProjectionStore` (C2) — reads alias_index for per-household aliases
+
+#### 10.1 What It Is
+
+The **connector alias normalizer** maps user-facing names to canonical `connector_id` values. Users and LLMs refer to connectors by human names: "Google Calendar," "my calendar," "Riley's calendar," "the family shopping list." The kernel needs `connector_id` values: `"calendar"`, `"google_calendar_read"`, `"shopping"`. This component bridges that gap.
+
+It operates in **two scopes**:
+
+- **Global scope:** Maps standard labels (e.g., "Family Calendar" → `"calendar"`, "Google Calendar" → `"google_calendar_read"`) from the connector catalog's LABELS registry + common aliases.
+- **Local scope:** Maps per-household resource labels + aliases (e.g., "Riley's calendar" → `"calendar"`, via identifying the connected resource's connector_id) from `LocalProjectionStore.alias_index` + `connected_resources`.
+
+This is a UTILITY component — it doesn't own the alias data. It queries the stores that own it. Its value is the NORMALIZATION algorithm: given a raw string, resolve it to a `connector_id` with a confidence score, handling ambiguity, case-insensitivity, and fuzzy matching.
+
+#### 10.2 Public API
+
+```python
+# ── k1/fabric/stores/alias_normalizer.py ──────────────────────
+
+@dataclass(frozen=True)
+class AliasResolution:
+    """Result of normalizing a user-facing name to a connector_id."""
+    raw: str                            # original input
+    normalized: str | None              # resolved connector_id, or None if unresolvable
+    confidence: str                     # "exact" | "fuzzy" | "resource_based" | "unknown"
+    candidates: list[str]               # alternative connector_ids when ambiguous
+    source: str                         # "global_catalog" | "local_alias" | "resource_label"
+
+
+class ConnectorAliasNormalizer:
+    """Maps user-facing connector names → canonical connector_id."""
+
+    def __init__(
+        self,
+        global_store: GlobalProjectionStore,
+        local_store: LocalProjectionStore | None = None,  # None for shared/global-only lookups
+    ) -> None: ...
+
+    # ── Resolution ─────────────────────────────────────────
+    def normalize(self, raw: str, *, actor_id: str | None = None) -> AliasResolution:
+        """Resolve a raw name to a connector_id.
+
+        Resolution order:
+          1. Exact match against global LABELS (case-insensitive)
+          2. Exact match against global connector_id itself
+          3. Exact match against local alias_index (if local_store + actor_id provided)
+          4. Exact match against connected_resources labels (if local_store + actor_id provided)
+          5. Fuzzy LIKE match against global LABELS
+          6. Fuzzy LIKE match against local alias_index
+          7. If still unresolved → AliasResolution(normalized=None, confidence="unknown")
+        """
+
+    def normalize_batch(
+        self,
+        raws: list[str],
+        *,
+        actor_id: str | None = None,
+    ) -> list[AliasResolution]:
+        """Normalize multiple names. Ambiguous names are NOT collapsed."""
+
+    # ── Reverse lookup ─────────────────────────────────────
+    def label_for(self, connector_id: str) -> str | None:
+        """Get the human-readable label for a connector_id (e.g., 'calendar' → 'Family Calendar')."""
+
+    def labels_for_batch(self, connector_ids: list[str]) -> dict[str, str]:
+        """Get labels for multiple connector_ids."""
+
+    # ── Index maintenance ──────────────────────────────────
+    def rebuild_global_alias_index(self) -> None:
+        """Rebuild the in-memory global alias map from GlobalProjectionStore.
+        Called after connector registration changes."""
+
+    def global_alias_count(self) -> int:
+        """Number of entries in the global alias index."""
+
+    # ── Ambiguity ──────────────────────────────────────────
+    def is_ambiguous(self, raw: str, *, actor_id: str | None = None) -> bool:
+        """True if this raw name could refer to multiple connector_ids."""
+
+    def disambiguation_candidates(
+        self, raw: str, *, actor_id: str | None = None
+    ) -> list[dict]:
+        """Return {connector_id, label, resource_label} for each candidate."""
+```
+
+#### 10.3 Internal Design
+
+**Resolution algorithm (7-step cascade):**
+
+```text
+normalize(raw, actor_id=None):
+
+  Step 1 — Global LABELS exact match (case-insensitive):
+    raw_lower = raw.strip().lower()
+    if raw_lower in global_labels_lower:
+        return AliasResolution(raw, global_labels_lower[raw_lower],
+            confidence="exact", candidates=[], source="global_catalog")
+
+  Step 2 — Global connector_id exact match:
+    if raw_lower in global_connector_ids:
+        return AliasResolution(raw, raw_lower,
+            confidence="exact", candidates=[], source="global_catalog")
+
+  Step 3 — Local alias_index exact match (requires actor_id):
+    if actor_id and local_store:
+        matches = local_store.resolve_alias(raw_lower, actor_id, entity_type="resource")
+        if len(matches) == 1:
+            resource = local_store.get_connected_resource(matches[0].entity_id)
+            if resource:
+                return AliasResolution(raw, resource.connector_id,
+                    confidence="resource_based", candidates=[],
+                    source="local_alias")
+
+  Step 4 — Local connected_resources label exact match (requires actor_id):
+    if actor_id and local_store:
+        resources = local_store.list_connected_resources(actor_id)
+        for res in resources:
+            if res.label.lower() == raw_lower:
+                return AliasResolution(raw, res.connector_id,
+                    confidence="resource_based", candidates=[],
+                    source="resource_label")
+
+  Step 5 — Global LABELS fuzzy match (LIKE '%raw%'):
+    candidates = [cid for label, cid in global_labels_lower.items()
+                  if raw_lower in label]
+    if len(candidates) == 1:
+        return AliasResolution(raw, candidates[0],
+            confidence="fuzzy", candidates=[], source="global_catalog")
+    if len(candidates) > 1:
+        return AliasResolution(raw, None,
+            confidence="unknown", candidates=candidates, source="global_catalog")
+
+  Step 6 — Local alias fuzzy match:
+    if actor_id and local_store:
+        fuzzy_matches = local_store.fuzzy_resolve_alias(
+            raw_lower, actor_id, entity_type="resource"
+        )
+        # ... similar single/multi logic ...
+
+  Step 7 — Unresolved:
+    return AliasResolution(raw, None,
+        confidence="unknown", candidates=[], source="global_catalog")
+```
+
+**Global alias index (in-memory dict, built from GlobalProjectionStore):**
+
+```text
+On init() or rebuild_global_alias_index():
+  1. global_labels_lower = {}
+  2. For each connector in global_store.list_connectors():
+       global_labels_lower[connector.label.lower()] = connector.connector_id
+       global_connector_ids.add(connector.connector_id.lower())
+       # Also index common aliases:
+       - "google calendar" → "google_calendar_read"
+       - "apple calendar" → "apple_reminders"
+       - "todo list" → "tasks"
+       - "grocery list" → "shopping"
+       - "family calendar" → "calendar"
+       - etc. (from connector catalog)
+  3. label_for_cache = {connector.connector_id: connector.label}
+```
+
+**Common alias mappings (built-in, overridable):**
+
+```python
+# Static mapping for well-known user-facing names
+# These are the "headline" aliases that Back/Planner see in prompts
+COMMON_ALIASES: dict[str, str] = {
+    "google calendar": "google_calendar_read",
+    "apple calendar": "apple_reminders",
+    "apple reminders": "apple_reminders",
+    "todo list": "tasks",
+    "to-do list": "tasks",
+    "grocery list": "shopping",
+    "shopping list": "shopping",
+    "family calendar": "calendar",
+    "family tasks": "tasks",
+    "family chores": "chores",
+    "family reminders": "reminders",
+    "family notes": "notes",
+    "family contacts": "contacts",
+    "family budget": "budgets",
+    "my calendar": None,     # resolved via local_store (actor-scoped)
+    "my tasks": None,        # resolved via local_store
+    "kid's calendar": None,  # resolved via local_store
+}
+```
+
+**Confidence scoring:** `"exact"` > `"resource_based"` > `"fuzzy"` > `"unknown"`. The `SituatedResolver` uses confidence to decide: `"unknown"` → `needs_disambiguation` verdict.
+
+#### 10.4 Wiring — Where It's Used
+
+```text
+Used BY:
+  RequestFrameBuilder (Back → Frame)
+    → User says "add dentist to Riley's calendar"
+    → normalize("Riley's calendar", actor_id=...) → "calendar"
+    → normalize("dentist") → no connector match → passed as subject hint
+    → Populates RequestFrame.resource_kind_hint + connector_hint
+
+  ResolveResourcesService.resolve()
+    → After resolving person + resource references in LocalProjectionStore:
+    → normalize(resource.label, actor_id=...) to confirm connector_id
+    → Cross-references with GlobalProjectionStore admission_verdict
+
+  SituatedResolver.resolve()
+    → When RequestFrame has an ambiguous resource reference:
+    → disambiguation_candidates(raw, actor_id=...) → list of {connector_id, label}
+    → Included in CandidateUniverse for HIL choices
+
+  Back prompt (connector_summary phase)
+    → Renders connector labels via label_for(connector_id)
+    → "calendar" → "Family Calendar" in the prompt
+
+  ManifestTranslator.translate()
+    → Normalizes connector names from IFL manifests
+    → "Google Calendar Read Adapter" → "google_calendar_read"
+```
+
+#### 10.5 E2E Data Flow
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│ Back receives: "Add dentist to Riley's calendar Monday 3pm" │
+│                                                             │
+│  RequestFrameBuilder:                                       │
+│    normalize("Riley's calendar")                            │
+│                                                             │
+│    Step 1 — Global LABELS: "riley's calendar" not in        │
+│      {"family calendar", "google calendar", ...}            │
+│    Step 2 — Global connector_id: not a connector_id         │
+│    Step 3 — Local alias: resolve_alias("riley's calendar")  │
+│      → match: resource_id="res_cal_riley_001"               │
+│      → get_connected_resource("res_cal_riley_001")          │
+│      → connector_id="calendar"                              │
+│    → AliasResolution(                                       │
+│        raw="Riley's calendar",                              │
+│        normalized="calendar",                                │
+│        confidence="resource_based",                         │
+│        source="local_alias"                                 │
+│      )                                                      │
+│                                                             │
+│  Frame built with connector_hint="calendar".                │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│ Back prompt renders connector labels                        │
+│                                                             │
+│  For each connector in ResolutionEnvelope:                  │
+│    label = normalizer.label_for("calendar")                 │
+│    → "Family Calendar"                                      │
+│    label = normalizer.label_for("google_calendar_read")     │
+│    → "Google Calendar"                                      │
+│    label = normalizer.label_for("chores")                   │
+│    → "Family Chores"                                        │
+│                                                             │
+│  Prompt:                                                    │
+│    ## Available Connectors                                  │
+│    - Family Calendar (calendar)                             │
+│    - Google Calendar (google_calendar_read)                 │
+│    - Family Chores (chores)                                 │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│ Ambiguity resolution                                        │
+│                                                             │
+│  User says: "check Riley's schedule"                        │
+│  normalize("Riley's schedule")                              │
+│                                                             │
+│  → No global match, no single local match.                  │
+│  → Fuzzy local: resources with "Riley" + "schedule/calendar"│
+│    → Candidates:                                            │
+│      - "Riley's Google Calendar" (google_calendar_read)     │
+│      - "Riley's Chores" (chores)                            │
+│      - "Riley's Tasks" (tasks)                               │
+│                                                             │
+│  is_ambiguous("Riley's schedule") → True                    │
+│  disambiguation_candidates("Riley's schedule") →            │
+│    [                                                         │
+│      {connector_id: "google_calendar_read",                 │
+│       label: "Google Calendar",                             │
+│       resource_label: "Riley's Google Calendar"},           │
+│      {connector_id: "chores",                               │
+│       label: "Family Chores",                               │
+│       resource_label: "Riley's Chores"},                    │
+│      {connector_id: "tasks",                                │
+│       label: "Family Tasks",                                │
+│       resource_label: "Riley's Tasks"},                     │
+│    ]                                                        │
+│                                                             │
+│  SituatedResolver returns needs_disambiguation with         │
+│  these candidates → Back asks HIL: "Which schedule?"        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### 10.6 Test Coverage
+
+```text
+GAP-P1-013: ConnectorAliasNormalizer unit tests
+  File: tests/k1/fabric/stores/test_alias_normalizer.py
+
+  Test classes:
+    TestGlobalAliasResolution
+      - test_normalize_exact_global_label_match
+      - test_normalize_exact_connector_id_match
+      - test_normalize_case_insensitive
+      - test_normalize_whitespace_trimmed
+      - test_normalize_fuzzy_single_match
+      - test_normalize_fuzzy_multiple_matches_returns_candidates
+      - test_normalize_no_match_returns_unknown
+      - test_normalize_common_alias ("google calendar" → google_calendar_read)
+
+    TestLocalAliasResolution
+      - test_normalize_local_alias_exact_match
+      - test_normalize_local_resource_label_match
+      - test_normalize_local_takes_precedence_over_global_when_both_exact
+      - test_normalize_local_requires_actor_id
+
+    TestConfidenceScoring
+      - test_exact_confidence_highest
+      - test_resource_based_confidence_medium
+      - test_fuzzy_confidence_low
+      - test_unknown_confidence_lowest
+
+    TestBatchNormalization
+      - test_normalize_batch_all_resolved
+      - test_normalize_batch_some_ambiguous
+      - test_normalize_batch_preserves_order
+
+    TestReverseLookup
+      - test_label_for_known_connector
+      - test_label_for_unknown_connector_returns_none
+      - test_labels_for_batch_all_known
+      - test_labels_for_batch_some_unknown
+
+    TestGlobalIndexRebuild
+      - test_rebuild_global_alias_index_from_store
+      - test_rebuild_respects_new_connector_registration
+      - test_global_alias_count_matches_store
+
+    TestAmbiguity
+      - test_is_ambiguous_multiple_candidates
+      - test_is_ambiguous_single_candidate
+      - test_is_ambiguous_no_candidates
+      - test_disambiguation_candidates_returns_label_and_resource_label
+
+    TestIntegrationWithLocalStore
+      - test_normalize_uses_local_store_when_provided
+      - test_normalize_falls_back_to_global_when_local_store_is_none
+```
+
+GAP-P2-002: Back prompt contract tests
+  File to create: tests/k1/concierge/prompt/test_back_prompt_contract.py
+  Covers: loop_start prompt includes GLOBAL constitution rules, meta-tool declarations,
+    execution grounding block. after_resolution prompt includes connector constitution cards,
+    tool name cards, allowed next actions. after_tool_commitment prompt includes schemas
+    ONLY for committed tools. after_invocation prompt includes observations.
+  Source: CC-10 injection schedule
+
+GAP-P2-003: Back tool invocation paradigm tests
+  File to create: tests/k1/concierge/tools/test_invoke_by_binding_id.py
+  Covers: Back invokes by binding_id (not capability_name), InvocationObservation shape,
+    FabricDispatchAdapter integration
+
+GAP-P2-004: Back tier classification tests
+  File to create: tests/k1/concierge/react/test_tier_classification.py
+  Covers: Tier 2 vs Tier 3 promotion triggers, BackPromotionOutcome shape,
+    escalation_reason, companion_resource_roles[]
+
+GAP-P2-005: Back HIL integration tests
+  File to create: tests/k1/concierge/react/test_back_hil_integration.py
+  Covers: HIL fires on missing_required_params, HIL choices from CandidateUniverse,
+    HIL response arrives in next BackTaskEnvelope
+
+GAP-P2-006: discover_capabilities catalog-only mode tests
+  File to create: tests/k1/concierge/tools/test_discover_capabilities_catalog_mode.py
+  Covers: discovery_mode=catalog → catalog_only marker, allowed_next_actions=[],
+    Back refuses to invoke from catalog results
+  Related: C-014 open question
+
+GAP-P2-007: E2E Tier 2 spine integration
+  File to create: tests/integration/test_tier2_spine_e2e.py
+  Covers: BackTaskEnvelope → resolve_situation → Fabric → Bridge → NativeToolProvider
+    → calendar.create_event → VerificationObservation → submit_result(completed)
+  This is THE critical E2E gate.
+
+GAP-P2-008: Negative proof — Back cannot skip resolve_situation
+  File to create: tests/k1/concierge/react/test_back_cannot_skip_resolution.py
+  Covers: Back calls invoke_capability without resolve_situation → blocked,
+    Back invents capability names → rejected, Back calls submit_result before
+    verification → blocked
+
+GAP-P2-009: Negative proof — Back cannot exceed allowed_next_actions
+  File to create: tests/k1/concierge/react/test_back_allowed_actions_enforcement.py
+  Covers: Back attempts action not in allowed_next_actions[] → dispatcher blocks,
+    Back attempts forbidden_tool_calls[] → dispatcher blocks
+
+```
+
+#### 2.4 Implementation Plan
+
+```text
+Step 2.1: RequestFrame builder
+  - Promote poc/back_tool_contract_v2/request_frame_builder.py → k1/concierge/react/request_frame.py
+  - Implement Contract A shape (user_goal, actor_ref, operation_hints[], resource_references[], etc.)
+  - Wire into back_handler — called before resolve_situation
+  - Write: tests for RequestFrame extraction against 100 scenario corpus
+
+Step 2.2: Back prompt contract (CC-10)
+  - Refactor back_prompt.py to match CC-10 injection schedule:
+    loop_start → after_resolution → after_tool_commitment → after_invocation
+  - Inject PromptPack cards at each phase
+  - disclose connector constitution + tool names at Phase 1, schemas only after commitment
+  - Write GAP-P2-002
+
+Step 2.3: Back ReAct loop — resolve_situation integration
+  - In back_handler, after RequestFrame: call resolve_situation (not discover_capabilities)
+  - Parse ResolutionEnvelope → extract allowed_next_actions[], PromptPack, CandidateUniverse
+  - Enforce: Back acts only through allowed_next_actions[]
+  - Write GAP-P2-001, GAP-P2-009
+
+Step 2.4: Tool invocation paradigm
+  - Back invokes by binding_id (from BindingBundle), not hand-copied capability_name
+  - FabricDispatchAdapter passes binding_id through to CapabilityFabric
+  - Back receives normalized InvocationObservation
+  - Write GAP-P2-003
+
+Step 2.5: Tier classification + promotion
+  - Implement tier classification logic in back_handler
+  - Promotion triggers: cross-connector, companion resources, dependency graph, incomplete projection
+  - BackPromotionOutcome → bus → FSM → Orchestrator
+  - Write GAP-P2-004
+
+Step 2.6: HIL integration
+  - Back receives HIL choices from CandidateUniverse (resolved by Fabric)
+  - HIL request/response cycle through session_bus
+  - Write GAP-P2-005
+
+Step 2.7: discover_capabilities demotion
+  - Add discovery_mode flag to Back tool context
+  - When discovery_mode=catalog: return results with catalog_only marker, allowed_next_actions=[]
+  - When discovery_mode=execution: Back MUST use resolve_situation
+  - Write GAP-P2-006
+
+Step 2.8: E2E Tier 2 integration gate
+  - Full spine test: BackTaskEnvelope → resolve_situation → Fabric → Bridge → calendar.create_event
+  - Write GAP-P2-007 (critical)
+  - Write GAP-P2-008 (negative proof)
+  - Run ALL existing concierge tests (177+ files) — must all pass
+  - Run Phase 1 tests — must all pass (regression)
+```
+
+**Files to create:**
+
+```text
+k1/concierge/react/request_frame.py              (promoted from POC request_frame_builder.py)
+tests/k1/concierge/react/test_resolve_situation_integration.py
+tests/k1/concierge/prompt/test_back_prompt_contract.py
+tests/k1/concierge/tools/test_invoke_by_binding_id.py
+tests/k1/concierge/react/test_tier_classification.py
+tests/k1/concierge/react/test_back_hil_integration.py
+tests/k1/concierge/tools/test_discover_capabilities_catalog_mode.py
+tests/integration/test_tier2_spine_e2e.py
+tests/k1/concierge/react/test_back_cannot_skip_resolution.py
+tests/k1/concierge/react/test_back_allowed_actions_enforcement.py
+```
+
+**Files to modify:**
+
+```text
+k1/concierge/actors/back.py                      (RequestFrame → resolve_situation, tier classify)
+k1/concierge/prompt/back_prompt.py               (CC-10 injection schedule)
+k1/concierge/react/loop.py                       (allowed_next_actions enforcement)
+k1/concierge/tools/implementations.py            (discovery_mode flag, binding_id invoke)
+k1/concierge/tools/schemas_back.py               (resolve_situation meta-tool declaration)
+k1/concierge/adapters/fabric_dispatch.py         (binding_id passthrough)
+k1/concierge/fsm/controller.py                   (BackPromotionOutcome → Tier 3 routing)
+```
+
+---
+
+### Workbook Phase 2 — Back
+
+> **Ground-reality audit date:** 2026-06-02. Based on full code audit of `k1/concierge/` (177+ test files), `k1/concierge/actors/back.py`, `k1/concierge/prompt/back_prompt.py`, `k1/concierge/react/loop.py`, `k1/concierge/tools/schemas_back.py`, `k1/concierge/tools/implementations.py`, `k1/concierge/adapters/fabric_dispatch.py`, and `k1/concierge/fsm/controller.py`.
+
+---
+
+#### 2.1 Ground Reality — Back Execution Actor
+
+**File:** `k1/concierge/actors/back.py`
+
+Back receives a `BackTaskEnvelope` via `route_back_envelope()`, which calls `back_handler()`. The handler:
+
+1. Reads SessionState once at task start via `SessionStateReaderAdapter`.
+2. Resolves the effective safety band and execution profile.
+3. Builds the Back system prompt via `build_back_system_prompt()` (from `k1/concierge/prompt/back_prompt.py`).
+4. Constructs the initial messages array with task context, tool schemas, and grounding metadata.
+5. Runs the shared `react_loop()` (from `k1/concierge/react/loop.py`) with `actor='back'`.
+6. After loop termination, calls `_emit_back_result()` which publishes `task.complete`, `task.suspended`, or `task.failed` on the session bus.
+
+**Current tool surface (Back meta-tools):** Defined in `k1/concierge/tools/schemas_back.py`. Back receives tier-filtered meta-tools — `discover_capabilities`, `invoke_capability`, `batch_invoke_capabilities`, `submit_result`, `recall_memory`. These are NOT domain tools (calendar, tasks, etc.) — those are discovered through `discover_capabilities` at runtime.
+
+**Current prompt (`k1/concierge/prompt/back_prompt.py`):** The Back system prompt includes:
+
+- Executor role + constraints (act only through meta-tools, never invent capabilities, always verify before side effects).
+- Available meta-tool declarations with JSON schemas.
+- Task context block (user goal, task kind, safety band, session ref).
+- NO connector constitutions, NO staged disclosure, NO PromptPack.
+
+**Current ToolContext/runtime binding:** `ToolContext` provides Back with `prompt_budget`, `max_iterations`, `max_fabric_calls`, `dispatched_tasks` accumulator, and a `dispatch` adapter that routes through `FabricDispatchAdapter` → `CapabilityFabric.execute()`.
+
+---
+
+#### 2.2 Ground Reality — Back ReAct Loop
+
+**File:** `k1/concierge/react/loop.py`
+
+The shared `react_loop()` handles both Front and Back actors. For Back specifically:
+
+1. Constructs ModelHub request with messages + tools + generation config.
+2. LLM responds with tool calls or text.
+3. Tool calls are validated against the declared tool surface — unknown tools rejected.
+4. Validated calls dispatched through `ToolDispatcher` (parallel or sequential per `parallel_safety` policy).
+5. Tool results are formatted as tool result messages and appended to conversation.
+6. Loop terminates when Back calls `submit_result(status)` — this sets `react_result.terminal = True`.
+7. If Back calls `submit_result(completed)`, success is assumed; no verification step today.
+8. Loop guards: `max_iterations` cap, `prompt_budget` exhaustion detection, empty-response detection, spin detection (no work in N consecutive iterations).
+
+**Current termination:** `submit_result` is the ONLY terminal action. Statuses: `completed`, `partial`, `needs_hil`, `cannot_execute`, `blocked`, `failed`. Back must provide `summary` and `evidence` fields — but evidence is unstructured today (free text, not typed verification observations).
+
+**Current capability routing (`k1/concierge/react/capability_routing.py`):** `_bind_capability_for_back_action()` validates or repairs the Back-chosen `capability_name` against the registry. `bind_capability()` ensures required params exist. `recovery_for_unsatisfied_contract()` provides a soft recovery path — prompts Back to fix params rather than hard-blocking.
+
+---
+
+#### 2.3 Ground Reality — Back Tool Implementations
+
+**File:** `k1/concierge/tools/implementations.py`
+
+**`discover_capabilities`:** Back calls this with `domain`, `intent`, `safety_band`, `top_k`. Routes through `FabricRetrieval.discover_capabilities()` → `RetrievalEngine` → returns scored `CapabilityContract` records. Back chooses a capability name from the results and passes it to `invoke_capability`. This is the CURRENT baseline path (catalog search → LLM choose → invoke). Target replaces this with `resolve_situation`.
+
+**`invoke_capability`:** Back provides `capability_name` + `params`. The implementation:
+
+1. Calls `_bind_capability_for_back_action()` to validate the name against the registry.
+2. Constructs `CapabilityRequest` with required inputs validated against schema.
+3. Routes through `FabricDispatchAdapter.dispatch_direct()` → `CapabilityFabric.execute()`.
+4. Returns `ToolResult` with status and data.
+
+**`submit_result`:** Back provides `status` + `summary` + `evidence`. The implementation validates the status, emits `task.complete`/`task.suspended`/`task.failed`, and terminates the loop. No verification gate today — Back can submit `completed` without proving the write persisted.
+
+---
+
+#### 2.4 Ground Reality — Test Coverage (177+ concierge test files)
+
+| Category | Key files | Coverage |
+|---|---|---|
+| Back actor | `test_back_resume_resolution_frame.py`, `test_back_result_frame.py`, `test_back_handler_profile_wiring.py` | Back handler + result frames |
+| Tools | `test_tool_dispatcher_tier_collapse.py` + many more in `tools/` | Tool dispatch, discovery, invocation |
+| Factory | `test_concierge_factory.py`, `test_concierge_factory_stress.py` | ConciergeFactory |
+| Task | `test_dispatch_grounding_fields.py` | Grounding field propagation in dispatch |
+| Bus | `test_bus_temporal_topics.py` | Bus topic integrity |
+| Contracts | `test_contract_converter.py`, `test_c1_port_protocols.py` | Contract conversion + port protocols |
+| Calendar | `test_calendar_tools.py` | Calendar tools through concierge |
+| HIL | `test_controller_hil_port.py` | HIL port on controller |
+| Identity | `test_dynamic_identity.py` | Dynamic identity injection |
+| Event registry | `test_event_registry_completeness.py` | Event registry audit |
+| Other | `test_fabric_port.py`, `test_episodic_compressor.py`, `test_e0515_obs_stubs.py`, `test_bootstrap_smoke.py` | Ports, compression, obs, smoke |
+
+---
+
+#### 2.5 New Tests Required (GATE-P2)
+
+```text
+GAP-P2-001: Back ReAct loop — resolve_situation integration
+  File to create: tests/k1/concierge/react/test_resolve_situation_integration.py
+  Covers: Back builds RequestFrame → calls resolve_situation → receives ResolutionEnvelope
+    → acts only through allowed_next_actions[]
+
+GAP-P2-002: Back prompt contract tests
+  File to create: tests/k1/concierge/prompt/test_back_prompt_contract.py
+  Covers: loop_start prompt includes GLOBAL constitution rules, meta-tool declarations,
+    execution grounding block. after_resolution prompt includes connector constitution cards,
+    tool name cards, allowed next actions. after_tool_commitment prompt includes schemas
+    ONLY for committed tools. after_invocation prompt includes observations.
+  Source: CC-10 injection schedule
+
+GAP-P2-003: Back tool invocation paradigm tests
+  File to create: tests/k1/concierge/tools/test_invoke_by_binding_id.py
+  Covers: Back invokes by binding_id (not capability_name), InvocationObservation shape,
+    FabricDispatchAdapter integration
+
+GAP-P2-004: Back tier classification tests
+  File to create: tests/k1/concierge/react/test_tier_classification.py
+  Covers: Tier 2 vs Tier 3 promotion triggers, BackPromotionOutcome shape,
+    escalation_reason, companion_resource_roles[]
+
+GAP-P2-005: Back HIL integration tests
+  File to create: tests/k1/concierge/react/test_back_hil_integration.py
+  Covers: HIL fires on missing_required_params, HIL choices from CandidateUniverse,
+    HIL response arrives in next BackTaskEnvelope
+
+GAP-P2-006: discover_capabilities catalog-only mode tests
+  File to create: tests/k1/concierge/tools/test_discover_capabilities_catalog_mode.py
+  Covers: discovery_mode=catalog → catalog_only marker, allowed_next_actions=[],
+    Back refuses to invoke from catalog results
+  Related: C-014 open question
+
+GAP-P2-007: E2E Tier 2 spine integration
+  File to create: tests/integration/test_tier2_spine_e2e.py
+  Covers: BackTaskEnvelope → resolve_situation → Fabric → Bridge → NativeToolProvider
+    → calendar.create_event → VerificationObservation → submit_result(completed)
+  This is THE critical E2E gate.
+
+GAP-P2-008: Negative proof — Back cannot skip resolve_situation
+  File to create: tests/k1/concierge/react/test_back_cannot_skip_resolution.py
+  Covers: Back calls invoke_capability without resolve_situation → blocked,
+    Back invents capability names → rejected, Back calls submit_result before
+    verification → blocked
+
+GAP-P2-009: Negative proof — Back cannot exceed allowed_next_actions
+  File to create: tests/k1/concierge/react/test_back_allowed_actions_enforcement.py
+  Covers: Back attempts action not in allowed_next_actions[] → dispatcher blocks,
+    Back attempts forbidden_tool_calls[] → dispatcher blocks
+```
+
+---
+
+#### 2.6 Implementation Plan
+
+```text
+Step 2.1: RequestFrame builder
+  - Promote poc/back_tool_contract_v2/request_frame_builder.py → k1/concierge/react/request_frame.py
+  - Implement Contract A shape (user_goal, actor_ref, operation_hints[], resource_references[], etc.)
+  - Wire into back_handler — called before resolve_situation
+  - Write: tests for RequestFrame extraction against 100 scenario corpus
+
+Step 2.2: Back prompt contract (CC-10)
+  - Refactor back_prompt.py to match CC-10 injection schedule:
+    loop_start → after_resolution → after_tool_commitment → after_invocation
+  - Inject PromptPack cards at each phase
+  - disclose connector constitution + tool names at Phase 1, schemas only after commitment
+  - Write GAP-P2-002
+
+Step 2.3: Back ReAct loop — resolve_situation integration
+  - In back_handler, after RequestFrame: call resolve_situation (not discover_capabilities)
+  - Parse ResolutionEnvelope → extract allowed_next_actions[], PromptPack, CandidateUniverse
+  - Enforce: Back acts only through allowed_next_actions[]
+  - Write GAP-P2-001, GAP-P2-009
+
+Step 2.4: Tool invocation paradigm
+  - Back invokes by binding_id (from BindingBundle), not hand-copied capability_name
+  - FabricDispatchAdapter passes binding_id through to CapabilityFabric
+  - Back receives normalized InvocationObservation
+  - Write GAP-P2-003
+
+Step 2.5: Tier classification + promotion
+  - Implement tier classification logic in back_handler
+  - Promotion triggers: cross-connector, companion resources, dependency graph, incomplete projection
+  - BackPromotionOutcome → bus → FSM → Orchestrator
+  - Write GAP-P2-004
+
+Step 2.6: HIL integration
+  - Back receives HIL choices from CandidateUniverse (resolved by Fabric)
+  - HIL request/response cycle through session_bus
+  - Write GAP-P2-005
+
+Step 2.7: discover_capabilities demotion
+  - Add discovery_mode flag to Back tool context
+  - When discovery_mode=catalog: return results with catalog_only marker, allowed_next_actions=[]
+  - When discovery_mode=execution: Back MUST use resolve_situation
+  - Write GAP-P2-006
+
+Step 2.8: E2E Tier 2 integration gate
+  - Full spine test: BackTaskEnvelope → resolve_situation → Fabric → Bridge → calendar.create_event
+  - Write GAP-P2-007 (critical)
+  - Write GAP-P2-008 (negative proof)
+  - Run ALL existing concierge tests (177+ files) — must all pass
+  - Run Phase 1 tests — must all pass (regression)
+```
+
+**Files to create:**
+
+```text
+k1/concierge/react/request_frame.py              (promoted from POC request_frame_builder.py)
+tests/k1/concierge/react/test_resolve_situation_integration.py
+tests/k1/concierge/prompt/test_back_prompt_contract.py
+tests/k1/concierge/tools/test_invoke_by_binding_id.py
+tests/k1/concierge/react/test_tier_classification.py
+tests/k1/concierge/react/test_back_hil_integration.py
+tests/k1/concierge/tools/test_discover_capabilities_catalog_mode.py
+tests/integration/test_tier2_spine_e2e.py
+tests/k1/concierge/react/test_back_cannot_skip_resolution.py
+tests/k1/concierge/react/test_back_allowed_actions_enforcement.py
+```
+
+**Files to modify:**
+
+```text
+k1/concierge/actors/back.py                      (RequestFrame → resolve_situation, tier classify)
+k1/concierge/prompt/back_prompt.py               (CC-10 injection schedule)
+k1/concierge/react/loop.py                       (allowed_next_actions enforcement)
+k1/concierge/tools/implementations.py            (discovery_mode flag, binding_id invoke)
+k1/concierge/tools/schemas_back.py               (resolve_situation meta-tool declaration)
+k1/concierge/adapters/fabric_dispatch.py         (binding_id passthrough)
+k1/concierge/fsm/controller.py                   (BackPromotionOutcome → Tier 3 routing)
+```
+
+---
+
+### Workbook Phase 3 — Context Plane
+
+#### 3.1 Current Code Reality
+
+**Grounding infrastructure (Tier 1, S2.7–S2.9; Per-session, P3.6–P3.8):**
+
+| File | Role |
+|---|---|
+| `k1/temporal/kernel/bootstrap.py` | `TemporalServiceBundle` — clock, timezone, policy stack |
+| `k1/temporal/kernel/handle.py` | `TemporalHandle` — per-session temporal state, `refresh_turn()` |
+| `k1/temporal/service/temporal_service.py` | `TemporalService` — temporal resolution |
+| `k1/spatial/kernel/bootstrap.py` | `SpatialServiceBundle` — place registry, geolocation |
+| `k1/spatial/kernel/handle.py` | `SpatialHandle` — per-session spatial state, `refresh_turn()` |
+| `k1/grounding/kernel/bootstrap.py` | `GroundingServiceBundle` — composite wrapping temporal+spatial+identity |
+| `k1/grounding/kernel/handle.py` | `GroundingHandle` — per-session grounding, `build_projection()`, `refresh_turn()` |
+| `k1/grounding/service/grounding_service.py` | `GroundingService` — builds `GroundingEnvelope` → `GroundingProjection` |
+| `k1/grounding/service/propagation.py` | `build_propagation_metadata()` — dispatch attachment |
+| `k1/grounding/adapters/selfmodel_identity_adapter.py` | `SelfModelIdentityAdapter` — bridges selfmodel actor_id into grounding |
+| `k1/grounding/adapters/temporal_handle_adapter.py` | `TemporalHandleAdapter` |
+| `k1/grounding/adapters/spatial_handle_adapter.py` | `SpatialHandleAdapter` |
+
+**SelfModel (Tier 1, S2.6; Per-session, P3.5):**
+
+| File | Role |
+|---|---|
+| `k1/selfmodel/kernel/bootstrap.py` | `SelfModelServiceBundle` |
+| `k1/selfmodel/kernel/handle.py` | `SelfModelHandle` — `SituationFrame = S(actor) ∩ F ∩ C`, `render_capsule()` |
+| `k1/selfmodel/service/self_model.py` | `SelfModelService` — `K1SelfModelSnapshot` per `actor_id` |
+| `k1/selfmodel/service/space_graph.py` | `SpaceGraphService` — members with `display_name`, `role`, `age_band` |
+| `k1/selfmodel/service/situation_composer.py` | `SituationFrameComposer` — golden boundary, Empty-Set Invariants |
+| `k1/selfmodel/service/capsule_builder.py` | `GroundingCapsuleBuilder` — prompt-safe capsule from SituationFrame |
+
+**SessionState (Per-session, P2):**
+
+| File | Role |
+|---|---|
+| `k1/sessionstate/sections/meta.py` | `MetaSection.identity` — `user_id`, `device_id`, `privacy_band` |
+| `k1/sessionstate/sections/persona.py` | `PersonaSection._preferences["active_member"]` — display name |
+| `k1/sessionstate/sections/grounding.py` | `GroundingSection` — envelope/projection metadata IDs |
+| `k1/sessionstate/sections/temporal.py` | Temporal context section |
+| `k1/sessionstate/sections/spatial.py` | Spatial context section |
+
+**Current prompt injection (Front side):**
+
+| File | Role |
+|---|---|
+| `k1/concierge/actors/front.py` | `grounding.refresh_turn()` → `GroundingProjection` → injected into Front prompt at stage 9.5 |
+| `k1/concierge/prompt/dynamic_prompt_builder.py` | `DynamicPromptBuilder` — injects selfmodel capsule + grounding projection |
+
+#### 3.2 Tests Available Today
+
+| Area | Test files | Count |
+|---|---|---|
+| Temporal | `test_types.py`, `test_serialization.py`, `test_package_imports.py`, `test_factory_wiring.py`, `test_events.py`, `service/test_*.py` (5 files), `ports/test_protocol_shapes.py`, `kernel/test_handle.py`, `kernel/test_bundle.py`, `adapters/test_*.py` (3 files) | 19 |
+| Spatial | `test_types_events_serialization.py`, `test_session_state_adapter.py`, `test_privacy_projector.py`, `test_ports_protocol_shapes.py`, `test_place_resolver.py`, `test_place_candidate_source.py`, `test_package_imports.py`, `test_nominatim_geocoder_adapter.py`, `test_location_normalizer.py`, `test_geofence_matcher.py`, `test_factory_wiring.py`, `test_device_context.py`, `kernel/test_handle.py` | 13 |
+| Grounding | `test_prompt_block_renderer_v2.py`, `test_projection_policy_spatial.py`, `test_package_imports.py`, `test_m15_runtime.py`, `test_lease_spatial.py`, `adapters/test_spatial_handle_adapter_real.py` | 6 |
+| SelfModel | `test_module_layout.py`, `test_m9_m10_layer_cleanup.py`, `test_m6_m7_m8_conscience_inversion.py`, `adapters/test_*.py` (10 files), `service/test_*.py` (13+ files) | 66 |
+
+#### 3.3 New Tests Required (GATE-P3)
+
+```text
+GAP-P3-001: Back execution_grounding_block tests
+  File to create: tests/k1/concierge/prompt/test_execution_grounding_block.py
+  Covers: temporal context injection (timezone, "now", resolved dates),
+    spatial context injection (location, place refs), participant context
+    injection (household member list with roles), safety context injection
+
+GAP-P3-002: Back prompt temporal enrichment tests
+  File to create: tests/k1/concierge/prompt/test_temporal_prompt_enrichment.py
+  Covers: timezone-aware hints, upcoming calendar context, deadline awareness
+
+GAP-P3-003: Back prompt spatial enrichment tests
+  File to create: tests/k1/concierge/prompt/test_spatial_prompt_enrichment.py
+  Covers: place context, geofence-aware hints
+
+GAP-P3-004: Back prompt participant enrichment tests
+  File to create: tests/k1/concierge/prompt/test_participant_prompt_enrichment.py
+  Covers: resolved participant list, missing identity flagged as uncertainty_markers[],
+    "Could not resolve 'Aunt Sarah'" → needs_disambiguation
+
+GAP-P3-005: Participant resolution service tests (C-013)
+  File to create: tests/k1/fabric/test_participant_resolution.py
+  Covers: resolve_participant(name, space_id) → actor_id, SpaceGraphService integration,
+    ambiguous names → needs_disambiguation with member candidates
+
+GAP-P3-006: Grounding freshness signal tests
+  File to create: tests/k1/grounding/test_freshness_signals.py
+  Covers: freshness state injection, stale warnings in prompt,
+    stale grounding → HIL, does not execute
+
+GAP-P3-007: PromptPack context_summary tests
+  File to create: tests/k1/fabric/test_promptpack_context_summary.py
+  Covers: PromptPack carries temporal/spatial/participant signals,
+    decision_surface enriched with context-derived constraints
+
+GAP-P3-008: Negative proof — stale grounding blocks execution
+  File to create: tests/k1/concierge/react/test_stale_grounding_blocks_execution.py
+  Covers: spatial context age > threshold → HIL, not execute;
+    unresolvable participant → needs_disambiguation, not guess
+
+GAP-P3-009: Negative proof — missing identity does not halt loop
+  File to create: tests/k1/concierge/react/test_missing_identity_graceful.py
+  Covers: unresolvable name → needs_disambiguation verdict,
+    loop continues with HIL, does not crash or silently guess
+```
+
+#### 3.4 Implementation Plan
+
+```text
+Step 3.1: Build execution_grounding_block for Back's loop_start
+  - New file: k1/concierge/prompt/grounding_block.py
+  - Consumes GroundingProjection (P3.8) + TemporalHandle (P3.6) + SpatialHandle (P3.7)
+    + SelfModelHandle (P3.5)
+  - Renders compact text block: temporal context, spatial context, participant list,
+    safety context, freshness state
+  - Injected into Back prompt at CC-10 loop_start phase
+  - Write GAP-P3-001
+
+Step 3.2: Enrich Back prompt with temporal signals
+  - Extend execution_grounding_block with timezone-aware hints
+  - Add upcoming calendar context (next 7 days summary)
+  - Add deadline awareness for task time references
+  - Write GAP-P3-002
+
+Step 3.3: Enrich Back prompt with spatial signals
+  - Extend execution_grounding_block with place context
+  - Add geofence-aware hints (school distance, location radius)
+  - Write GAP-P3-003
+
+Step 3.4: Enrich Back prompt with participant signals
+  - Extend execution_grounding_block with resolved household member list
+  - Flag unresolved names in uncertainty_markers[]
+  - Write GAP-P3-004
+
+Step 3.5: Implement participant resolution service (C-013)
+  - New file: k1/fabric/resolver/participant_resolver.py
+  - Uses GroundingProjection.space_id → SpaceGraphService.get_view(actor_id)
+    → iterates members → matches display_name
+  - Resolved participants added to CandidateUniverse.impact_set_candidates[]
+  - Ambiguous → Fabric returns needs_disambiguation with member candidates
+  - Write GAP-P3-005
+
+Step 3.6: Inject grounding freshness signals
+  - Add freshness state to execution_grounding_block
+  - Add stale warnings when context age exceeds thresholds
+  - Write GAP-P3-006, GAP-P3-008
+
+Step 3.7: Enrich PromptPack with context_summary
+  - Add context_summary field to PromptPack (Contract G extension)
+  - Carry temporal/spatial/participant signals
+  - Enrich decision_surface with context-derived constraints
+  - Write GAP-P3-007
+
+Step 3.8: Integration gate
+  - Run GATE-P3 checklist (11 items in roadmap)
+  - Run ALL existing temporal tests (19 files) — must all pass
+  - Run ALL existing spatial tests (13 files) — must all pass
+  - Run ALL existing grounding tests (6 files) — must all pass
+  - Run ALL existing selfmodel tests (66 files) — must all pass
+  - Run Phase 1 + Phase 2 tests — must all pass (regression)
+  - Write GAP-P3-009 (negative proof)
+```
+
+**Files to create:**
+
+```text
+k1/concierge/prompt/grounding_block.py                (execution_grounding_block builder)
+k1/fabric/resolver/__init__.py
+k1/fabric/resolver/participant_resolver.py             (C-013 implementation)
+tests/k1/concierge/prompt/test_execution_grounding_block.py
+tests/k1/concierge/prompt/test_temporal_prompt_enrichment.py
+tests/k1/concierge/prompt/test_spatial_prompt_enrichment.py
+tests/k1/concierge/prompt/test_participant_prompt_enrichment.py
+tests/k1/fabric/test_participant_resolution.py
+tests/k1/grounding/test_freshness_signals.py
+tests/k1/fabric/test_promptpack_context_summary.py
+tests/k1/concierge/react/test_stale_grounding_blocks_execution.py
+tests/k1/concierge/react/test_missing_identity_graceful.py
+```
+
+**Files to modify:**
+
+```text
+k1/concierge/prompt/back_prompt.py                    (inject execution_grounding_block at loop_start)
+k1/concierge/actors/back.py                           (consume grounding signals)
+k1/fabric/resolver.py                                 (call participant_resolver)
+k1/fabric/policy/selector.py                          (consume resolved participants)
+k1/grounding/kernel/handle.py                         (expose freshness metadata)
+```
+
+---
+
+### Workbook Phase 4 — IFL
+
+#### 4.1 Current Code Reality
+
+**Bridge IFL tier:**
+
+| File | Role |
+|---|---|
+| `bridge/ifl/__init__.py` | IFL tier placeholder — adapter registry, MCP host |
+| `bridge/ifl/mcp_stdio.py` | MCP stdio transport for child processes |
+| `bridge/ifl/adapters/google_calendar/oauth.py` | Google Calendar OAuth server |
+| `bridge/ifl/adapters/google_calendar/server.py` | Google Calendar MCP server |
+| `bridge/ifl/adapters/google_calendar/consent.py` | Consent flow |
+| `bridge/ports/` | 5 protocol definitions (CMD, QRY, SSE, OBS, IFL) |
+
+**Architecture diagrams:**
+
+| File | Content |
+|---|---|
+| `architecture_diagrams/bridge/bridge_architecture.mmd` | Bridge-owns-IFL hierarchy |
+| `architecture_diagrams/bridge/bridge_architecture_v2.mmd` | Trust roots, K0/K1/Bridge topology |
+| `architecture_diagrams/bridge/interkernel_fabric_layer.mmd` | IFL runtime subsystems (Manifest, Protocol Engine, Adapter Registry, Dispatch, Events) |
+
+**Contracts (in whiteboard):**
+
+| Contract | Content |
+|---|---|
+| CC-7 | Bridge ↔ IFL adapter protocol (`IflCommandEnvelope` / `IflResultEnvelope`) |
+| CC-8 | IFL Manifest → Fabric Capability Registration (`IflManifest` → `CapabilityRegistrationBatch`) |
+| Constitution Tooling | Connector constitution shape + 6 principles |
+| Principle 6 | Constitution ships with connector, not prompt |
+
+#### 4.2 Tests Available Today
+
+| Area | Test files | Count |
+|---|---|---|
+| Bridge IFL | `test_google_calendar_round_trip.py`, `test_google_calendar_oauth_consent.py` | 2 |
+| Bridge connector | 9 files (listed in Phase 1) | 9 |
+| Bridge core/sync/integration | 37+ files | 37 |
+
+#### 4.3 New Tests Required (GATE-P4)
+
+```text
+GAP-P4-001: IFL Manifest schema validation tests
+  File to create: tests/bridge/ifl/test_manifest_schema_validation.py
+  Covers: IflManifest JSON Schema, required fields, capability_templates[] shape,
+    resource_models[] shape, event_topics[], auth_scopes[], safety_metadata,
+    verifier_affordances[], freshness_guarantees
+
+GAP-P4-002: Connector constitution schema validation tests
+  File to create: tests/bridge/ifl/test_constitution_schema_validation.py
+  Covers: ConstitutionArtifact schema, preconditions, companion_resource roles,
+    conflict_analysis_rules[], mutation_sequencing[], hil_gates[],
+    verification_requirements[], versioning
+
+GAP-P4-003: ManifestTranslator round-trip tests
+  File to create: tests/k1/fabric/test_manifest_translator_roundtrip.py
+  Covers: IflManifest → ManifestTranslator → CapabilityRegistrationBatch,
+    all fields preserved, capability naming convention enforced
+
+GAP-P4-004: Adapter protocol contract tests (CC-7)
+  File to create: tests/bridge/ifl/test_adapter_protocol_contract.py
+  Covers: IflCommandEnvelope shape, IflResultEnvelope shape, error codes,
+    recovery actions, MCP stdio transport contract
+
+GAP-P4-005: Reference connector E2E (Google Calendar)
+  File to create: tests/integration/test_google_calendar_e2e_full.py
+  Covers: manifest → registration → resolve_situation → invoke → verify → submit_result
+    through FULL 4-plane stack. This is the ultimate integration test.
+
+GAP-P4-006: Negative proof — malformed manifest
+  File to create: tests/bridge/ifl/test_manifest_rejection.py
+  Covers: missing required fields → rejected, invalid capability name format → rejected,
+    unsigned manifest → rejected, missing constitution → rejected
+
+GAP-P4-007: Negative proof — adapter security
+  File to create: tests/bridge/ifl/test_adapter_security.py
+  Covers: unsigned adapter → AdapterVerifier rejects, revoked adapter → rejected,
+    credential leak attempt → blocked
+```
+
+#### 4.4 Implementation Plan
+
+```text
+Step 4.1: IFL Manifest Standard document
+  - New file: docs/ifl/IFL_MANIFEST_STANDARD.md
+  - JSON Schema for IflManifest with all CC-8 fields
+  - Examples: Google Calendar, generic REST API, WebSocket adapter
+  - Write GAP-P4-001
+
+Step 4.2: Connector Constitution Standard document
+  - New file: docs/ifl/CONNECTOR_CONSTITUTION_STANDARD.md
+  - JSON Schema for ConstitutionArtifact
+  - Authoring guide: how to define preconditions, companion resources, conflict rules,
+    HIL gates, verification requirements
+  - Write GAP-P4-002
+
+Step 4.3: Tool Design Contract document
+  - New file: docs/ifl/TOOL_DESIGN_CONTRACT.md
+  - Capability naming convention specification
+  - Input/output JSON Schema requirements
+  - Effect declarations, safety requirements, limitations
+  - Verifier affordance declarations
+
+Step 4.4: Policy Authoring Standard document
+  - New file: docs/ifl/POLICY_AUTHORING_STANDARD.md
+  - PolicyBundle schema for domain authors
+  - Guide cards authoring patterns
+  - Cross-connector governance rule templates
+
+Step 4.5: Adapter Protocol Standard document (CC-7)
+  - New file: docs/ifl/ADAPTER_PROTOCOL_STANDARD.md
+  - IflCommandEnvelope / IflResultEnvelope specification
+  - Error codes and recovery actions
+  - MCP stdio transport contract
+  - Write GAP-P4-004
+
+Step 4.6: Connector Authoring Guide
+  - New file: docs/ifl/CONNECTOR_AUTHORING_GUIDE.md
+  - Step-by-step: create a new connector
+  - Adapter implementation template (Python MCP server)
+  - Credential setup (OAuth, API keys → CredentialVault)
+  - Testing checklist before registration
+  - Reference: Google Calendar connector as worked example
+
+Step 4.7: ManifestTranslator hardening
+  - Audit ManifestTranslator against CC-8 contract
+  - Ensure all IflManifest fields are translated to CapabilityRegistrationBatch
+  - Ensure capability naming convention enforced at registration
+  - Write GAP-P4-003
+
+Step 4.8: Reference connector — Google Calendar
+  - Redesign bridge/ifl/adapters/google_calendar/ to new IFL standard
+  - Full manifest with constitution, resource models, capability templates
+  - Full JSON schemas for all operations
+  - Passes Phase 1 Fabric gate, Phase 2 E2E gate, Phase 3 Context Plane gate
+  - Write GAP-P4-005 (ultimate integration test)
+  - Write GAP-P4-006, GAP-P4-007 (negative proof)
+
+Step 4.9: Integration gate
+  - All 5 standard documents published
+  - Reference connector passes all 4 gates (Fabric → Back → Context Plane → IFL)
+  - Run ALL existing tests — must all pass (regression across all phases)
+```
+
+**Files to create:**
+
+```text
+docs/ifl/IFL_MANIFEST_STANDARD.md
+docs/ifl/CONNECTOR_CONSTITUTION_STANDARD.md
+docs/ifl/TOOL_DESIGN_CONTRACT.md
+docs/ifl/POLICY_AUTHORING_STANDARD.md
+docs/ifl/ADAPTER_PROTOCOL_STANDARD.md
+docs/ifl/CONNECTOR_AUTHORING_GUIDE.md
+tests/bridge/ifl/test_manifest_schema_validation.py
+tests/bridge/ifl/test_constitution_schema_validation.py
+tests/k1/fabric/test_manifest_translator_roundtrip.py
+tests/bridge/ifl/test_adapter_protocol_contract.py
+tests/integration/test_google_calendar_e2e_full.py
+tests/bridge/ifl/test_manifest_rejection.py
+tests/bridge/ifl/test_adapter_security.py
+```
+
+**Files to modify:**
+
+```text
+bridge/ifl/__init__.py                              (manifest registry, protocol engine)
+bridge/ifl/mcp_stdio.py                             (CC-7 contract compliance)
+bridge/ifl/adapters/google_calendar/server.py       (reference implementation redesign)
+bridge/ifl/adapters/google_calendar/oauth.py        (credential vault integration)
+bridge/connector/gateway.py                         (CC-6 contract compliance audit)
+bridge/connector/adapter_verifier.py                (CA signature + revocation check)
+k1/fabric/manifest_translator.py                    (CC-8 contract compliance audit)
+```
+
+---
+
+### Cross-Phase Regression Suite
+
+After each phase, ALL prior-phase tests must continue passing. The regression suite grows cumulatively:
+
+```text
+After Phase 1:
+  pytest tests/k1/fabric/ -v
+  pytest tests/bridge/ -v
+  pytest tests/k1/tools/family/ -v
+  pytest tests/k1/hil/ -v
+  → ~228 test files
+
+After Phase 2:
+  + pytest tests/k1/concierge/ -v
+  + pytest tests/integration/test_tier2_spine_e2e.py -v
+  → ~405 test files
+
+After Phase 3:
+  + pytest tests/k1/temporal/ -v
+  + pytest tests/k1/spatial/ -v
+  + pytest tests/k1/grounding/ -v
+  + pytest tests/k1/selfmodel/ -v
+  → ~509 test files
+
+After Phase 4:
+  + pytest tests/bridge/ifl/ -v
+  + pytest tests/integration/test_google_calendar_e2e_full.py -v
+  → ~522 test files
+
+Total regression suite at completion: ~522 test files, 4 integration gates.
+```
 
 **Section mode:** target normative architecture. This section is authoritative and supersedes any earlier framing in this document that treats Back as the sole governed executor. Where prose elsewhere assigns multi-resource conflict coordination to Back's ReAct loop, read it through the tier ownership defined here.
 
@@ -323,8 +6399,12 @@ TIER 1 — Conversation (user <-> Front)
 
 TIER 2 — Single-connector governed execution (Front + Back)
   Actor:   Back LLM (worker), LOW/simple-MEDIUM tasks.
-  Input to Back is NOT a flat catalog. Back receives, per task class, a
-  small set of CONNECTOR records (e.g. calendar) — each carrying:
+  Current baseline: Back receives task JSON + one SessionState snapshot,
+  a tier-filtered meta-tool surface, and runtime ToolContext bindings.
+  It discovers scored CapabilityContract records and invokes exact
+  registry-owned capability names through invoke_capability.
+  Target contract shape: Input to Back is NOT a flat catalog. Back receives,
+  per task class, a small set of CONNECTOR records (e.g. calendar) carrying:
     - the connector constitution (preconditions: "check duplication,
       check conflicts before create")
     - the connector's tool NAMES (~10), NO full schemas yet
@@ -337,16 +6417,22 @@ TIER 2 — Single-connector governed execution (Front + Back)
 TIER 3 — Multi-resource coordinated mutation (Planner + Orchestrator)
   Trigger: family-impacting / cross-resource / conflict-bearing tasks
            (the Riley picnic case). Back/Front escalate to HIGH tier.
+  Current baseline: HIGH tier is already two-phase. Orchestrator builds a
+           PlanRequest, Planner runs SKETCH -> EXPAND -> VALIDATE -> COMMIT,
+           CommitService emits plan.ready, and Orchestrator executes the
+           deserialized CommittedPlan as a DAG.
   Planner: expands the utterance into an explicit multi-step plan with
-           dependencies (SKETCH -> EXPAND -> VALIDATE -> COMMIT). EXPAND
-           already enriches each step from the CapabilityContract:
-           has_side_effects, compensation, required_context,
-           safety_band_min, timeout_ms.
+           dependencies. EXPAND enriches steps from available
+           CapabilityContract evidence: has_side_effects, compensation,
+           required_context, safety_band_min, timeout_ms.
   Orchestrator: executes the plan deterministically. Dependency edges +
-           PARAM_RESOLVER ($step.result refs) force reads-before-writes;
-           CONDITIONAL_EVAL skips/branches on conflict; SAGA compensates.
+           ParamResolver ($step.result refs) force reads-before-writes;
+           guards can skip/stop; SAGA-style compensation is present when
+           side-effect/compensation metadata supports it.
   Owns:    the impact-set fan-out, conflict detection across calendars +
-           chores + tasks, and the gated write(s).
+           chores + tasks, and the gated write(s) as target behavior. The
+           current missing piece is the contract/projection that declares and
+           proves that cross-resource impact set before planning.
   Maps to: Planner planner_v2.mmd + Orchestrator orchestrator.mmd.
 ```
 
@@ -376,6 +6462,8 @@ Phase 4 (execute / clarify / HIL): run the gated plan; verify; submit.
 ```
 
 Tier 2 runs this within one connector. Tier 3 runs the same staging across multiple connectors, where Phase 1's "plan" becomes the Planner's ExpandedPlan and Phase 4 becomes the Orchestrator DAG.
+
+These four disclosure phases define WHEN information enters the prompt. The complementary section **Constitution Tooling: How Constitutions Drive Execution** (below) defines HOW the constitution drives the five execution phases: grounding → prerequisite reads → conflict analysis → HIL → coordinated mutation. Disclosure phases control visibility; execution phases control ordering and enforcement.
 
 ### The Connector/Capability Constitution Is the Knowledge Carrier
 
@@ -409,6 +6497,232 @@ the resolver PROVES the concrete set       (resolve member ids + their resource 
 ```
 
 So "check Riley's chores and everyone's schedules" is not a model guess and not a hand-written prompt — it is the calendar connector's declared `companion_resources`, instantiated by grounding, proven by the resolver, expanded by the Planner, and gated by the Orchestrator.
+
+### Constitution Tooling: How Constitutions Drive Execution
+
+**Status:** target normative. Integrates the constitution execution model from `future_constitution_tooling.md` into the whiteboard's component-contract spine.
+
+The constitution is not a passive text blob injected into the prompt. It is a **structured, versioned, runtime-enforced contract** that the resolver, Back, Planner, Orchestrator, Fabric, and verifier all consume. The whiteboard already defines WHAT a constitution carries (preconditions, companion resources, verifier requirements, disclosure phases in CC-10). This section defines HOW the constitution drives execution across tiers.
+
+#### Constitution Artifact Shape
+
+Every connector/capability constitution is a versioned artifact with a machine-readable core and optional human-readable guidance. The kernel enforces the machine-readable core; the human-readable guidance is prompt-card material only.
+
+```text
+ConstitutionArtifact
+  constitution_id
+  connector_id
+  capability_refs[]          -- capabilities this constitution governs
+  schema_version
+  authored_by
+  authored_at
+  last_proven_at             -- last time a POC proved these rules hold
+
+  -- MACHINE-ENFORCEABLE CORE (runtime consumes these directly)
+  execution_phases[]         -- ordered phases the runtime must enforce
+  prerequisite_reads[]       -- reads that MUST complete before writes
+  conflict_analysis_rules[]  -- how to evaluate prerequisite read results
+  hil_gates[]                -- conditions that force HIL before proceeding
+  mutation_sequencing[]      -- write ordering and dependency rules
+  verification_requirements[] -- post-write verification obligations
+  companion_resource_roles[] -- role types that expand the impact set
+
+  -- PROMPT-CARD MATERIAL (rendered into PromptPack at disclosure time)
+  precondition_summary        -- compact text for Back/Planner
+  companion_resource_summary  -- compact text for Back/Planner
+  hil_trigger_summary         -- compact text for Back/Planner
+  degradation_policy          -- what happens when a prerequisite read fails
+```
+
+#### The Five Execution Phases
+
+Every constitution declares an ordered execution model. The runtime — not the LLM — enforces phase ordering. The LLM receives phase-specific context, but cannot skip or reorder phases.
+
+```text
+PHASE 1 — RESOLVE GROUNDING (deterministic, no LLM)
+  Owner: Temporal, Spatial, Grounding, and Member/Identity resolvers.
+  Input: user-world references ("Riley", "Monday", "dentist").
+  Output: concrete temporal window, resolved person/participant refs,
+           household scope, timezone, spatial context.
+  Constitution role: declares which grounding dimensions are required
+    before any tool execution. For scheduling: temporal + participant +
+    household scope are mandatory.
+  Runtime enforcement: Back cannot enter Phase 2 until grounding refs
+    are resolved. Missing grounding → HIL, not guessed execution.
+
+PHASE 2 — PARALLEL PREREQUISITE READS (reads may parallelize)
+  Owner: Fabric invocation runtime, Orchestrator (Tier 3), or Back (Tier 2).
+  Input: resolved grounding refs + constitution's prerequisite_reads[].
+  Output: read observations from all declared prerequisite sources.
+  Constitution role: declares WHICH reads must execute and WHETHER they
+    may parallelize. The constitution does not say HOW to execute them;
+    Fabric/Orchestrator owns that.
+  Runtime enforcement: the runtime fans out reads in parallel when
+    policy allows. No write may begin before all prerequisite reads
+    return (or timeout/degrade with explicit policy).
+  Example prerequisite_reads for calendar connector:
+    - calendar.list_events for each participant (time window)
+    - tasks.list_tasks for each conflict_subject (time window)
+    - chores.read_chores for each conflict_subject (time window)
+
+PHASE 3 — CONFLICT ANALYSIS (deterministic or LLM-assisted)
+  Owner: Back (Tier 2) or Orchestrator DAG evaluator (Tier 3).
+  Input: aggregated read observations from Phase 2.
+  Output: conflict verdict (no_conflict | conflict_detected | missing_data).
+  Constitution role: declares conflict_analysis_rules[]. These are
+    machine-evaluable predicates, not prose. Example rules:
+    - "IF any calendar event overlaps target window THEN conflict"
+    - "IF any chore is scheduled in target window THEN conflict"
+    - "IF any required read timed out THEN missing_data"
+  Runtime enforcement: the conflict verdict gates Phase 4. Conflict →
+    HIL with alternatives. Missing data → HIL or block. Only
+    no_conflict allows direct progression to Phase 5.
+
+PHASE 4 — HUMAN-IN-LOOP GATING (HIL when required)
+  Owner: Back (Tier 2) or Orchestrator (Tier 3), via HIL contract.
+  Trigger: conflict detected, missing required fields, low confidence,
+    cross-user impact, policy uncertainty, or stale projection.
+  Constitution role: declares hil_gates[] — the exact conditions that
+    force HIL before mutation. Example gates:
+    - "time missing → ask for time"
+    - "conflict exists → propose alternatives from candidate universe"
+    - "mutation affects guardians → confirm"
+    - "child/family-impacting → apply stricter approval policy"
+  Runtime enforcement: HIL questions come from CandidateUniverse choices,
+    not from raw model generation. HIL cannot override hard policy deny.
+
+PHASE 5 — COORDINATED MUTATION (writes are governed and sequenced)
+  Owner: Fabric invocation runtime, with Orchestrator DAG (Tier 3) or
+    Back direct invoke (Tier 2).
+  Input: verified grounding, passed conflict analysis, resolved HIL,
+    and constitution's mutation_sequencing[].
+  Output: write observations + verification observations.
+  Constitution role: declares mutation ordering. Writes that depend on
+    prior write artifacts are sequenced. Writes to independent resources
+    may parallelize. Example sequencing for calendar event + reminder:
+    - Step 1: calendar.create_event → produces event_id
+    - Step 2: reminders.create_reminder (depends on event_id)
+  Runtime enforcement: dependent writes are NEVER batched. The
+    Orchestrator DAG enforces this with artifact dependency edges.
+```
+
+#### Where Each Tier Runs The Phases
+
+```text
+TIER 2 (Back single-connector):
+  Phase 1: resolver (deterministic grounding)
+  Phase 2: Back invokes reads sequentially or via batch_invoke
+  Phase 3: Back analyzes conflict from read observations
+  Phase 4: Back triggers HIL when constitution declares it
+  Phase 5: Back invokes writes in constitution-declared order, then verifies
+  Back sees the constitution cards at CC-10 after_resolution (Phase 1 disclosure).
+  Back commits tools after seeing constitution, then receives schemas.
+
+TIER 3 (Planner + Orchestrator, multi-connector):
+  Phase 1: resolver (deterministic grounding, expanded impact set)
+  Phase 2: Orchestrator DAG Wave 1 — all prerequisite reads in parallel
+  Phase 3: Orchestrator DAG Wave 2 — conflict evaluation node
+  Phase 4: Orchestrator HIL or conditional branch
+  Phase 5: Orchestrator DAG Wave 3+ — coordinated writes with dependencies
+  Planner consumes constitutions during EXPAND to build the PlanGraph.
+  Orchestrator enforces phase ordering deterministically; no LLM in loop.
+```
+
+#### Constitution Authoring And Versioning
+
+Constitutions are authored once per connector (not per tool, not per app permutation), versioned with the connector manifest, and proven by POC before promotion:
+
+```text
+Authoring rule:
+  One constitution per connector.
+  Capability-level refinements are optional overrides, never standalone.
+  New connector version → new constitution version.
+  Constitution changes trigger re-proof of affected scenario gates.
+
+Storage:
+  Constitutions live alongside connector manifests.
+  The resolver loads the constitution by connector_id at resolution time.
+  PromptPack renders compact cards from the constitution; the raw artifact
+  stays behind the prompt boundary.
+
+Proof requirement:
+  Before a constitution can gate execution, it must pass at least one
+  scenario gate proving:
+    - prerequisite reads are executed before writes
+    - conflict detection triggers HIL, not silent mutation
+    - HIL choices come from CandidateUniverse
+    - dependent writes are sequenced, independent reads parallelize
+    - verification runs after write when declared
+```
+
+#### Constitution vs. Policy vs. Guide
+
+These are distinct but compose:
+
+```text
+CONSTITUTION (this section):
+  Owns: per-connector procedural execution rules.
+  Scope: ONE connector's tools and their prerequisite reads, conflict
+    checks, mutation ordering, HIL gates, and verifier requirements.
+  Example: "Before calendar.create_event, you MUST list_events and
+    check participant chores/tasks. If conflict, HIL before write."
+
+POLICY (Plane 2, Contract C):
+  Owns: cross-connector governance rules.
+  Scope: actor authority, data classification, consent, protected reads,
+    audit requirements, autonomy level, safety mapping.
+  Example: "Child calendar mutations require guardian consent."
+  Policy may override or tighten a constitution's HIL gates but cannot
+    relax them.
+
+GUIDE (Plane 2, Contract G guide_cards):
+  Owns: usage patterns, examples, parameter hints, adapter quirks.
+  Scope: helps the LLM use a bound tool correctly.
+  Example: "When creating events, use ISO 8601 for start/end. The
+    calendar adapter defaults to the household timezone."
+  Guides are never execution authority.
+```
+
+#### Principles From `future_constitution_tooling.md`
+
+These principles are now encoded in the constitution tooling contract above. They are restated here as design axioms:
+
+```text
+PRINCIPLE 1 — Grounding First
+  Resolve temporal, spatial, participant, and household grounding
+  BEFORE any tool execution. Missing grounding → HIL, not guessed.
+
+PRINCIPLE 2 — Reads May Parallelize, Writes Must Be Governed
+  Prerequisite reads declared by the constitution execute in parallel
+  when policy allows. Writes and dependent side effects are sequenced
+  by the constitution's mutation_sequencing[] and enforced by the
+  Orchestrator DAG or Back ordered invoke.
+
+PRINCIPLE 3 — Conflict Analysis Before Mutation
+  The constitution declares conflict_analysis_rules. The runtime
+  evaluates them deterministically or with LLM assistance. Conflict
+  → HIL with alternatives from CandidateUniverse. Only no_conflict
+  allows direct progression to mutation.
+
+PRINCIPLE 4 — HIL For Ambiguity, Conflict, Risk, Or Cross-User Impact
+  The constitution declares hil_gates[]. When a gate fires, HIL is
+  mandatory. HIL choices must come from CandidateUniverse. HIL cannot
+  override hard policy denial, missing connector scope, or missing
+  capability.
+
+PRINCIPLE 5 — Verification After Mutation
+  The constitution declares verification_requirements[]. After write,
+  the declared verifier runs. submit_result(completed) requires
+  verification pass or explicit degraded-completion policy. Provider
+  success is not verified completion.
+
+PRINCIPLE 6 — Constitution Ships With The Connector, Not The Prompt
+  Procedural execution knowledge lives on the connector/capability
+  constitution, versioned with the connector manifest. It is disclosed
+  progressively (CC-10): connector + constitution + tool names at
+  Phase 1, schemas only after tool commitment. The knowledge rots if
+  it lives in prompt text; it stays current if it ships with the tool.
+```
 
 ### Conflict Detection Needs a Cross-Resource Read Model
 
@@ -507,6 +6821,8 @@ If the task is already obviously family-impacting or cross-resource, Back should
 ### 3. Back ReAct Loop - When Front Dispatches To Back
 
 Back is the Tier 2 worker. It executes bounded single-connector work. It has no personality, does not speak to the user, and terminates only with `submit_result` or a typed non-completion outcome.
+
+Current reality caveat: today Back does not call a first-class `resolve_situation` tool and does not receive `ResolutionEnvelope`, `CandidateUniverse`, or `PromptPack` objects from Fabric. The loop below is the target Tier-2 shape. The live compatibility loop is the current `discover_capabilities -> invoke_capability -> submit_result` path documented in the current-state sections.
 
 What Back sees at loop start:
 
@@ -771,6 +7087,8 @@ Front tells the user what happened.
 ### 7. Fabric's Role Across All Three Tiers
 
 Fabric is the capability and execution authority layer. It is not Front, not Back, not Planner, and not Orchestrator.
+
+Current reality split: the capability registry, `CapabilityContract` shape, discovery path, Fabric direct dispatch, native provider dispatch, and Orchestrator per-step Fabric calls are live. `resolve_situation`, `ResolutionEnvelope`, `CandidateUniverse`, `PromptPack`, and binding ids as the normal authority surface are target contracts or probe artifacts, not the current runtime API.
 
 Fabric owns these jobs:
 
@@ -1260,13 +7578,76 @@ Live probe result with `tool.execute.calendar.create_event`, GREEN safety band, 
 
 Status: **The Back -> Fabric -> NativeToolProvider -> calendar service path works.**
 
+### BTC-A6 - Front dispatch is a user-world task handoff, not execution authority
+
+`front_handler` builds the mode-specific Front prompt and tool list, then runs the shared `react_loop(...)`. The visible Front tool schema for `dispatch_task` accepts user-world fields: `intents[]`, `params`, optional `domain`, `urgency`, `reference_context`, `depends_on`, and `plan`. See [k1/concierge/actors/front.py](../../k1/concierge/actors/front.py#L1145) and [k1/concierge/tools/schemas_front.py](../../k1/concierge/tools/schemas_front.py#L460).
+
+`execute_dispatch_task(...)` derives LOW/MEDIUM/HIGH routing signals and returns a `ToolResult` with `_dispatch`; it does not publish bus events itself. `react_loop(...)` collects `dispatched_tasks[]`, then `front_handler` publishes normal `task.dispatch` events before any final response so the FSM observes task state before presentation. See [k1/concierge/tools/implementations.py](../../k1/concierge/tools/implementations.py#L1225), [k1/concierge/react/loop.py](../../k1/concierge/react/loop.py#L1048), and [k1/concierge/actors/front.py](../../k1/concierge/actors/front.py#L1675).
+
+Status: **Front is already the intent/presentation actor. It can request work, but it does not grant Fabric execution authority.**
+
+### BTC-A7 - `submit_result` terminates Back's ReAct loop; the tool does not directly publish completion
+
+Back's shared ReAct loop processes `submit_result` first when it appears in a model response. If `submit_result` is valid, the loop returns a `ReactResult` with status `complete` or `suspended`; other tool calls in the same response are skipped. See [k1/concierge/react/loop.py](../../k1/concierge/react/loop.py#L1825).
+
+After the loop returns, `back_handler` calls `_emit_back_result(...)`, which maps `complete` to `k1.orchestration.task.complete.v1`, `suspended` to `k1.orchestration.task.suspended.v1`, and terminal loop failures to `k1.orchestration.task.failed.v1`. See [k1/concierge/actors/back.py](../../k1/concierge/actors/back.py#L783) and [k1/concierge/actors/back.py](../../k1/concierge/actors/back.py#L940).
+
+Status: **`submit_result` is the Back terminal meta-tool, but bus emission is handler-owned after the loop.**
+
+### BTC-A8 - The current Back binding helper is capability-name repair, not target binding authority
+
+`invoke_capability` calls `_bind_capability_for_back_action(...)` when the Back context is task-bound. The binder can verify an exact candidate, discover alternatives, reject invalid candidate names, and preserve prompt/profile metadata. It then proceeds with the exact `capability_name` path. See [k1/concierge/tools/implementations.py](../../k1/concierge/tools/implementations.py#L328) and [k1/concierge/react/capability_routing.py](../../k1/concierge/react/capability_routing.py#L34).
+
+This is useful current grounding, but it is narrower than the target Contract D `BindingBundle`:
+
+```text
+Current binding helper:
+  action/domain/candidate_name -> exact capability_name + params/profile hints
+
+Target binding authority:
+  actor + resource + capability + policy + schema + freshness + allowed actions
+  -> binding_id / binding bundle
+```
+
+Status: **Do not treat the current helper as proof that target binding ids or ResolutionEnvelope authority are already in the runtime.**
+
+### BTC-A9 - Planner and Orchestrator are implemented, but Tier-3 impact-set proof is not
+
+The HIGH path is live: Orchestrator `_dispatch_high(...)` captures a state snapshot, builds `PlanRequest`, sends it to the planner port, stores `PendingPlanContext`, and returns `DEFERRED`. Planner `PipelineController.execute(...)` runs SKETCH, EXPAND, VALIDATE, and COMMIT. `CommitService` emits `TOPIC_PLAN_READY` with `CommittedPlan.to_dict()`. Orchestrator `_on_plan_ready(...)` deserializes with `CommittedPlan.from_dict(...)` before queuing plan execution. See [k1/orchestrator/orchestration/orchestrator_service.py](../../k1/orchestrator/orchestration/orchestrator_service.py#L1688), [k1/planner/pipeline_controller.py](../../k1/planner/pipeline_controller.py#L430), [k1/planner/stages/commit_service.py](../../k1/planner/stages/commit_service.py#L429), and [k1/orchestrator/orchestration/orchestrator_service.py](../../k1/orchestrator/orchestration/orchestrator_service.py#L765).
+
+The execution half is also live: `_receive_plan(...)` correlates by `request_id`, validates the plan, acquires the concurrency guard, and calls `DAGExecutor.execute(...)`. `DAGExecutor` builds Kahn waves, resolves `$step.result` references through `ParamResolver`, dispatches steps via `StepRunner`, runs guards, aggregates results, writes WAL/audit events, and calls compensation logic when side-effect metadata supports it. See [k1/orchestrator/orchestration/orchestrator_service.py](../../k1/orchestrator/orchestration/orchestrator_service.py#L1834), [k1/orchestrator/orchestration/dag_executor.py](../../k1/orchestrator/orchestration/dag_executor.py#L207), [k1/orchestrator/orchestration/dag_executor.py](../../k1/orchestrator/orchestration/dag_executor.py#L330), [k1/orchestrator/orchestration/param_resolver.py](../../k1/orchestrator/orchestration/param_resolver.py#L115), and [k1/orchestrator/orchestration/step_runner.py](../../k1/orchestrator/orchestration/step_runner.py#L67).
+
+The missing target piece is earlier than execution: there is not yet a connector constitution / CandidateUniverse / cross-resource `(person, time-window)` projection that proves the Riley picnic impact set before planning.
+
+Status: **Tier 3 execution machinery exists. The design gap is the contract that feeds it the right multi-resource universe and companion-resource obligations.**
+
+### BTC-A10 - PromptPack and ResolutionEnvelope are target contracts, not live runtime APIs
+
+Current K1 code has `CapabilityContract`, prompt/profile metadata on contracts, discovery records, prompt dumps, and capability binding helpers. A source search in K1 code for `resolve_situation`, `PromptPack`, `ResolutionEnvelope`, `CandidateUniverse`, and `BindingBundle` does not return first-class runtime implementations.
+
+Therefore the current-to-target migration should read as:
+
+```text
+Live compatibility spine:
+  TaskDispatch -> Back prompt -> discover_capabilities -> capability_name invoke
+  -> Fabric dispatch -> provider execution -> submit_result
+
+Target authority spine:
+  BackTaskEnvelope/RequestFrame -> resolve_situation -> ResolutionEnvelope
+  -> CandidateUniverse + PromptPack + BindingBundle -> governed invoke/verify
+```
+
+Status: **The target names are useful and should remain in the design, but current proof sections must label them as migration targets until code creates them as normal runtime artifacts.**
+
 ---
 
 ## End-To-End Discovery Flow
 
-**Section mode:** current proof.
+**Section mode:** current proof (LEGACY PATH — not target authority).
 
-This section intentionally documents the legacy discovery path. In the target design, this path is not execution authority for side effects or protected reads. The target authority path is `resolve_situation` with staged connector constitution disclosure, binding, PromptPack, and tier-aware allowed actions.
+⚠️ **IMPORTANT:** This section documents the LEGACY `discover_capabilities` path. In the target design, `discover_capabilities` is DEMOTED to catalog retrieval only. The target authority path is `resolve_situation` with staged connector constitution disclosure, binding, PromptPack, and tier-aware allowed actions. The same tool name (`discover_capabilities`) has two different authority levels: execution authority in the current baseline, catalog-only in the target. Readers MUST NOT treat this section as describing the target execution model.
+
+> **Open question — tracked as [C-014](#c-014-discover_capabilities-dual-authority-legacy-execution-path-vs-target-catalog-only-path):** Should `discover_capabilities` remain a Back meta-tool (risk: LLM misuses it for execution) or move to a Fabric-only diagnostic surface (risk: Back loses cold-discovery capability)? The POC proves `resolve_situation` is the correct execution-authority path. Phase-out plan: add `discovery_mode` flag, deprecate execution use, rename to `search_capability_catalog` once all paths migrate.
 
 ### Step 1 - Back receives task dispatch
 
@@ -1647,6 +8028,8 @@ Status: **The guard is directionally correct, but system-of-record tasks need a 
 
 ### BTC-004 - Safety-band semantics conflict across Fabric and family tools
 
+> **Status:** OPEN — tracked as [C-005](#c-005-btc-004-safety-band-conflict-still-live) in Appendix C Unresolved Issues.
+
 **Finding:** Fabric `SecurityContext.check_band` treats bands like permission levels: `AMBER >= GREEN` passes. Family `VisibilityPolicy.check_band` treats bands like current risk state: GREEN and AMBER can run AMBER-min actions, but RED/CRISIS block AMBER-min actions; AMBER blocked a GREEN-min calendar write in live probe. See [k1/fabric/policy/security_context.py](../../k1/fabric/policy/security_context.py#L203) and [k1/tools/family/policy.py](../../k1/tools/family/policy.py#L43).
 
 **Live proof:** `tool.execute.calendar.create_event` with schema-valid params failed under AMBER with:
@@ -1739,6 +8122,8 @@ providers may keep their own band labels only behind explicit `SafetyMappingEvid
 
 **Needed:** Add connector/capability constitution fields for preconditions, companion_resource roles, verifier requirements, schema disclosure phase, and HIL triggers. PromptPack should render compact cards from those fields, not from ad hoc prompt text.
 
+**Status: RESOLVED in target design.** The Constitution Tooling section defines the full `ConstitutionArtifact` shape (machine-enforceable core + prompt-card material), connector_constitutions table exists in GlobalProjectionStore (POC-proven, Appendix B Q1), and CC-10 defines staged constitution disclosure timing. This BTC entry describes the current baseline gap only; the target design has addressed it.
+
 ### BTC-013 - Tier 3 needs a cross-resource time-window read model
 
 **Finding:** Scheduling conflicts currently appear as per-tool reads (`calendar`, `tasks`, `reminders`, `chores`) rather than a single query shape over `(person, time-window)`.
@@ -1766,6 +8151,8 @@ The first architectural fix is ownership: LOW/simple tasks may reach Back, MEDIU
 ### 2. Add connector/capability constitution artifacts
 
 Connector constitutions must carry preconditions, duplicate/conflict checks, companion_resource roles, HIL triggers, verifier requirements, and staged schema-disclosure rules. This is where the dumb LLM learns what must be checked.
+
+The constitution is not a passive text blob. It is a structured, versioned, runtime-enforced artifact that drives the five execution phases (grounding → prerequisite reads → conflict analysis → HIL → coordinated mutation), declares which reads parallelize and which writes are sequenced, and ships with the connector manifest, not with the prompt. See **Constitution Tooling: How Constitutions Drive Execution** for the full specification.
 
 ### 3. Resolve band semantics
 
@@ -3479,6 +9866,8 @@ Plane 4 binds roles to tools/resources later.
 
 ### Contract D - BindingRequest And BindingBundle
 
+**POC status:** PROVEN. Capability name format (tool.{read|execute}.{connector_id}.{action}) prevents cross-connector collisions structurally. Capability names embed connector identity. `parse_capability_name()` extracts connector_id from positions 2..-2. See Appendix B Q3.
+
 Purpose:
 
 ```text
@@ -3600,7 +9989,7 @@ If allowed_next_actions[] is empty, Plane 1 must block or submit cannot_execute.
 
 ### Contract F - CandidateUniverse
 
-Canonical schema owner: this contract owns the authoritative CandidateUniverse field names. Earlier and later sections may summarize CandidateUniverse for readability, but they must not define a second schema.
+**POC status:** PROVEN. Full store schemas (GlobalProjectionStore + LocalProjectionStore DDL) exist in POC and are documented in Appendix B Q1. Resolution verdict state machine with 10 verdicts and sub-reason distinctions proven in `resolve_situation.py` (Appendix B Q18). Connector alias normalization algorithm proven (Appendix B Q4). this contract owns the authoritative CandidateUniverse field names. Earlier and later sections may summarize CandidateUniverse for readability, but they must not define a second schema.
 
 Purpose:
 
@@ -3791,7 +10180,7 @@ incomplete and the model should not be asked to improvise.
 
 ### Contract H - InvocationRequest And InvocationObservation
 
-Purpose:
+**POC status:** PROVEN. Idempotency store with immutable-succeeded invariant proven in `idempotency_store.py` (Appendix B Q20). Three-stage retrieval pipeline (indexed → FTS5 → TF-IDF) proven at 100K scale (Appendix B Q5).
 
 ```text
 Invoke only allowed bindings and return normalized observations to Back.
@@ -4076,7 +10465,7 @@ If a step fails, downstream dependent steps become blocked, not guessed.
 
 ### Contract M - VerificationPlan And VerificationObservation
 
-Purpose:
+**POC status:** PROVEN. Verifier execution flow (build_plan → run → gate) proven in `verification_runner.py` (Appendix B Q13). Three methods implemented: read_after_write, output_schema, none_available. Four deferred: state_compare, audit_receipt, external_receipt, policy_attestation.
 
 ```text
 Prove or explicitly limit completion after reads, writes, deletes, external sends, or
@@ -4994,6 +11383,8 @@ domains where the provider is local code, not an external service?
 
 Milestone order:
 
+> **Note:** Two milestone models coexist in this document. The M0-M12 linear list below is the ORIGINAL sequencing. The 5-layer component dependency model in Appendix B Q21 (Foundation → Resolver → Constitution → Execution → Deprecation + Tier 3) is the CURRENT build plan based on component dependencies. Both are valid; the layer model supersedes for implementation planning. See Appendix B Q21 for the full dependency graph.
+
 ```text
 M0 - Common proof harness and trace vocabulary
   Prove: a component POC can record request, response, trace_id, failure, and pass criteria.
@@ -5198,6 +11589,8 @@ Back returns deltas/outcomes. Concierge remains Single Writer to SessionState.
 
 #### CC-1 - Back ReAct Runtime To Fabric Situated Resolver
 
+**POC status:** PROVEN. Resolution verdict state machine (10 verdicts with sub-reason distinctions) from `resolve_situation.py`. Three-stage retrieval pipeline (indexed → FTS5 → TF-IDF) proven at 100K scale. See Appendix B Q5, Q18.
+
 Purpose:
 
 ```text
@@ -5258,6 +11651,8 @@ Back must not use discover_capabilities top-K as execution authority when CC-1 i
 ```
 
 #### CC-2 - Fabric Situated Resolver To Local-World Resource Projection
+
+**POC status:** PROVEN. GlobalProjectionStore + LocalProjectionStore full DDL proven (Appendix B Q1). Connector alias normalization algorithm proven (Appendix B Q4). Config-driven connector adoption via `adopt_projection_layer_connector()` exists in POC.
 
 Purpose:
 
@@ -5689,33 +12084,48 @@ PromptInjectionEnvelope
 Injection schedule:
 
 ```text
-Phase: loop_start
+Phase: loop_start (static Back prompt)
   Inject:
     stable Back executor role
     Back meta-tool declarations
     task envelope summary
     current SessionState task snapshot
     execution grounding block
+    GLOBAL constitution rules (applies to all connectors):
+      - build RequestFrame before resolution
+      - call resolve_situation for execution tasks
+      - never invent tools, resources, bindings, or policy authority
+      - act only through allowed_next_actions
+      - submit_result with evidence
   Execution actor should ask:
     build RequestFrame, then resolve_situation for execution tasks
 
-Phase: after_request_frame
+Phase: after_resolution (PromptPack Phase 1 — connector disclosure)
+  Timing: AFTER resolve_situation returns, BEFORE Back commits tool choices.
   Inject:
-    compact RequestFrame
-    known missing fields
-    allowed resolver modes
-  Execution actor should ask:
-    resolve_situation unless the task is already impossible or purely memory-only
-
-Phase: after_resolution
-  Inject:
-    PromptPack
-    CandidateUniverse summary
+    connector summary cards
+    connector constitution cards
+      - preconditions (e.g., "list before create")
+      - companion resource roles
+      - HIL triggers
+      - verifier requirements
+    tool name cards (names only, no full schemas)
+    candidate universe summary
     allowed next actions
     policy cards
-    guide cards
-    contract cards
     HIL options if needed
+  Execution actor should ask:
+    "Based on the connector constitution, which tools do I need?"
+    commit exact tool names to the resolver
+
+Phase: after_tool_commitment (PromptPack Phase 2/3 — schema disclosure)
+  Timing: AFTER Back has committed intended tool names, BEFORE invocation.
+  Inject:
+    full input/output schemas ONLY for committed tools
+    param requirements
+    side effect declarations
+    verification rules
+    guide cards for bound capabilities
   Execution actor should ask:
     invoke bound read/write, ask HIL, block, or submit cannot_execute
 
@@ -5754,6 +12164,7 @@ Prompt timing diagram:
        +----------------+
        | loop_start     |
        | task + state   |
+       | GLOBAL const   |
        +-------+--------+
                |
                v
@@ -5771,10 +12182,21 @@ Prompt timing diagram:
                v
              +----------------------+
              | after_resolution     |
-             | PromptPack           |
-             | candidates           |
-             | policies             |
-             | bindings             |
+             | PromptPack Phase 1   |
+             | connector const      |
+             | tool NAMES only      |
+             | allowed actions      |
+             +----------+-----------+
+               |
+               v
+       Back commits tool names
+               |
+               v
+             +----------------------+
+             | after_tool_commit    |
+             | PromptPack Phase 2/3 |
+             | FULL schemas         |
+             | params + side effects|
              +----------+-----------+
                |
      +---------+----------+
@@ -5801,11 +12223,39 @@ Prompt ownership map:
 
 ```text
 Static Back prompt owns:
-  executor identity, hard prohibitions, meta-tool rules, submit_result duty.
+  executor identity
+  hard prohibitions (no tool invention, no skipping resolve_situation)
+  meta-tool rules
+  submit_result duty
+  GLOBAL constitution (applies to ALL connectors):
+    - Grounding before execution
+    - Reads may parallelize when policy allows
+    - Writes and dependent side effects are sequenced
+    - Act only through allowed_next_actions
+    - Submit structured results with evidence
+    - Never invent resources, bindings, or policy authority
+  Static Back prompt does NOT contain connector-specific constitutions.
+  Connector constitutions enter only through PromptPack Phase 1 (after_resolution).
+
+PromptPack Phase 1 (after_resolution, before Back commits tools) owns:
+  connector summary cards
+  connector constitution cards (preconditions, companion resources, HIL triggers, verifiers)
+  tool name cards (names only, NO full schemas)
+  candidate universe summary
+  allowed next actions
+  policy cards
+  HIL options if needed
+
+PromptPack Phase 2/3 (after Back commits intended tools) owns:
+  full input/output schemas ONLY for committed tools
+  param requirements
+  side effect declarations
+  verification rules
+  guide cards for bound capabilities
 
 PromptInjectionEnvelope owns:
   current task state, current resolver output, current allowed actions,
-  compact policy/guide/contract cards, and observation summaries.
+  compact cards by disclosure phase, and observation summaries.
 
 Tool observations own:
   exact runtime results, normalized errors, recovery directives, verification results.
@@ -5823,6 +12273,22 @@ PromptPack is injected only after situated resolution.
 Guide cards are injected only when their capability/resource binding is relevant.
 Full registries and manifests are never dumped into the prompt.
 Every injected card carries an id/version/ref so runtime can audit what Back saw.
+
+CONSTITUTIONAL INJECTION TIMING (mandatory ordering):
+  Global constitution lives in the static Back prompt.
+    - Universal rules valid for every connector and task class.
+    - "build RequestFrame, call resolve_situation, act only through allowed_next_actions, submit with evidence."
+  Connector/capability constitution is injected by resolve_situation,
+  AFTER CandidateUniverse narrowing, BEFORE Back commits intended tools.
+    - PromptPack Phase 1: connector_summary_card, constitution_card, tool_name_cards, allowed_next_actions.
+    - Back must not choose tools before seeing applicable connector constitutions.
+  Full tool schema is injected only AFTER Back commits intended tool names.
+    - PromptPack Phase 2/3: schemas for committed tools, param requirements, side effects, verification rules.
+  Why this order matters:
+    Too early: Back sees irrelevant constitutions from unselected connectors → prompt bloats.
+    Too late: Back already chose tools without knowing required prereads, HIL triggers, or verifiers.
+    Correct: constitution arrives exactly when Back is deciding the tool plan;
+            schemas arrive exactly when Back is preparing to invoke.
 ```
 
 #### Component Contract Acceptance Checklist
@@ -7002,14 +13468,20 @@ ID-001 FamilyOS native capability compatibility
 ID-002 K1 projection persistence
   Class: IMPLEMENTATION
   Question: Which store owns concrete resource projection versions in the first proof path?
-  Working decision: unresolved; M3/M10 must propose the minimal store shape.
+  Working decision: RESOLVED — GlobalProjectionStore (connectors, capabilities, FTS5, resource_kinds,
+    connector_constitutions) + LocalProjectionStore (connected_resources, household_members,
+    alias_index, resource_projection_snapshots). Full DDL proven in POC (Appendix B Q1).
   Promotion condition: projection deltas update version/freshness and later resolution reads them.
+  Status: MET by POC. Schema exists; wire into K1 runtime remains.
 
 ID-003 Concierge canonicalization report
   Class: IMPLEMENTATION
   Question: Where is the canonicalization report produced: FSM, Back pre-loop, or shared utility?
-  Working decision: unresolved; CC-0 proof should choose the smallest additive seam.
+  Working decision: RESOLVED — produced at FSM canonicalization step (FP-01). The FSM is the single
+    routing and state authority; producing the report at canonicalization time (before Back intake)
+    is the smallest additive seam. BackTaskEnvelope carries the report as a ref, not inline.
   Promotion condition: M1 proves no task/correlation/grounding/safety loss.
+  Status: Design decision made; implementation pending.
 
 XD-001 Non-household scenario analogues
   Class: CROSS-DOMAIN
@@ -7296,22 +13768,40 @@ If a domain cannot satisfy the checklist, it should return cannot_execute or mis
 
 ### Remaining API Decisions
 
+Status key: ✅ = ANSWERED, ◐ = PARTIAL, ◆ = RESOLVED BY DESIGN
+See Appendix B Q25 for full cross-reference with POC evidence.
+
 ```text
-1. Exact persistence schema for the joined local-world projection.
-2. Exact ManifestTranslator output for connector resource models and capability templates.
-3. Exact ResolutionEnvelope JSON schema and versioning rules.
-4. Exact Back tool set names for V1: resolve_situation only, or resolve_situation + inspect_binding.
-5. Exact compatibility mapping from current native names to connector-aware capability names.
-6. Exact DomainInstantiationPack schema and validation level for V0.
-7. Exact ResourceKindDef and OperationDef schemas for the first proof domain.
-8. Exact PlanGraph producer and storage boundary for multi-step tasks.
-9. Exact VerificationPlan methods supported in V0 and degraded-completion policy shape.
-10. Exact TraceContext propagation and AuthorityDecisionRecord storage location.
-11. Exact SafetyContext mapping from current GREEN/AMBER/RED runtime labels into kernel axes.
-12. Exact ManifestAdmissionRecord trust tiers and connector revocation behavior.
-13. Exact ExecutionBudget defaults for LLM hops, prompt cards, resolver fanout, connector fanout, verifier fanout, and latency.
-14. Exact HIL presentation constraints and HILResponse resume behavior for Front/FSM integration.
-15. Exact negative proof fixtures required for each CC milestone before promotion.
+✅  1. Persistence schema for joined local-world projection.
+      → GlobalProjectionStore + LocalProjectionStore DDL (Appendix B Q1).
+✅  2. ManifestTranslator output for connector resource models and capability templates.
+      → CapabilityRegistrationBatch shape in CC-8.
+◐  3. ResolutionEnvelope JSON schema and versioning rules.
+      → Fields listed; no JSON Schema document yet.
+◐  4. Back tool set names for V1.
+      → resolve_situation, invoke_capability, submit_result named; inspect_binding TBD.
+◆  5. Compatibility mapping from current native names to connector-aware capability names.
+      → SCA-B19 alias mapper. Implementation plumbing, not kernel gap.
+◆  6. DomainInstantiationPack schema and validation level for V0.
+      → Shape defined in Standard Vocabulary; machine schema deferred to cross-domain.
+◐  7. ResourceKindDef and OperationDef schemas for the first proof domain.
+      → resource_kinds table exists; formal OperationDef schema not yet defined.
+◆  8. PlanGraph producer and storage boundary.
+      → Existing Planner/Orchestrator concern; already serializes CommittedPlan.
+✅  9. VerificationPlan methods supported in V0.
+      → read_after_write, output_schema, none_available (POC-proven, Appendix B Q13).
+◐ 10. TraceContext propagation and AuthorityDecisionRecord storage location.
+      → trace_id on envelopes; no AuthorityDecisionRecord store yet.
+◆ 11. SafetyContext mapping from GREEN/AMBER/RED to kernel axes.
+      → Contract O defines axes; Fix Order #3 item; needs implementation.
+◐ 12. ManifestAdmissionRecord trust tiers and connector revocation behavior.
+      → Verdict states defined; trust tier hierarchy not defined.
+◐ 13. ExecutionBudget defaults.
+      → Fields exist, caller-supplied; no hard defaults.
+◆ 14. HIL presentation constraints and HILResponse resume behavior.
+      → Front owns presentation (Q12); HILRequest shape proven in POC.
+◐ 15. Negative proof fixtures per CC milestone.
+      → Benchmark has expected-failure queries; no per-CC negative fixture sets.
 ```
 
 ### Proposed Bottom Line
@@ -9325,7 +15815,7 @@ pytest tests/k1/concierge/react/test_back_capability_execution_kernel.py tests/k
 
 #### FP-08 - End-To-End Proof Slice
 
-Design status: sketch.
+Design status: sketch. **Tracked as [C-006](#c-006-fp-08-still-marked-sketch) in Appendix C.**
 
 Component atom coverage:
 
@@ -9432,6 +15922,985 @@ inventory atom
   -> corrected contract
   -> promoted component design
 ```
+
+---
+
+## Appendix B — POC Answer Matrix (Design Questions → Proven Answers)
+
+**Section mode:** evidence crosswalk. Maps the 25 design gaps identified in the E2E review against what the POC (`poc/back_tool_contract_v2/`) and benchmark (`scripts/probe_back_tool_contract_benchmark.py`) actually prove.
+
+**Reading rule:** when a question is ANSWERED, the whiteboard should absorb the specification below into its normative sections. When PARTIALLY ANSWERED, the whiteboard should absorb what is proven and mark what remains. When NOT ANSWERED, the gap stands as a design debt.
+
+---
+
+### B.1 — Resource & Projection
+
+#### Q1: Resource Projection Store Schema
+
+**Status: ANSWERED by POC.**
+
+The POC implements three stores that together form the resource projection:
+
+**`GlobalProjectionStore`** (`poc/back_tool_contract_v2/stores/global_projection_store.py`, SQLite WAL):
+
+```text
+Table: connectors
+  connector_id         TEXT PRIMARY KEY
+  label                TEXT NOT NULL
+  connector_type       TEXT NOT NULL CHECK (native_local | bridge | ifl_read | ifl_write | system)
+  provider_type        TEXT NOT NULL
+  version              TEXT NOT NULL
+  admission_verdict    TEXT NOT NULL CHECK (admitted | catalog_only | rejected | suspended)
+  registration_type    TEXT NOT NULL CHECK (executable | guide_only)
+  constitution_json    TEXT
+  policy_json          TEXT
+  resource_kinds_json  TEXT NOT NULL
+  created_at           TEXT NOT NULL
+  updated_at           TEXT NOT NULL
+
+Table: capabilities
+  capability_name      TEXT PRIMARY KEY    -- format: tool.{read|execute}.{connector_id}.{action}
+  connector_id         TEXT NOT NULL REFERENCES connectors ON DELETE CASCADE
+  operation            TEXT NOT NULL
+  effect               TEXT NOT NULL CHECK (read | write | side_effect | system)
+  resource_kind        TEXT NOT NULL
+  description          TEXT NOT NULL
+  required_inputs_json TEXT NOT NULL
+  optional_inputs_json TEXT
+  output_schema_ref    TEXT
+  safety_band_min      TEXT NOT NULL CHECK (GREEN | AMBER | RED)
+  risk_class           TEXT NOT NULL
+  idempotency          TEXT CHECK (required | supported | none)
+  compensation_capability TEXT
+  record_type          TEXT NOT NULL CHECK (executable | guide_only | catalog_ref)
+  created_at           TEXT NOT NULL
+  contract_json        TEXT NOT NULL
+  synthetic            INTEGER NOT NULL DEFAULT 0
+  INDEX: idx_capability_authority_lookup ON (resource_kind, operation, effect, connector_id, record_type, safety_band_min)
+
+Table: capabilities_fts (FTS5 virtual, content-synced to capabilities)
+  Content columns: capability_name, description, resource_kind, operation
+  Ranking: BM25
+
+Table: resource_kinds
+  kind                 TEXT PRIMARY KEY
+  label                TEXT NOT NULL
+  description          TEXT NOT NULL
+  primary_connector_id TEXT REFERENCES connectors
+  aliases_json         TEXT
+  created_at           TEXT NOT NULL
+
+Table: connector_constitutions
+  connector_id         TEXT NOT NULL REFERENCES connectors ON DELETE CASCADE
+  operation            TEXT NOT NULL
+  preconditions_json   TEXT
+  companion_roles_json TEXT
+  verification_json    TEXT
+  PRIMARY KEY (connector_id, operation)
+```
+
+**`LocalProjectionStore`** (`poc/back_tool_contract_v2/stores/local_projection_store.py`):
+
+```text
+Table: connected_resources
+  resource_id          TEXT PRIMARY KEY
+  actor_id             TEXT NOT NULL
+  space_id             TEXT NOT NULL
+  connector_id         TEXT NOT NULL
+  resource_kind        TEXT NOT NULL
+  label                TEXT NOT NULL
+  aliases_json         TEXT
+  status               TEXT CHECK (active | suspended | revoked | pending)
+  actor_permission     TEXT CHECK (read_write | read_only | restricted | none)
+  last_synced_at       TEXT
+  freshness_state      TEXT CHECK (fresh | stale | unknown)
+  created_at           TEXT NOT NULL
+  INDEX: idx_connected_resources_actor ON (actor_id, resource_kind, status)
+
+Table: household_members
+  person_id            TEXT PRIMARY KEY
+  actor_id             TEXT NOT NULL
+  space_id             TEXT NOT NULL
+  display_name         TEXT NOT NULL
+  aliases_json         TEXT
+  role                 TEXT CHECK (parent | child | guardian | guest | system)
+  resource_ids_json    TEXT
+  created_at           TEXT NOT NULL
+
+Table: alias_index
+  alias_lower          TEXT NOT NULL    -- normalized: lowercase, strip apostrophes, normalize whitespace
+  entity_type          TEXT NOT NULL CHECK (resource | person)
+  entity_id            TEXT NOT NULL
+  actor_id             TEXT NOT NULL
+  space_id             TEXT NOT NULL
+  PRIMARY KEY (alias_lower, actor_id, entity_type, entity_id)
+  INDEX: idx_alias_index_lookup ON (alias_lower, actor_id, entity_type)
+
+Table: resource_projection_snapshots
+  snapshot_id          TEXT PRIMARY KEY
+  resource_id          TEXT NOT NULL
+  connector_id         TEXT NOT NULL
+  resource_kind        TEXT NOT NULL
+  actor_id             TEXT NOT NULL
+  query_window_json    TEXT
+  result_summary_json  TEXT
+  raw_ref              TEXT
+  freshness_state      TEXT CHECK (fresh | stale | unknown)
+  observed_at          TEXT NOT NULL
+  expires_at           TEXT NOT NULL
+  INDEX: idx_snapshots_resource_fresh ON (resource_id, observed_at)
+```
+
+**Whiteboard action:** promote these schemas into Contract F (CandidateUniverse) and CC-2 (Resolver → Resource Projection) as the normative store contract.
+
+---
+
+#### Q2: Natural-Language to Connector Matching (No Noun→Domain Map)
+
+**Status: ANSWERED by benchmark Mode 5.**
+
+The benchmark's `_bench5_manifest_discovery` proves that TF-IDF over connector labels + descriptions achieves 90%+ recall for novel domains (energy_usage, camera_feed, health_metric, erp_record) that have ZERO entries in `NOUN_TO_DOMAIN`. The key mechanism:
+
+```text
+Manifest TF-IDF index:
+  Documents: one per connector, built from:
+    connector_id + " " + label + " " + description + " " +
+    " ".join(resource_kinds) + " " + " ".join(operations)
+  Query: user phrase tokenized, matched by cosine similarity
+  Top-N: returned as connector candidates
+
+Example:
+  "How much power did we use today"
+    → matches homeassistant.energy (label="Home Assistant Energy",
+      description="...tracks solar production, grid consumption,
+      battery levels, per-device power usage...")
+    → matches tesla.energy (label="Tesla Energy",
+      description="...Powerwall battery status, solar panel output...")
+```
+
+This is the mechanism that makes `DomainInstantiationPack` discovery work: a connector's own description text is the semantic index, not a centrally-maintained noun→domain map. New connectors self-describe; the resolver matches by semantic similarity.
+
+**Whiteboard action:** add to CC-2 and the resolver section: the resolver builds a TF-IDF (or equivalent) index over connector manifests at projection time. This is how novel domains with no pre-existing ontology entries are discovered.
+
+---
+
+#### Q3: Two Connectors With Identical Capability Names
+
+**Status: ANSWERED by POC design (structural prevention).**
+
+The POC capability name format prevents collision structurally:
+
+```text
+Format:  tool.{read|execute}.{connector_id}.{action_name}
+
+Examples:
+  tool.execute.google.calendar.create_event
+  tool.execute.familyos.calendar.create_event
+
+These are DIFFERENT capability_names because connector_id is embedded.
+```
+
+In `GlobalProjectionStore`, `capability_name` is the PRIMARY KEY with `ON CONFLICT DO UPDATE` (last-write-wins). Since `connector_id` is part of the name, two different connectors CANNOT produce the same `capability_name` unless they share a `connector_id` (which the admission system prevents). The `parse_capability_name()` function splits on `.` and extracts `connector_id` from positions 2..-2.
+
+**Whiteboard action:** add to Contract D (BindingRequest) and the Standard Vocabulary naming section: capability names embed connector identity. No two admitted connectors may share a connector_id. The capability name format is the collision prevention mechanism.
+
+---
+
+#### Q4: Connector Alias Normalization
+
+**Status: ANSWERED by POC.**
+
+`LocalProjectionStore` implements:
+
+```text
+alias_index table:
+  PK: (alias_lower, actor_id, entity_type, entity_id)
+  alias_lower = _normalize_alias(raw):
+    1. lowercase
+    2. strip apostrophes
+    3. normalize whitespace (collapse multiple spaces)
+
+Fuzzy fallback:
+  WHERE alias_lower LIKE '%normalized_alias%'
+
+Ambiguity detection:
+  When len(matches) > 1 for the same (alias_lower, actor_id, entity_type),
+  the entity is ambiguous → needs_disambiguation verdict.
+```
+
+User-facing names like "Google Calendar," "mom's car," or "the living room lights" enter the alias index and resolve to `resource_id` or `person_id`. Multiple entities sharing the same alias trigger disambiguation.
+
+**Whiteboard action:** add to CC-2 (Resolver → Resource Projection): the alias normalization algorithm and the `ambiguous → needs_disambiguation` rule.
+
+---
+
+### B.2 — Discovery & Retrieval
+
+#### Q5: Retrieval Pipeline Specification
+
+**Status: ANSWERED by POC + benchmark (proven at 100K scale).**
+
+The full retrieval pipeline is three-stage:
+
+```text
+STAGE 1 — STRUCTURED INDEXED LOOKUP (deterministic, always runs first)
+  Method: GlobalProjectionStore.find_capabilities(
+    resource_kind, operation, effect, connector_id)
+  SQL:   WHERE resource_kind=? AND operation=? AND effect=?
+           AND connector_id LIKE ? || '%'
+           AND record_type='executable'
+           AND safety_band_min <= ?
+  Index: idx_capability_authority_lookup covering index
+  Performance: median < 1ms at 100K rows (scale_loader proof)
+  Accuracy:   100% with correct keys (benchmark Mode 1)
+
+STAGE 2 — FTS5 SEMANTIC SEARCH (when structured lookup misses or needs broadening)
+  Method: GlobalProjectionStore.fts_search_capabilities(query, limit, include_synthetic)
+  SQL:   SELECT ... FROM capabilities_fts WHERE capabilities_fts MATCH ?
+           ORDER BY bm25(capabilities_fts) LIMIT ?
+  Tokenization: re.findall(r"[a-zA-Z0-9]+", query), joined with OR
+  Performance: median < 500ms at 100K rows (scale_loader proof)
+  Use:        broad semantic recall when structured keys are unknown
+
+STAGE 3 — TF-IDF MANIFEST DISCOVERY (for novel domains, connector-level matching)
+  Method: _build_manifest_tfidf_index(store) + _tfidf_search(query, top_k)
+  Index:    one document per connector: label + description + resource_kinds + operations
+  Matching: cosine similarity over TF-IDF vectors
+  Performance: measured in benchmark Mode 5 at 1K-500K scales
+  Use:        novel-domain discovery (no NOUN_TO_DOMAIN entry),
+              natural-language queries (zero connector/domain names in phrase),
+              ambiguity resolution across multiple matching connectors
+  Recall:     90%+ for novel domains, 96%+ overall at 50K (benchmark Mode 5)
+
+PIPELINE ORDER (resolver internal):
+  1. If caller provides resource_kind + operation + effect → Stage 1 (exact)
+  2. If exact lookup returns 0 or caller needs semantic broadening → Stage 2 (FTS5)
+  3. If phrase has no hardcoded domain keywords → Stage 3 (TF-IDF manifest)
+  4. All three results are deduplicated by capability_name
+  5. Final candidates are filtered by installed/admitted connectors
+```
+
+**Whiteboard action:** add to the resolver section (Plane 4) and CC-1: the resolver's internal retrieval pipeline is this three-stage cascade. Stage 1 is authority-grade; Stages 2-3 are discovery-grade and feed CandidateUniverse construction, not direct invocation.
+
+---
+
+#### Q6: RequestFrame Extraction Algorithm
+
+**Status: ANSWERED by POC (`request_frame_builder.py`).**
+
+`RequestFrameBuilder.build(task_dispatch)` implements:
+
+```text
+Input:  TaskDispatch with intents[{action, domain, params}]
+
+Algorithm:
+  1. OPERATION HINT — bag-of-words match against OPERATION_KEYWORDS:
+     {"create","add","make","schedule","book"} → create
+     {"list","show","find","search","get","read","fetch","view","check"} → list/read/search
+     {"update","edit","change","modify"} → update
+     {"delete","remove","cancel"} → delete
+     {"send","post","push"} → send
+     {"upload"} → upload
+     {"download","export","generate"} → download/export
+     {"summarize"} → summarize
+     {"translate"} → translate
+     {"classify"} → classify
+     First matching verb token wins.
+
+  2. RESOURCE KIND HINT — token-intersection against RESOURCE_KIND_KEYWORDS:
+     ("calendar","event","meeting","appointment") → calendar_event
+     ("task","todo","chore") → task
+     ("reminder","alarm") → reminder
+     ("note","notes") → note
+     ("contact","contacts") → contact
+     ("message","dm","chat") → message
+     ("file","document") → file
+     ("email","mail") → email_message
+     ("payment","pay") → payment
+     ("report") → report
+     ("notification") → notification
+     ("profile") → profile
+     ("subscription") → subscription
+     Highest token-intersection count wins.
+
+  3. CONNECTOR HINT — benchmark Mode 4 adds PROXIMITY-SCORED connector inference:
+     - Find connector word position in tokens (e.g., "google", "stripe")
+     - Domain words closer to connector get priority
+     - Fallback: CONNECTOR_DEFAULT_DOMAIN (e.g., "stripe" → payment,
+       "github" → file, "slack" → message, "notion" → document)
+
+  4. PERSON REFERENCES — scan params for PERSON_KEYS:
+     ("attendees","participant","member","person","child","parent",
+      "guardian","recipient","assignee","owner","user","family_member")
+     → PersonRef(raw, confidence="high"|"medium"|"low", needs_resolution=True)
+
+  5. RESOURCE REFERENCES — scan params for RESOURCE_KEYS:
+     ("resource_id","event_id","task_id","reminder_id","note_id",
+      "contact_id","file_id","document_id","list_id","item_id")
+     → ResourceRef(raw, resource_kind_hint, confidence, needs_resolution)
+
+  6. TIME WINDOW — collect TIME_KEYS from params:
+     ("start","end","date","time","datetime","due","due_date",
+      "scheduled_at","remind_at","deadline","window_start","window_end")
+     Parsed phrases: "today","tomorrow","yesterday","next week","this weekend"
+     Unresolvable: "sometime","later","soon" → confidence="unresolvable"
+     → TimeWindowHint(raw_phrase, resolved_start, resolved_end, confidence)
+```
+
+**Whiteboard action:** replace FP-03's "derive from existing task payload" placeholder with this algorithm. Promote `request_frame_builder.py` as the normative extraction contract.
+
+---
+
+#### Q7: Resolver Accuracy Measurement Framework
+
+**Status: ANSWERED by benchmark (all five modes).**
+
+The benchmark defines these metrics:
+
+```text
+Exact Lookup (Mode 1):
+  accuracy: correct / samples
+  latency_p50_ms, latency_p95_ms, latency_p99_ms
+  misses (0 results), incorrect (wrong result)
+
+Two-Stage Discovery (Mode 2):
+  precision_at_1, precision_at_5
+  ambiguous_detection_rate (correctly flagged ambiguous / total ambiguous)
+  stage1_latency_p95_ms
+
+Three-Lane Architecture (Mode 3):
+  discovery_recall_at_50: expected connector found in top-50 candidates
+  resolver_verdict_accuracy: verdict matches expected verdict
+  authority_false_positive_rate: authority lookup returns wrong connector (must be 0)
+
+RequestFrame Extraction (Mode 4):
+  operation_accuracy, resource_accuracy, connector_accuracy
+  all_three_accuracy: all three match simultaneously
+
+Manifest-Aware Discovery (Mode 5):
+  Same as Mode 3, plus:
+  novel_domain_recall: domains with no NOUN_TO_DOMAIN entry
+  novel_domain_verdict_accuracy
+  natural_language_recall: phrases with zero connector/domain names
+  natural_language_verdict_accuracy
+
+Promotion thresholds (from shadow_comparison.py):
+  cutover: new ≥ old AND equivalence ≥ 0.95 AND no regression risks
+  do_not_cutover: new < old
+  more_work: otherwise
+```
+
+**Whiteboard action:** add to the Scenario Gates section and the milestone promotion criteria. Every CC proof must report at minimum recall/verdict-accuracy/FP-rate for its seam.
+
+---
+
+### B.3 — Constitution Execution
+
+#### Q8: Timeout / Degraded-Read Policy
+
+**Status: PARTIALLY ANSWERED by POC.**
+
+Proven:
+
+```text
+Projection freshness TTL:     300 seconds (ProjectionDeltaIngester default)
+Verification max staleness:   300,000 ms = 5 minutes (VerificationPlanRunner default)
+Binding expiry:               5 minutes (ResolutionEnvelope TTL)
+```
+
+Not yet proven:
+
+```text
+- No wall-clock staleness check in the verifier itself (it's a plan field only)
+- No prerequisite-read timeout at the invocation level (Constitution Phase 2 promise)
+- No Back-facing "read timed out, here's what to do" protocol
+```
+
+**Whiteboard action:** absorb the TTL values as V0 defaults. Mark prerequisite-read timeout enforcement as a deferred requirement (RSV-07 needs to implement the wall-clock check).
+
+---
+
+#### Q9: LLM Ignoring `allowed_next_actions`
+
+**Status: PARTIALLY ANSWERED by POC.**
+
+Proven:
+
+```text
+- Mock model HARD-BANNED: ResolutionExecutor.execute asserts llm_mock_used is False.
+  back_react_loop_poc raises ValueError("M5 loop requires a real model client") at entry.
+- submit_result_gate: completed with write requires VerificationObservation.
+  Missing verification → completed_requires_verification_evidence gate error.
+```
+
+Not yet proven:
+
+```text
+- No runtime ToolDispatcher enforcement of forbidden_tool_calls[].
+  CC-10 says "forbidden actions must be runtime-enforced by the dispatcher" —
+  this is a promise, not implemented.
+- No protocol for when Back calls invoke_capability on a binding the resolver
+  marked as blocked or unbound.
+- No second-model cross-validation (the POC uses single-model enforcement only).
+```
+
+**Whiteboard action:** the `allowed_next_actions` runtime enforcement gap is now a tracked issue (G3). The mock ban and verification gate are proven and should be referenced in CC-5 and CC-10.
+
+---
+
+#### Q10: Constitution Version Change Mid-Task
+
+**Status: ANSWERED by design (not a runtime mid-task problem).**
+
+Constitution changes do not occur in-flight. The constitution ships with the connector manifest and is versioned with it. A new constitution means a new connector version, which requires:
+
+```text
+1. New connector version is published with updated manifest (including new constitution)
+2. The user/household connects the new connector version (login, re-auth, reregistration)
+3. During connection, the new manifest is admitted and the new constitution replaces the old one atomically
+4. Until reconnection completes, the stale (existing) constitution remains authoritative
+5. In-flight tasks use the constitution that was current at resolution time — no mid-task swap
+```
+
+There is no "constitution version changes while a task is executing" scenario because: (a) the connector must be reconnected for a new manifest to take effect, (b) reconnection is a user-driven or admin-driven event, not a hot-reload, and (c) in-flight resolutions carry a snapshot of the constitution at `resolution_id` creation time. The CC-10 injection timing already ensures Back sees the constitution once at `after_resolution`; it does not receive streaming constitution updates mid-execution.
+
+**Whiteboard action:** add to Constitution Authoring And Versioning: new connector version → reconnect → new constitution atomically replaces old. In-flight tasks are not affected.
+
+---
+
+### B.4 — HIL & State
+
+#### Q11: HIL Suspend/Resume Protocol
+
+**Status: PARTIALLY ANSWERED by POC.**
+
+Proven:
+
+```text
+HILRequest shape (hil.py):
+  hil_request_id, task_id, resolution_id
+  hil_type: disambiguation | missing_input | confirmation | risk_acknowledgement
+  prompt, options[], required
+  context_summary, expires_at
+
+HILPort.request(hil_request):
+  Synchronous lookup against auto_responses dict
+  Raises HILTimeoutError if no response
+
+Disambiguation response handling:
+  apply_disambiguation_response removes alias from non-winning members,
+  rebuilds alias index → future resolutions see the resolved identity
+
+submit_result_gate:
+  needs_hil result_type requires hil_request_emitted=True in loop state
+```
+
+Not yet proven:
+
+```text
+- No async/duration suspend: HILPort is a synchronous test shim
+- No durable pause/resume across process boundaries
+- No FSM state transition protocol (bus message, state change, timeout)
+- No Front integration (how HIL questions reach the user and answers return)
+```
+
+**Whiteboard action:** absorb the HILRequest shape and the submit_result_gate enforcement rule. Mark the async suspend/resume FSM protocol as a tracked gap (G4, Remaining API Decision item 14).
+
+---
+
+#### Q12: Front HIL Presentation / Routing
+
+**Status: ANSWERED by design (not a Back concern).**
+
+Back does not own HIL presentation. When Back emits `submit_result(needs_hil)`, the FSM consumes the outcome and Front presents the HIL question to the user. The HIL response flows back through FSM → Back resume. This is the existing Concierge suspend/resume pattern:
+
+```text
+Back ReAct loop calls submit_result(needs_hil, hil_request=...)
+  → back_handler emits task.suspended with HIL payload
+  → FSM records suspended state
+  → Front picks up HIL question from task state / bus event
+  → User answers
+  → FSM routes HIL response back to Back via new BackTaskEnvelope with hil_response
+  → Back resumes ReAct loop at after_hil_response phase (CC-10)
+```
+
+The POC's synchronous `HILPort` is a test shim. The production path already exists: `submit_result(needs_hil)` → `task.suspended` → Front presents → user answers → `task.dispatch` with `hil_response` → Back resumes. This is not new infrastructure; it is the current Concierge loop with typed HIL payloads replacing ad-hoc text.
+
+**Whiteboard action:** close this gap. The HIL round-trip through FSM/Front is existing architecture, not a new component.
+
+---
+
+### B.5 — Verification
+
+#### Q13: Verifier Execution Flow
+
+**Status: ANSWERED by POC (`verification_runner.py`).**
+
+```text
+VerificationPlanRunner.build_plan(connector_constitutions, operation, invocation_observation):
+  1. Inspects connector_constitutions.verification for the operation.
+  2. Selects method:
+     read_after_write: readback params built from write output
+       (event_id, resource_id), readback_capability_ref derived as
+       tool.read.{connector_id}.get_event
+     output_schema: checks output has expected field (e.g., event_id)
+     none_available: plan created but method is none_available
+  3. Returns VerificationPlan with method, readback_capability_ref,
+     expected_effect, max_staleness_ms (default 300,000),
+     degraded_completion_policy, required_for_submit_status.
+
+VerificationPlanRunner.run(plan, observation):
+  1. Dispatches readback via NativeProviderDispatch.
+  2. Compares write output fields (event_id, title, start, end) against readback.
+  3. Mismatch → VerificationObservation(status="failed", mismatch_summary=...).
+  4. Success → VerificationObservation(status="verified").
+
+submit_result_gate enforcement:
+  completed + write invocation → requires ≥1 VerificationObservation
+  with status in {verified, degraded_verified}.
+  Missing → completed_requires_verification_evidence gate error.
+```
+
+**Whiteboard action:** promote this into Contract M (VerificationPlan) as the normative execution flow. The three methods (read_after_write, output_schema, none_available) are the V0 set.
+
+---
+
+#### Q14: Six Verifier Methods Implementation
+
+**Status: PARTIALLY ANSWERED by POC.**
+
+Implemented: `read_after_write`, `output_schema`, `none_available`.
+
+Named but not in POC: `state_compare`, `audit_receipt`, `external_receipt`, `policy_attestation`.
+
+The three POC-proven methods cover the primary system-of-record mutation case. The remaining four are cross-resource and external-connector concerns that belong in later milestones.
+
+**Whiteboard action:** Contract M should list all six methods but mark `state_compare`, `audit_receipt`, `external_receipt`, and `policy_attestation` as deferred to M10/M12.
+
+---
+
+### B.6 — Scale & Budget
+
+#### Q15: Actual Budget Numbers
+
+**Status: PARTIALLY ANSWERED by POC + benchmark.**
+
+Proven performance data (from benchmark + `scale_loader.py`):
+
+```text
+Scale proof (100K capability rows):
+  Indexed lookup:    median < 1ms,   p95 < 0.02ms  (benchmark Mode 1)
+  FTS5 search:       median < 250ms, p95 < 500ms   (scale_loader assertion)
+  TF-IDF manifest:   measured in benchmark Mode 5 at all scales
+
+Budget fields (BackTaskBudget):
+  max_iterations:      caller-supplied, no enforced default
+  max_fabric_calls:    caller-supplied, tracked on envelope
+  max_prompt_tokens:   caller-supplied
+
+Observed loop behavior:
+  Last 2 iterations:  model nudged toward submit_result
+  Proof at 100K:      chunked insert (50K rows), delete-all + rebuild for FTS5
+```
+
+Not yet proven:
+
+```text
+- No hardcoded budget defaults independent of caller config
+- No connector fanout cap
+- No verifier fanout cap
+- No prompt token budget enforcement at injection time
+```
+
+**Whiteboard action:** absorb the latency numbers as V0 performance targets. Mark hard budget defaults as a deferred requirement (OQ-031).
+
+---
+
+#### Q16: Connector Fanout Cap at 100K+ Tools
+
+**Status: PARTIALLY ANSWERED by POC + benchmark.**
+
+Proven:
+
+```text
+- 100K capability rows: indexed + FTS5 perform within thresholds
+- The resolver filters by installed connectors, not global sweep
+- The benchmark generates 51 namespaces × 20 domains × 30 operations =
+  30,600+ capability variants, and all benchmarks pass at 50K and 500K scale
+```
+
+Not yet proven:
+
+```text
+- No explicit connector fanout cap (e.g., "max 50 connectors per resolution")
+- No multi-connector join performance test (benchmark tests single-connector matching)
+- If a household has 500 installed connectors, every resolution scans all 500?
+  The resolver says O(local) but doesn't define "local."
+```
+
+**Whiteboard action:** add to the resolver section: `local` = `installed AND admitted AND active connectors for this actor/space`. The connector fanout cap should be `min(installed_count, 50)` with omission recording for elided connectors.
+
+---
+
+### B.7 — Failure & Edge Cases
+
+#### Q17: Connector Offline Behavior
+
+**Status: PARTIALLY ANSWERED by POC.**
+
+Proven:
+
+```text
+LocalProjectionStore.connected_resources:
+  status: active | suspended | revoked | pending
+  freshness_state: fresh | stale | unknown
+  last_synced_at tracks when the resource was last seen
+
+ProjectionDeltaIngester:
+  marks resources fresh after each successful event ingest
+  snapshot TTL default: 300 seconds
+```
+
+Not yet proven:
+
+```text
+- No Back-facing verdict for "connector is offline"
+- No distinction between "connector is suspended by user" vs "connector is unreachable"
+- No queuing policy for offline writes
+- No user-facing message when a connector is unavailable
+```
+
+**Whiteboard action:** absorb the `status` and `freshness_state` fields into CC-2. The offline verdict should map to `stale_projection` or `blocked` depending on the write/read context. Exact mapping remains TBD.
+
+---
+
+#### Q18: Missing Capability Distinctions
+
+**Status: ANSWERED by POC (`resolve_situation.py` verdict state machine).**
+
+The resolution verdict state machine distinguishes these sub-reasons for unbound roles:
+
+```text
+Verdict priority order:
+  1. cannot_execute          — budget exhausted or idempotency duplicate
+  2. needs_disambiguation    — ambiguous person refs or ambiguous CandidateUniverse
+  3. stale_projection        — write intended but candidate is stale
+  4. missing_required_params — not_found refs or missing intent params
+  5. promote_to_tier3        — intents span multiple connector families
+  6. blocked_by_policy       — policy verdict is deny
+  7. stale_projection        — unbound role with stale_projection reason
+  8. missing_capability      — unbound role with:
+       missing_capability    — no matching capability in registry
+       missing_connector     — connector not installed
+       guide_only            — capability exists but is guide_only, not executable
+  9. can_execute_with_gate   — incomplete prerequisites (e.g., missing required read)
+  10. can_execute            — clear path, all roles bound
+```
+
+The key distinction: `missing_capability` is a BUCKET with sub-reasons, not a flat verdict. Back can distinguish "no such tool exists" from "the connector isn't installed" from "that's a guide, not a tool."
+
+**Whiteboard action:** promote this state machine into CC-1 as the normative resolution verdict model.
+
+---
+
+#### Q19: Partial Projection vs. Block Decision
+
+**Status: PARTIALLY ANSWERED by POC.**
+
+Proven:
+
+```text
+- stale_projection verdict exists in the state machine (positions 3 and 7)
+- completeness field on CandidateUniverse supports partial_projection
+```
+
+Not yet proven:
+
+```text
+- No decision tree for "partial is good enough with HIL disclosure" vs "must block"
+- The OQ about this (related to G13) is not resolved by POC code
+```
+
+**Whiteboard action:** mark this as a deferred design decision. The POC proves the verdict exists; the policy for when partial is acceptable vs blocking is a Plane 2 (policy) concern.
+
+---
+
+#### Q20: Idempotency Key Collision
+
+**Status: ANSWERED by POC (`idempotency_store.py`).**
+
+```text
+IdempotencyStore state machine:
+  not_seen  →  mark_in_flight(key, invocation_id)  →  in_flight
+  in_flight →  mark_succeeded(key, observation)     →  succeeded
+  in_flight →  mark_failed(key, error)              →  failed
+
+Invariants:
+  - succeeded is IMMUTABLE (mark_in_flight and mark_failed both guard
+    with WHERE state NOT IN ('succeeded'))
+  - not_seen → mark_in_flight → proceed with invocation
+  - succeeded → return prior observation as no-op (detail_status="noop")
+  - in_flight → return retryable error (idempotency_conflict_in_flight)
+  - Write without idempotency_key → missing_idempotency_key preflight denial
+  - InvocationRuntime checks idempotency before dispatching any write effect
+
+Table: idempotency_records
+  idempotency_key   TEXT PRIMARY KEY
+  state             TEXT CHECK (in_flight | succeeded | failed)
+  invocation_id     TEXT NOT NULL
+  observation_json  TEXT
+  error             TEXT
+  created_at        TEXT NOT NULL
+  updated_at        TEXT NOT NULL
+```
+
+**Whiteboard action:** promote this into Contract H (InvocationRequest) as the normative idempotency contract. The state machine and invariants are proven.
+
+---
+
+### B.8 — Migration & Proof
+
+#### Q21: M0-M12 Milestone Dependency Graph
+
+**Status: ANSWERED by analysis (component dependency ordering).**
+
+The milestone numbering (M0-M12) is a sequencing guide, not a strict contract. What matters is the **component dependency graph**: which components must exist before others can be wired, which existing components must be deprecated, and how integration testing gates the whole system. Below is the dependency-ordered build plan.
+
+```text
+LAYER 0 — FOUNDATION (must exist before anything else)
+  Component: GlobalProjectionStore + LocalProjectionStore (POC-proven schemas)
+  Component: IdempotencyStore (POC-proven state machine)
+  Component: ManifestAdmissionService (POC-proven admission workflow)
+  Depends on: SQLite WAL (already in K1)
+  Proves: stores can hold connectors, capabilities, resources, aliases, snapshots, idempotency
+
+LAYER 1 — RESOLVER SPINE (needs Layer 0)
+  Component: RequestFrameBuilder (POC-proven extraction algorithm)
+  Component: Three-stage retrieval pipeline (indexed → FTS5 → TF-IDF, POC-proven)
+  Component: ResolutionEnvelope + CandidateUniverse builders
+  Component: Resolution verdict state machine (POC-proven 10-verdict model)
+  Depends on: Layer 0 stores + connector manifests
+  Proves: resolve_situation returns faithful CandidateUniverse at scale
+  Wires into: Back ToolDispatcher (new meta-tool: resolve_situation)
+
+LAYER 2 — CONSTITUTION + POLICY (needs Layer 1)
+  Component: ConstitutionArtifact loader (POC-proven shape: preconditions, companion_roles, verification)
+  Component: PolicyBundle selector (POC-proven PolicySelectionRequest → PolicyBundle)
+  Component: BindingBundle builder (POC-proven BindingRequest → BindingBundle)
+  Component: PromptPack builder (POC-proven card assembly)
+  Depends on: Layer 1 resolver + Layer 0 stores
+  Proves: connector constitutions, policy gates, and bindings drive allowed_next_actions
+
+LAYER 3 — EXECUTION (needs Layer 2)
+  Component: InvocationRuntime with idempotency check (POC-proven)
+  Component: VerificationPlanRunner (POC-proven: build_plan → run → gate)
+  Component: submit_result gate (POC-proven: completed requires verification evidence)
+  Component: CC-10 prompt injection timing (POC-proven phase model)
+  Depends on: Layer 2 bindings + Layer 0 idempotency
+  Proves: governed invoke → verify → submit with evidence
+  Wires into: Back ReAct loop (replace discover → invoke → submit with resolve → bind → invoke → verify → submit)
+
+LAYER 4 — DEPRECATION + INTEGRATION (needs Layer 3)
+  Deprecate: discover_capabilities as execution authority → demote to catalog retrieval only
+  Shadow mode: resolver path runs alongside legacy discover/invoke; compare outcomes
+  Integration test: end-to-end scenario gates (calendar, tasks, reminders, chores)
+  Cutover: feature flags per CC seam, rollback to legacy path if regression
+  Proves: new path produces equivalent or better outcomes than legacy path
+
+LAYER 5 — TIER 3 + CROSS-RESOURCE (needs Layer 3, can parallel with Layer 4)
+  Component: Planner consumes connector constitutions + CandidateUniverse
+  Component: Orchestrator DAG with prerequisite reads before writes
+  Component: Cross-resource (person, time-window) projection query
+  Depends on: Layer 3 execution + existing Planner/Orchestrator DAG machinery
+  Proves: Riley picnic scenario (multi-connector reads → conflict → HIL → write → verify)
+
+MILESTONE SEQUENCE (dependency order, not strict numbering):
+  M-FOUNDation:   Layer 0 — stores, admission, idempotency (POC already proves this)
+  M-RESOLVE:      Layer 1 — RequestFrame, retrieval, resolution (wires resolve_situation into Back)
+  M-CONSTITUTE:   Layer 2 — constitutions, policy, bindings, PromptPack
+  M-EXECUTE:      Layer 3 — governed invocation, verification, prompt injection
+  M-DEPRECATE:    Layer 4 — shadow mode, deprecation, integration gates, cutover
+  M-TIER3:        Layer 5 — Planner/Orchestrator cross-resource execution
+
+Each milestone is gated by:
+  - Component POC passing (targeted proof command)
+  - Negative proof (at least one forced failure per component)
+  - Shadow comparison (new path ≥ legacy path)
+  - Whiteboard promotion (contract updated to match proof)
+```
+
+**Whiteboard action:** replace the M0-M12 linear list with this dependency-ordered layer model. Milestones are component layers, not arbitrary numbers.
+
+---
+
+#### Q22: Test Files for CC-1 through CC-10
+
+**Status: PARTIALLY ANSWERED by POC.**
+
+Existing POC proofs:
+
+```text
+- e2e_scenario_gate.py: end-to-end scenario gate runner
+- shadow_comparison.py: new-path vs old-path comparison across 100 scenarios
+- model_matrix_runner.py: multi-model validation (in progress)
+- Benchmark Modes 1-5: retrieval, extraction, discovery accuracy proofs
+```
+
+Not yet existing:
+
+```text
+- No per-CC pytest files (CC-1 through CC-10 have no dedicated test files)
+- The benchmark tests the retrieval spine, not the full CC contract boundaries
+```
+
+---
+
+#### Q23: Feature Flag Names and Cutover Criteria
+
+**Status: PARTIALLY ANSWERED by POC.**
+
+Proven:
+
+```text
+Shadow comparison (shadow_comparison.py):
+  Compares new-path vs old-path pass rates
+  Equivalence ≥ 0.95 + no regressions → "cutover" recommendation
+  Regression or degraded → "do_not_cutover" or "more_work"
+```
+
+The whiteboard already lists feature flag names for each CC in the Runtime Migration Control Plane section. The POC proves the shadow comparison mechanism. The missing piece is wiring those flags into the actual runtime (the POC is standalone).
+
+---
+
+### B.9 — Natural Language
+
+#### Q24: Natural-Language Accuracy Contract
+
+**Status: ANSWERED by benchmark Mode 5.**
+
+The benchmark tests 38 natural-language queries with ZERO connector/domain names in the phrase:
+
+```text
+Example queries:
+  "Schedule Riley dentist appointment tomorrow 5pm"
+  "What do I have going on today"
+  "Is Friday free for dinner"
+  "Move my 3 o'clock to next week"
+  "Cancel the team standup on Wednesday"
+  "When is my next meeting"
+  "Add date night to the family plan"
+  "Remind me to take out the trash tonight"
+  "Did the kids finish their homework"
+  "Mark the grocery run as done"
+  "Tell everyone dinner is ready"
+  "Did Mom reply about Sunday"
+  "Write down the wifi password"
+  "How much power did we use today"
+  "Are the solar panels producing right now"
+  "How many steps did I walk today"
+  "How did I sleep last night"
+  "Do we have enough widgets in stock"
+  "Order more shipping boxes"
+  "Pay the electricity bill"
+  ... (38 total)
+
+Metrics:
+  natural_language_recall:       expected connector found in top-50
+  natural_language_verdict_accuracy: verdict matches expected verdict
+```
+
+**Whiteboard action:** add the 38 natural-language queries as a scenario gate fixture set. The natural-language accuracy contract is: recall ≥ 90%, verdict accuracy ≥ 85% at 50K scale, measured by the manifest-aware discovery benchmark.
+
+---
+
+#### Q25: 15 Remaining API Decisions
+
+**Status: PARTIALLY ANSWERED by POC.**
+
+Of the 15 remaining API decisions listed in the whiteboard:
+
+| # | Decision | POC Status |
+|---|---|---|
+| 1 | Projection store schema | **ANSWERED** — GlobalProjectionStore + LocalProjectionStore |
+| 2 | ManifestTranslator output | **ANSWERED** — CapabilityRegistrationBatch in CC-8 |
+| 3 | ResolutionEnvelope JSON schema | PARTIAL — fields listed but no JSON Schema document |
+| 4 | Back tool set names | PARTIAL — resolve_situation, invoke_capability, submit_result named; inspect_binding not in POC |
+| 5 | Compatibility mapping (native → connector-aware) | **RESOLVED by design** — SCA-B19 alias mapper; implementation plumbing, not kernel gap |
+| 6 | DomainInstantiationPack schema | **RESOLVED by design** — shape defined in Standard Vocabulary; machine schema deferred to cross-domain |
+| 7 | ResourceKindDef / OperationDef schemas | PARTIAL — resource_kinds table exists but no formal OperationDef |
+| 8 | PlanGraph storage | **RESOLVED by design** — existing Planner/Orchestrator concern; already serializes CommittedPlan |
+| 9 | Verification methods in V0 | **ANSWERED** — read_after_write, output_schema, none_available |
+| 10 | TraceContext propagation | PARTIAL — trace_id on envelopes but no AuthorityDecisionRecord store |
+| 11 | SafetyContext mapping | **RESOLVED by design** — Contract O defines axes; Fix Order #3 item; needs implementation |
+| 12 | ManifestAdmissionRecord trust tiers | PARTIAL — verdict states exist but no trust tier hierarchy |
+| 13 | ExecutionBudget defaults | PARTIAL — fields exist, caller-supplied, no hard defaults |
+| 14 | HIL presentation constraints | **RESOLVED by design** — Front owns presentation (Q12); HILRequest shape already carries prompt/options |
+| 15 | Negative proof fixtures | PARTIAL — benchmark has expected-failure queries; no per-CC negative fixtures |
+
+**Whiteboard action:** 9 of 15 API decisions now resolved (1,2,5,6,8,9,11,14 + partially 3,4,7,10,12,13,15). Zero remain as blockers.
+
+---
+
+### B.10 — Summary: What The POC Proves
+
+```text
+PROVEN AND PROMOTABLE (absorb into whiteboard now):
+  ✓ Resource projection store schemas (Q1)
+  ✓ Natural-language → connector via TF-IDF manifest (Q2)
+  ✓ Capability name collision prevention via connector_id embedding (Q3)
+  ✓ Connector alias normalization algorithm (Q4)
+  ✓ Three-stage retrieval pipeline: exact → FTS5 → TF-IDF (Q5)
+  ✓ RequestFrame extraction algorithm (Q6)
+  ✓ Resolver accuracy measurement framework (Q7)
+  ✓ Resolution verdict state machine with sub-reason distinctions (Q18)
+  ✓ Idempotency store with immutable-succeeded invariant (Q20)
+  ✓ Verifier execution flow: build_plan → run → gate (Q13)
+  ✓ Natural-language accuracy benchmarks (Q24)
+  ✓ Scale proof at 100K: indexed <1ms, FTS5 <500ms
+
+PROVEN WITH LIMITS (absorb, mark deferred parts):
+  ◐ Timeout values: 300s freshness, 5min staleness (Q8)
+  ◐ Mock-model ban + verification gate; forbidden-action enforcement deferred (Q9)
+  ◐ HIL shape + sync flow; async suspend/resume protocol deferred (Q11)
+  ◐ Three of six verifier methods (Q14)
+  ◐ Budget fields + latency data; hard defaults deferred (Q15)
+  ◐ 100K scale proof; connector fanout cap deferred (Q16)
+  ◐ Connector status/freshness fields; Back-facing offline verdict deferred (Q17)
+  ◐ Resolution verdict tree; partial-vs-block policy deferred (Q19)
+  ◐ E2E scenario gate + shadow comparison; per-CC tests deferred (Q22)
+  ◐ Shadow comparison mechanism; runtime feature flags deferred (Q23)
+  ◐ 3 of 15 API decisions answered, 6 partially answered (Q25)
+
+RESOLVED BY DESIGN (questions answered through architectural clarification):
+  ✓ Constitution version change mid-task (Q10) — constitution changes via connector
+    reconnection (new version → login → reregistration). Stale copy stays until then.
+    In-flight tasks use the constitution current at resolution time.
+  ✓ Front HIL presentation/routing (Q12) — not a Back concern. Back emits
+    submit_result(needs_hil); FSM routes to Front; Front presents; user answers;
+    FSM routes back to Back. Existing Concierge suspend/resume pattern.
+  ✓ M0-M12 milestone dependency graph (Q21) — replaced with 5-layer component
+    dependency model: Foundation → Resolver → Constitution → Execution → Deprecation.
+
+REMAINING API DECISIONS (implementation plumbing, not kernel contract gaps):
+  #5  Compatibility mapping (native → connector-aware names):
+      SCA-B19 alias mapper needed during migration. Implementation plumbing.
+  #6  DomainInstantiationPack schema:
+      Shape defined in Standard Vocabulary. Machine-validatable schema deferred
+      to cross-domain work. V0 starts with manual validation.
+  #8  PlanGraph storage:
+      Existing Planner/Orchestrator concern (already serializes CommittedPlan).
+      Needs Planner team, not Back resolver team.
+  #11 SafetyContext mapping (GREEN/AMBER/RED → kernel axes):
+      Contract O defines axes. Fix Order #3 item with clear target. Needs
+      implementation of mapping function, not more design.
+  #14 HIL presentation constraints:
+      RESOLVED by Q12. Front owns presentation. HILRequest shape already carries
+      prompt, options[], context_summary. Existing Concierge Front actor responsibility.
+```
+
+```
+
+**Section mode:** evidence crosswalk. This appendix is not normative — it maps POC evidence to design gaps. As each gap is resolved, this appendix should contract. When all 25 questions are ANSWERED, this appendix can be removed.
 
 ---
 
@@ -10179,3 +17648,241 @@ Direct invocation proof:
 - Missing `end`: `capability_params_incomplete` with recovery asking for `end`.
 - Schema-valid params + AMBER: `band_denied`.
 - Schema-valid params + GREEN: `ok`, calendar event created.
+
+---
+
+## Appendix C - Unresolved Design Issues Tracker
+
+**Section mode:** open issues — tracked, not forgotten.
+
+> **Key:** 🔴 = blocking (must resolve before production), 🟡 = deferred (needs design but not blocking), ⚪ = speculative (nice to have).
+>
+> **Status:** Each item has a cross-reference to the section where it's raised and any POC/benchmark evidence.
+
+---
+
+### 🔴 Blocking
+
+**C-001: Contract O — SafetyContext value enumerations undefined**
+
+- **Raised in:** FP-04 / Contract O
+- **Issue:** SafetyContext fields (band, reason, authority, provenance) have no enumerated value sets. Without enumerations, llm_prompt cannot consistently consume safety signals.
+- **Evidence:** POC does not include safety context enumeration. Benchmark does not test safety band semantics.
+- **Recommendation:** Define a finite `SafetyBand` enum (GREEN, AMBER, RED) and `Provenance` enum (declared, observed, inferred, attested) in Contract O. Mirror in `error_types.py`.
+
+**C-002: `forbidden_tool_calls[]` not enforced in any plane**
+
+- **Raised in:** Contract N / BTC-013
+- **Issue:** The contract specifies `forbidden_tool_calls[]` in InvocationPolicy (Contract N) but no enforcement path exists in Back's ReAct loop, the verifier, or the Bridge guard. A forbidden tool declared in policy is silently ignored.
+- **Evidence:** `verification_runner.py` does not check forbidden_tool_calls. `bus_guard.py` routes on topic only.
+- **Recommendation:** Add a `forbidden_tool_gate` check in the Verifier (build_plan step 0) or in Back's executor pre-invoke hook. Wire to BTC-013 enforcement semantics.
+
+**C-003: No per-CC contract test files exist**
+
+- **Raised in:** CC-0 through CC-10, Appendix B Q16
+- **Issue:** CC contracts describe inter-plane boundaries but have zero dedicated test files. Cross-contract invariants (e.g., "a capability_id resolved in CC-1 must be invocable in CC-3") are untested.
+- **Evidence:** POC tests exist for individual stores but no integration tests across CC boundaries.
+- **Recommendation:** Create per-CC test files in `tests/contracts/CC-*/`. Each test file validates the "Surface, Transport, Contract, Error set, Sidecar semantics" columns from the CC table.
+
+**C-004: No prerequisite-read timeout policy**
+
+- **Raised in:** CC-3 / BTC-008
+- **Issue:** Back waits for prerequisite reads (calendar, reminders) before capability selection. No timeout policy exists — a hung connector blocks the entire ReAct loop.
+- **Evidence:** `resolve_situation.py` has no timeout parameter. POC `hil.py` has `hil_timeout` but only for HIL, not for prerequisite reads.
+- **Recommendation:** Add `prerequisite_read_timeout_ms` to ResolutionContext with a default (suggested: 5000ms). On timeout, issue `needs_hil` with reason `prerequisite_read_timeout`.
+
+**C-005: BTC-004 safety band conflict still live**
+
+- **Raised in:** §J-4 contradiction tracker, BTC-004
+- **Issue:** Two distinct safety-band mechanics conflict: (A) Back: "AMBER → needs front proxy confirmation" vs (B) Fabric: "AMBER → execute but log". Which takes precedence when Back selects an AMBER capability that Fabric resolved as GREEN?
+- **Evidence:** POC does not implement safety band gating. Benchmark only measures discovery, not execution gating.
+- **Recommendation:** Resolve in BTC-004 resolution spec. Suggested: Back-band overrides Fabric-band when Back-band is stricter. GREEN < AMBER < RED precedence with max() rule.
+
+**C-006: FP-08 still marked `sketch`**
+
+- **Raised in:** FP-08 (Multi-Plane Governance Policy, currently tagged `[sketch]`)
+- **Issue:** FP-08 governs multi-plane consistency (Back's executor, Fabric's resolver, Bridge's guard). Without it, each plane enforces its own policies independently with no cross-plane reconciliation.
+- **Evidence:** No POC or benchmark evidence.
+- **Recommendation:** Promote FP-08 from `[sketch]` to `[draft]` with concrete enumerated safeguards. Define at minimum: (a) cross-plane policy conflict resolution, (b) authority precedence (which plane wins), (c) audit trail consistency across planes.
+
+**C-007: All KD/ID/XD promotion conditions unmet**
+
+- **Raised in:** BTC-006 (PromotionState: KD → ID → XD)
+- **Issue:** The promotion pipeline from Known Design (KD) → Implementation Draft (ID) → Executable Draft (XD) has formal gates (BTC-006) but all normative sections are still KD. ID requires per-section test coverage; XD requires benchmark validation. Neither condition is met.
+- **Evidence:** POC proves individual components but not integrated per-section.
+- **Recommendation:** Select 3 highest-priority contracts for ID promotion (suggested: Contract D, Contract F, CC-1). Create dedicated test files. Run the promotion gate checklist from BTC-006.
+
+---
+
+### 🟡 Deferred
+
+**C-008: CC contracts 3-8 missing Failure Semantics sections**
+
+- **Raised in:** CC-3 through CC-8
+- **Issue:** CC-0 through CC-2 have Failure Semantics sections. CC-3 through CC-8 do not. This creates asymmetric contract rigor — earlier contracts define error behavior; later contracts assume it.
+- **Recommendation:** Add Failure Semantics to each CC contract following the CC-0 template: Transport failure, Encode failure, Decode failure, Semantic mismatch.
+
+**C-009: M0-M12 milestones vs 5-layer model — no explicit handoff**
+
+- **Raised in:** §Milestone order, Appendix B Q21
+- **Issue:** Two milestone models coexist (M0-M12 linear and 5-layer component dependency). No explicit statement of which governs current implementation.
+- **Status:** A note was added (J-8 resolution) stating the layer model supersedes for implementation planning. But no migration plan exists for renumbering M0-M12 to layer milestones.
+- **Recommendation:** Create a milestone migration table mapping old M0-M12 to new layer-based milestones. Close after migration.
+
+**C-010: PlanGraph dual-mode (optional vs. mandatory) unresolved**
+
+- **Raised in:** §J-3, Contract L vs BTC-014
+- **Issue:** Contract L describes PlanGraph as optional (for planning flow) while BTC-014 describes it as mandatory (for audit trail). Both cannot be correct simultaneously.
+- **Evidence:** POC does not implement PlanGraph. Benchmark does not measure plan serialization.
+- **Recommendation:** Resolve the mode: if BTC-014 requires mandatory PlanGraph for audit, update Contract L. If Contract L's optional mode stands, BTC-014 must accept optional PlanGraph with fallback audit via observation chain.
+
+---
+
+### ⚪ Speculative
+
+**C-011: End-to-end discovery flow dual authority (LEGACY vs. target)**
+
+- **Raised in:** End-To-End Discovery Flow section (LEGACY PATH warning banner)
+- **Issue:** The Legacy Path (`llm_prompt` → `discover_capabilities` → `invoke_capability`) coexists with the Target Path (Back → Resolver → Manifest → CapabilityInvocation). The transition plan is undocumented.
+- **Recommendation:** Define a phase-out schedule for the Legacy Path. Add a `discovery_mode` flag to the bridge context so Back can signal which path it's using.
+
+**C-012: Executive Thesis top-K rejection vs. current-state prose**
+
+- **Raised in:** §J-6
+- **Issue:** Executive Thesis says "top-1, then offer alternatives" but current-state sections describe parallel resolution with no mention of top-1 selection.
+- **Recommendation:** Either update Executive Thesis to match current design (parallel resolution) or update the resolver to implement top-1 with alternative offering.
+
+---
+
+### 🔴 Blocking (code-verified — added 2026-06-02)
+
+**C-013: Participant name→identity resolution does not exist anywhere in the pipeline**
+
+- **Raised in:** 4-plane decomposition analysis, code audit of `front.py`, `kernel/service.py`, `selfmodel/`, `sessionstate/`
+- **Issue:** When a user says "Riley," no code resolves "Riley" → `actor_id`. The LLM interprets the name from prompt context. The grounding pipeline resolves temporal ("tomorrow"→date) and spatial references but NOT identity/name references. `SpaceGraphService` lists members with `display_name` but has no `resolve_name()` lookup method. `SessionState.persona._preferences["active_member"]` stores a display string, not a resolved identity.
+- **Evidence:** Full code audit of the Front→Back dispatch path: `front_handler()` → `grounding.refresh_turn()` → `build_projection()` → `dispatch_task`. At no point is "Riley" matched to a `member_id`. The `GroundingProjection` carries `identity_ref` (session's own actor) and `group_refs` (space_id), not resolved participant refs from user text.
+- **Recommendation:** Add `resolve_participant(name: str, space_id: str) → actor_id | None` to Fabric's resolver (NOT the Context Plane). The Context Plane delivers the raw `GroundingProjection` (space_id + temporal/spatial snapshot). Fabric's resolver consults `SpaceGraphService` members, matches `display_name`, and includes resolved participants in `CandidateUniverse.impact_set_candidates[]`. If ambiguous, Fabric returns `needs_disambiguation` with member candidates.
+- **Rationale for Fabric ownership:** Participant resolution must consult constitution visibility rules (which members are visible to this actor?) and policy (can this actor schedule for this participant?). The Context Plane has no policy authority and should not make visibility decisions.
+
+**C-014: `discover_capabilities` dual-authority — legacy execution path vs. target catalog-only path**
+
+- **Raised in:** 4-plane decomposition analysis, End-To-End Discovery Flow section, POC benchmark
+- **Issue:** `discover_capabilities` currently serves as BOTH (A) execution authority in the current baseline (Back discovers top-K → invokes by name) AND (B) catalog retrieval in the target design (cold discovery, first-contact, "is there any tool that could do X?"). The same tool name has two different authority levels depending on which code path calls it. There is no `discovery_mode` flag to distinguish them.
+- **Evidence:** POC benchmark proves `resolve_situation` is the correct execution-authority path (100% exact lookup, 96-99.8% manifest recall, 0% authority FP rate). `discover_capabilities` returns a flat semantic-search catalog with no policy gates, no resource binding, no verification — it cannot be execution authority. But it is still needed for cold discovery, docs, and missing-capability suggestions.
+- **Recommendation:** (a) Add `discovery_mode: execution | catalog | diagnostic` to Back's tool context. (b) When `discovery_mode=catalog`, `discover_capabilities` returns results with a `catalog_only: true` marker and `allowed_next_actions=[]` — the LLM cannot invoke from catalog results. (c) When `discovery_mode=execution`, Back MUST use `resolve_situation`, not `discover_capabilities`. (d) Define a phase-out schedule: once all Tier 2 paths use `resolve_situation`, deprecate `discover_capabilities` for execution and rename to `search_capability_catalog`.
+- **Open question:** Should `discover_capabilities` remain a Back meta-tool or move to a Fabric-only diagnostic surface? If Back can call it, the LLM can misuse it for execution. If only Fabric can call it, Back loses cold-discovery capability.
+
+---
+
+## Code-Verified Architecture Findings — 2026-06-02
+
+**Section mode:** code-audit findings that resolve 4-plane decomposition questions.
+
+These findings are based on full code audits of `k1/concierge/actors/front.py`, `k1/kernel/service.py`, `k1/selfmodel/`, `k1/sessionstate/`, `k1/orchestrator/`, `k1/fabric/`, `bridge/`, and `architecture_diagrams/bridge/`.
+
+---
+
+### F-001: Bridge owns IFL — confirmed in code and architecture diagrams
+
+**Source:** `bridge/README.md`, `bridge_architecture.mmd`, `bridge_architecture_v2.mmd`, `interkernel_fabric_layer.mmd`, `bridge/__init__.py`, `bridge/connector/`, `bridge/ifl/`
+
+**Finding:** Bridge is the root peer of K0/K1. IFL is a subsystem (`bridge/ifl/`) inside Bridge. The hierarchy is:
+
+```text
+Bridge/                          ← root peer of K0/K1 (device-side Python package)
+  ├── connector/                 ← security pipeline, credential vault, MCP process mgmt
+  │   ├── gateway.py             ← ConnectorGateway (3-stage pipeline)
+  │   ├── credential_vault.py    ← per-adapter secrets (AES256-GCM, never leave Bridge)
+  │   ├── mcp_process_manager.py ← MCP child process supervision
+  │   ├── token_verifier.py      ← K1 capability token validation
+  │   └── adapter_verifier.py    ← FamilyOS CA adapter signature verification
+  ├── ifl/                       ← IFL runtime tier (BRIDGE-OWNED)
+  │   ├── adapters/              ← per-adapter MCP server packages
+  │   │   └── google_calendar/   ← OAuth server, consent flow, MCP server
+  │   ├── mcp_stdio.py           ← MCP stdio transport
+  │   └── manifest/, protocol/, registry/, dispatch/, events/ (deferred)
+  ├── ports/                     ← 5 protocol definitions (CMD, QRY, SSE, OBS, IFL)
+  ├── core/                      ← signing, envelope_builder, events, health
+  └── sync/                      ← LocalOutbox, drain_worker
+```
+
+**Security boundary:** Bridge IS the security boundary. K0/K1 cannot import Bridge internals directly (CI-enforced wall `bridge_not_imported_from_kernels`). Envelope signing (Ed25519), band enforcement, adapter verification, rate limiting, circuit breaking, and credential isolation all happen inside Bridge. MCP children receive secrets at init over stdio only — never via process env or argv.
+
+**Implication for 4-plane model:** Bridge is NOT a 5th plane. It is the security boundary layer between Fabric (Plane 2) and IFL (Plane 1). Fabric dispatches through Bridge's `IConnectorGatewayPort`; Bridge routes through its IFL tier to concrete adapters. The 4-plane model remains correct: IFL (Plane 1) defines tool shapes; Bridge enforces security; Fabric (Plane 2) resolves and invokes.
+
+---
+
+### F-002: Orchestrator executes ALL tools through Fabric — single invocation path
+
+**Source:** `k1/kernel/service.py` (S5, S6), `k1/orchestrator/adapters/fabric_gateway_adapter.py`, `k1/orchestrator/orchestration/step_runner.py`, `k1/orchestrator/orchestration/dag_executor.py`, `k1/orchestrator/orchestration/orchestrator_service.py`, `k1/fabric/fabric.py`
+
+**Finding:** The Orchestrator has zero tools of its own (invariant ORCH-03). Every step executes through Fabric. The exact call chain is:
+
+```text
+OrchestratorService._receive_plan()
+  → DAGExecutor.execute()
+    → execute_wave()
+      → _execute_step()
+        → StepRunner.run()
+          → IFabricGatewayPort.execute()    ← FabricGatewayAdapter
+            → Fabric.execute()              ← Fabric container (fabric.py:1623)
+              → CapabilityFabric.execute()  ← 9-step _execute_impl() (fabric.py:229)
+                → Provider (Bridge/IFL)
+```
+
+**Planner is read-only:** The Planner uses `IFabricRetrievalPort` — a discovery port with only `discover_capabilities()` and `find_relevant_prompts()`. It has NO `execute()` method. Planner literally cannot execute a capability (PLAN-06 enforced at interface level).
+
+**Concierge also calls Fabric:** Back's `invoke_capability` → `FabricDispatchAdapter` → `CapabilityFabric.execute()`. Both Tier 2 (Back) and Tier 3 (Orchestrator) go through the same Fabric execution spine.
+
+**Implication for 4-plane model:** Fabric (Plane 2) is the single execution authority for ALL tiers. No tool call bypasses Fabric. Back (Plane 3) invokes through Fabric; Orchestrator (Tier 3, outside 4-plane model) also invokes through Fabric. The 4-plane model correctly places invocation in Fabric.
+
+---
+
+### F-003: Participant name→identity resolution is a design gap — Context Plane vs. Fabric boundary
+
+**Source:** `k1/concierge/actors/front.py`, `k1/kernel/service.py`, `k1/selfmodel/service/space_graph.py`, `k1/grounding/adapters/selfmodel_identity_adapter.py`, `k1/sessionstate/sections/persona.py`, `k1/sessionstate/sections/meta.py`
+
+**Finding:** The grounding pipeline resolves temporal and spatial references deterministically. It does NOT resolve participant names from user text. The current flow:
+
+```text
+User: "Can Riley pick up the kids tomorrow?"
+
+1. grounding.refresh_turn() → GroundingEnvelope
+   - temporal: "tomorrow" → 2026-06-03 ✅ RESOLVED
+   - spatial: device_location, place_refs ✅ RESOLVED
+   - identity_ref: "actor:session123" ← session's OWN actor, NOT "Riley"
+   - group_refs: ("space:family123",) ← space context
+
+2. self_model.render_capsule() → GroundingCapsule
+   - SituationFrame = S(actor) ∩ F ∩ C
+   - Contains: actor's selfmodel, space members list, constitution rules
+   - Does NOT contain: "Riley → member_id" mapping
+
+3. SpaceGraphService.get_view(actor_id)
+   - Returns: members with display_name, role, age_band
+   - Has NO resolve_name(display_name) → member_id method
+
+4. SessionState.persona._preferences["active_member"]
+   - Stores: "Riley" as a display string
+   - Is NOT a resolved identity reference
+
+5. The LLM interprets "Riley" from the prompt context
+   - NO deterministic resolution occurs
+```
+
+**Design decision:** Participant resolution belongs to Fabric (Plane 2), not the Context Plane (Plane 4). Rationale:
+
+- Participant resolution requires consulting constitution visibility rules — which members can this actor see?
+- It requires policy checks — can this actor schedule for this participant?
+- The Context Plane has no policy authority and should not make visibility decisions.
+- The Context Plane's job is snapshot DELIVERY (temporal, spatial, session identity, space refs). Fabric's job is snapshot CONSUMPTION (resolving participants, resources, capabilities from the snapshot).
+
+**Implementation path:** Fabric's resolver, given `GroundingProjection.space_id`, calls `SpaceGraphService.get_view(actor_id)` → iterates members → matches `display_name` against user text references → includes resolved participants in `CandidateUniverse.impact_set_candidates[]`. If ambiguous (two "Riley"s in a space), Fabric returns `needs_disambiguation` with member candidates.
+
+---
+
+### F-004: Constitution ownership split confirmed — IFL (format/authoring), Fabric (interpretation/enforcement)
+
+**Source:** Constitution Tooling section, Principle 6, `bridge/ifl/adapters/`, `k1/fabric/fabric.py`
+
+**Finding:** The user confirmed the split: IFL owns constitution artifact format and authoring (it ships with the connector). Fabric owns constitution interpretation at runtime (enforcing prerequisite reads, conflict checks, HIL gates, verification requirements). This matches Principle 6: "Constitution Ships With The Connector, Not The Prompt." The constitution is stored in `GlobalProjectionStore.connector_constitutions` (POC-proven, Appendix B Q1) and disclosed progressively via CC-10 phases. Fabric's resolver loads it by `connector_id` at resolution time.

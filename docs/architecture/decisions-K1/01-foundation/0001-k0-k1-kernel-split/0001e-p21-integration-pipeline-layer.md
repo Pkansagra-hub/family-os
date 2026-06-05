@@ -117,6 +117,7 @@ title: P21+ Integration Pipeline Layer
 **Technical Story:** Define how K1 hosts third-party integrations (P21+ pipelines) while keeping K0 pure and stable
 **Parent ADR:** [ADR-0001: K0/K1 Kernel Split](0001-k0-k1-kernel-split.md)
 **Related ADRs:**
+
 - [ADR-0001a: K0 Bridge Communication Protocol](0001a-k0-bridge-communication-protocol.md)
 - [ADR-0002: Actor Model for Agent Isolation](0002-actor-model-agent-isolation.md)
 - [ADR-0010: Capability-Based Security](0010-capability-based-security.md)
@@ -145,6 +146,7 @@ K1 Intelligence Module acts as an **integration host** for third-party services 
 ### The Integration Challenge
 
 **K1 Intelligence Module needs to integrate with external services:**
+
 - **IoT Devices:** Smart lights (Philips Hue), thermostats (Nest), sensors
 - **Cloud Services:** Google Calendar, Bank of America, Weather APIs
 - **Voice Assistants:** Alexa, Google Home bridges
@@ -154,12 +156,14 @@ K1 Intelligence Module acts as an **integration host** for third-party services 
 **Problem: Where do integrations live?**
 
 **Option 1: Integrations in K0 (memory_kernel ADR-010 original design)**
+
 - ❌ **Problem:** K0 becomes bloated and unstable
 - ❌ **Problem:** K0 pipeline count grows unbounded (P01-P∞)
 - ❌ **Problem:** K0 security surface area expands (external API keys, OAuth)
 - ❌ **Problem:** K0 version churn (integration updates break memory operations)
 
 **Option 2: Integrations in K1 (this ADR's decision)**
+
 - ✅ **Benefit:** K0 remains pure and stable (P01-P20 frozen)
 - ✅ **Benefit:** K1 acts as integration host (sandboxed, isolated)
 - ✅ **Benefit:** K1 security surface area isolated from K0
@@ -290,6 +294,7 @@ We establish K1 as the **Integration Host** for P21+ pipelines:
 | **P20** | HealthCheck | K0 liveness, readiness probes |
 
 **Characteristics:**
+
 - **No external dependencies** (no HTTP calls, no OAuth)
 - **Deterministic** (same input → same output)
 - **Fast** (<200ms P95 for Smart Lane)
@@ -314,6 +319,7 @@ We establish K1 as the **Integration Host** for P21+ pipelines:
 | **P31+** | Third-Party Apps | App Store | Marketplace integrations (sandboxed) |
 
 **Characteristics:**
+
 - **External dependencies** (HTTP APIs, OAuth, API keys)
 - **Non-deterministic** (network failures, rate limits)
 - **Slow** (<3000ms P95 timeout)
@@ -497,6 +503,7 @@ dependencies:
 **Purpose:** Enforce capability-based access control at K1 ingress.
 
 **PEP Decision Flow:**
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │ Integration Request                                                     │
@@ -532,6 +539,7 @@ dependencies:
 **Purpose:** Control outbound network access from integrations.
 
 **Egress Proxy Rules:**
+
 ```yaml
 # Egress Proxy Configuration
 egress_policy:
@@ -557,6 +565,7 @@ egress_policy:
 ```
 
 **Egress Proxy Enforcement:**
+
 ```
 Integration → Egress Proxy → Destination
             ↓ Check allow_list
@@ -569,12 +578,14 @@ Integration → Egress Proxy → Destination
 **Purpose:** Securely store API keys, OAuth tokens for integrations.
 
 **Secrets Storage:**
+
 - **Encryption:** AES-256-GCM (Galois/Counter Mode)
 - **Key Derivation:** PBKDF2 (100,000 iterations, SHA-256)
 - **Storage:** SQLite encrypted database (`secrets.db`)
 - **Access:** Capability-based (integrations with `secrets.read` capability only)
 
 **Secrets API:**
+
 ```python
 # Secrets Manager API
 class SecretsManager:
@@ -620,6 +631,7 @@ class SecretsManager:
 **Purpose:** Sandbox LLM tool calls (e.g., calendar.get, email.send) using MCP protocol.
 
 **MCP Architecture:**
+
 ```
 K1 Agent (LLM) → MCP Gateway → MCP Server (Integration) → External Service
               ↓ JSON-RPC 2.0
@@ -628,6 +640,7 @@ K1 Agent (LLM) → MCP Gateway → MCP Server (Integration) → External Service
 ```
 
 **Example: Google Calendar Integration (MCP)**
+
 ```json
 // MCP Tool Call (JSON-RPC 2.0)
 {
@@ -658,6 +671,7 @@ K1 Agent (LLM) → MCP Gateway → MCP Server (Integration) → External Service
 **Purpose:** Sandbox user-defined code (custom extensions) using WebAssembly.
 
 **WASM Architecture:**
+
 ```
 K1 Integration Host → WASM Runtime (Wasmtime) → User Code (WASM) → Restricted API
                     ↓ Memory isolation
@@ -666,6 +680,7 @@ K1 Integration Host → WASM Runtime (Wasmtime) → User Code (WASM) → Restric
 ```
 
 **Example: Custom Extension (WASM)**
+
 ```rust
 // User-defined custom extension (Rust compiled to WASM)
 #[wasm_bindgen]
@@ -682,6 +697,7 @@ pub fn custom_logic(input: String) -> String {
 **Purpose:** Sandbox third-party binaries (OAuth services, bank APIs) in separate processes.
 
 **Process Isolation:**
+
 ```
 K1 Integration Host → Spawn subprocess → Integration binary → External Service
                     ↓ Resource limits (cgroups)
@@ -690,6 +706,7 @@ K1 Integration Host → Spawn subprocess → Integration binary → External Ser
 ```
 
 **Resource Limits (cgroups):**
+
 - **Memory:** 128MB per integration
 - **CPU:** 50% of one core
 - **Network:** Egress only (no inbound connections)
@@ -704,6 +721,7 @@ K1 Integration Host → Spawn subprocess → Integration binary → External Ser
 **Purpose:** Isolate failing integrations to prevent cascading failures.
 
 **Circuit Breaker States:**
+
 ```
 CLOSED (normal) → OPEN (3 failures) → HALF-OPEN (test recovery) → CLOSED
                 ↓ 60s timeout
@@ -711,6 +729,7 @@ CLOSED (normal) → OPEN (3 failures) → HALF-OPEN (test recovery) → CLOSED
 ```
 
 **Example: Philips Hue Circuit Breaker**
+
 ```
 Turn 1: Call Hue API → Timeout (3000ms) → Failure 1
 Turn 2: Call Hue API → Timeout (3000ms) → Failure 2
@@ -726,11 +745,13 @@ Turn 11 (60s later): Circuit HALF-OPEN, retry API call
 **Purpose:** Retry failed integration calls with exponential backoff.
 
 **DLQ Retry Policy:**
+
 ```
 Failure → DLQ → Retry after 1s → Failure → Retry after 2s → Failure → Retry after 4s → Failure → Retry after 8s → Give up
 ```
 
 **Example: Bank API Call Failed**
+
 ```
 Turn 1: Call Bank API → Network error → Send to DLQ
 DLQ: Retry after 1s → Network error → Send to DLQ
@@ -744,11 +765,13 @@ DLQ: Retry after 8s → Network error → Give up, log error
 **Purpose:** Isolate misbehaving integrations (excessive failures, resource abuse).
 
 **Quarantine Triggers:**
+
 - **Excessive failures:** >10 failures in 1 minute
 - **Resource abuse:** Memory >128MB, CPU >50% sustained
 - **Security violations:** Attempting to access unauthorized capabilities
 
 **Quarantine Actions:**
+
 1. Kill integration process
 2. Move manifest to `integrations_quarantined/`
 3. Notify user: "Philips Hue integration quarantined due to excessive failures"
@@ -763,10 +786,12 @@ DLQ: Retry after 8s → Network error → Give up, log error
 **Manifest:** `integrations/philips_hue/smart_light.yaml`
 
 **Endpoints:**
+
 - `POST /integrations/philips_hue/turn_on` - Turn on light (brightness, color)
 - `POST /integrations/philips_hue/turn_off` - Turn off light
 
 **Example Usage (K1 Agent):**
+
 ```python
 # Planner Agent calls Philips Hue integration
 response = await integration_client.call(
@@ -782,6 +807,7 @@ response = await integration_client.call(
 **Manifest:** `integrations/bank_oauth/bank_account.yaml`
 
 **OAuth Flow:**
+
 1. User initiates: "Link my bank account"
 2. K1 redirects to Bank of America OAuth consent page
 3. User approves, Bank returns authorization code
@@ -789,10 +815,12 @@ response = await integration_client.call(
 5. K1 can now fetch account balances, transactions
 
 **Endpoints:**
+
 - `GET /integrations/bank_oauth/accounts` - List accounts
 - `GET /integrations/bank_oauth/transactions?account_id=123` - Get transactions
 
 **Example Usage:**
+
 ```python
 # Researcher Agent fetches bank balance
 response = await integration_client.call(
@@ -810,11 +838,13 @@ response = await integration_client.call(
 **OAuth Flow:** (Similar to Bank of America)
 
 **Endpoints:**
+
 - `GET /integrations/google_calendar/events` - List upcoming events
 - `POST /integrations/google_calendar/create_event` - Create new event
 - `DELETE /integrations/google_calendar/delete_event?event_id=abc` - Delete event
 
 **Example Usage:**
+
 ```python
 # Planner Agent creates calendar event
 response = await integration_client.call(
@@ -837,33 +867,39 @@ response = await integration_client.call(
 ### Positive ✅
 
 **✅ K0 Stability:**
+
 - K0 remains pure (P01-P20 only, no integrations)
 - K0 security surface area minimal (no API keys, no OAuth)
 - **Result:** K0 can be frozen, minimal version churn
 
 **✅ K1 Extensibility:**
+
 - K1 hosts all integrations (P21+)
 - Manifest-driven registration (transparent, auditable)
 - **Result:** Easy to add new integrations without K0 changes
 
 **✅ Security Isolation:**
+
 - PEP enforces capability-based access
 - Egress proxy controls outbound network
 - Secrets encrypted at rest
 - **Result:** Production-grade security for untrusted integrations
 
 **✅ Sandboxing:**
+
 - MCP/WASM/process isolation
 - Resource limits (memory, CPU, network)
 - **Result:** Misbehaving integrations cannot crash K1
 
 **✅ Resilience:**
+
 - Circuit breakers isolate failures
 - DLQ retries failed calls
 - Quarantine mechanism removes bad integrations
 - **Result:** K1 remains operational even with failing integrations
 
 **✅ Observability:**
+
 - Integration metrics (success rate, latency, errors)
 - cognitive_trace_id propagation
 - **Result:** Full visibility into integration health
@@ -873,26 +909,31 @@ response = await integration_client.call(
 ### Negative ⚠️
 
 **⚠️ Integration Complexity:**
+
 - Manifest-driven registration adds overhead
 - Developers must declare capabilities upfront
 - **Mitigation:** Provide manifest templates, examples, CLI tooling for manifest generation
 
 **⚠️ Performance Overhead:**
+
 - Process isolation adds latency (~10ms per call)
 - WASM compilation adds startup delay (~100ms)
 - **Mitigation:** Use MCP for low-latency integrations, cache WASM modules
 
 **⚠️ Secrets Management:**
+
 - Storing API keys, OAuth tokens in encrypted database
 - Key rotation requires user re-authentication
 - **Mitigation:** Automated key rotation for supported providers, user notification for manual rotation
 
 **⚠️ OAuth Flow Complexity:**
+
 - OAuth redirect flow requires web server (K1 API Gateway)
 - Token refresh logic required for long-lived integrations
 - **Mitigation:** OAuth library abstracts complexity, automatic token refresh
 
 **⚠️ Integration Versioning:**
+
 - Manifest versioning adds complexity
 - Deprecation policy required for breaking changes
 - **Mitigation:** Semantic versioning (1.0.0 → 2.0.0), deprecation notices (90-day warning)
@@ -915,6 +956,7 @@ K1 Intelligence Module acts as **integration host** for third-party services (P2
 **Status:** Architecture approved, ready for Phase 3 implementation (Weeks 10-15).
 
 **Key Resources:**
+
 - [ADR-0001a: K0 Bridge Communication Protocol](0001a-k0-bridge-communication-protocol.md)
 - [ADR-0002: Actor Model for Agent Isolation](0002-actor-model-agent-isolation.md)
 - [ADR-0010: Capability-Based Security](0010-capability-based-security.md)
@@ -924,6 +966,7 @@ K1 Intelligence Module acts as **integration host** for third-party services (P2
 ## Implementation
 
 ### Phase 1: Manifest System & PEP (Weeks 10-11)
+
 - [ ] Define manifest schema (YAML v1.0)
 - [ ] Implement manifest loader (validation, capability approval)
 - [ ] Implement PEP (Policy Evaluation Point)
@@ -931,6 +974,7 @@ K1 Intelligence Module acts as **integration host** for third-party services (P2
 - [ ] Unit tests (WARD framework)
 
 ### Phase 2: Sandboxing & Isolation (Weeks 12-13)
+
 - [ ] Implement MCP sandboxing (JSON-RPC 2.0)
 - [ ] Implement WASM sandboxing (Wasmtime runtime)
 - [ ] Implement process isolation (cgroups, iptables, seccomp)
@@ -938,6 +982,7 @@ K1 Intelligence Module acts as **integration host** for third-party services (P2
 - [ ] Integration tests
 
 ### Phase 3: Lifecycle & Sample Integrations (Weeks 14-15)
+
 - [ ] Implement circuit breaker (3 failures → open for 60s)
 - [ ] Implement DLQ (exponential backoff: 1s, 2s, 4s, 8s)
 - [ ] Implement quarantine mechanism
@@ -954,23 +999,27 @@ K1 Intelligence Module acts as **integration host** for third-party services (P2
 ## Success Metrics
 
 **Performance:**
+
 - ✅ Integration call latency <3000ms P95
 - ✅ Circuit breaker recovery <60s
 - ✅ DLQ retry latency: 1s, 2s, 4s, 8s (exponential backoff)
 - ✅ Manifest loading <100ms (startup)
 
 **Security:**
+
 - ✅ PEP capability enforcement (100% of calls checked)
 - ✅ Egress proxy enforcement (100% of outbound requests filtered)
 - ✅ Secrets encrypted at rest (AES-256-GCM)
 - ✅ Sandboxing active (MCP/WASM/process isolation)
 
 **Resilience:**
+
 - ✅ Circuit breaker isolation (failing integrations don't crash K1)
 - ✅ DLQ success rate >90% (after retries)
 - ✅ Quarantine mechanism (misbehaving integrations removed)
 
 **Observability:**
+
 - ✅ Integration metrics (success rate, latency, errors) exported to Prometheus
 - ✅ cognitive_trace_id propagated through all integration calls
 - ✅ Integration audit log (all calls logged with trace ID)

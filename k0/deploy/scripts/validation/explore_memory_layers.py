@@ -12,6 +12,9 @@ import json
 import asyncpg
 
 
+_OUTPUT_MIRROR = None
+
+
 def ascii_print(*args, **kwargs):
     sep = kwargs.get("sep", " ")
     end = kwargs.get("end", "\n")
@@ -51,66 +54,23 @@ def ascii_print(*args, **kwargs):
             text = text.replace(old, new)
         text = text.encode("ascii", errors="ignore").decode("ascii")
         builtins.print(text, sep=sep, end=end, file=file, flush=flush)
+        if _OUTPUT_MIRROR is not None and file is None:
+            builtins.print(text, sep=sep, end=end, file=_OUTPUT_MIRROR, flush=flush)
     else:
         builtins.print("", sep=sep, end=end, file=file, flush=flush)
+        if _OUTPUT_MIRROR is not None and file is None:
+            builtins.print("", sep=sep, end=end, file=_OUTPUT_MIRROR, flush=flush)
 
 
 print = ascii_print
 
 
 async def explore_all_layers():
+    global _OUTPUT_MIRROR
+
     conn = await asyncpg.connect("postgresql://k0user:changeme@localhost:5432/k0_kernel")
-
-    print("=" * 100)
-    print("🧠 MEMORY LAYERS DEEP DIVE - REAL EXAMPLES FROM YOUR LIFE")
-    print("=" * 100)
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # 1. EPISODIC MEMORIES (st_epi) - "What happened in my life?"
-    # ═══════════════════════════════════════════════════════════════════════════
-    print("\n" + "═" * 100)
-    print("1. EPISODIC MEMORIES (st_epi)")
-    print("   Purpose: Stores autobiographical events - 'What happened, when, where, with whom'")
-    print("═" * 100)
-
-    # Show count
-    count = await conn.fetchval("SELECT COUNT(*) FROM st_epi")
-    print(f"\n   📊 Total Episodes: {count}")
-
-    # Show real examples with source texts
-    print("\n   🔍 REAL EXAMPLES FROM YOUR LIFE:")
-    print("   " + "─" * 90)
-
-    rows = await conn.fetch(
-        """
-        SELECT episode_id, episode_summary, episode_type,
-               primary_location, participants_json, source_texts_json,
-               source_event_count
-        FROM st_epi
-        ORDER BY created_at DESC
-        LIMIT 5
-    """
-    )
-
-    for i, r in enumerate(rows, 1):
-        print(f"\n   📌 Episode {i}: {r['episode_summary']}")
-        print(f"      Type: {r['episode_type']} | Location: {r['primary_location']}")
-        print(f"      Participants: {r['participants_json']}")
-
-        # Parse and show source texts (the actual memory content)
-        if r["source_texts_json"]:
-            try:
-                texts = json.loads(r["source_texts_json"])
-                if texts:
-                    print("      📝 Original Memory:")
-                    # Show first unique text
-                    shown = set()
-                    for text in texts[:2]:
-                        if text not in shown:
-                            shown.add(text)
-                            print(f"         \"{text[:100]}{'...' if len(text) > 100 else ''}\"")
-            except Exception:
-                pass
+    output_path = "explore_memory_layers_output.md"
+    _OUTPUT_MIRROR = open(output_path, "w", encoding="utf-8")
 
     # ═══════════════════════════════════════════════════════════════════════════
     # 2. SEMANTIC MEMORY (st_sem) - "What patterns have I learned?"
@@ -126,15 +86,13 @@ async def explore_all_layers():
     print("\n   🔍 REAL PATTERNS FROM YOUR EXPERIENCES:")
     print("   " + "─" * 90)
 
-    rows = await conn.fetch(
-        """
+    rows = await conn.fetch("""
         SELECT pattern_id, pattern_name, pattern_description, pattern_type,
                pattern_subtype, source_texts_json, confidence_score
         FROM st_sem
         ORDER BY created_at DESC
         LIMIT 5
-    """
-    )
+    """)
 
     for i, r in enumerate(rows, 1):
         print(f"\n   🧩 Pattern {i}: {r['pattern_name']}")
@@ -167,15 +125,13 @@ async def explore_all_layers():
 
     # Group by type
     print("\n   📋 ENTITIES BY TYPE:")
-    type_counts = await conn.fetch(
-        """
+    type_counts = await conn.fetch("""
         SELECT entity_type, COUNT(*) as cnt,
                array_agg(canonical_name ORDER BY observation_count DESC) as examples
         FROM st_kg_dom
         GROUP BY entity_type
         ORDER BY cnt DESC
-    """
-    )
+    """)
 
     for r in type_counts:
         examples = r["examples"][:5] if r["examples"] else []
@@ -186,15 +142,13 @@ async def explore_all_layers():
     print("\n   🔍 REAL ENTITIES FROM YOUR LIFE:")
     print("   " + "─" * 90)
 
-    rows = await conn.fetch(
-        """
+    rows = await conn.fetch("""
         SELECT canonical_name, entity_type, source_texts_json, attributes_json
         FROM st_kg_dom
         WHERE entity_type = 'PERSON'
         ORDER BY observation_count DESC
         LIMIT 5
-    """
-    )
+    """)
 
     for i, r in enumerate(rows, 1):
         print(f"\n   👤 Person {i}: {r['canonical_name']}")
@@ -223,8 +177,7 @@ async def explore_all_layers():
     print("   " + "─" * 90)
 
     # FIX A: Compute sentiment from observations of episodes involving each person
-    rows = await conn.fetch(
-        """
+    rows = await conn.fetch("""
         WITH person_sentiment AS (
             SELECT
                 s.relationship_id,
@@ -260,8 +213,7 @@ async def explore_all_layers():
         LEFT JOIN person_sentiment ps ON ps.relationship_id = s.relationship_id
         ORDER BY s.interaction_count DESC
         LIMIT 6
-    """
-    )
+    """)
 
     for i, r in enumerate(rows, 1):
         sent = r["computed_sentiment"] if r["computed_sentiment"] else 0
@@ -298,15 +250,13 @@ async def explore_all_layers():
     print("\n   🔍 YOUR REMINDERS & DECISIONS:")
     print("   " + "─" * 90)
 
-    rows = await conn.fetch(
-        """
+    rows = await conn.fetch("""
         SELECT intention_description, intention_type, status,
                source_texts_json, confidence_score
         FROM st_prospective
         ORDER BY created_at DESC
         LIMIT 6
-    """
-    )
+    """)
 
     for i, r in enumerate(rows, 1):
         icon = "⏰" if r["intention_type"] == "REMINDER" else "🤔"
@@ -337,15 +287,13 @@ async def explore_all_layers():
 
     # Distribution by layer
     print("\n   📋 OBSERVATIONS BY MEMORY LAYER:")
-    layer_counts = await conn.fetch(
-        """
+    layer_counts = await conn.fetch("""
         SELECT layer, COUNT(*) as cnt,
                AVG(sentiment_score) as avg_sent
         FROM st_observations
         GROUP BY layer
         ORDER BY cnt DESC
-    """
-    )
+    """)
 
     for r in layer_counts:
         sent = r["avg_sent"] if r["avg_sent"] else 0
@@ -362,8 +310,7 @@ async def explore_all_layers():
     print("\n   📊 QUERY 1: Most Joyful Episodes (emotion = joy/love/gratitude)")
     print("   " + "─" * 90)
 
-    rows = await conn.fetch(
-        """
+    rows = await conn.fetch("""
         SELECT
             e.episode_summary,
             e.primary_location,
@@ -382,8 +329,7 @@ async def explore_all_layers():
           AND e.episode_type NOT IN ('work', 'routine')  -- Focus on personal moments
         ORDER BY o.sentiment_score DESC, o.dominant_emotion
         LIMIT 3
-    """
-    )
+    """)
 
     for i, r in enumerate(rows, 1):
         print(f"\n   🌟 #{i} {r['episode_summary']}")
@@ -409,8 +355,7 @@ async def explore_all_layers():
     print("\n\n   📊 QUERY 2: Relationships - Who Brings Joy?")
     print("   " + "─" * 90)
 
-    rows = await conn.fetch(
-        """
+    rows = await conn.fetch("""
         SELECT
             s.relationship_label,
             s.relationship_type,
@@ -423,8 +368,7 @@ async def explore_all_layers():
         GROUP BY s.relationship_label, s.relationship_type, s.interaction_count, s.source_texts_json
         ORDER BY s.interaction_count DESC
         LIMIT 4
-    """
-    )
+    """)
 
     for r in rows:
         sent = r["avg_sentiment"] if r["avg_sentiment"] else 0
@@ -450,8 +394,7 @@ async def explore_all_layers():
     print("\n\n   📊 QUERY 3: When Are You Happiest? (Time-of-Day Analysis)")
     print("   " + "─" * 90)
 
-    rows = await conn.fetch(
-        """
+    rows = await conn.fetch("""
         SELECT
             circadian_slot,
             AVG(sentiment_score) as avg_sentiment,
@@ -461,8 +404,7 @@ async def explore_all_layers():
         WHERE circadian_slot IS NOT NULL AND circadian_slot != ''
         GROUP BY circadian_slot
         ORDER BY avg_sentiment DESC
-    """
-    )
+    """)
 
     for r in rows:
         sent = r["avg_sentiment"] if r["avg_sentiment"] else 0
@@ -479,53 +421,43 @@ async def explore_all_layers():
     print("═" * 100)
 
     # Get key people
-    people = await conn.fetch(
-        """
+    people = await conn.fetch("""
         SELECT relationship_label, relationship_type, interaction_count
         FROM st_social
         ORDER BY interaction_count DESC
         LIMIT 5
-    """
-    )
+    """)
 
     # Get key places
-    places = await conn.fetch(
-        """
+    places = await conn.fetch("""
         SELECT canonical_name, observation_count
         FROM st_kg_dom
         WHERE entity_type = 'LOCATION'
         ORDER BY observation_count DESC
         LIMIT 5
-    """
-    )
+    """)
 
     # Get emotional summary
-    emotions = await conn.fetch(
-        """
+    emotions = await conn.fetch("""
         SELECT dominant_emotion, COUNT(*) as cnt
         FROM st_observations
         WHERE dominant_emotion IS NOT NULL AND dominant_emotion != ''
         GROUP BY dominant_emotion
         ORDER BY cnt DESC
         LIMIT 5
-    """
-    )
+    """)
 
     # Get pending reminders
-    reminders = await conn.fetch(
-        """
+    reminders = await conn.fetch("""
         SELECT intention_description, intention_type
         FROM st_prospective
         WHERE status = 'ACTIVE'
         LIMIT 3
-    """
-    )
+    """)
 
-    print(
-        """
+    print("""
    Based on your memories, here's what the system knows about your life:
-    """
-    )
+    """)
 
     print("   👥 KEY PEOPLE IN YOUR LIFE:")
     for p in people:
@@ -553,8 +485,7 @@ async def explore_all_layers():
     print("🧠 HOW ST_OBSERVATIONS ENABLES A HOLISTIC VIEW")
     print("═" * 100)
 
-    print(
-        """
+    print("""
    ST_OBSERVATIONS acts as a universal context layer that:
 
    1. LINKS ALL MEMORY LAYERS
@@ -589,8 +520,7 @@ async def explore_all_layers():
    │                                                                         │
    │  = A Complete Picture of How, When, Where, and Why Memories Form        │
    └─────────────────────────────────────────────────────────────────────────┘
-    """
-    )
+    """)
 
     # ═══════════════════════════════════════════════════════════════════════════
     # 7. KNOWLEDGE GRAPH EDGES (st_kg_edges) - GAP-007 Edge Enrichment Algorithms
@@ -607,8 +537,7 @@ async def explore_all_layers():
     print("\n   🔬 EDGES BY ENRICHMENT ALGORITHM:")
     print("   " + "─" * 90)
 
-    algo_stats = await conn.fetch(
-        """
+    algo_stats = await conn.fetch("""
         SELECT
             source_algorithm,
             COUNT(*) as edge_count,
@@ -619,8 +548,7 @@ async def explore_all_layers():
         FROM st_kg_edges
         GROUP BY source_algorithm
         ORDER BY edge_count DESC
-    """
-    )
+    """)
 
     algo_descriptions = {
         "semantic_similarity": "🧠 Entities with similar meaning/context (cosine similarity of embeddings)",
@@ -648,8 +576,7 @@ async def explore_all_layers():
 
     # FIX D: Add same-type gate for semantic similarity to avoid nonsense edges
     # Only show edges where entities share the same type OR have co-occurrence evidence
-    sem_edges = await conn.fetch(
-        """
+    sem_edges = await conn.fetch("""
         WITH cooccurrence_pairs AS (
             -- Get pairs that have co-occurrence evidence
             SELECT source_entity_id, target_entity_id
@@ -678,8 +605,7 @@ async def explore_all_layers():
         WHERE e.source_algorithm = 'semantic_similarity'
         ORDER BY e.edge_weight DESC
         LIMIT 20
-    """
-    )
+    """)
 
     if sem_edges:
         print("\n   💡 How it works: Compares vector embeddings of entity descriptions")
@@ -731,8 +657,7 @@ async def explore_all_layers():
     print("   🔗 7.2 CONTEXTUAL RELATIONSHIPS - 'These appear in similar contexts'")
     print("   " + "━" * 94)
 
-    ctx_edges = await conn.fetch(
-        """
+    ctx_edges = await conn.fetch("""
         SELECT
             s.canonical_name as source_name,
             t.canonical_name as target_name,
@@ -745,8 +670,7 @@ async def explore_all_layers():
         WHERE e.source_algorithm = 'contextual'
         ORDER BY e.edge_weight DESC
         LIMIT 8
-    """
-    )
+    """)
 
     if ctx_edges:
         print("\n   💡 How it works: Identifies entities that share contextual attributes,")
@@ -776,8 +700,7 @@ async def explore_all_layers():
     print("   👥 7.3 CO-OCCURRENCE - 'These are mentioned together frequently'")
     print("   " + "━" * 94)
 
-    cooc_edges = await conn.fetch(
-        """
+    cooc_edges = await conn.fetch("""
         SELECT
             s.canonical_name as source_name,
             t.canonical_name as target_name,
@@ -791,8 +714,7 @@ async def explore_all_layers():
         WHERE e.source_algorithm = 'co_occurrence'
         ORDER BY e.edge_weight DESC
         LIMIT 8
-    """
-    )
+    """)
 
     if cooc_edges:
         print("\n   💡 How it works: Counts how often two entities appear in the same")
@@ -814,8 +736,7 @@ async def explore_all_layers():
     print("   ⏰ 7.4 TEMPORAL PROXIMITY - 'These happen close together in time'")
     print("   " + "━" * 94)
 
-    temp_edges = await conn.fetch(
-        """
+    temp_edges = await conn.fetch("""
         SELECT
             s.canonical_name as source_name,
             t.canonical_name as target_name,
@@ -828,8 +749,7 @@ async def explore_all_layers():
         WHERE e.source_algorithm = 'temporal_proximity'
         ORDER BY e.edge_weight DESC
         LIMIT 8
-    """
-    )
+    """)
 
     if temp_edges:
         print("\n   💡 How it works: Measures time gap between entity mentions.")
@@ -861,8 +781,7 @@ async def explore_all_layers():
     print("   " + "━" * 94)
 
     # FIX C: Query causal edges ONLY from bayesian_causal algorithm, deduplicate, group by family
-    causal_edges = await conn.fetch(
-        """
+    causal_edges = await conn.fetch("""
         SELECT DISTINCT ON (s.canonical_name, t.canonical_name)
             s.canonical_name as source_name,
             t.canonical_name as target_name,
@@ -877,8 +796,7 @@ async def explore_all_layers():
         JOIN st_kg_dom t ON e.target_entity_id = t.entity_id
         WHERE e.source_algorithm = 'bayesian_causal'
         ORDER BY s.canonical_name, t.canonical_name, e.confidence_score DESC
-    """
-    )
+    """)
 
     if causal_edges:
         print("\n   💡 How it works: Uses Granger causality and Bayesian inference to")
@@ -923,8 +841,7 @@ async def explore_all_layers():
         print("\n   ⚠️ No bayesian causal edges found")
 
     # Separate section for temporal edges (PRECEDES/FOLLOWS)
-    temporal_causal = await conn.fetch(
-        """
+    temporal_causal = await conn.fetch("""
         SELECT DISTINCT ON (s.canonical_name, t.canonical_name)
             s.canonical_name as source_name,
             t.canonical_name as target_name,
@@ -939,8 +856,7 @@ async def explore_all_layers():
           AND e.source_algorithm != 'bayesian_causal'
         ORDER BY s.canonical_name, t.canonical_name, e.confidence_score DESC
         LIMIT 5
-    """
-    )
+    """)
 
     if temporal_causal:
         print("\n   ⏱️ TEMPORAL ORDERING (PRECEDES/FOLLOWS):")
@@ -960,8 +876,7 @@ async def explore_all_layers():
     print("   🔄 7.6 TRANSITIVE CLOSURE - 'Inferred through intermediate entities'")
     print("   " + "━" * 94)
 
-    trans_edges = await conn.fetch(
-        """
+    trans_edges = await conn.fetch("""
         SELECT
             s.canonical_name as source_name,
             t.canonical_name as target_name,
@@ -974,8 +889,7 @@ async def explore_all_layers():
         WHERE e.source_algorithm = 'transitive_closure'
         ORDER BY e.edge_weight DESC
         LIMIT 5
-    """
-    )
+    """)
 
     if trans_edges:
         print("\n   💡 How it works: If A→B and B→C, then infer A→C with reduced weight.")
@@ -1004,8 +918,7 @@ async def explore_all_layers():
     print("   📊 7.7 RELATIONSHIP TYPE DISTRIBUTION")
     print("   " + "━" * 94)
 
-    rel_types = await conn.fetch(
-        """
+    rel_types = await conn.fetch("""
         SELECT
             relation_type,
             source_algorithm,
@@ -1015,8 +928,7 @@ async def explore_all_layers():
         GROUP BY relation_type, source_algorithm
         ORDER BY cnt DESC
         LIMIT 15
-    """
-    )
+    """)
 
     print("\n   Relation Type             | Algorithm           | Count | Avg Weight")
     print("   " + "─" * 75)
@@ -1032,8 +944,7 @@ async def explore_all_layers():
     print("   🌐 7.8 GRAPH INSIGHTS - Hub Entities (Most Connected)")
     print("   " + "━" * 94)
 
-    hubs = await conn.fetch(
-        """
+    hubs = await conn.fetch("""
         WITH edge_counts AS (
             SELECT source_entity_id as entity_id, COUNT(*) as out_degree FROM st_kg_edges GROUP BY source_entity_id
             UNION ALL
@@ -1048,8 +959,7 @@ async def explore_all_layers():
         GROUP BY d.canonical_name, d.entity_type
         ORDER BY total_connections DESC
         LIMIT 10
-    """
-    )
+    """)
 
     print(
         "\n   💡 Hub entities are central to your life story - they connect many other entities.\n"
@@ -1075,15 +985,13 @@ async def explore_all_layers():
     print("\n   📊 CO-OCCURRENCE MATRIX (Who appears together in episodes?):")
     print("   " + "─" * 90)
 
-    rows = await conn.fetch(
-        """
+    rows = await conn.fetch("""
         SELECT participants_json, episode_summary, source_texts_json
         FROM st_epi
         WHERE participant_count > 1
         ORDER BY participant_count DESC
         LIMIT 8
-    """
-    )
+    """)
 
     co_occurrences = {}
     for r in rows:
@@ -1113,8 +1021,7 @@ async def explore_all_layers():
     print("\n\n   📊 EMOTIONAL TRAJECTORY BY PERSON:")
     print("   " + "─" * 90)
 
-    rows = await conn.fetch(
-        """
+    rows = await conn.fetch("""
         SELECT
             s.relationship_label as person,
             s.relationship_type,
@@ -1125,8 +1032,7 @@ async def explore_all_layers():
         FROM st_social s
         ORDER BY s.interaction_count DESC
         LIMIT 6
-    """
-    )
+    """)
 
     for r in rows:
         sent = r["avg_sentiment"] if r["avg_sentiment"] else 0
@@ -1161,8 +1067,7 @@ async def explore_all_layers():
     print("═" * 100)
 
     # Get emotions by category from events
-    rows = await conn.fetch(
-        """
+    rows = await conn.fetch("""
         SELECT
             dominant_emotion,
             sentiment_score,
@@ -1172,8 +1077,7 @@ async def explore_all_layers():
         WHERE dominant_emotion IS NOT NULL AND dominant_emotion != ''
         GROUP BY dominant_emotion, sentiment_score, layer
         ORDER BY count DESC
-    """
-    )
+    """)
 
     # Categorize emotions
     positive_emotions = [
@@ -1214,8 +1118,7 @@ async def explore_all_layers():
     neu_bar = "█" * (neutral_count * 30 // total if total else 0)
     neg_bar = "█" * (neg_count * 30 // total if total else 0)
 
-    print(
-        f"""
+    print(f"""
    📊 EMOTIONAL DISTRIBUTION:
 
    Positive Emotions: {pos_count} memories ({pos_count*100//total if total else 0}%)
@@ -1228,8 +1131,7 @@ async def explore_all_layers():
    Negative Emotions: {neg_count} memories ({neg_count*100//total if total else 0}%)
    {neg_bar}
    (sadness, anxiety, frustration, nervousness)
-    """
-    )
+    """)
 
     # Emotion triggers
     print("\n   🎯 EMOTION TRIGGERS - What Causes Each Emotion?")
@@ -1279,13 +1181,11 @@ async def explore_all_layers():
     print("   " + "─" * 90)
 
     # Get relationship
-    emma_rel = await conn.fetchrow(
-        """
+    emma_rel = await conn.fetchrow("""
         SELECT relationship_label, relationship_type, interaction_count,
                dominant_emotion, source_texts_json
         FROM st_social WHERE relationship_label ILIKE '%Emma%' LIMIT 1
-    """
-    )
+    """)
 
     if emma_rel:
         print(f"\n   👧 EMMA ({emma_rel['relationship_type']})")
@@ -1293,14 +1193,12 @@ async def explore_all_layers():
         print(f"      Dominant Emotion: {emma_rel['dominant_emotion']}")
 
     # Get episodes with Emma
-    emma_episodes = await conn.fetch(
-        """
+    emma_episodes = await conn.fetch("""
         SELECT episode_summary, primary_location, source_texts_json
         FROM st_epi
         WHERE participants_json ILIKE '%Emma%'
         LIMIT 5
-    """
-    )
+    """)
 
     print(f"\n      📍 Episodes together ({len(emma_episodes)} found):")
     for ep in emma_episodes:
@@ -1310,14 +1208,12 @@ async def explore_all_layers():
     print("\n\n   📋 QUERY: 'What happened at work?'")
     print("   " + "─" * 90)
 
-    work_episodes = await conn.fetch(
-        """
+    work_episodes = await conn.fetch("""
         SELECT episode_summary, participants_json, source_texts_json
         FROM st_epi
         WHERE episode_type = 'work'
         LIMIT 5
-    """
-    )
+    """)
 
     print(f"\n   💼 WORK EPISODES ({len(work_episodes)} found):")
     for ep in work_episodes:
@@ -1333,8 +1229,7 @@ async def explore_all_layers():
     print("\n\n   📋 QUERY: 'When was I happiest?'")
     print("   " + "─" * 90)
 
-    happiest = await conn.fetch(
-        """
+    happiest = await conn.fetch("""
         SELECT e.episode_summary, e.source_texts_json, o.sentiment_score,
                o.dominant_emotion, o.circadian_slot
         FROM st_epi e
@@ -1342,8 +1237,7 @@ async def explore_all_layers():
         WHERE o.sentiment_score IS NOT NULL
         ORDER BY o.sentiment_score DESC
         LIMIT 5
-    """
-    )
+    """)
 
     print("\n   🌟 YOUR HAPPIEST MOMENTS:")
     for i, h in enumerate(happiest, 1):
@@ -1361,14 +1255,12 @@ async def explore_all_layers():
     print("\n\n   📋 QUERY: 'What decisions do I need to make?'")
     print("   " + "─" * 90)
 
-    decisions = await conn.fetch(
-        """
+    decisions = await conn.fetch("""
         SELECT intention_description, source_texts_json
         FROM st_prospective
         WHERE intention_type = 'DECISION' AND status = 'ACTIVE'
         LIMIT 5
-    """
-    )
+    """)
 
     print("\n   🤔 PENDING DECISIONS:")
     for d in decisions:
@@ -1378,15 +1270,13 @@ async def explore_all_layers():
     print("\n\n   📋 QUERY: 'Who are my colleagues?'")
     print("   " + "─" * 90)
 
-    colleagues = await conn.fetch(
-        """
+    colleagues = await conn.fetch("""
         SELECT relationship_label, interaction_count, source_texts_json
         FROM st_social
         WHERE relationship_type = 'COLLEAGUE'
         ORDER BY interaction_count DESC
         LIMIT 5
-    """
-    )
+    """)
 
     print("\n   👔 YOUR COLLEAGUES:")
     for c in colleagues:
@@ -1407,24 +1297,20 @@ async def explore_all_layers():
     print("═" * 100)
 
     # Analyze episodes by type
-    episode_types = await conn.fetch(
-        """
+    episode_types = await conn.fetch("""
         SELECT episode_type, COUNT(*) as count
         FROM st_epi
         GROUP BY episode_type
         ORDER BY count DESC
-    """
-    )
+    """)
 
     # Analyze relationships by type
-    relationship_types = await conn.fetch(
-        """
+    relationship_types = await conn.fetch("""
         SELECT relationship_type, COUNT(*) as count, SUM(interaction_count) as total_interactions
         FROM st_social
         GROUP BY relationship_type
         ORDER BY total_interactions DESC
-    """
-    )
+    """)
 
     # Map to life categories
     life_categories = {
@@ -1456,8 +1342,7 @@ async def explore_all_layers():
 
     # Also check participants to identify FAMILY episodes
     # Episodes with family relationship participants should be counted as FAMILY
-    family_participants = await conn.fetch(
-        """
+    family_participants = await conn.fetch("""
         SELECT COUNT(*) as cnt
         FROM st_epi e
         WHERE EXISTS (
@@ -1465,8 +1350,7 @@ async def explore_all_layers():
             WHERE s.relationship_type = 'FAMILY'
             AND e.participants_json ILIKE '%' || s.relationship_label || '%'
         )
-    """
-    )
+    """)
     if family_participants and family_participants[0]["cnt"]:
         life_categories["FAMILY"]["episodes"] = family_participants[0]["cnt"]
 
@@ -1484,21 +1368,17 @@ async def explore_all_layers():
             life_categories["SOCIAL"]["interactions"] = r["total_interactions"]
 
     # Count health/learning from semantic patterns
-    health_patterns = await conn.fetchval(
-        """
+    health_patterns = await conn.fetchval("""
         SELECT COUNT(*) FROM st_sem
         WHERE pattern_subtype ILIKE '%health%' OR pattern_name ILIKE '%workout%'
               OR pattern_name ILIKE '%exercise%' OR pattern_name ILIKE '%doctor%'
-    """
-    )
+    """)
 
-    learning_patterns = await conn.fetchval(
-        """
+    learning_patterns = await conn.fetchval("""
         SELECT COUNT(*) FROM st_sem
         WHERE pattern_type = 'LESSON' OR pattern_subtype ILIKE '%learning%'
               OR pattern_name ILIKE '%learned%' OR pattern_name ILIKE '%book%'
-    """
-    )
+    """)
 
     life_categories["HEALTH"]["episodes"] = health_patterns or 0
     life_categories["LEARNING"]["episodes"] = learning_patterns or 0
@@ -1507,11 +1387,9 @@ async def explore_all_layers():
     total_episodes = sum(c["episodes"] for c in life_categories.values())
     total_interactions = sum(c["interactions"] for c in life_categories.values())
 
-    print(
-        """
+    print("""
    📊 LIFE AREA DISTRIBUTION:
-   """
-    )
+   """)
     print(
         f"   Total Episodes: {int(total_episodes)} | Total Interactions: {int(total_interactions)}"
     )
@@ -1549,38 +1427,32 @@ async def explore_all_layers():
     print("\n   🏥 HEALTH PATTERN ANALYSIS:")
     print("   " + "─" * 90)
 
-    gerd_mentions = await conn.fetch(
-        """
+    gerd_mentions = await conn.fetch("""
         SELECT source_texts_json, dominant_emotion
         FROM st_observations o
         JOIN st_sem s ON o.record_id::text = s.pattern_id::text AND o.layer = 'st_sem'
         WHERE s.pattern_name ILIKE '%GERD%' OR s.pattern_description ILIKE '%GERD%'
         LIMIT 10
-    """
-    )
+    """)
 
     # Also check episodes for GERD
-    gerd_episodes = await conn.fetch(
-        """
+    gerd_episodes = await conn.fetch("""
         SELECT episode_summary, source_texts_json
         FROM st_epi
         WHERE episode_summary ILIKE '%GERD%' OR episode_summary ILIKE '%stomach%'
               OR episode_summary ILIKE '%acid%' OR episode_summary ILIKE '%digestion%'
         LIMIT 5
-    """
-    )
+    """)
 
     # Check raw events for GERD patterns
-    gerd_events = await conn.fetch(
-        """
+    gerd_events = await conn.fetch("""
         SELECT text, created_at
         FROM st_hipp_events
         WHERE text ILIKE '%GERD%' OR text ILIKE '%stomach%'
               OR text ILIKE '%spicy%' OR text ILIKE '%acid%'
         ORDER BY created_at DESC
         LIMIT 8
-    """
-    )
+    """)
 
     gerd_semantic_count = len(gerd_mentions) if gerd_mentions else 0
     gerd_episode_count = len(gerd_episodes) if gerd_episodes else 0
@@ -1630,16 +1502,14 @@ async def explore_all_layers():
     print("\n\n   😴 SLEEP & ENERGY PATTERNS:")
     print("   " + "─" * 90)
 
-    sleep_events = await conn.fetch(
-        """
+    sleep_events = await conn.fetch("""
         SELECT text, created_at
         FROM st_hipp_events
         WHERE text ILIKE '%sleep%' OR text ILIKE '%tired%'
               OR text ILIKE '%energy%' OR text ILIKE '%rest%'
         ORDER BY created_at DESC
         LIMIT 8
-    """
-    )
+    """)
 
     if sleep_events:
         good_sleep = sum(
@@ -1674,8 +1544,7 @@ async def explore_all_layers():
     print("\n\n   💻 PROJECT PROGRESS (FamilyOS/K0/K1):")
     print("   " + "─" * 90)
 
-    project_events = await conn.fetch(
-        """
+    project_events = await conn.fetch("""
         SELECT text, created_at
         FROM st_hipp_events
         WHERE text ILIKE '%K0%' OR text ILIKE '%K1%'
@@ -1683,8 +1552,7 @@ async def explore_all_layers():
               OR text ILIKE '%P02%' OR text ILIKE '%P03%'
         ORDER BY created_at DESC
         LIMIT 15
-    """
-    )
+    """)
 
     if project_events:
         wins = []
@@ -1721,15 +1589,13 @@ async def explore_all_layers():
     print("   " + "─" * 90)
 
     # Get Panda relationship details
-    panda_events = await conn.fetch(
-        """
+    panda_events = await conn.fetch("""
         SELECT text, created_at
         FROM st_hipp_events
         WHERE text ILIKE '%Panda%'
         ORDER BY created_at DESC
         LIMIT 10
-    """
-    )
+    """)
 
     if panda_events:
         positive_panda = sum(
@@ -1753,16 +1619,14 @@ async def explore_all_layers():
             )
 
     # Family analysis
-    family_events = await conn.fetch(
-        """
+    family_events = await conn.fetch("""
         SELECT text, created_at
         FROM st_hipp_events
         WHERE text ILIKE '%Mom%' OR text ILIKE '%Dad%'
               OR text ILIKE '%Maya%' OR text ILIKE '%parents%'
         ORDER BY created_at DESC
         LIMIT 10
-    """
-    )
+    """)
 
     if family_events:
         print(f"\n   👨‍👩‍👧 Family: {len(family_events)} mentions")
@@ -1779,8 +1643,7 @@ async def explore_all_layers():
     print("   " + "─" * 90)
 
     # Find frequently mentioned topics
-    recurring = await conn.fetch(
-        """
+    recurring = await conn.fetch("""
         SELECT intention_description, COUNT(*) as mentions
         FROM st_prospective
         WHERE intention_type = 'DECISION' AND status = 'ACTIVE'
@@ -1788,8 +1651,7 @@ async def explore_all_layers():
         HAVING COUNT(*) > 1
         ORDER BY mentions DESC
         LIMIT 5
-    """
-    )
+    """)
 
     if recurring:
         print("\n   🤔 Decisions that keep coming up:")
@@ -1804,8 +1666,7 @@ async def explore_all_layers():
 
     # Check if st_issues exists and has data
     try:
-        issues = await conn.fetch(
-            """
+        issues = await conn.fetch("""
             SELECT
                 canonical_title,
                 issue_category,
@@ -1820,8 +1681,7 @@ async def explore_all_layers():
                     WHEN 'RESOLVED' THEN 3
                 END,
                 evidence_count DESC
-        """
-        )
+        """)
 
         if issues:
             for issue in issues:
@@ -1851,12 +1711,10 @@ async def explore_all_layers():
         # Fallback to old topic counting if st_issues doesn't exist
         print("   ⚠️ st_issues table not found - showing raw topic counts")
 
-        monitor_mentions = await conn.fetchval(
-            """
+        monitor_mentions = await conn.fetchval("""
             SELECT COUNT(*) FROM st_hipp_events
             WHERE text ILIKE '%monitor%' OR text ILIKE '%flicker%'
-        """
-        )
+        """)
 
         print(f"      🔴 Monitor/Display issues: {monitor_mentions} mentions")
 
@@ -1864,25 +1722,21 @@ async def explore_all_layers():
     print("\n\n   ⚡ PRODUCTIVITY INSIGHTS:")
     print("   " + "─" * 90)
 
-    morning_work = await conn.fetch(
-        """
+    morning_work = await conn.fetch("""
         SELECT o.sentiment_score, e.episode_summary
         FROM st_observations o
         JOIN st_epi e ON o.record_id::text = e.episode_id::text AND o.layer = 'st_epi'
         WHERE o.circadian_slot = 'breakfast_window' AND e.episode_type = 'work'
         LIMIT 5
-    """
-    )
+    """)
 
-    night_work = await conn.fetch(
-        """
+    night_work = await conn.fetch("""
         SELECT o.sentiment_score, e.episode_summary
         FROM st_observations o
         JOIN st_epi e ON o.record_id::text = e.episode_id::text AND o.layer = 'st_epi'
         WHERE o.circadian_slot = 'sleep_window' AND e.episode_type = 'work'
         LIMIT 5
-    """
-    )
+    """)
 
     morning_avg = (
         sum(m["sentiment_score"] or 0 for m in morning_work) / len(morning_work)
@@ -1918,14 +1772,12 @@ async def explore_all_layers():
 
     # Get recommendations from canonical issues table
     try:
-        open_issues = await conn.fetch(
-            """
+        open_issues = await conn.fetch("""
             SELECT canonical_title, issue_category, evidence_count, status
             FROM st_issues
             WHERE status IN ('OPEN', 'RECURRING')
             ORDER BY evidence_count DESC
-        """
-        )
+        """)
 
         for issue in open_issues:
             cat_map = {
@@ -2010,8 +1862,7 @@ async def explore_all_layers():
     print("═" * 100)
 
     # Query causal edges directly
-    causal_chains = await conn.fetch(
-        """
+    causal_chains = await conn.fetch("""
         SELECT
             s.canonical_name as cause,
             s.entity_type as cause_type,
@@ -2027,8 +1878,7 @@ async def explore_all_layers():
            OR e.relation_type = 'CAUSES'
         ORDER BY e.confidence_score DESC
         LIMIT 10
-    """
-    )
+    """)
 
     print("\n   🔬 DISCOVERED CAUSAL RELATIONSHIPS:")
     print("   " + "─" * 90)
@@ -2047,8 +1897,7 @@ async def explore_all_layers():
     print("\n\n   📝 EXPLICIT CAUSAL STATEMENTS FROM YOUR MEMORIES:")
     print("   " + "─" * 90)
 
-    causal_texts = await conn.fetch(
-        """
+    causal_texts = await conn.fetch("""
         SELECT text FROM st_hipp_events
         WHERE text ILIKE '%because%'
            OR text ILIKE '%caused%'
@@ -2058,8 +1907,7 @@ async def explore_all_layers():
            OR text ILIKE '%which explains%'
         ORDER BY created_at DESC
         LIMIT 10
-    """
-    )
+    """)
 
     if causal_texts:
         for i, t in enumerate(causal_texts[:8], 1):
@@ -2071,8 +1919,7 @@ async def explore_all_layers():
     print("\n\n   🏥 HEALTH CAUSAL CHAINS:")
     print("   " + "─" * 90)
 
-    health_causal = await conn.fetch(
-        """
+    health_causal = await conn.fetch("""
         SELECT text FROM st_hipp_events
         WHERE (text ILIKE '%headache%' AND (text ILIKE '%because%' OR text ILIKE '%when%'))
            OR (text ILIKE '%GERD%' AND (text ILIKE '%because%' OR text ILIKE '%when%'))
@@ -2080,8 +1927,7 @@ async def explore_all_layers():
            OR (text ILIKE '%tired%' AND (text ILIKE '%because%' OR text ILIKE '%when%'))
         ORDER BY created_at DESC
         LIMIT 8
-    """
-    )
+    """)
 
     if health_causal:
         # Parse health patterns
@@ -2138,60 +1984,50 @@ async def explore_all_layers():
     print("   " + "─" * 90)
 
     # From episodic memory
-    display_episodes = await conn.fetch(
-        """
+    display_episodes = await conn.fetch("""
         SELECT episode_summary, source_texts_json, primary_location
         FROM st_epi
         WHERE episode_summary ILIKE '%display%' OR episode_summary ILIKE '%monitor%'
               OR episode_summary ILIKE '%flicker%' OR episode_summary ILIKE '%dock%'
         LIMIT 5
-    """
-    )
+    """)
 
     # From semantic memory (patterns learned)
-    display_patterns = await conn.fetch(
-        """
+    display_patterns = await conn.fetch("""
         SELECT pattern_name, pattern_description, confidence_score
         FROM st_sem
         WHERE pattern_name ILIKE '%display%' OR pattern_name ILIKE '%monitor%'
               OR pattern_name ILIKE '%dock%' OR pattern_name ILIKE '%flicker%'
               OR pattern_description ILIKE '%display%'
         LIMIT 5
-    """
-    )
+    """)
 
     # From KG entities
-    display_entities = await conn.fetch(
-        """
+    display_entities = await conn.fetch("""
         SELECT canonical_name, entity_type, observation_count
         FROM st_kg_dom
         WHERE canonical_name ILIKE '%monitor%' OR canonical_name ILIKE '%dock%'
               OR canonical_name ILIKE '%OLED%' OR canonical_name ILIKE '%display%'
         LIMIT 5
-    """
-    )
+    """)
 
     # From prospective (decisions/reminders)
-    display_decisions = await conn.fetch(
-        """
+    display_decisions = await conn.fetch("""
         SELECT intention_description, intention_type, status
         FROM st_prospective
         WHERE intention_description ILIKE '%monitor%' OR intention_description ILIKE '%display%'
               OR intention_description ILIKE '%dock%'
         LIMIT 3
-    """
-    )
+    """)
 
     # From raw events
-    display_events = await conn.fetch(
-        """
+    display_events = await conn.fetch("""
         SELECT text FROM st_hipp_events
         WHERE text ILIKE '%dock%' OR text ILIKE '%flicker%'
               OR text ILIKE '%display%' OR text ILIKE '%OLED%'
         ORDER BY created_at DESC
         LIMIT 8
-    """
-    )
+    """)
 
     print("\n   📚 EPISODIC MEMORY (What happened):")
     if display_episodes:
@@ -2231,13 +2067,11 @@ async def explore_all_layers():
 
     # Show the resolution story
     print("\n   💡 RESOLUTION STORY:")
-    resolution_events = await conn.fetch(
-        """
+    resolution_events = await conn.fetch("""
         SELECT text FROM st_hipp_events
         WHERE text ILIKE '%switching docks%' OR text ILIKE '%flicker stopped%'
         LIMIT 3
-    """
-    )
+    """)
     if resolution_events:
         print("      After investigating display flicker issues:")
         print(f"      ✅ \"{resolution_events[0]['text']}\"")
@@ -2254,15 +2088,13 @@ async def explore_all_layers():
     print("═" * 100)
 
     # Get active decisions
-    active_decisions = await conn.fetch(
-        """
+    active_decisions = await conn.fetch("""
         SELECT intention_description, source_texts_json, confidence_score
         FROM st_prospective
         WHERE intention_type = 'DECISION' AND status = 'ACTIVE'
         ORDER BY created_at DESC
         LIMIT 5
-    """
-    )
+    """)
 
     print("\n   🤔 YOUR ACTIVE DECISIONS:")
     print("   " + "─" * 90)
@@ -2302,8 +2134,7 @@ async def explore_all_layers():
     print("═" * 100)
 
     # Get all relationships with context
-    relationships = await conn.fetch(
-        """
+    relationships = await conn.fetch("""
         SELECT
             relationship_label,
             relationship_type,
@@ -2314,8 +2145,7 @@ async def explore_all_layers():
         FROM st_social
         ORDER BY interaction_count DESC
         LIMIT 10
-    """
-    )
+    """)
 
     print("\n   👥 YOUR RELATIONSHIP MAP:")
     print("   " + "─" * 90)
@@ -2351,15 +2181,13 @@ async def explore_all_layers():
     print("   " + "─" * 90)
 
     # Find episodes with multiple participants
-    multi_participant = await conn.fetch(
-        """
+    multi_participant = await conn.fetch("""
         SELECT participants_json, episode_summary
         FROM st_epi
         WHERE participant_count >= 2
         ORDER BY participant_count DESC
         LIMIT 8
-    """
-    )
+    """)
 
     if multi_participant:
         pair_counts = {}
@@ -2388,8 +2216,7 @@ async def explore_all_layers():
     print("═" * 100)
 
     # Analyze by circadian slot
-    circadian_analysis = await conn.fetch(
-        """
+    circadian_analysis = await conn.fetch("""
         SELECT
             circadian_slot,
             COUNT(*) as event_count,
@@ -2408,8 +2235,7 @@ async def explore_all_layers():
                 WHEN 'sleep_window' THEN 6
                 ELSE 7
             END
-    """
-    )
+    """)
 
     print("\n   ⏰ YOUR DAILY RHYTHM:")
     print("   " + "─" * 90)
@@ -2439,8 +2265,7 @@ async def explore_all_layers():
     print("\n\n   📅 WEEKEND vs WEEKDAY:")
     print("   " + "─" * 90)
 
-    weekend_stats = await conn.fetch(
-        """
+    weekend_stats = await conn.fetch("""
         SELECT
             is_weekend,
             COUNT(*) as count,
@@ -2448,8 +2273,7 @@ async def explore_all_layers():
             array_agg(DISTINCT dominant_emotion) FILTER (WHERE dominant_emotion IS NOT NULL AND dominant_emotion != '') as emotions
         FROM st_observations
         GROUP BY is_weekend
-    """
-    )
+    """)
 
     for w in weekend_stats:
         label = "Weekend 🎉" if w["is_weekend"] else "Weekday 💼"
@@ -2468,8 +2292,7 @@ async def explore_all_layers():
     print("═" * 100)
 
     # Location-based analysis
-    location_stats = await conn.fetch(
-        """
+    location_stats = await conn.fetch("""
         SELECT
             e.primary_location,
             COUNT(*) as episode_count,
@@ -2481,8 +2304,7 @@ async def explore_all_layers():
         GROUP BY e.primary_location
         ORDER BY episode_count DESC
         LIMIT 8
-    """
-    )
+    """)
 
     print("\n   📍 YOUR LOCATIONS:")
     print("   " + "─" * 90)
@@ -2518,8 +2340,7 @@ async def explore_all_layers():
     print("═" * 100)
 
     # All reminders grouped by category
-    reminders_by_type = await conn.fetch(
-        """
+    reminders_by_type = await conn.fetch("""
         SELECT
             intention_type,
             status,
@@ -2539,8 +2360,7 @@ async def explore_all_layers():
                 WHEN 'PENDING' THEN 2
                 ELSE 3
             END
-    """
-    )
+    """)
 
     print("\n   🧠 YOUR MENTAL LOAD:")
     print("   " + "─" * 90)
@@ -2582,8 +2402,7 @@ async def explore_all_layers():
     stats["intentions"] = await conn.fetchval("SELECT COUNT(*) FROM st_prospective")
     stats["observations"] = await conn.fetchval("SELECT COUNT(*) FROM st_observations")
 
-    print(
-        f"""
+    print(f"""
    ╔══════════════════════════════════════════════════════════════════════════════╗
    ║                         YOUR LIFE IN NUMBERS                                  ║
    ╠══════════════════════════════════════════════════════════════════════════════╣
@@ -2596,16 +2415,14 @@ async def explore_all_layers():
    ║  ⏰ Prospective Intentions:     {stats['intentions']:>6}  (What's on your mind)           ║
    ║  👁️  Contextual Observations:   {stats['observations']:>6}  (Holistic context layer)        ║
    ╚══════════════════════════════════════════════════════════════════════════════╝
-    """
-    )
+    """)
 
     # Show how layers connect
     print("\n   🔗 HOW LAYERS INTERCONNECT:")
     print("   " + "─" * 90)
 
     # Find an example that spans multiple layers
-    cross_layer_example = await conn.fetch(
-        """
+    cross_layer_example = await conn.fetch("""
         SELECT DISTINCT
             e.episode_summary,
             e.participants_json,
@@ -2618,8 +2435,7 @@ async def explore_all_layers():
         WHERE e.participant_count > 0
           AND o.sentiment_score IS NOT NULL
         LIMIT 1
-    """
-    )
+    """)
 
     if cross_layer_example:
         ex = cross_layer_example[0]
@@ -2630,8 +2446,7 @@ async def explore_all_layers():
             except Exception:
                 pass
 
-        print(
-            f"""
+        print(f"""
    EXAMPLE: A Single Memory's Multi-Layer Presence
 
    📖 EPISODIC: "{ex['episode_summary']}"
@@ -2642,8 +2457,7 @@ async def explore_all_layers():
       └── Sentiment: {ex['sentiment_score']:.2f}
       └── Emotion: {ex['dominant_emotion']}
       └── Time: {ex['circadian_slot']}
-        """
-        )
+        """)
 
         # Check if participants have social entries
         if participants:
@@ -2660,12 +2474,10 @@ async def explore_all_layers():
                 )
 
                 if social_entry:
-                    print(
-                        f"""   💕 SOCIAL: {social_entry['relationship_label']}
+                    print(f"""   💕 SOCIAL: {social_entry['relationship_label']}
       └── Type: {social_entry['relationship_type']}
       └── Total Interactions: {social_entry['interaction_count']}
-                    """
-                    )
+                    """)
 
                 # Check KG entity
                 kg_entry = await conn.fetchrow(
@@ -2679,18 +2491,15 @@ async def explore_all_layers():
                 )
 
                 if kg_entry:
-                    print(
-                        f"""   🔗 KNOWLEDGE GRAPH: {kg_entry['canonical_name']}
+                    print(f"""   🔗 KNOWLEDGE GRAPH: {kg_entry['canonical_name']}
       └── Type: {kg_entry['entity_type']}
       └── Observations: {kg_entry['observation_count']}
-                    """
-                    )
+                    """)
 
     print("\n" + "═" * 100)
     print("🎯 THIS IS THE FAMILYOS VISION:")
     print("═" * 100)
-    print(
-        """
+    print("""
    Every life event creates ripples across ALL memory layers:
 
    Event: "Called Panda, promised to plan our trip to Chicago"
@@ -2720,14 +2529,15 @@ async def explore_all_layers():
    ✓ "What travel plans are pending?" → PROSPECTIVE layer
 
    THIS IS THE HOLISTIC VIEW THAT ONLY FAMILYOS CAN PROVIDE.
-    """
-    )
+    """)
 
     print("\n" + "═" * 100)
     print("✅ MEMORY LAYER EXPLORATION COMPLETE")
     print("═" * 100)
 
     await conn.close()
+    _OUTPUT_MIRROR.close()
+    _OUTPUT_MIRROR = None
 
 
 if __name__ == "__main__":

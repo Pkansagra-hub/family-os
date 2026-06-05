@@ -1,7 +1,22 @@
-# Fabric Integration Guide -- How Tools, Prompts, and Providers Connect
+# Fabric Integration Guide — How Tools, Prompts, and Providers Connect
 
-> Living reference for the Capability Fabric integration architecture.
-> Covers every registration path, execution path, and adapter pattern.
+> **⚠️ DEPRECATED — This document describes the current baseline integration model.**
+> **It is being migrated to the target connector model defined in the 4-plane roadmap.**
+>
+> **Current baseline (this doc):** `ModuleLoader` → YAML tool contracts → `CapabilityRegistry` → `discover_capabilities` → `invoke_capability`
+> **Target model (new docs):** `ManifestAdmissionService` → full manifests + constitutions + policies + schemas + ontology → `GlobalProjectionStore` → `resolve_situation` → `BindingBundle` → `invoke_capability` by `binding_id`
+>
+> **See target docs:**
+>
+> - `k1/fabric/docs/connector_onboarding_familyos.md` — Internal FamilyOS connector authoring (manifests, constitutions, policies, guide cards, ontology, adapter, testing, admission)
+> - `k1/fabric/docs/connector_development_external.md` — External company connector development (IFL manifest, JSON schemas, MCP adapter, OAuth, submission)
+> - `docs/whiteboard/back_tool_contract_whiteboard.md` — Full architecture, 4-plane roadmap, Contracts A–Q, Phase 1–4 gates
+>
+> **Migration status:** Phase 1 (Fabric). `GlobalProjectionStore`, `LocalProjectionStore`, `IdempotencyStore`, `ManifestAdmissionService`, `CapabilityTypeResolver`, `PolicySelector`, `CapabilityBinder`, `ResolveSituationService`, `VerificationPlanRunner`, `PromptPackBuilder` are being promoted from POC to `k1/fabric/`. This doc will be rewritten once Phase 1 gate passes.
+>
+> **What stays:** The 9-step `_execute_impl()` pipeline, `ProviderFactory`, `CircuitBreaker`, `OutputValidation`, MCP/WASM/BRIDGE/AGENT providers, `ContextBuilder`, adapters, events, metrics — these are the execution spine and do not change.
+>
+> **What changes:** Contract registration moves from `ModuleLoader` scanning flat YAML to `ManifestAdmissionService` ingesting full connector manifests. Discovery moves from `RetrievalEngine` vector search to `ResolveSituationService` (typed graph + exact match + BM25). The 5 graph ontology tables, connector constitutions, `PolicyBundle`, `BindingBundle`, `PromptPack`, and `ResolutionEnvelope` are new.
 
 ---
 
@@ -15,6 +30,7 @@ Fabric operates on two separate planes that are often confused:
 | **Execution Plane** | "How to actually run it?" -- transport routing, runtime dispatch | `ProviderFactory` -> Provider -> Transport/Runtime |
 
 A capability must be registered on BOTH planes to execute:
+
 - Contract Plane: `ModuleLoader` loads YAML -> `CapabilityRegistry`
 - Execution Plane: `_auto_register_providers()` scans contracts -> `ProviderRegistry`
 
@@ -116,6 +132,7 @@ tool_contract:
 ```
 
 Current MCP tool contracts (10):
+
 - `tool.read.weather_forecast`, `tool.read.weather_current` (weather_mcp_sse)
 - `tool.read.calendar_list_events`, `tool.write.calendar_create_event`, `tool.write.calendar_delete_event` (calendar_mcp_stdio)
 - `tool.read.notes_list`, `tool.read.notes_search`, `tool.write.notes_create` (notes_mcp_stdio)
@@ -150,6 +167,7 @@ Current MCP servers (4 auto-discovered):
 | recipes | FastMCP | `k1/tools/mcp_servers/recipes/` | search, meal_plan |
 
 Internal/meta handlers (registered post-construction, not auto-discovered):
+
 - `tool.write.build_agent` -- Agent builder
 - `tool.read.discover_capabilities` -- Capability discovery
 - `tool.read.find_prompts` -- Prompt finder
@@ -157,6 +175,7 @@ Internal/meta handlers (registered post-construction, not auto-discovered):
 ### Name Resolution
 
 `_strip_tool_prefix()` converts Fabric capability names to MCP function names:
+
 ```
 "tool.read.notes_list"  -> "notes_list"   (used for FastMCP routing)
 "tool.read.weather_forecast" -> kept as-is (used for JSON-RPC routing)
@@ -176,6 +195,7 @@ tool_contract:
 ```
 
 Current WASM tool contracts (2):
+
 - `tool.execute.date_calc` (date_calc_wasm)
 - `tool.execute.unit_convert` (unit_convert_wasm)
 
@@ -194,6 +214,7 @@ Scans `k1/tools/wasm_modules/` for subdirectories with `executor.py` exporting
 `execute(params: dict) -> dict`.
 
 Current WASM modules (2):
+
 - `k1/tools/wasm_modules/date_calc/executor.py`
 - `k1/tools/wasm_modules/unit_convert/executor.py`
 
@@ -206,6 +227,7 @@ Current WASM modules (2):
 ### Use Case 1: K0 Communication
 
 Cross-kernel memory, queries, and commands:
+
 ```
 BridgeProvider -> IBridgePort.send_command(topic, body)  -- one-way
 BridgeProvider -> IBridgePort.query(selectors)           -- request/response
