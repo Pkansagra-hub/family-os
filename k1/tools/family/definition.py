@@ -227,6 +227,15 @@ class ActionSpec(BaseModel):
         default_factory=list,
         description="Outbound result schema (per-row for list actions).",
     )
+    input_schema: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Optional explicit JSON-schema (Draft-07) for the action params. "
+            "When present, the manifest translator persists it to "
+            "``GlobalProjectionStore`` (Phase 1.1); when empty, ``params`` "
+            "(``FieldSpec`` list) remains the source."
+        ),
+    )
     output_schema: dict[str, Any] = Field(
         default_factory=dict,
         description=(
@@ -361,6 +370,86 @@ class ToolDefinition(BaseModel):
         ...,
         min_length=1,
         description="The action list -- at least one entry required.",
+    )
+
+    # ------------------------------------------------------------------ #
+    # Phase 1.1 -- Constitution enrichment (Epics 9-14).
+    #
+    # All seven fields are ``Optional`` with ``default=None`` so existing
+    # adapters that do not declare them remain valid.  They are consumed
+    # by ``k1.fabric.manifest_translator.register_definition_to_store``
+    # which projects the definition into ``GlobalProjectionStore`` for the
+    # situated resolver.  ``snapshot_types`` is declared now but its store
+    # column is added in Phase 2.5 (Epic 19); until then it is dormant.
+    # ------------------------------------------------------------------ #
+    constitution: Optional[dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Connector constitution artifact (prerequisite_reads, "
+            "conflict_analysis_rules, companion_resource_roles, hil_gates, "
+            "mutation_sequencing, verification_requirements, summaries). "
+            "See connector_onboarding_familyos.md §1.3."
+        ),
+    )
+    policy_declarations: Optional[dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Per-connector policy rules (operation_role_gates, "
+            "operation_safety_bands, protected_resources, hil_triggers) "
+            "enforced by PolicySelectorService. See onboarding §1.4."
+        ),
+    )
+    guide_cards: Optional[list[dict[str, Any]]] = Field(
+        default=None,
+        description=(
+            "LLM-facing guidance cards persisted to GlobalProjectionStore "
+            "and injected into Back's prompt pack. See onboarding §1.5."
+        ),
+    )
+    ontology: Optional[dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Domain ontology registration (concept_aliases, "
+            "concept_resource_edges, resource_connector_edges, "
+            "operation_aliases, operation_equivalences) seeded into the "
+            "graph-ontology tables. See onboarding §1.6."
+        ),
+    )
+    resource_kinds: Optional[list[str]] = Field(
+        default=None,
+        description=(
+            "Resource kinds this connector owns (overrides singular "
+            "``entity_type`` for the store). E.g. ``['calendar_event', "
+            "'appointment']``."
+        ),
+    )
+    actor_scope: Optional[list[str]] = Field(
+        default=None,
+        description=(
+            "Roles permitted to use this connector. Defaults to "
+            "``['parent', 'admin', 'system']`` when absent."
+        ),
+    )
+    snapshot_types: Optional[list[str]] = Field(
+        default=None,
+        description=(
+            "Snapshot types this connector participates in, e.g. "
+            "``['daily_snapshot', 'weekly_overview']``. Empty/absent = no "
+            "participation. Consumed by the lookup() tool. NOTE: store "
+            "persistence is added in Phase 2.5 (Epic 19); dormant until then."
+        ),
+    )
+    back_execution_profile: bool = Field(
+        default=False,
+        description=(
+            "When ``True`` this connector self-declares a Back execution "
+            "profile keyed by ``activity_profile``. The profile is built at "
+            "import time from this definition (domains from ``adapter_id`` + "
+            "``domain_tags``, guidance derived from ``guide_cards``) and "
+            "selected by ``k1.concierge.prompt.back_profiles``. Connectors "
+            "that leave this ``False`` are intentionally unbacked and fall "
+            "back to the generic discovery profile (e.g. chores, shopping)."
+        ),
     )
 
     @field_validator("tables_sql")

@@ -31,7 +31,7 @@ import logging
 import sqlite3
 from typing import Any, Iterable, List, Optional, Type
 
-from k1.fabric.manifest_translator import register_definition
+from k1.fabric.manifest_translator import register_definition, register_definition_to_store
 from k1.tools.family.base_service import BaseToolService
 from k1.tools.family.events import EventEmitter
 from k1.tools.family.idem import IdempotencyStore
@@ -132,6 +132,28 @@ class ToolRegistry:
                     adapter_id,
                     names,
                 )
+
+            # Phase 1.1 (Epic 9.9): also project the definition into
+            # GlobalProjectionStore so the situated resolver can discover,
+            # type-resolve, and govern the connector.  Gated on the store's
+            # presence -- legacy boots / offline tests carry no store.
+            gps = getattr(self._fabric, "global_projection_store", None)
+            if gps is not None:
+                try:
+                    n_caps = register_definition_to_store(svc.DEFINITION, gps)
+                    logger.info(
+                        "ToolRegistry: projected %d capabilities for adapter %s "
+                        "into GlobalProjectionStore",
+                        n_caps,
+                        adapter_id,
+                    )
+                except Exception:
+                    logger.warning(
+                        "ToolRegistry: GlobalProjectionStore projection failed "
+                        "for adapter %s (continuing)",
+                        adapter_id,
+                        exc_info=True,
+                    )
 
         logger.info("ToolRegistry: registered family adapter %s", adapter_id)
         return svc

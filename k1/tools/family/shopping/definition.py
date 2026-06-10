@@ -56,6 +56,241 @@ _ITEM_ID_FIELD = FieldSpec(
 )
 
 
+# ---------------------------------------------------------------------------
+# Phase 1.1 -- Constitution / Policy / Guide cards / Ontology (Epic 13.1-13.2)
+#
+# Grounded to the REAL shopping model, which is NOT a simple shared list: it
+# has a parent-approval workflow. Children request items via add_item (status
+# pending_parent_approval); parents approve_item / reject_item; check_off_item
+# marks an approved item bought. Lists are managed by approvers (guardian+).
+# ---------------------------------------------------------------------------
+
+_SHOPPING_CONSTITUTION: dict[str, Any] = {
+    "connector_id": "family.shopping",
+    "constitution_id": "family.shopping.v1",
+    "schema_version": "1.0.0",
+    "execution_phases": ["read", "mutate"],
+    "prerequisite_reads": [
+        {
+            "operation": "list",
+            "resource_kind": "shopping_item",
+            "reason": (
+                "Check for a duplicate item (same name, same active list) before "
+                "adding. The user may have already added 'milk'."
+            ),
+            "required": True,
+            "timeout_ms": 5000,
+        },
+    ],
+    "conflict_analysis_rules": [
+        {
+            "check": "duplicate",
+            "with_resource_kinds": ["shopping_item"],
+            "description": ("New item name matches an existing active item on the list."),
+            "resolution": (
+                "Tell the user: '{item_name} is already on the list (added "
+                "{when}, qty: {qty})'. Options: add anyway (separate entry), "
+                "update the existing item, or skip. Do NOT silently duplicate."
+            ),
+        },
+    ],
+    "companion_resource_roles": [
+        {
+            "resource_kind": "calendar_event",
+            "role": "suggestion_source",
+            "description": (
+                "Other connectors may SUGGEST shopping items (calendar "
+                "'birthday party Saturday' -> 'order cake?'). Those suggestions "
+                "flow FROM other connectors TO shopping -- shopping does not need "
+                "to read calendar/tasks/chores to function."
+            ),
+        },
+    ],
+    "hil_gates": [
+        {
+            "trigger": "missing_required_field",
+            "field": "name",
+            "prompt": "What item should I add to the shopping list?",
+        },
+        {
+            "trigger": "missing_required_field",
+            "field": "list_id",
+            "prompt": "Which shopping list should I add this to?",
+        },
+        {
+            "trigger": "duplicate_detected",
+            "prompt": "'{item_name}' is already on the list (qty: {existing_qty}). What should I do?",
+            "options": [
+                "Add anyway (separate entry)",
+                "Update the existing item",
+                "Skip",
+            ],
+        },
+        {
+            "trigger": "child_request_pending",
+            "prompt": (
+                "{child_name}'s request for '{item_name}' is pending parent "
+                "approval. Approve it now?"
+            ),
+            "options": ["Approve", "Reject", "Leave pending"],
+        },
+    ],
+    "mutation_sequencing": [
+        {
+            "order": 1,
+            "phase": "read",
+            "operation": "list",
+            "description": "Read the active shopping list to check for duplicates.",
+        },
+        {
+            "order": 2,
+            "phase": "mutate",
+            "operation": "add",
+            "description": (
+                "Add the item if no duplicate. Child-originated requests land as "
+                "pending_parent_approval; surface that to the user."
+            ),
+        },
+        {
+            "order": 3,
+            "phase": "read",
+            "operation": "list",
+            "description": "Verify the item was added (read_after_write).",
+        },
+    ],
+    "verification_requirements": [
+        {
+            "method": "read_after_write",
+            "description": (
+                "Read back the list and confirm the new item appears with the "
+                "correct name, quantity, and approval_status."
+            ),
+            "required_for_submit": True,
+        },
+        {
+            "method": "output_schema",
+            "description": "Validate the returned item matches the expected schema.",
+        },
+    ],
+    "precondition_summary": (
+        "Before adding an item, I MUST list the active shopping list to check "
+        "for duplicates. Shopping has a parent-approval workflow: child requests "
+        "land as pending_parent_approval and need approve_item before they count "
+        "as on the list. I present duplicate conflicts rather than silently "
+        "creating a second entry."
+    ),
+    "companion_resource_summary": (
+        "Shopping is mostly self-contained, but it has a real approval workflow: "
+        "add_item (child request -> pending) -> approve_item | reject_item -> "
+        "check_off_item when bought. Other connectors (calendar, chores) may "
+        "suggest shopping items to the user, but shopping does not coordinate "
+        "back with them."
+    ),
+    "hil_trigger_summary": (
+        "I need human input when: item name or target list is missing, a "
+        "duplicate item is detected, or a child request is pending approval."
+    ),
+    "degradation_policy": (
+        "If read_after_write verification fails, retry once then submit degraded."
+    ),
+}
+
+_SHOPPING_POLICY: dict[str, Any] = {
+    "operation_role_gates": {
+        # List management is approver-only (guardian+).
+        "create_list": ["guardian", "parent"],
+        "delete_list": ["guardian", "parent"],
+        # Anyone can REQUEST an item; child requests stay pending until a
+        # parent/guardian approves (enforced at the service layer).
+        "add_item": ["parent", "child", "guardian", "elder"],
+        # Item lifecycle management is approver-only.
+        "update_item": ["guardian", "parent"],
+        "approve_item": ["guardian", "parent"],
+        "reject_item": ["guardian", "parent"],
+        "check_off_item": ["guardian", "parent"],
+        "delete_item": ["guardian", "parent"],
+    },
+    "operation_safety_bands": {
+        "create_list": "AMBER",
+        "delete_list": "AMBER",
+        "add_item": "AMBER",
+        "update_item": "AMBER",
+        "approve_item": "AMBER",
+        "reject_item": "AMBER",
+        "check_off_item": "AMBER",
+        "delete_item": "AMBER",
+    },
+}
+
+_SHOPPING_GUIDE_CARDS: list[dict[str, Any]] = [
+    {
+        "guide_id": "family.shopping.guide.01",
+        "title": "How to Manage the Family Shopping List",
+        "content": (
+            "The family shopping list is shared, but child requests need parent "
+            "approval before they count.\n\n"
+            "Best practices:\n"
+            "1. Always LIST the active list before adding -- avoid duplicates.\n"
+            "2. Be specific: '2% milk - half gallon' not just 'milk'.\n"
+            "3. Include quantity: 'bananas (6)', 'paper towels (2-pack)'.\n"
+            "4. Child adds land as pending_parent_approval -- tell the child it "
+            "needs a parent to approve.\n"
+            "5. Use check_off_item when an approved item is bought.\n\n"
+            "The shopping list is NOT a todo list. For 'remember to go "
+            "shopping', use family.tasks. For 'buy milk every Tuesday', use "
+            "family.chores (recurring) or family.reminders (notification)."
+        ),
+        "relevance": "always",
+        "disclosure_phase": "connector_summary",
+    },
+    {
+        "guide_id": "family.shopping.guide.02",
+        "title": "The Approval Workflow",
+        "content": (
+            "Child-originated requests are NOT immediately on the list:\n"
+            "1. add_item by a child -> approval_status = pending_parent_approval.\n"
+            "2. A parent/guardian calls approve_item (now counts) or reject_item "
+            "(declined, kept for audit).\n"
+            "3. When the approved item is bought, call check_off_item.\n\n"
+            "When a parent asks 'what are the kids asking for?', use "
+            "list_items(approval_status='pending_parent_approval'). Never "
+            "silently approve -- approval is an explicit parent action."
+        ),
+        "relevance": "on_conflict",
+        "disclosure_phase": "tool_name_selection",
+    },
+]
+
+_SHOPPING_ONTOLOGY: dict[str, Any] = {
+    "domain": "family",
+    "concept_aliases": [
+        {"alias": "groceries", "canonical_concept": "shopping_item", "weight": 0.9},
+        {"alias": "buy", "canonical_concept": "shopping_item", "weight": 0.8},
+        {"alias": "shopping list", "canonical_concept": "shopping_item", "weight": 1.0},
+        {"alias": "purchase", "canonical_concept": "shopping_item", "weight": 0.8},
+        {"alias": "supplies", "canonical_concept": "shopping_item", "weight": 0.6},
+    ],
+    "concept_resource_edges": [
+        {"concept": "shopping_item", "resource_family": "shopping_item", "weight": 1.0},
+    ],
+    "resource_connector_edges": [
+        {
+            "resource_family": "shopping_item",
+            "connector_id": "family.shopping",
+            "weight": 1.0,
+            "role": "primary",
+        },
+    ],
+    "operation_aliases": [
+        {"alias": "add", "operation_family": "add", "effect": "write"},
+        {"alias": "need", "operation_family": "add", "effect": "write"},
+        {"alias": "buy", "operation_family": "check", "effect": "write"},
+        {"alias": "got it", "operation_family": "check", "effect": "write"},
+        {"alias": "approve", "operation_family": "approve", "effect": "write"},
+    ],
+}
+
+
 SHOPPING_DEFINITION = ToolDefinition(
     adapter_id="shopping",
     version="1.0.0",
@@ -99,6 +334,14 @@ SHOPPING_DEFINITION = ToolDefinition(
     ],
     can_reference=["task_item", "calendar_event", "reminder"],
     feature_flags=["m15_shopping"],
+    # ── Phase 1.1 enrichment (Epics 13.1-13.2) ──
+    resource_kinds=["shopping_item"],
+    actor_scope=["parent", "admin", "system"],
+    snapshot_types=["daily_snapshot"],
+    constitution=_SHOPPING_CONSTITUTION,
+    policy_declarations=_SHOPPING_POLICY,
+    guide_cards=_SHOPPING_GUIDE_CARDS,
+    ontology=_SHOPPING_ONTOLOGY,
     tables_sql=_SHOPPING_DDL,
     actions=[
         ActionSpec(
@@ -108,7 +351,6 @@ SHOPPING_DEFINITION = ToolDefinition(
             label="New list",
             primary=True,
             min_band="AMBER",
-            prompt_template="shopping_activity_v1",
             allowed_roles=_APPROVER_ROLES,
             idempotent=True,
             params=[
@@ -144,7 +386,6 @@ SHOPPING_DEFINITION = ToolDefinition(
             summary="Soft-delete a shopping list bucket.",
             label="Delete list",
             min_band="AMBER",
-            prompt_template="shopping_activity_v1",
             allowed_roles=_APPROVER_ROLES,
             params=[_LIST_ID_FIELD],
             result=[
@@ -166,7 +407,6 @@ SHOPPING_DEFINITION = ToolDefinition(
             summary="Return shopping lists in the family space.",
             label="List shopping lists",
             min_band="GREEN",
-            prompt_template="shopping_activity_v1",
             allowed_roles=_ALL_ROLES,
             params=[_CATEGORY_FIELD],
             result=[
@@ -192,7 +432,6 @@ SHOPPING_DEFINITION = ToolDefinition(
             label="Add item",
             primary=True,
             min_band="AMBER",
-            prompt_template="shopping_activity_v1",
             allowed_roles=_REQUEST_ROLES,
             idempotent=True,
             params=[
@@ -250,7 +489,6 @@ SHOPPING_DEFINITION = ToolDefinition(
             summary="Patch an existing shopping item.",
             label="Edit item",
             min_band="AMBER",
-            prompt_template="shopping_activity_v1",
             allowed_roles=_APPROVER_ROLES,
             params=[
                 _ITEM_ID_FIELD,
@@ -282,7 +520,6 @@ SHOPPING_DEFINITION = ToolDefinition(
             summary="Approve a pending child shopping request.",
             label="Approve item",
             min_band="AMBER",
-            prompt_template="shopping_activity_v1",
             allowed_roles=_APPROVER_ROLES,
             params=[
                 _ITEM_ID_FIELD,
@@ -308,7 +545,6 @@ SHOPPING_DEFINITION = ToolDefinition(
             summary="Reject a pending child shopping request.",
             label="Reject item",
             min_band="AMBER",
-            prompt_template="shopping_activity_v1",
             allowed_roles=_APPROVER_ROLES,
             params=[
                 _ITEM_ID_FIELD,
@@ -334,7 +570,6 @@ SHOPPING_DEFINITION = ToolDefinition(
             summary="Mark an approved shopping item as bought or done.",
             label="Check off",
             min_band="AMBER",
-            prompt_template="shopping_activity_v1",
             allowed_roles=_APPROVER_ROLES,
             params=[
                 _ITEM_ID_FIELD,
@@ -358,7 +593,6 @@ SHOPPING_DEFINITION = ToolDefinition(
             summary="Soft-delete a shopping item.",
             label="Delete item",
             min_band="AMBER",
-            prompt_template="shopping_activity_v1",
             allowed_roles=_APPROVER_ROLES,
             params=[_ITEM_ID_FIELD],
             result=[
@@ -382,7 +616,6 @@ SHOPPING_DEFINITION = ToolDefinition(
             summary="Return shopping items, optionally filtered by list, category, status, requestor, or approval.",
             label="List items",
             min_band="GREEN",
-            prompt_template="shopping_activity_v1",
             allowed_roles=_ALL_ROLES,
             params=[
                 FieldSpec(name="list_id", type="string", required=False),
@@ -424,7 +657,6 @@ SHOPPING_DEFINITION = ToolDefinition(
             summary="Fetch one shopping item by id.",
             label="Get item",
             min_band="GREEN",
-            prompt_template="shopping_activity_v1",
             allowed_roles=_ALL_ROLES,
             params=[_ITEM_ID_FIELD],
             result=[

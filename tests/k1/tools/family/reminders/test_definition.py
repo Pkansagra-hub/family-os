@@ -75,11 +75,11 @@ def test_llm_hints_present_on_write_actions() -> None:
             assert action.llm is not None, f"{action.name} missing LLM hints"
 
 
-def test_user_invokable_reminder_actions_reference_activity_prompt_template() -> None:
+def test_no_user_invokable_reminder_action_carries_legacy_prompt_template() -> None:
     for action in REMINDERS_DEFINITION.actions:
         if action.name == "fire_reminder":
             continue
-        assert action.prompt_template == "reminders_activity_v1", action.name
+        assert action.prompt_template is None, action.name
 
 
 def test_reminder_contracts_inherit_activity_profile_metadata() -> None:
@@ -89,5 +89,5 @@ def test_reminder_contracts_inherit_activity_profile_metadata() -> None:
     contract = build_contract(REMINDERS_DEFINITION, action)
 
     assert contract.activity_profile == "reminders.v1"
-    assert contract.prompt_template == "reminders_activity_v1"
+    assert contract.prompt_template is None
     assert "alerting" in contract.domain

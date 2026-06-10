@@ -16,23 +16,13 @@ CONTRACTS_DIR = ROOT / "k1" / "contracts" / "prompts"
 TOOLS_DIR = ROOT / "k1" / "contracts" / "tools"
 
 EXPECTED_TEMPLATES = {
-    "calendar_activity_v1",
-    "chores_activity_v1",
     "mcp_generic_activity_v1",
-    "tasks_activity_v1",
-    "reminders_activity_v1",
-    "shopping_activity_v1",
     "system_of_record_generic_v1",
     "wasm_generic_activity_v1",
 }
 
 EXPECTED_ACTIVITY_PROFILES = {
-    "calendar_activity_v1": "calendar.v1",
-    "chores_activity_v1": "chores.v1",
     "mcp_generic_activity_v1": "mcp.generic.v1",
-    "tasks_activity_v1": "tasks.v1",
-    "reminders_activity_v1": "reminders.v1",
-    "shopping_activity_v1": "shopping.v1",
     "system_of_record_generic_v1": "system_of_record.generic.v1",
     "wasm_generic_activity_v1": "wasm.generic.v1",
 }

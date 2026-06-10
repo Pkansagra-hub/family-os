@@ -2,8 +2,8 @@
 
 > **Audience:** External companies, 3rd-party developers, and independent contributors building connectors for the FamilyOS kernel.
 > **Scope:** Everything an external team needs to design, build, test, submit, and maintain a production connector. No FamilyOS internal knowledge assumed.
-> **Status:** Living document. Phase 4 of the 4-plane roadmap (IFL Standard).
-> **Prerequisite reading:** `connector_onboarding_familyos.md` (internal guide — this doc references its contracts).
+> **Status:** Living document. Updated 2026-06-05 — Phase 1 (GATE-P1) complete. Real code in `k1/fabric/connectors/`.
+> **Prerequisite reading:** `connector_onboarding_familyos.md` (internal guide), `k1/fabric/docs/phase1_implementation_plan.md` (Phase 1 spec), `k1/fabric/CONTRACT.md` (Fabric contracts).
 
 ---
 
@@ -38,19 +38,18 @@ You do NOT need to understand the kernel internals. You provide these artifacts 
 
 | Kernel Component | What It Does For You |
 |-----------------|---------------------|
-| `GlobalProjectionStore` | Stores your manifest, schemas, constitution — FTS5 searchable |
-| `LocalProjectionStore` | Tracks which households have your connector connected |
-| `ManifestAdmissionService` | Validates your manifest before admitting it |
-| `CapabilityTypeResolver` | Maps user language ("dentist appointment") → your capability |
-| `PolicySelectorService` | Enforces who can use your connector and when |
-| `CapabilityBinderService` | Binds user resources to your capabilities |
-| `ResolveSituationService` | Orchestrates the full resolution → verdict pipeline |
-| `PromptPackBuilder` | Injects your schemas + guides into the LLM's context at the right time |
-| `CapabilityFabric` | Executes your adapter through the 9-step pipeline |
-| `VerificationPlanRunner` | Verifies your writes actually happened (read_after_write) |
-| `IdempotencyStore` | Prevents duplicate executions of the same operation |
-| `Bridge ConnectorGateway` | Security boundary — token verification, rate limiting, circuit breaking |
-| `CredentialVault` | AES256-GCM encrypted storage for your API keys (never leave Bridge) |
+| `GlobalProjectionStore` | Stores your manifest, capabilities, constitution — 11 tables + FTS5 search (BM25) |
+| `LocalProjectionStore` | Per-session store tracking connected resources, household members, aliases |
+| `ManifestAdmissionService` | Typed validation + idempotent upsert into GlobalProjectionStore |
+| `CapabilityTypeResolver` | 4-step graph traversal — maps user language to typed capabilities via capability_type_index |
+| `PolicySelectorService` | Gates on typed ResolvedIntentType — role checks, safety bands, HIL triggers; deterministic (no eval) |
+| `CapabilityBinderService` | 3-pass discovery (typed graph → exact match → BM25 FTS5) → BindingBundle |
+| `ResolveSituationService` | 13-step verdict cascade → ResolutionEnvelope {verdict, binding_bundle, prompt_pack} |
+| `PromptPackBuilder` | 5 disclosure phases, triple redaction check against SECRET_MARKERS — any leak raises PromptPackLeakError |
+| `ConstitutionLoader` | Single read path — loads typed ConstitutionArtifact validated via JSON Schema Draft-07 |
+| `VerificationPlanRunner` | Post-write verification (read_after_write / output_schema) via NativeReadbackPort |
+| `IdempotencyStore` | State machine: not_seen→in_flight→succeeded/failed; succeeded is immutable |
+| `FabricFactory` | STEP 21 wires all Phase 1 components (gated on enable_fabric_stores=True) |
 
 ---
 
@@ -93,29 +92,37 @@ resource_models:
 # ── What operations are available? ──
 capability_templates:
   - name: "tool.read.family.acme_calendar.list"
-    operation: "list"
+    invocation_mode: "read"
+    action_name: "list"
     effect: "read"
+    resource_kind: "calendar_event"
     description: "List calendar events in a time window."
     input_schema_ref: "schemas/list_events_input.schema.json"
     output_schema_ref: "schemas/list_events_output.schema.json"
 
   - name: "tool.execute.family.acme_calendar.create"
-    operation: "create"
+    invocation_mode: "execute"
+    action_name: "create"
     effect: "write"
+    resource_kind: "calendar_event"
     description: "Create a new calendar event."
     input_schema_ref: "schemas/create_event_input.schema.json"
     output_schema_ref: "schemas/create_event_output.schema.json"
 
   - name: "tool.execute.family.acme_calendar.update"
-    operation: "update"
+    invocation_mode: "execute"
+    action_name: "update"
     effect: "write"
+    resource_kind: "calendar_event"
     description: "Update an existing calendar event."
     input_schema_ref: "schemas/update_event_input.schema.json"
     output_schema_ref: "schemas/update_event_output.schema.json"
 
   - name: "tool.execute.family.acme_calendar.delete"
-    operation: "delete"
+    invocation_mode: "execute"
+    action_name: "delete"
     effect: "write"
+    resource_kind: "calendar_event"
     description: "Delete a calendar event."
     input_schema_ref: "schemas/delete_event_input.schema.json"
     output_schema_ref: "schemas/delete_event_output.schema.json"
@@ -282,12 +289,15 @@ hil_gates:
 # ── What order should operations happen in? ──
 mutation_sequencing:
   - order: 1
+    phase: "read"
     operation: "list"
     description: "Read current calendar state."
   - order: 2
+    phase: "mutate"
     operation: "create"
     description: "Create the event."
   - order: 3
+    phase: "read"
     operation: "list"
     description: "Verify event creation (read_after_write)."
 
@@ -300,9 +310,9 @@ verification_requirements:
     description: "Validate returned event against the output schema."
 
 # ── Human-readable summaries (injected into LLM prompt) ──
-precondition_sum: "Always list the calendar before creating events to check for time conflicts."
-companion_resource_sum: "New events may conflict with existing events in the same time window."
-hil_trigger_sum: "HIL required when end time or calendar selection is missing, or when a time conflict exists."
+precondition_summary: "Always list the calendar before creating events to check for time conflicts."
+companion_resource_summary: "New events may conflict with existing events in the same time window."
+hil_trigger_summary: "HIL required when end time or calendar selection is missing, or when a time conflict exists."
 degradation_policy: "If read_after_write verification fails, retry once then submit as degraded."
 ```
 
@@ -582,11 +592,11 @@ bridge/ifl/adapters/{your_connector}/
 Before marking `admission_verdict: "admitted"`, the FamilyOS team verifies:
 
 ```text
-□ Manifest: All required fields present. connector_id follows naming convention.
-□ Schemas: Every operation has input + output JSON Schema (Draft-07).
-  Schemas pass jsonschema validation.
-□ Constitution: prerequisite_reads, conflict_analysis_rules, hil_gates,
-  mutation_sequencing, verification_requirements all populated.
+□ Manifest: All 14 required ConnectorDefinition fields present. connector_id follows naming convention.
+□ Capabilities: Every operation has full JSON Schema (Draft-07) input_schema + output_schema.
+□ Constitution: prerequisite_reads, conflict_analysis_rules, companion_resource_roles,
+  hil_gates, mutation_sequencing, verification_requirements all populated.
+  Constitution passes validate_constitution() against CONSTITUTION_JSON_SCHEMA.
 □ Adapter: MCP server starts, responds to health_check, handles all declared operations.
 □ Error handling: Invalid params → clear error. Timeout → graceful degradation.
 □ Credentials: OAuth flow documented. CredentialVault registration tested.
@@ -597,17 +607,18 @@ Before marking `admission_verdict: "admitted"`, the FamilyOS team verifies:
 □ Performance: list_events < 2s, create_event < 3s at p95.
 □ Idempotency: create_event with same idempotency_key twice → second call returns same event_id.
 ```
+```
 
 ### 4.3 Admission Flow
 
 ```text
 1. You submit PR with complete package.
 2. FamilyOS CI runs:
-     - ContractValidator: JSON Schema + 12 semantic rules
-     - ManifestAdmissionService.admit_manifest()
+     - ContractValidator: JSON Schema validation (via jsonschema Draft7Validator)
+     - ManifestAdmissionService.admit(definition) — typed validation + upsert
      - Automated MCP server integration test
-     - Constitution compliance check
-     - All existing tests (must not regress)
+     - Constitution validation via validate_constitution() + validate_constitution_semantics()
+     - All existing tests (must not regress — 280 Phase 1 tests)
 3. FamilyOS reviewer checks:
      - Constitution rules are complete and correct
      - No security issues (credential handling, input validation)
@@ -618,8 +629,8 @@ Before marking `admission_verdict: "admitted"`, the FamilyOS team verifies:
      - Manifest is signed with FamilyOS CA key
      - CredentialVault entry is created (encrypted)
      - MCP process manager registers your server
-     - ModuleLoader picks up on next restart
-     - Connector appears in catalog (discover_capabilities)
+     - ManifestAdmissionService writes to GlobalProjectionStore (idempotent upsert)
+     - Connector appears in catalog (discover_capabilities + search_capabilities via FTS5)
 5. Connector is now "admitted" and executable by all FamilyOS households.
 ```
 
@@ -736,18 +747,20 @@ freshness_guarantees:
 ## Appendix A: Capability Naming Convention
 
 ```text
-Pattern: tool.{effect_type}.{domain}.{connector}.{action}
+Pattern: tool.{invocation_mode}.{domain}.{service_id}.{action_name}
 
-effect_type: "read" or "execute"
-domain: "family" (for FamilyOS; other domains use their own prefix)
-connector: your connector short name (snake_case)
-action: the operation verb (list, search, create, update, delete, send, fire)
+invocation_mode: "read" or "execute"
+domain: domain prefix (e.g. "family", "enterprise", "government", "agriculture", "healthcare")
+service_id: connector short name in snake_case (e.g. "calendar", "acme_calendar")
+action_name: the operation verb (list, search, create, update, delete, send)
+
+Per: k1/fabric/connectors/builder.py _cap_name() line 24.
 
 Examples:
-  tool.read.family.acme_calendar.list       → Read calendar events
-  tool.execute.family.acme_calendar.create  → Create calendar event
-  tool.execute.family.acme_calendar.update  → Update calendar event
-  tool.execute.family.acme_calendar.delete  → Delete calendar event
+  tool.read.family.calendar.list         → Read calendar events
+  tool.execute.family.calendar.create    → Create calendar event
+  tool.execute.family.calendar.update    → Update calendar event
+  tool.execute.family.calendar.delete    → Delete calendar event
 ```
 
 ## Appendix B: Error Codes Your Adapter Should Return

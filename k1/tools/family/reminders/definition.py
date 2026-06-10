@@ -26,6 +26,7 @@ Special notes
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from k1.tools.family.definition import (
     ActionSpec,
@@ -55,6 +56,268 @@ _VISIBILITY_FIELD = FieldSpec(
     required=False,
     description="Row-level band: ``family`` | ``adults`` | ``named`` | ``private``.",
 )
+
+# ---------------------------------------------------------------------------
+# Phase 1.1 -- Constitution / Policy / Guide cards / Ontology (Epic 11.1-11.2)
+#
+# Grounded to the REAL 8-action surface: create / update / snooze / dismiss /
+# fire (system-only) / delete / list / get. Reminders are pure notifications --
+# distinct from one-shot tasks and recurring gamified chores.
+# ---------------------------------------------------------------------------
+
+_REMINDERS_CONSTITUTION: dict[str, Any] = {
+    "connector_id": "family.reminders",
+    "constitution_id": "family.reminders.v1",
+    "schema_version": "1.0.0",
+    "execution_phases": ["read", "mutate"],
+    "prerequisite_reads": [
+        {
+            "operation": "list",
+            "resource_kind": "reminder",
+            "reason": (
+                "Check for duplicate reminders (same person + same time + same "
+                "message) before creating."
+            ),
+            "required": True,
+            "timeout_ms": 5000,
+        },
+        {
+            "operation": "list",
+            "resource_kind": "calendar_event",
+            "reason": (
+                "If the reminder uses an event_offset trigger, verify the "
+                "referenced calendar event still exists. If deleted, the "
+                "reminder would fire at a computed time based on nothing -- "
+                "warn the user."
+            ),
+            "required": False,
+            "timeout_ms": 3000,
+        },
+    ],
+    "conflict_analysis_rules": [
+        {
+            "check": "duplicate",
+            "with_resource_kinds": ["reminder"],
+            "description": (
+                "New reminder must not duplicate an existing reminder for the "
+                "same recipient at the same time with the same message."
+            ),
+            "resolution": (
+                "Tell the user: '{recipient} already has a reminder "
+                "{existing_message} at {time}'. Offer: create anyway or cancel."
+            ),
+        },
+        {
+            "check": "invalid_event_ref",
+            "with_resource_kinds": ["calendar_event"],
+            "description": (
+                "The calendar event referenced by an event_offset trigger no "
+                "longer exists (deleted or moved)."
+            ),
+            "resolution": (
+                "Warn: 'The event {event_title} was deleted. The reminder will "
+                "still fire at {computed_time} but won't reference a valid "
+                "event.' Offer: create anyway, pick a different event, or cancel."
+            ),
+        },
+    ],
+    "companion_resource_roles": [
+        {
+            "resource_kind": "calendar_event",
+            "role": "dependency",
+            "description": (
+                "Reminders can fire at event offsets ('30 minutes before "
+                "Riley's soccer') via the event_offset trigger. The reminder "
+                "depends on the event existing -- if the event is deleted, warn "
+                "the user per conflict_analysis_rules above."
+            ),
+        },
+        {
+            "resource_kind": "task",
+            "role": "distinct_sibling",
+            "description": (
+                "CRITICAL DISTINCTION: Reminders are PURE NOTIFICATIONS ('remind "
+                "Riley to take medicine at 8pm'). Tasks are ONE-SHOT action "
+                "items ('pick up Riley today'). If the user says 'remind me to "
+                "X', that's a reminder. If the user says 'I need to X' or 'add X "
+                "to my list', that's a task. See the 'Reminders vs Tasks' guide "
+                "card."
+            ),
+        },
+    ],
+    "hil_gates": [
+        {
+            "trigger": "missing_required_field",
+            "field": "trigger_at",
+            "prompt": "What time should the reminder fire?",
+        },
+        {
+            "trigger": "missing_required_field",
+            "field": "recipient",
+            "prompt": "Who is this reminder for?",
+        },
+        {
+            "trigger": "missing_required_field",
+            "field": "message",
+            "prompt": "What should the reminder say?",
+        },
+        {
+            "trigger": "ambiguous_person",
+            "prompt": "Which person did you mean? I found: {candidate_names}.",
+        },
+    ],
+    "mutation_sequencing": [
+        {
+            "order": 1,
+            "phase": "read",
+            "operation": "list",
+            "description": "Read current reminders + calendar event if event_offset trigger is set.",
+        },
+        {
+            "order": 2,
+            "phase": "mutate",
+            "operation": "create",
+            "description": (
+                "Create the reminder if no duplicate detected. Warn about an "
+                "invalid event reference if applicable."
+            ),
+        },
+        {
+            "order": 3,
+            "phase": "read",
+            "operation": "list",
+            "description": "Verify reminder was created (read_after_write).",
+        },
+    ],
+    "verification_requirements": [
+        {
+            "method": "read_after_write",
+            "description": "Read back the created reminder and confirm all fields match.",
+            "required_for_submit": True,
+        },
+        {
+            "method": "output_schema",
+            "description": "Validate the returned reminder matches the expected schema.",
+        },
+    ],
+    "precondition_summary": (
+        "Before creating a reminder, I MUST list existing reminders for the same "
+        "recipient to check for duplicates. If the reminder uses an event_offset "
+        "trigger, I SHOULD verify the event still exists. Reminders are pure "
+        "notifications -- I do NOT check for calendar scheduling conflicts."
+    ),
+    "companion_resource_summary": (
+        "Reminders can fire at calendar event offsets. Reminders are DISTINCT "
+        "from tasks: reminders are pure notifications ('remind me to X at Y "
+        "time'), tasks are action items ('I need to do X'). See the 'Reminders "
+        "vs Tasks' guide card for the full distinction rules."
+    ),
+    "hil_trigger_summary": (
+        "I need human input when: reminder time, recipient, or message is "
+        "missing, or a person reference is ambiguous."
+    ),
+    "degradation_policy": (
+        "If read_after_write verification fails, retry once then submit degraded."
+    ),
+}
+
+_REMINDERS_POLICY: dict[str, Any] = {
+    "operation_role_gates": {
+        # Anyone in the household can set/manage their own reminders; the
+        # cross-recipient guard (recipient != caller -> guardian+) is enforced
+        # at the service layer, not as a static role gate.
+        "create_reminder": ["parent", "child", "guardian", "elder"],
+        "update_reminder": ["parent", "child", "guardian", "elder"],
+        "snooze_reminder": ["parent", "child", "guardian", "elder"],
+        "dismiss_reminder": ["parent", "child", "guardian", "elder"],
+        "delete_reminder": ["parent", "child", "guardian", "elder"],
+        # fire_reminder is the scheduler's mechanism -- system only.
+        "fire_reminder": ["system"],
+    },
+    "operation_safety_bands": {
+        "create_reminder": "GREEN",
+        "update_reminder": "GREEN",
+        "snooze_reminder": "GREEN",
+        "dismiss_reminder": "GREEN",
+        "delete_reminder": "GREEN",
+    },
+}
+
+_REMINDERS_GUIDE_CARDS: list[dict[str, Any]] = [
+    {
+        "guide_id": "family.reminders.guide.01",
+        "title": "Reminders vs Tasks -- Know the Difference",
+        "content": (
+            "REMINDERS are PURE NOTIFICATIONS:\n"
+            "  'Remind Riley to take medicine at 8pm'\n"
+            "  'Remind me to call the dentist tomorrow at 9am'\n"
+            "  'Remind Riley 30 minutes before soccer practice'\n"
+            "Reminders fire once, notify, and are done. No tracking, no "
+            "completion state, no rewards. They are cheap -- create freely.\n\n"
+            "TASKS are ONE-SHOT ACTION ITEMS:\n"
+            "  'Pick up Riley from school today'\n"
+            "  'I need to finish the report by Friday'\n"
+            "Tasks are tracked, have completion state, and may have due dates.\n\n"
+            "RED FLAGS that mean TASK not reminder:\n"
+            "- 'I need to [do X]' -> task\n"
+            "- 'add [X] to my list' -> task\n"
+            "- '[X] is due [date]' -> task\n"
+            "- 'don't forget to [X]' -> ask if they want a reminder or a task\n\n"
+            "If ANY red flag is present, consider family.tasks instead."
+        ),
+        "relevance": "always",
+        "disclosure_phase": "connector_summary",
+    },
+    {
+        "guide_id": "family.reminders.guide.02",
+        "title": "Creating Reminders from Calendar Events",
+        "content": (
+            "Reminders can fire at offsets from calendar events using the "
+            "event_offset trigger:\n"
+            "- 'Remind Riley 30 minutes before soccer practice'\n"
+            "- 'Remind me 1 hour before the dentist appointment'\n\n"
+            "Always verify the event still exists before creating the reminder. "
+            "If the event is deleted, warn the user but still allow creation."
+        ),
+        "relevance": "on_conflict",
+        "disclosure_phase": "tool_name_selection",
+    },
+]
+
+_REMINDERS_ONTOLOGY: dict[str, Any] = {
+    "domain": "family",
+    "concept_aliases": [
+        {"alias": "alert", "canonical_concept": "reminder", "weight": 0.9},
+        {"alias": "nag", "canonical_concept": "reminder", "weight": 0.7},
+        {"alias": "notify", "canonical_concept": "reminder", "weight": 0.8},
+        {"alias": "remind me", "canonical_concept": "reminder", "weight": 1.0},
+        {"alias": "ping", "canonical_concept": "reminder", "weight": 0.6},
+    ],
+    "concept_resource_edges": [
+        {"concept": "reminder", "resource_family": "reminder", "weight": 1.0},
+    ],
+    "resource_connector_edges": [
+        {
+            "resource_family": "reminder",
+            "connector_id": "family.reminders",
+            "weight": 1.0,
+            "role": "primary",
+        },
+        {
+            "resource_family": "calendar_event",
+            "connector_id": "family.reminders",
+            "weight": 0.5,
+            "role": "companion",
+        },
+    ],
+    "operation_aliases": [
+        {"alias": "remind", "operation_family": "create", "effect": "write"},
+        {"alias": "set", "operation_family": "create", "effect": "write"},
+        {"alias": "snooze", "operation_family": "snooze", "effect": "write"},
+        {"alias": "notify", "operation_family": "create", "effect": "write"},
+    ],
+}
+
 
 # ---------------------------------------------------------------------------
 # REMINDERS_DEFINITION
@@ -98,6 +361,15 @@ REMINDERS_DEFINITION = ToolDefinition(
     ],
     can_reference=["calendar_event", "task"],
     feature_flags=["m15_reminders"],
+    # ── Phase 1.1 enrichment (Epics 11.1-11.2) ──
+    resource_kinds=["reminder"],
+    actor_scope=["parent", "admin", "system"],
+    snapshot_types=["daily_snapshot", "weekly_overview"],
+    back_execution_profile=True,
+    constitution=_REMINDERS_CONSTITUTION,
+    policy_declarations=_REMINDERS_POLICY,
+    guide_cards=_REMINDERS_GUIDE_CARDS,
+    ontology=_REMINDERS_ONTOLOGY,
     tables_sql=_REMINDERS_DDL,
     actions=[
         # ------------------------------------------------------------------
@@ -110,7 +382,6 @@ REMINDERS_DEFINITION = ToolDefinition(
             label="New reminder",
             primary=True,
             min_band="GREEN",
-            prompt_template="reminders_activity_v1",
             allowed_roles=["parent", "child", "guardian", "elder", "system"],
             idempotent=True,
             params=[
@@ -190,7 +461,6 @@ REMINDERS_DEFINITION = ToolDefinition(
             summary="Change the title, message, or trigger of a scheduled reminder.",
             label="Edit reminder",
             min_band="GREEN",
-            prompt_template="reminders_activity_v1",
             allowed_roles=["parent", "child", "guardian", "elder", "system"],
             params=[
                 _REMINDER_ID_FIELD,
@@ -233,7 +503,6 @@ REMINDERS_DEFINITION = ToolDefinition(
             summary="Re-arm a fired reminder to fire again at a new time.",
             label="Snooze",
             min_band="GREEN",
-            prompt_template="reminders_activity_v1",
             allowed_roles=["parent", "child", "guardian", "elder", "system"],
             params=[
                 _REMINDER_ID_FIELD,
@@ -273,7 +542,6 @@ REMINDERS_DEFINITION = ToolDefinition(
             summary="Acknowledge a fired reminder — no further action needed.",
             label="Dismiss",
             min_band="GREEN",
-            prompt_template="reminders_activity_v1",
             allowed_roles=["parent", "child", "guardian", "elder", "system"],
             params=[_REMINDER_ID_FIELD],
             result=[
@@ -338,7 +606,6 @@ REMINDERS_DEFINITION = ToolDefinition(
             summary="Cancel and soft-delete a reminder before it fires.",
             label="Delete reminder",
             min_band="GREEN",
-            prompt_template="reminders_activity_v1",
             allowed_roles=["parent", "child", "guardian", "elder", "system"],
             params=[_REMINDER_ID_FIELD],
             result=[
@@ -366,7 +633,6 @@ REMINDERS_DEFINITION = ToolDefinition(
             summary="Return reminders in the family space, ACL-filtered for the caller.",
             label="List reminders",
             min_band="GREEN",
-            prompt_template="reminders_activity_v1",
             allowed_roles=["parent", "child", "guardian", "elder", "system", "guest"],
             params=[
                 FieldSpec(
@@ -415,7 +681,6 @@ REMINDERS_DEFINITION = ToolDefinition(
             summary="Fetch a single reminder by id (ACL-filtered).",
             label="Get reminder",
             min_band="GREEN",
-            prompt_template="reminders_activity_v1",
             allowed_roles=["parent", "child", "guardian", "elder", "system", "guest"],
             params=[_REMINDER_ID_FIELD],
             result=[

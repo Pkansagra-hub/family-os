@@ -25,11 +25,13 @@ ActionSpec.prompt_template/activity_profile/tool_instructions/social_act/side_ef
 
 M8 concrete attachments currently cover:
 
-- `calendar.v1` / `calendar_activity_v1` for all calendar actions.
-- `tasks.v1` / `tasks_activity_v1` for all task actions.
-- `reminders.v1` / `reminders_activity_v1` for user-invokable reminder actions; `fire_reminder` is scheduler-only and keeps explicit no-LLM tool instructions.
-- `chores.v1` / `chores_activity_v1` for all chore actions.
-- `shopping.v1` / `shopping_activity_v1` for all shopping actions; child-added items stay pending until parent/guardian approval.
+- `calendar.v1` for all calendar actions; backed Back execution profile (`ToolDefinition.back_execution_profile=True`), guidance derived from `guide_cards`.
+- `tasks.v1` for all task actions; backed Back execution profile, guidance derived from `guide_cards`.
+- `reminders.v1` for user-invokable reminder actions; backed Back execution profile. `fire_reminder` is scheduler-only and keeps explicit no-LLM tool instructions.
+- `chores.v1` for all chore actions; `activity_profile` only (unbacked — no Back execution profile, falls back to generic discovery).
+- `shopping.v1` for all shopping actions; `activity_profile` only (unbacked). Child-added items stay pending until parent/guardian approval.
+
+The legacy per-action `prompt_template` activity-profile YAMLs were removed; actions inherit only the definition-level `activity_profile`.
 
 Native services do not receive prompt text in business params, and `NativeToolProvider` does not require prompt metadata to execute actions. Prompt/profile metadata is passed separately for audit/debug through Fabric provider metadata.
 

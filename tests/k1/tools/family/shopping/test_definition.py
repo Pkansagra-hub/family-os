@@ -69,15 +69,15 @@ def test_child_can_request_but_not_approve_or_check_off() -> None:
         assert "parent" in action.allowed_roles
 
 
-def test_all_actions_reference_activity_prompt_template() -> None:
+def test_no_action_carries_legacy_prompt_template() -> None:
     for action in SHOPPING_DEFINITION.actions:
-        assert action.prompt_template == "shopping_activity_v1", action.name
+        assert action.prompt_template is None, action.name
 
 
 def test_contracts_expose_profile_and_instructions() -> None:
     for action in SHOPPING_DEFINITION.actions:
         contract = build_contract(SHOPPING_DEFINITION, action)
         assert contract.activity_profile == "shopping.v1"
-        assert contract.prompt_template == "shopping_activity_v1"
+        assert contract.prompt_template is None
         assert contract.tool_instructions
         assert "shopping" in contract.domain

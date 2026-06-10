@@ -190,6 +190,79 @@ async def _build_execution_grounding_block(task: dict[str, Any], grounding: Any 
     return "\n".join(lines)
 
 
+# =========================================================================
+# Phase 2 Epic 15.3-15.5 — Context block builders for Back prompt
+# =========================================================================
+# Mirror Front's pattern: each handle produces a different type of context.
+# Separate blocks give Back clearer signal about where each piece of
+# context comes from (temporal = deadlines/windows, spatial = locations,
+# selfmodel = preferences/patterns/persona).
+
+
+async def _build_temporal_context_block(temporal: Any | None) -> str:
+    """Render Back's temporal execution context from TemporalHandle.
+
+    Calls ``temporal.get_projection("back")`` → ``render_execution_block()``.
+    Returns empty string when the handle is None or projection fails.
+    """
+    if temporal is None:
+        return ""
+    try:
+        projection = await temporal.get_projection("back")
+        from k1.temporal.service.projection_renderer import render_execution_block
+
+        return render_execution_block(projection)
+    except Exception:
+        logger.warning("back_handler: temporal context block failed", exc_info=True)
+        return ""
+
+
+async def _build_spatial_context_block(spatial: Any | None) -> str:
+    """Render Back's spatial context from SpatialHandle.
+
+    Calls ``spatial.get_projection("back")`` → formatted text block.
+    Returns empty string when the handle is None or projection fails.
+    """
+    if spatial is None:
+        return ""
+    try:
+        projection = await spatial.get_projection("back")
+        if projection is None:
+            return ""
+        # SpatialProjection fields: device_location, home_location, nearby_places.
+        # Back needs lightweight context — just device + home.
+        lines = ["== SPATIAL CONTEXT =="]
+        device = getattr(projection, "device_location", None)
+        home = getattr(projection, "home_location", None)
+        if device is not None:
+            lines.append(f"device: {device}")
+        if home is not None:
+            lines.append(f"home: {home}")
+        return "\n".join(lines) if len(lines) > 1 else ""
+    except Exception:
+        logger.warning("back_handler: spatial context block failed", exc_info=True)
+        return ""
+
+
+async def _build_selfmodel_context_block(self_model: Any | None) -> str:
+    """Render Back's selfmodel context from SelfModelHandle.
+
+    Calls ``self_model.render_capsule()`` → ``capsule.as_prompt_text()``.
+    This is the EXACT same pattern Front uses at ``front.py:1433``.
+    Returns empty string when the handle is None or rendering fails.
+    """
+    if self_model is None:
+        return ""
+    try:
+        capsule = self_model.render_capsule()
+        if capsule is None:
+            return ""
+        return capsule.as_prompt_text() if hasattr(capsule, "as_prompt_text") else str(capsule)
+    except Exception:
+        logger.warning("back_handler: selfmodel context block failed", exc_info=True)
+        return ""
+
+
 # Compatibility export -- max ReAct iterations per tier
 # (mirrors config default: BackActorConfig.max_iterations)
 BACK_MAX_ITERATIONS: dict[str, int] = {"LOW": 4, "MEDIUM": 8, "HIGH": 12}
@@ -947,6 +1020,9 @@ async def back_handler(
     cancel_token: CancellationToken | None = None,
     hil_port: Any | None = None,
     grounding: Any | None = None,
+    temporal: Any | None = None,  # Phase 2 Epic 15.1
+    spatial: Any | None = None,  # Phase 2 Epic 15.1
+    self_model: Any | None = None,  # Phase 2 Epic 15.1
 ) -> ReactResult:
     """Back handler: ReAct agent for task execution.
 
@@ -1058,6 +1134,14 @@ async def back_handler(
     )
     execution_profile_block = _execution_profile_block_for_selection(profile_selection)
     execution_grounding_block = await _build_execution_grounding_block(task, grounding)
+
+    # Phase 2 Epic 15.3-15.5: Build live context blocks from handles.
+    # These mirror Front's pattern — each handle produces a different type
+    # of situational context for Back's execution decisions.
+    temporal_context_block = await _build_temporal_context_block(temporal)
+    spatial_context_block = await _build_spatial_context_block(spatial)
+    selfmodel_context_block = await _build_selfmodel_context_block(self_model)
+
     resolved_temporal_refs = task.get("resolved_temporal_refs")
     if not isinstance(resolved_temporal_refs, dict):
         resolved_temporal_refs = None
@@ -1082,6 +1166,9 @@ async def back_handler(
         execution_profile_block=execution_profile_block,
         execution_grounding_block=execution_grounding_block,
         resolved_temporal_refs=resolved_temporal_refs,
+        temporal_context_block=temporal_context_block,  # Phase 2 Epic 15.6
+        spatial_context_block=spatial_context_block,  # Phase 2 Epic 15.6
+        selfmodel_context_block=selfmodel_context_block,  # Phase 2 Epic 15.6
     )
 
     # 3. Build messages: last N entries + task as "user" message
@@ -1241,6 +1328,10 @@ async def back_resume_handler(
     tool_dispatcher: ToolDispatcher,
     fsm_state: Any | None = None,
     cancel_token: CancellationToken | None = None,
+    grounding: Any | None = None,  # Phase 2 Epic 15.1
+    temporal: Any | None = None,  # Phase 2 Epic 15.1
+    spatial: Any | None = None,  # Phase 2 Epic 15.1
+    self_model: Any | None = None,  # Phase 2 Epic 15.1
 ) -> ReactResult:
     """Resume a suspended Back task with user's resolution.
 
@@ -1443,6 +1534,9 @@ async def back_resume_handler(
         max_tool_calls=original_budget,
         execution_profile_block=_execution_profile_block_for_selection(profile_selection),
         execution_grounding_block=await _build_execution_grounding_block(original_task, None),
+        temporal_context_block=await _build_temporal_context_block(temporal),  # Phase 2
+        spatial_context_block=await _build_spatial_context_block(spatial),  # Phase 2
+        selfmodel_context_block=await _build_selfmodel_context_block(self_model),  # Phase 2
     )
 
     # 4. Hydrate resolution into messages (copy to avoid mutation)
@@ -1668,6 +1762,9 @@ async def route_back_envelope(
     cancel_token: CancellationToken | None = None,
     hil_port: Any | None = None,
     grounding: Any | None = None,
+    temporal: Any | None = None,  # Phase 2 Epic 15.1
+    spatial: Any | None = None,  # Phase 2 Epic 15.1
+    self_model: Any | None = None,  # Phase 2 Epic 15.1
 ) -> ReactResult | None:
     """Central topic-based dispatcher for all back-bound envelopes.
 
@@ -1727,6 +1824,9 @@ async def route_back_envelope(
             cancel_token=cancel_token,
             hil_port=hil_port,
             grounding=grounding,
+            temporal=temporal,  # Phase 2 Epic 15.1
+            spatial=spatial,  # Phase 2 Epic 15.1
+            self_model=self_model,  # Phase 2 Epic 15.1
         )
 
     if topic == TOPIC_TASK_RESUME:
@@ -1739,6 +1839,10 @@ async def route_back_envelope(
             tool_dispatcher=tool_dispatcher,
             fsm_state=fsm_state,
             cancel_token=cancel_token,
+            grounding=grounding,
+            temporal=temporal,  # Phase 2 Epic 15.1
+            spatial=spatial,  # Phase 2 Epic 15.1
+            self_model=self_model,  # Phase 2 Epic 15.1
         )
 
     if topic == TOPIC_CLARIFICATION_RESPONSE:
@@ -1754,6 +1858,10 @@ async def route_back_envelope(
             tool_dispatcher=tool_dispatcher,
             fsm_state=fsm_state,
             cancel_token=cancel_token,
+            grounding=grounding,
+            temporal=temporal,  # Phase 2 Epic 15.1
+            spatial=spatial,  # Phase 2 Epic 15.1
+            self_model=self_model,  # Phase 2 Epic 15.1
         )
 
     if topic == TOPIC_TASK_CANCEL:

@@ -1,9 +1,11 @@
 # Fabric — Architecture Document
 
-> **Epic**: E-0.3 · Fabric Full Code Scan
-> **Generated**: 2025-07-15 · MS-0 Phase A
-> **Source files**: ~70+ Python modules · 92 test files · 3,958 tests · ~69,500 test lines
+> **Epic**: E-0.3 · Fabric Full Code Scan · **Phase 1 complete (GATE-P1 passed 2026-06-05)**
+> **Generated**: 2025-07-15 · **Updated**: 2026-06-05 (Phase 1 Epics 0–8)
+> **Milestone**: GATE-P1 — Fabric standalone proven · 280 tests pass, 0 regressions
+> **Source files**: ~100+ Python modules · 111 test files · ~280 Phase-1 tests
 > **Diagrams**: `k1/fabric/fabric.mmd` (~700 lines), `k1/fabric/fabric_new.mmd` (~500 lines)
+> **Phase 1 spec**: `k1/fabric/docs/phase1_implementation_plan.md` (39 issues, 8 epics, 50-connector catalog)
 
 ---
 
@@ -15,6 +17,99 @@
 4. [Cross-Component Connections](#4-cross-component-connections)
 5. [Test Surface](#5-test-surface)
 6. [Spec vs Code Delta](#6-spec-vs-code-delta)
+
+---
+
+## §0 Phase 1 — Situsted Resolution Subsystem (NEW, Epics 1–8)
+
+Phase 1 adds a **situated resolution pipeline** parallel to the existing execution-discover-register API. It is the answer to "what capability can fulfill this intent, on this resource, for this actor, under these policies?"
+
+### 0.1 Phase 1 Component Map
+
+```
+RequestFrame (Back's LLM extraction)
+  │
+  ▼
+ResolveSituationService (13-step verdict cascade)
+  ├─ ResolveResourcesService  → ResourceUniverse        (Epic 3.4)
+  ├─ CapabilityTypeResolver   → list[ResolvedIntentType] (Epic 3.5)
+  ├─ PolicySelectorService    → PolicyBundle             (Epic 4.1)
+  ├─ CapabilityBinderService  → BindingBundle            (Epic 6.1)
+  │    └─ 3-pass: typed graph → exact match → BM25 FTS5
+  ├─ ConstitutionLoader       → ConstitutionArtifact     (Epic 5.2)
+  └─ PromptPackBuilder        → PromptPack               (Epic 6.3)
+       └─ 5 disclosure phases, triple redaction check
+  │
+  ▼
+ResolutionEnvelope {verdict, sub_reason, binding_bundle, prompt_pack}
+```
+
+### 0.2 New Stores (Epic 1)
+
+| Store | Scope | Tables | Key Feature |
+|---|---|---|---|
+| `GlobalProjectionStore` | Shared (SQLite WAL) | 11 tables + FTS5 | 50-connector catalog, graph ontology, typed resolution |
+| `LocalProjectionStore` | Per-session (`:memory:`) | 4 tables | Connected resources, household members, alias index |
+| `IdempotencyStore` | Shared (SQLite WAL) | 1 table | State machine: not_seen→in_flight→succeeded/failed; succeeded is immutable |
+
+### 0.3 13-Step Verdict Cascade (Epic 6.2)
+
+| Step | Check | Verdict | Sub-Reason |
+|---|---|---|---|
+| 1 | Budget exhausted | `cannot_execute` | `budget_exhausted:{field}` |
+| 2 | Idempotency duplicate | `cannot_execute` | `idempotency_duplicate:{key}` |
+| 3 | Ambiguous person ref | `needs_disambiguation` | `ambiguous_person:{raw}` |
+| 4 | Stale resource on write | `stale_projection` | `stale_resource:{id}` |
+| 5 | Unresolved ambiguous ref | `needs_disambiguation` | `ambiguous_resource:{raw}` |
+| 6 | Unresolved not_found ref | `missing_required_params` | `resource_not_found:{raw}` |
+| 7 | Intent too vague | `missing_required_params` | `intent_too_vague` |
+| 8 | Promote to Tier 3 | `promote_to_tier3` | `connectors:{n}_depth:{d}` |
+| 9 | Policy denied | `blocked_by_policy` | `{deny_reason}` |
+| 10 | Stale binding | `stale_projection` | `stale_binding:{detail}` |
+| 11 | Missing capability | `missing_capability` | `{reason}:{resource_kind}` |
+| 12 | Incomplete prerequisites | `can_execute_with_gate` | `prerequisite_read_incomplete:{name}` |
+| 13 | HIL gate (write-only) | `needs_hil` | `hil_gate:{trigger}` |
+| — | All pass | `can_execute` | `None` |
+
+### 0.4 New Fabric Fields (Epic 7.1)
+
+| Field | Type | Scope |
+|---|---|---|
+| `global_projection_store` | `GlobalProjectionStore \| None` | Shared |
+| `local_projection_store` | `LocalProjectionStore \| None` | Per-session |
+| `idempotency_store` | `IdempotencyStore \| None` | Shared |
+| `situated_resolver` | `ResolveSituationService \| None` | Per-session |
+| `policy_selector` | `PolicySelectorService \| None` | Per-session |
+| `verification_runner` | `VerificationPlanRunner \| None` | Shared (kernel-wired) |
+| `constitution_loader` | `ConstitutionLoader \| None` | Shared |
+| `prompt_pack_builder` | `PromptPackBuilder \| None` | Per-session |
+
+All default to `None` — zero backward-compat impact. Factory STEP 21 wires them when `global_projection_store is not None`.
+
+### 0.5 New Public API on Fabric
+
+- `resolve_situation(request: ResolveSituationRequest) -> ResolutionEnvelope` — typed sync entry (raises `FabricError` if unwired)
+- `async _handle_resolve_situation(payload: dict) -> dict` — Back-facing meta-tool (never raises)
+
+### 0.6 Domain Catalog (Epic 2)
+
+50 connectors across 5 domains (family, enterprise, government, agriculture, healthcare), 182 capabilities. Admitted into `GlobalProjectionStore` via `ManifestAdmissionService.admit_all()`. Capability naming: `tool.{invocation_mode}.{domain}.{svc.id}.{action_name}`.
+
+### 0.7 Kernel Integration (Epic 7.3)
+
+| Point | When | What |
+|---|---|---|
+| S2.10 | Before S3 Fabric | Opens `GlobalProjectionStore` + `IdempotencyStore` (gated: `enable_fabric_stores=True`) |
+| S3 | Shared Fabric | Passes stores to `FabricFactory.create_shared()` → STEP 21 wires everything |
+| Post-S8 | After family tools | `_load_phase1_catalog_and_verifier()` admits 50-connector catalog |
+| P3 | Per-session | `LocalProjectionStore(":memory:")` passed to `create_with_ports()` |
+| Shutdown | After fabric.close() | Closes `global_projection_store` + `idempotency_store` |
+
+### 0.8 GATE-P1 Status
+
+- 280/280 Phase 1 tests pass (1 skipped = Bridge Phase 2)
+- Real Vertex `gemini-2.5-flash` benchmark: verdict PASS 49/50 (98%), extraction 46/50 (92%), resolve ~25 ms
+- `scripts/probe_back_fabric_resolver_benchmark.py` — full pipeline on real `k1.fabric`
 
 ---
 
@@ -576,6 +671,11 @@ JSON-formatted, 5 log phases: resolve, policy_check, context_build, execute, res
 | FAB-11 | Name conventions | ContractValidator regex per type |
 | FAB-12 | Contracts validated before registration | `ContractValidator.validate()` in register path |
 | FAB-13 | quality_score deterministic | SoftRanker formula is pure function of inputs |
+| FAB-18 | Phase 1 stores gated behind `enable_fabric_stores` | `KernelConfig.enable_fabric_stores` default `False` — zero behavioral change |
+| FAB-19 | `resolve_situation` typed entry | `Fabric.resolve_situation()` delegates to `ResolveSituationService` (13-step cascade) |
+| FAB-20 | Constitution loaded via single `ConstitutionLoader` | Shared instance — validated once, read by resolver + verifier + prompt builder |
+| FAB-21 | Redaction triple-check before LLM exposure | Source envelope → pack dict → rendered string → any leak raises `PromptPackLeakError` |
+| FAB-22 | NEVER global-as-local | Factory creates `LocalProjectionStore(":memory:")` when none provided; never reuses global store |
 
 ---
 
@@ -589,7 +689,7 @@ JSON-formatted, 5 log phases: resolve, policy_check, context_build, execute, res
 | `create_for_testing()` | Integration tests with event capture. | Test adapters + `LocalEventAdapter(capture_mode=True)` |
 | `create_with_ports()` | Production. Custom adapter injection. | All injected externally |
 
-### 3.2 The 20-Step Construction Order
+### 3.2 The 22-Step Construction Order (Phase 1 adds STEP 21)
 
 | Step | Component | Key Dependencies |
 |------|-----------|-----------------|

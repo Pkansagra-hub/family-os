@@ -79,7 +79,7 @@ async def test_session_fabric_preserves_calendar_prompt_profile_metadata(
         shared_contract = shared_fabric.lookup(capability_name)
         assert shared_contract is not None
         assert shared_contract.activity_profile == "calendar.v1"
-        assert shared_contract.prompt_template == "calendar_activity_v1"
+        assert shared_contract.prompt_template is None
 
         session_fabric = FabricFactory.create_with_ports(
             state_reader=TestSessionStateReaderAdapter(),

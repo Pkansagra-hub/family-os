@@ -21,6 +21,7 @@ matrix (10 actions, 3 of which are parent-only).
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from k1.tools.family.definition import (
     ActionSpec,
@@ -79,6 +80,310 @@ _METADATA_FIELD = FieldSpec(
 
 
 # ---------------------------------------------------------------------------
+# Phase 1.1 -- Constitution / Policy / Guide cards / Ontology (Epic 9.3-9.6)
+#
+# These dicts are projected into GlobalProjectionStore by
+# ``register_definition_to_store`` so the situated resolver can enforce
+# prerequisite reads, conflict analysis, HIL gates, role/safety policy,
+# and typed (graph) resolution for the Calendar connector.
+# ---------------------------------------------------------------------------
+
+_CALENDAR_CONSTITUTION: dict[str, Any] = {
+    "connector_id": "family.calendar",
+    "constitution_id": "family.calendar.v1",
+    "schema_version": "1.0.0",
+    "execution_phases": ["read", "mutate"],
+    "prerequisite_reads": [
+        {
+            "operation": "list",
+            "resource_kind": "calendar_event",
+            "reason": (
+                "Check for time-window conflicts with existing events "
+                "before creating or updating."
+            ),
+            "required": True,
+            "timeout_ms": 5000,
+        },
+        {
+            "operation": "list",
+            "resource_kind": "chore",
+            "reason": "Assigned chores in the same time window may conflict -- warn the user.",
+            "required": False,
+            "timeout_ms": 3000,
+        },
+        {
+            "operation": "list",
+            "resource_kind": "task",
+            "reason": "Due tasks in the same time window may conflict -- warn the user.",
+            "required": False,
+            "timeout_ms": 3000,
+        },
+    ],
+    "conflict_analysis_rules": [
+        {
+            "check": "time_overlap",
+            "with_resource_kinds": ["calendar_event"],
+            "description": "Two events at overlapping times for the same attendees.",
+            "resolution": (
+                "Present the conflict to the user with these options: create "
+                "anyway, pick a different time, or cancel. Do NOT silently "
+                "overwrite."
+            ),
+        },
+        {
+            "check": "time_overlap",
+            "with_resource_kinds": ["chore"],
+            "description": "An assigned chore is due during this event's time window.",
+            "resolution": (
+                "Warn: '{child} has chore {chore_title} due at {due_time}'. "
+                "Offer: create event anyway, reschedule the chore, or cancel "
+                "this event."
+            ),
+        },
+        {
+            "check": "time_overlap",
+            "with_resource_kinds": ["task"],
+            "description": "A task is due during this event's time window.",
+            "resolution": (
+                "Warn: '{assignee} has task {task_title} due'. Offer: create "
+                "event anyway or cancel."
+            ),
+        },
+        {
+            "check": "participant_availability",
+            "description": "All attendees must be free in the target time window.",
+            "resolution": (
+                "If any participant has a conflicting event, list the conflict "
+                "and ask whether to proceed."
+            ),
+        },
+    ],
+    "companion_resource_roles": [
+        {
+            "resource_kind": "chore",
+            "role": "conflict_source",
+            "description": (
+                "Calendar events may conflict with assigned chores in the same "
+                "time window. When the user says 'assign kitchen cleanup to "
+                "Riley weekly', that is a CHORE, not a calendar event -- use "
+                "family.chores."
+            ),
+        },
+        {
+            "resource_kind": "task",
+            "role": "conflict_source",
+            "description": "Calendar events may conflict with due tasks.",
+        },
+        {
+            "resource_kind": "reminder",
+            "role": "dependency",
+            "description": "Events can trigger reminders via event_offset triggers.",
+        },
+        {
+            "resource_kind": "shopping_item",
+            "role": "suggestion_source",
+            "description": (
+                "Events like 'birthday party Saturday' may suggest shopping "
+                "items ('order cake?')."
+            ),
+        },
+    ],
+    "hil_gates": [
+        {
+            "trigger": "missing_required_field",
+            "field": "title",
+            "prompt": "What should this event be called?",
+        },
+        {
+            "trigger": "missing_required_field",
+            "field": "start",
+            "prompt": "What time does this event start?",
+        },
+        {
+            "trigger": "missing_required_field",
+            "field": "end",
+            "prompt": "What time does this event end? (I'll default to 1 hour if not sure.)",
+        },
+        {
+            "trigger": "missing_required_field",
+            "field": "resource_id",
+            "prompt": "Which calendar should I add this to?",
+        },
+        {
+            "trigger": "time_conflict_detected",
+            "prompt": "This time conflicts with: {conflict_summary}. What should I do?",
+            "options": ["Create anyway", "Pick a different time", "Cancel"],
+        },
+        {
+            "trigger": "ambiguous_person",
+            "prompt": "Which person did you mean? I found: {candidate_names}.",
+        },
+        {
+            "trigger": "child_creates_event",
+            "prompt": "{child_name} is creating an event. Notify parents?",
+            "options": ["Yes, notify parents", "Just create it"],
+        },
+    ],
+    "mutation_sequencing": [
+        {
+            "order": 1,
+            "phase": "read",
+            "operation": "list",
+            "description": "Read current calendar + chores + tasks for the target time window.",
+        },
+        {
+            "order": 2,
+            "phase": "mutate",
+            "operation": "create",
+            "description": (
+                "Create the event if no blocking conflicts. If a soft conflict "
+                "exists, present it to the user per conflict_analysis_rules "
+                "resolution guidance above."
+            ),
+        },
+        {
+            "order": 3,
+            "phase": "read",
+            "operation": "list",
+            "description": "Verify event was created (read_after_write).",
+        },
+    ],
+    "verification_requirements": [
+        {
+            "method": "read_after_write",
+            "description": "Read back the created event and confirm all fields match.",
+            "required_for_submit": True,
+        },
+        {
+            "method": "output_schema",
+            "description": "Validate the returned event matches the expected schema.",
+        },
+    ],
+    "precondition_summary": (
+        "Before creating or updating an event, I MUST list the calendar for the "
+        "target time window. I SHOULD also check chores and tasks for soft "
+        "conflicts. I present all conflicts to the user -- I never silently "
+        "overwrite."
+    ),
+    "companion_resource_summary": (
+        "Calendar events conflict with chores and tasks in the same time window. "
+        "Events can trigger reminders. Recurring events like birthdays can "
+        "suggest shopping items. If the user describes something recurring with "
+        "reward tracking, that is a CHORE (family.chores), not a calendar event."
+    ),
+    "hil_trigger_summary": (
+        "I need human input when: title/start/end/calendar are missing, a time "
+        "conflict is detected, a person reference is ambiguous, or a child is "
+        "creating an event that should notify parents."
+    ),
+    "degradation_policy": (
+        "If read_after_write verification fails, retry once. If still failing, "
+        "submit degraded with the created event_id but flag verification=failed."
+    ),
+}
+
+_CALENDAR_POLICY: dict[str, Any] = {
+    "operation_role_gates": {
+        "create_event": ["parent", "child", "guardian"],
+        "update_event": ["parent", "guardian"],
+        "delete_event": ["parent", "guardian"],
+        "set_visibility": ["parent"],
+        "connect_feed": ["parent"],
+        "disconnect_feed": ["parent"],
+        "list_feeds": ["parent", "guardian"],
+        "respond_to_invite": ["parent", "child", "guardian"],
+    },
+    "operation_safety_bands": {
+        "create_event": "GREEN",
+        "update_event": "GREEN",
+        "delete_event": "AMBER",
+        "set_visibility": "AMBER",
+        "connect_feed": "AMBER",
+        "disconnect_feed": "AMBER",
+    },
+    "protected_resources": [
+        {
+            "resource_id_pattern": "cal_parent_*",
+            "reason": "Parent calendar may contain sensitive appointments.",
+            "required_role": "parent",
+        },
+    ],
+    "hil_triggers": [
+        {
+            "condition": "write_operation AND actor_role == 'child'",
+            "prompt": "Ask a parent to confirm this calendar change.",
+        },
+    ],
+}
+
+_CALENDAR_GUIDE_CARDS: list[dict[str, Any]] = [
+    {
+        "guide_id": "family.calendar.guide.01",
+        "title": "How to Schedule Events",
+        "content": (
+            "When creating a calendar event:\n"
+            "1. Always LIST the calendar first to check for conflicts.\n"
+            "2. Check the person's chores and tasks in the same time window.\n"
+            "3. If the person is a child, their parent's calendar may have "
+            "related events.\n"
+            "4. Provide clear titles -- 'Dentist - Riley' not just 'Appointment'.\n"
+            "5. Set appropriate durations -- default 60 min if unsure."
+        ),
+        "relevance": "always",
+        "disclosure_phase": "connector_summary",
+    },
+    {
+        "guide_id": "family.calendar.guide.02",
+        "title": "Conflict Resolution",
+        "content": (
+            "When the constitution reports a time conflict:\n"
+            "- Tell the user WHAT conflicts (event name + time).\n"
+            "- Offer: 'Create anyway', 'Pick a different time', or 'Cancel'.\n"
+            "- Do NOT silently overwrite or skip the conflict."
+        ),
+        "relevance": "on_conflict",
+        "disclosure_phase": "tool_name_selection",
+    },
+]
+
+_CALENDAR_ONTOLOGY: dict[str, Any] = {
+    "domain": "family",
+    "concept_aliases": [
+        {"alias": "dentist", "canonical_concept": "appointment", "weight": 0.9},
+        {"alias": "doctor", "canonical_concept": "appointment", "weight": 0.9},
+        {"alias": "practice", "canonical_concept": "calendar_event", "weight": 0.7},
+        {"alias": "game", "canonical_concept": "calendar_event", "weight": 0.7},
+        {"alias": "recital", "canonical_concept": "calendar_event", "weight": 0.8},
+        {"alias": "calendar event", "canonical_concept": "calendar_event", "weight": 1.0},
+    ],
+    "concept_resource_edges": [
+        {"concept": "appointment", "resource_family": "calendar_event", "weight": 1.0},
+        {"concept": "calendar_event", "resource_family": "calendar_event", "weight": 1.0},
+    ],
+    "resource_connector_edges": [
+        {
+            "resource_family": "calendar_event",
+            "connector_id": "family.calendar",
+            "weight": 1.0,
+            "role": "primary",
+        },
+    ],
+    "operation_equivalences": [
+        {
+            "canonical_operation": "list",
+            "equivalent_operation": "search",
+            "resource_family": "calendar_event",
+        },
+    ],
+    "operation_aliases": [
+        {"alias": "schedule", "operation_family": "create", "effect": "write"},
+        {"alias": "book", "operation_family": "create", "effect": "write"},
+        {"alias": "add", "operation_family": "create", "effect": "write"},
+    ],
+}
+
+
+# ---------------------------------------------------------------------------
 # CALENDAR_DEFINITION
 # ---------------------------------------------------------------------------
 
@@ -124,6 +429,15 @@ CALENDAR_DEFINITION = ToolDefinition(
     can_reference=["task", "reminder", "shopping_item"],
     feature_flags=["m15_calendar"],
     domain_tags=["scheduling", "availability", "external_calendar"],
+    # ── Phase 1.1 enrichment (Epics 9.2-9.6) ──
+    resource_kinds=["calendar_event", "appointment"],
+    actor_scope=["parent", "admin", "system"],
+    snapshot_types=["daily_snapshot", "weekly_overview"],
+    back_execution_profile=True,
+    constitution=_CALENDAR_CONSTITUTION,
+    policy_declarations=_CALENDAR_POLICY,
+    guide_cards=_CALENDAR_GUIDE_CARDS,
+    ontology=_CALENDAR_ONTOLOGY,
     tables_sql=_CALENDAR_DDL,
     actions=[
         # ------------------------------------------------------------------
@@ -136,7 +450,6 @@ CALENDAR_DEFINITION = ToolDefinition(
             label="New event",
             primary=True,
             min_band="GREEN",
-            prompt_template="calendar_activity_v1",
             allowed_roles=["parent", "child", "guardian", "elder", "system"],
             idempotent=True,
             params=[
@@ -204,7 +517,6 @@ CALENDAR_DEFINITION = ToolDefinition(
             summary="Patch fields of an existing calendar event.",
             label="Update event",
             min_band="GREEN",
-            prompt_template="calendar_activity_v1",
             allowed_roles=["parent", "child", "guardian", "elder", "system"],
             params=[
                 FieldSpec(name="event_id", type="string", required=True),
@@ -246,7 +558,6 @@ CALENDAR_DEFINITION = ToolDefinition(
             summary="Soft-delete a calendar event.",
             label="Delete event",
             min_band="GREEN",
-            prompt_template="calendar_activity_v1",
             allowed_roles=["parent", "child", "guardian", "elder", "system"],
             params=[
                 FieldSpec(name="event_id", type="string", required=True),
@@ -273,7 +584,6 @@ CALENDAR_DEFINITION = ToolDefinition(
             summary="Return events in a time window, ACL-filtered for the caller.",
             label="List events",
             min_band="GREEN",
-            prompt_template="calendar_activity_v1",
             allowed_roles=["parent", "child", "guardian", "elder", "system", "guest"],
             params=[
                 FieldSpec(
@@ -327,7 +637,6 @@ CALENDAR_DEFINITION = ToolDefinition(
             summary="Fetch a single event by id (ACL-filtered).",
             label="Get event",
             min_band="GREEN",
-            prompt_template="calendar_activity_v1",
             allowed_roles=["parent", "child", "guardian", "elder", "system", "guest"],
             params=[FieldSpec(name="event_id", type="string", required=True)],
             result=[
@@ -351,7 +660,6 @@ CALENDAR_DEFINITION = ToolDefinition(
             summary="Record the caller's RSVP for an event they attend.",
             label="Respond to invite",
             min_band="GREEN",
-            prompt_template="calendar_activity_v1",
             allowed_roles=["parent", "child", "guardian", "elder", "system"],
             params=[
                 FieldSpec(name="event_id", type="string", required=True),
@@ -387,7 +695,6 @@ CALENDAR_DEFINITION = ToolDefinition(
             context=["entity_detail_gear"],
             min_band="GREEN",
             min_role="parent",
-            prompt_template="calendar_activity_v1",
             allowed_roles=["parent", "guardian", "system"],
             params=[
                 FieldSpec(name="event_id", type="string", required=True),
@@ -429,7 +736,6 @@ CALENDAR_DEFINITION = ToolDefinition(
             label="Connect external calendar",
             min_band="GREEN",
             min_role="parent",
-            prompt_template="calendar_activity_v1",
             allowed_roles=["parent", "guardian", "system"],
             idempotent=True,
             params=[
@@ -472,7 +778,6 @@ CALENDAR_DEFINITION = ToolDefinition(
             label="Disconnect feed",
             min_band="GREEN",
             min_role="parent",
-            prompt_template="calendar_activity_v1",
             allowed_roles=["parent", "guardian", "system"],
             params=[FieldSpec(name="feed_id", type="string", required=True)],
             result=[
@@ -496,7 +801,6 @@ CALENDAR_DEFINITION = ToolDefinition(
             summary="List currently-bound external feeds (ACL-filtered).",
             label="List feeds",
             min_band="GREEN",
-            prompt_template="calendar_activity_v1",
             allowed_roles=["parent", "guardian", "elder", "system"],
             params=[
                 FieldSpec(

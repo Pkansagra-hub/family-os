@@ -27,6 +27,12 @@ from k1.fabric.policy.security_context import (
     SecurityContext,
     SecurityContextError,
 )
+from k1.fabric.policy.selector import (
+    PolicyBundle,
+    PolicyGate,
+    PolicySelectorService,
+    SafetyMappingEvidence,
+)
 from k1.fabric.policy.tool_scope import ToolScope, ToolScopeError
 
 __all__ = [
@@ -55,4 +61,9 @@ __all__ = [
     # 3.2.6 -- ToolScope
     "ToolScope",
     "ToolScopeError",
+    # Epic 4.1 -- PolicySelectorService (execution authority)
+    "PolicySelectorService",
+    "PolicyBundle",
+    "PolicyGate",
+    "SafetyMappingEvidence",
 ]

@@ -86,10 +86,6 @@ PARALLEL TOOL CALLS:
 
 Follow this mandatory sequence. Do not skip steps.
 
-{execution_profile_block}
-
-{execution_grounding_block}
-
 STEP 1 -- ORIENT:
   Read the task dispatch below: intents, params, reference_context.
   Read beliefs_summary and task_artifacts in session context.
@@ -400,6 +396,11 @@ Plan your calls upfront:
 {task_json}
 
 == SESSION CONTEXT ==
+{temporal_context_block}
+{spatial_context_block}
+{selfmodel_context_block}
+{execution_grounding_block}
+{execution_profile_block}
 Beliefs: {beliefs_summary}
 Active tasks: {task_state_summary}
 Completed artifacts: {artifacts_summary}
@@ -420,6 +421,9 @@ def build_back_prompt(
     execution_profile_block: str = "",
     execution_grounding_block: str = "",
     resolved_temporal_refs: dict[str, Any] | None = None,
+    temporal_context_block: str = "",  # Phase 2 Epic 15.6
+    spatial_context_block: str = "",  # Phase 2 Epic 15.6
+    selfmodel_context_block: str = "",  # Phase 2 Epic 15.6
 ) -> str:
     """Build Back system prompt with task-specific context injection.
 
@@ -492,6 +496,9 @@ def build_back_prompt(
         available_tools_note=available_tools_note,
         execution_profile_block=execution_profile_block.strip(),
         execution_grounding_block=execution_grounding_block.strip(),
+        temporal_context_block=temporal_context_block.strip(),  # Phase 2 Epic 15.6
+        spatial_context_block=spatial_context_block.strip(),  # Phase 2 Epic 15.6
+        selfmodel_context_block=selfmodel_context_block.strip(),  # Phase 2 Epic 15.6
     )
     task_action = (
         task.get("action", task.get("intents", [{}])[0].get("action", "unknown"))

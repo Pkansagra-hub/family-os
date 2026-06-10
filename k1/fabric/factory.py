@@ -502,6 +502,9 @@ class FabricFactory:
         hil_port: Optional[Any] = None,
         conscience_port: Optional[Any] = None,
         grounding_port: Optional[Any] = None,
+        global_projection_store: Optional[Any] = None,
+        local_projection_store: Optional[Any] = None,
+        idempotency_store: Optional[Any] = None,
     ) -> Fabric:
         """
         Create Fabric with custom adapter injection.
@@ -525,6 +528,10 @@ class FabricFactory:
                 a new one.  Enables sharing a single registry across
                 multiple per-session Fabric instances (SIM-D-36).
                 If None, a fresh registry is constructed (backward-compatible).
+            global_projection_store: Optional shared Epic 1 store.  When
+                provided, Phase 1 components are wired (Issue 7.2 step 21).
+            local_projection_store: Optional per-session Epic 1 store.
+            idempotency_store: Optional shared Epic 1 idempotency store.
 
         Returns:
             Fully wired Fabric instance.
@@ -546,6 +553,9 @@ class FabricFactory:
             hil_port=hil_port,
             conscience_port=conscience_port,
             grounding_port=grounding_port,
+            global_projection_store=global_projection_store,
+            local_projection_store=local_projection_store,
+            idempotency_store=idempotency_store,
         )
 
     @staticmethod
@@ -567,6 +577,8 @@ class FabricFactory:
         hil_port: Optional[Any] = None,
         conscience_port: Optional[Any] = None,
         grounding_port: Optional[Any] = None,
+        global_projection_store: Optional[Any] = None,
+        idempotency_store: Optional[Any] = None,
     ) -> Fabric:
         """
         Create a shared Fabric instance.
@@ -629,6 +641,8 @@ class FabricFactory:
             hil_port=hil_port,
             conscience_port=conscience_port,
             grounding_port=grounding_port,
+            global_projection_store=global_projection_store,
+            idempotency_store=idempotency_store,
         )
 
 
@@ -654,6 +668,9 @@ def _construct_fabric(
     hil_port: Optional[Any] = None,
     conscience_port: Optional[Any] = None,
     grounding_port: Optional[Any] = None,
+    global_projection_store: Optional[Any] = None,
+    local_projection_store: Optional[Any] = None,
+    idempotency_store: Optional[Any] = None,
 ) -> Fabric:
     """
     Internal: Build a Fabric instance in dependency-safe order.
@@ -1010,5 +1027,108 @@ def _construct_fabric(
         context_builder=context_builder,
     )
 
+    # ===== STEP 21: Wire Phase 1 promoted components (Epics 1-6) =====
+    # Gated: only wires when a GlobalProjectionStore is provided.  When None
+    # (standalone, testing, legacy paths), nothing changes — all Phase 1
+    # fields on the Fabric stay None and existing behavior is byte-identical.
+    if global_projection_store is not None:
+        _wire_phase1(
+            fabric,
+            global_projection_store=global_projection_store,
+            local_projection_store=local_projection_store,
+            idempotency_store=idempotency_store,
+        )
+
     logger.info("Fabric construction complete (production_mode=%s)", production_mode)
     return fabric
+
+
+def _wire_phase1(
+    fabric: Fabric,
+    *,
+    global_projection_store: Any,
+    local_projection_store: Optional[Any],
+    idempotency_store: Optional[Any],
+) -> None:
+    """STEP 21: wire the Epic 1-6 promoted components onto a Fabric.
+
+    Invariants:
+      * NEVER use the global store as a local store — when no local store is
+        provided, a separate in-memory ``LocalProjectionStore`` is created.
+      * ``ConstitutionLoader`` is created ONCE and shared between the
+        ``PromptPackBuilder`` and the ``ResolveSituationService``.
+      * ``VerificationPlanRunner`` is NOT wired here — it needs a native
+        provider that only exists after S8, so the kernel wires it later.
+    """
+    from k1.fabric.constitution.loader import ConstitutionLoader
+    from k1.fabric.policy.selector import PolicySelectorService
+    from k1.fabric.prompt_pack.builder import PromptPackBuilder
+    from k1.fabric.resolver.capability_binder import CapabilityBinderService
+    from k1.fabric.resolver.capability_type_resolver import CapabilityTypeResolver
+    from k1.fabric.resolver.resource_projection import ResolveResourcesService
+    from k1.fabric.resolver.situated_resolver import ResolveSituationService
+    from k1.fabric.stores.local_projection_store import LocalProjectionStore
+
+    # 21a: attach shared stores.
+    fabric.global_projection_store = global_projection_store
+    fabric.idempotency_store = idempotency_store
+
+    # 21b: shared constitution loader.
+    constitution_loader = ConstitutionLoader(global_projection_store)
+    fabric.constitution_loader = constitution_loader
+
+    # 21c: local store — NEVER the global store.  Create an in-memory
+    # instance when none was provided.
+    local_store = local_projection_store
+    if local_store is None:
+        local_store = LocalProjectionStore(":memory:")
+        local_store.open()
+    fabric.local_projection_store = local_store
+
+    # 21d: resolver sub-components.
+    resource_resolver = ResolveResourcesService(global_projection_store, local_store)
+    type_resolver = CapabilityTypeResolver(global_projection_store, local_store)
+    policy_selector = PolicySelectorService(global_projection_store)
+    capability_binder = CapabilityBinderService(global_projection_store, local_store)
+    prompt_pack_builder = PromptPackBuilder(
+        global_projection_store,
+        constitution_loader=constitution_loader,
+    )
+    fabric.policy_selector = policy_selector
+    fabric.prompt_pack_builder = prompt_pack_builder
+
+    # 21e: situated resolver (depends on all of the above).
+    fabric.situated_resolver = ResolveSituationService(
+        global_projection_store,
+        local_store,
+        resource_resolver=resource_resolver,
+        type_resolver=type_resolver,
+        policy_selector=policy_selector,
+        capability_binder=capability_binder,
+        constitution_loader=constitution_loader,
+        prompt_pack_builder=prompt_pack_builder,
+        idempotency_store=idempotency_store,
+    )
+
+    # 21f: attach idempotency store to the facade for a future Step-0
+    # execution-pipeline check.  Phase 1 only sets the attribute; the
+    # actual check in _execute_impl is out of Phase 1 scope.
+    if idempotency_store is not None:
+        try:
+            fabric.facade._idempotency_store = idempotency_store
+        except Exception:  # pragma: no cover — defensive
+            logger.debug("could not attach idempotency_store to facade", exc_info=True)
+
+    # 21g: VerificationPlanRunner is NOT wired here (needs native provider
+    # registered at S8 — the kernel wires fabric.verification_runner later).
+
+    logger.info(
+        "Phase 1 wiring complete: global_store=%s local_store=%s idempotency=%s "
+        "constitution_loader=%s situated_resolver=%s prompt_pack_builder=%s",
+        type(global_projection_store).__name__,
+        type(local_store).__name__,
+        type(idempotency_store).__name__ if idempotency_store else "None",
+        type(constitution_loader).__name__,
+        type(fabric.situated_resolver).__name__,
+        type(prompt_pack_builder).__name__,
+    )

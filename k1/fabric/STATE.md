@@ -366,3 +366,88 @@ Fabric deliberately does NOT hold:
 - **Workflow definitions at rest**: `IWorkflowRegistry` owns them.
 - **Plan graph**: `IOrchestrator` owns execution state.
 - **Agent mailbox** (MPSC): not yet implemented (see OPEN_ISSUES §4).
+
+---
+
+## 16. Phase 1 Store State (NEW — Epics 1, 7, 8 · GATE-P1 passed)
+
+### 16.1 `GlobalProjectionStore` — Shared SQLite WAL
+
+```
+Owned by: KernelService (S2.10), shared across all sessions
+DB path:  KernelConfig.global_projection_db_path (default "./data/global_projection.db")
+WAL mode: Yes · foreign_keys=ON · check_same_thread=False
+
+Tables (11):
+  connectors               — PK: connector_id, 12 columns
+  capabilities             — PK: capability_name, 19 columns, FTS5 content table
+  capabilities_fts         — FTS5 virtual table on (capability_name, description, resource_kind, connector_id)
+  resource_kinds           — PK: kind_id
+  connector_constitutions  — PK: connector_id, 17 columns
+  concept_aliases          — PK: (alias, canonical_concept, domain)
+  concept_resource_edges   — PK: (concept, resource_family, domain)
+  resource_connector_edges — PK: (domain, resource_family, connector_id)
+  operation_equivalences   — PK: (canonical_operation, equivalent_operation, resource_family, domain)
+  operation_aliases        — PK: (alias, operation_family)
+  capability_type_index    — PK: (capability_name, resource_family, operation_family, effect)
+
+Concurrency: Single-writer (CapabilityRegistryAPI serializes writes). Lock-free reads (dict atomic + frozen dataclasses).
+
+Lifecycle:
+  open()  → WAL mode + _ensure_schema() + foreign_keys=ON
+  close() → conn.close()
+```
+
+### 16.2 `LocalProjectionStore` — Per-Session `:memory:`
+
+```
+Owned by: Per-session Fabric instance (P3 path)
+DB path:  ":memory:" (never persisted)
+WAL mode: Yes
+
+Tables (4):
+  connected_resources            — PK: resource_id. Columns: actor_id, resource_kind, connector_id, label, status, permissions (CHECK: read_write/read_only/restricted/none), freshness_state (CHECK: fresh/stale/unknown)
+  household_members              — PK: person_id. Columns: label, role, linked_resource_ids_json
+  alias_index                    — (alias, entity_id, entity_type, actor_id). Rebuilt from connected_resources + household_members labels on rebuild_alias_index().
+  resource_projection_snapshots  — PK: snapshot_id
+
+Key invariant: NEVER use global store as local. Factory creates LocalProjectionStore(":memory:") when none provided.
+
+Lifecycle:
+  open()  → WAL + schema. close() → conn.close() (Fabric.shutdown() or session teardown).
+```
+
+### 16.3 `IdempotencyStore` — Shared SQLite WAL
+
+```
+Owned by: KernelService (S2.10), shared across all sessions
+DB path:  KernelConfig.idempotency_db_path (default "./data/idempotency.db")
+
+State machine (1 table → idempotency_keys):
+  not_seen  → in_flight → succeeded  (immutable — cannot transition further)
+                         → failed
+
+Enforcement: WHERE state NOT IN ('succeeded') on UPDATE — immutable succeeded.
+
+Key invariants:
+  check(key)     → IdempotencyCheckResult(state, prior_observation, error)
+  mark_success() → durable, blocks re-execution across ALL sessions
+  succeeded      → never overwritten, never evicted by mark_failed
+
+Lifecycle:
+  open() → WAL + schema. close() → conn.close() (KernelService shutdown).
+```
+
+### 16.4 Phase 1 Store Ownership Summary
+
+| Store | Owner | Scope | Opened | Closed |
+|---|---|---|---|---|
+| `GlobalProjectionStore` | `KernelService` | Shared | S2.10 | Shutdown (after fabric.close()) |
+| `LocalProjectionStore` | Per-session `Fabric` | Session | P3 | Session teardown or Fabric.shutdown() |
+| `IdempotencyStore` | `KernelService` | Shared | S2.10 | Shutdown (after fabric.close()) |
+
+### 16.5 Phase 1 Gate
+
+All Phase 1 stores are gated behind `KernelConfig.enable_fabric_stores: bool = False`.
+When `False` (default), none of the stores are created, all 8 Fabric Phase 1 fields remain `None`,
+and factory STEP 21 is inert — zero behavioral change for existing code paths.

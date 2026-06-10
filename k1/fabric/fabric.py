@@ -75,6 +75,21 @@ from k1.fabric.types import (
 if TYPE_CHECKING:
     # Imported only for typing -- runtime import would create a fabric -> kernel
     # cycle. The actual IHILPort instance is duck-typed at the call site.
+    # Phase 1 promoted components (Epics 1-6).  Typing-only imports —
+    # ``from __future__ import annotations`` keeps these as lazy string
+    # annotations so no runtime import happens at module load.
+    from k1.fabric.constitution.loader import ConstitutionLoader
+    from k1.fabric.policy.selector import PolicySelectorService
+    from k1.fabric.prompt_pack.builder import PromptPackBuilder
+    from k1.fabric.resolver.situated_resolver import (
+        ResolutionEnvelope,
+        ResolveSituationRequest,
+        ResolveSituationService,
+    )
+    from k1.fabric.stores.global_projection_store import GlobalProjectionStore
+    from k1.fabric.stores.idempotency_store import IdempotencyStore
+    from k1.fabric.stores.local_projection_store import LocalProjectionStore
+    from k1.fabric.verification.runner import VerificationPlanRunner
     from k1.kernel.ports.hil_port import IHILPort
     from k1.selfmodel.ports.conscience import IConsciencePort
 
@@ -281,6 +296,7 @@ class CapabilityFabric:
         "_config",
         "_hil_port",
         "_conscience_port",
+        "_idempotency_store",
     )
 
     def __init__(
@@ -311,6 +327,11 @@ class CapabilityFabric:
         self._hil_port: Optional["IHILPort"] = hil_port
         # M12.E4.I1 -- Conscience pre-HIL gate. None disables the gate.
         self._conscience_port: Optional["IConsciencePort"] = conscience_port
+        # Phase 1 (Issue 7.2) -- optional shared IdempotencyStore.  Set by the
+        # factory when Phase 1 stores are wired; defaults to None.  Reserved
+        # for a future Step-0 execution-pipeline idempotency check — not read
+        # in Phase 1.
+        self._idempotency_store: Any = None
 
     # ==================================================================
     # Properties
@@ -1650,6 +1671,20 @@ class Fabric:
     context_builder: Any = None
 
     # ------------------------------------------------------------------
+    # Phase 1 promoted components (Epics 1-6).  All default to None —
+    # nothing reads them until the factory (Issue 7.2) wires them, so
+    # existing code paths are unaffected (backward compatible).
+    # ------------------------------------------------------------------
+    global_projection_store: Optional["GlobalProjectionStore"] = None  # shared
+    local_projection_store: Optional["LocalProjectionStore"] = None  # per-session
+    idempotency_store: Optional["IdempotencyStore"] = None  # shared
+    situated_resolver: Optional["ResolveSituationService"] = None  # per-session
+    policy_selector: Optional["PolicySelectorService"] = None  # per-session
+    verification_runner: Optional["VerificationPlanRunner"] = None  # shared (kernel-wired)
+    constitution_loader: Optional["ConstitutionLoader"] = None  # shared
+    prompt_pack_builder: Optional["PromptPackBuilder"] = None  # per-session
+
+    # ------------------------------------------------------------------
     # Convenience delegates
     # ------------------------------------------------------------------
 
@@ -1696,6 +1731,67 @@ class Fabric:
             safety_band=safety_band,
             top_k=top_k,
         )
+
+    # ------------------------------------------------------------------
+    # Phase 1 meta-tool: resolve_situation
+    # ------------------------------------------------------------------
+
+    def resolve_situation(self, request: "ResolveSituationRequest") -> "ResolutionEnvelope":
+        """Resolve a situated execution request into a ``ResolutionEnvelope``.
+
+        Typed entry point for callers that already hold a
+        ``ResolveSituationRequest``.  Delegates to the wired
+        ``ResolveSituationService`` (Epic 6.2).
+
+        Raises:
+            FabricError: if the situated resolver is not wired (Phase 1
+                stores were not provided to the factory).
+        """
+        if self.situated_resolver is None:
+            raise FabricError(
+                "resolve_situation unavailable: situated_resolver not wired "
+                "(Phase 1 stores were not provided to the factory)"
+            )
+        return self.situated_resolver.resolve(request)
+
+    async def _handle_resolve_situation(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Back-facing meta-tool handler for ``resolve_situation``.
+
+        Deserializes the incoming payload into a ``ResolveSituationRequest``,
+        delegates to the wired resolver, and returns the
+        ``ResolutionEnvelope`` as a dict.
+
+        Never raises — always returns a dict.  When the resolver is not
+        wired or an error occurs, returns an error envelope with
+        ``verdict='cannot_execute'`` and a diagnostic ``sub_reason``.
+        """
+        import uuid as _uuid
+
+        if self.situated_resolver is None:
+            return {
+                "resolution_id": "err-" + _uuid.uuid4().hex[:12],
+                "verdict": "cannot_execute",
+                "sub_reason": "resolver_not_wired",
+                "diagnostics": [
+                    {
+                        "type": "wiring",
+                        "message": "situated_resolver is None — Phase 1 stores not wired",
+                    }
+                ],
+            }
+
+        try:
+            request = _build_resolve_request(payload)
+            envelope = self.situated_resolver.resolve(request)
+            return envelope.to_dict()
+        except Exception as exc:  # never raise — return error envelope
+            logger.error("_handle_resolve_situation failed: %s", exc, exc_info=True)
+            return {
+                "resolution_id": "err-" + _uuid.uuid4().hex[:12],
+                "verdict": "cannot_execute",
+                "sub_reason": "handler_exception",
+                "diagnostics": [{"type": "handler_error", "error": str(exc)}],
+            }
 
     def register(self, contract: Any) -> None:
         """Register a capability and emit registry event via EventEmitter (FAB-09)."""
@@ -1770,6 +1866,15 @@ class Fabric:
             except Exception:
                 logger.warning("Proactive gap detector stop failed", exc_info=True)
 
+        # Phase 1 (Epic 7): close the per-session LocalProjectionStore if one
+        # was wired.  Shared stores (global/idempotency) are owned and closed
+        # by the kernel, not the Fabric.
+        if self.local_projection_store is not None:
+            try:
+                self.local_projection_store.close()
+            except Exception:
+                logger.warning("LocalProjectionStore close failed", exc_info=True)
+
 
 # ---------------------------------------------------------------------------
 # Utility
@@ -1779,3 +1884,35 @@ class Fabric:
 def _elapsed_ms(start_time: float) -> int:
     """Calculate elapsed milliseconds since start_time (monotonic)."""
     return int((time.monotonic() - start_time) * 1000)
+
+
+def _build_resolve_request(payload: Dict[str, Any]) -> "ResolveSituationRequest":
+    """Build a ``ResolveSituationRequest`` from a raw meta-tool payload.
+
+    Lazy imports keep the Phase 1 resolver out of fabric.py's import graph
+    until the meta-tool is actually invoked.
+    """
+    from k1.fabric.resolver.request_frame_builder import build_frame_from_dict
+    from k1.fabric.resolver.situated_resolver import ResolveSituationRequest
+
+    actor_id = str(payload["actor_id"])
+    space_id = str(payload["space_id"])
+    frame_dict = payload.get("frame") or {}
+    frame = build_frame_from_dict(frame_dict, actor_id=actor_id, space_id=space_id)
+
+    return ResolveSituationRequest(
+        request_id=str(payload.get("request_id") or frame.request_id),
+        frame=frame,
+        actor_id=actor_id,
+        space_id=space_id,
+        session_id=str(payload["session_id"]),
+        tier=str(payload.get("tier", "MEDIUM")),
+        safety_band=str(payload.get("safety_band", "GREEN")),
+        disclosure_phase=str(payload.get("disclosure_phase", "connector_summary")),
+        freshness_policy=str(payload.get("freshness_policy", "allow_stale_reads")),
+        prompt_budget_tokens=int(payload.get("prompt_budget_tokens", 8000)),
+        completed_prerequisite_bindings=list(payload.get("completed_prerequisite_bindings", [])),
+        previous_resolution_id=payload.get("previous_resolution_id"),
+        idempotency_keys=list(payload.get("idempotency_keys", [])),
+        budget_remaining=payload.get("budget_remaining"),
+    )

@@ -1,5 +1,7 @@
 # K1 Fabric — WIRING
 
+> **Updated**: 2026-06-05 · Phase 1 complete (GATE-P1 passed)
+
 Describes how K1 Fabric connects to every external port, adapter, and system at
 construction time, and what flows over each connection at runtime.
 
@@ -11,10 +13,10 @@ construction time, and what flows over each connection at runtime.
 |---|---|---|---|
 | Standalone | `create_standalone(...)` | Scripts, isolated test | Test adapters, capture_mode=False |
 | Testing | `create_for_testing(...)` | Unit/integration tests | Test adapters + `LocalEventAdapter(capture=True)` |
-| Full ports | `create_with_ports(state_reader, event_port, bridge, model_gateway, prompt_system, delta_bus, ...)` | K1 system bootstrap (session-aware) | All ports injected |
-| Shared | `create_shared(event_port, bridge, model_gateway, prompt_system, delta_bus, *, state_reader=None, ...)` | K1 system bootstrap (system-global) | `NullSessionStateReaderAdapter` when state_reader=None |
+| Full ports | `create_with_ports(state_reader, event_port, bridge, model_gateway, prompt_system, delta_bus, ..., *, global_projection_store=None, local_projection_store=None, idempotency_store=None)` | K1 system bootstrap (session-aware) | All ports injected. Phase 1 stores optional (default None = inert) |
+| Shared | `create_shared(event_port, bridge, model_gateway, prompt_system, delta_bus, *, state_reader=None, ..., global_projection_store=None, idempotency_store=None)` | K1 system bootstrap (system-global) | `NullSessionStateReaderAdapter` when state_reader=None. Phase 1 stores optional |
 
-All modes call `_construct_fabric()` (20-step internal), which wires every internal component.
+All modes call `_construct_fabric()` (22-step internal, Phase 1 adds STEP 21), which wires every internal component.
 
 ---
 
@@ -592,3 +594,95 @@ Three built-in meta-capability handlers registered at startup (not via YAML — 
 | `tool.read.get_capability_schema` | `GetCapabilitySchemaHandler(capability_registry)` | `get_capability_schema_handler` |
 
 Note: These use `RetrievalEngine` directly (synchronous). `FabricRetrieval` (async wrapper) does NOT satisfy `RetrievalLike` protocol (mismatch on async/sync signatures).
+
+---
+
+## 23. Phase 1 Wiring (NEW — Epic 7 · GATE-P1 passed)
+
+### 23.1 Factory STEP 21 — `_wire_phase1()`
+
+Gated: only executes when `global_projection_store is not None`.
+
+```
+_wire_phase1(fabric, global_projection_store, local_projection_store, idempotency_store)
+  │
+  ├─ 21a: Attach shared stores to Fabric
+  │      fabric.global_projection_store = global_projection_store
+  │      fabric.idempotency_store = idempotency_store
+  │
+  ├─ 21b: Create ONE shared ConstitutionLoader
+  │      fabric.constitution_loader = ConstitutionLoader(global_projection_store)
+  │
+  ├─ 21c: Create per-session LocalProjectionStore
+  │      local = local_projection_store or LocalProjectionStore(":memory:").open()
+  │      fabric.local_projection_store = local
+  │      (NEVER uses global store as local)
+  │
+  ├─ 21d: Wire resolver sub-components
+  │      ResolveResourcesService(global, local)
+  │      CapabilityTypeResolver(global, local)
+  │      PolicySelectorService(global)
+  │      CapabilityBinderService(global, local)
+  │      PromptPackBuilder(global, constitution_loader=constitution_loader)
+  │
+  ├─ 21e: Wire situated resolver (depends on ALL of the above)
+  │      ResolveSituationService(global, local,
+  │          resource_resolver, type_resolver, policy_selector,
+  │          capability_binder, constitution_loader, prompt_pack_builder,
+  │          idempotency_store)
+  │
+  ├─ 21f: Attach idempotency to facade
+  │      fabric.facade._idempotency_store = idempotency_store
+  │      (reserved for future execution-pipeline Step-0 check)
+  │
+  └─ 21g: VerificationPlanRunner NOT wired
+         (needs NativeReadbackPort — kernel wires it after S8)
+```
+
+### 23.2 Kernel Integration (Epic 7.3)
+
+```
+KernelService._startup_tier1()
+  │
+  ├─ S2.10: _global_projection_store = GlobalProjectionStore(path).open()
+  │          _idempotency_store = IdempotencyStore(path).open()
+  │          (gated: enable_fabric_stores=True)
+  │
+  ├─ S3: FabricFactory.create_shared(
+  │        global_projection_store=self._global_projection_store,
+  │        idempotency_store=self._idempotency_store,
+  │      )
+  │      → _construct_fabric() STEP 21 wires all Phase 1 components
+  │
+  ├─ Post-S8: _load_phase1_catalog_and_verifier()
+  │      ManifestAdmissionService(gps).admit_all(build_domain_corpus(domain))
+  │      for all 5 domains → 50 connectors, 182 capabilities
+  │
+  └─ Shutdown:
+        global_projection_store.close()
+        idempotency_store.close()
+```
+
+### 23.3 Per-Session Wiring (P3)
+
+```
+KernelService._create_session_tier2()
+  │
+  ├─ P3: session_fabric = FabricFactory.create_with_ports(
+  │        global_projection_store=shared_gps,   ← shared reference
+  │        local_projection_store=LocalProjectionStore(":memory:"),  ← per-session
+  │        idempotency_store=shared_idem,        ← shared reference
+  │      )
+  │
+  └─ Session teardown:
+        session.local_projection_store.close()
+```
+
+### 23.4 Feature Gate
+
+| Config | Default | Effect |
+|---|---|---|
+| `KernelConfig.enable_fabric_stores` | `False` | When False: stores not created, all Phase 1 Fabric fields = None, STEP 21 inert |
+| `Fabric.global_projection_store` | `None` | When None: `resolve_situation()` raises `FabricError("resolver not wired")` |
+
+All existing kernel/session tests pass unchanged when the flag is off.

@@ -363,3 +363,44 @@ but for the registry subsystem.
 
 **Fix**: Add `labelnames=["capability"]` to `registry_lookup_duration`. Update call sites to pass
 the capability label when observing.
+
+---
+
+## Phase 1 — Resolved (Post GATE-P1, 2026-06-05)
+
+All Phase 1 Epics 0–8 are complete. No open issues remain from that milestone.
+The following were addressed during Phase 1 build-out:
+
+| Issue | Description | Status |
+|---|---|---|
+| — | GlobalProjectionStore (11 tables, FTS5, 50-connector catalog) | ✅ Complete |
+| — | LocalProjectionStore (4 tables, per-session `:memory:`) | ✅ Complete |
+| — | IdempotencyStore (state machine, immutable succeeded) | ✅ Complete |
+| — | 50-connector domain catalog (5 domains, 182 caps) | ✅ Complete |
+| — | RequestFrame types (Contract A, frozen, no keyword heuristics) | ✅ Complete |
+| — | ResolveSituationService (13-step verdict cascade) | ✅ Complete |
+| — | CapabilityBinderService (3-pass: typed→exact→BM25) | ✅ Complete |
+| — | PolicySelectorService (deny > needs_hil > allow_with_gate > allow) | ✅ Complete |
+| — | VerificationPlanRunner (read_after_write, Protocol ports) | ✅ Complete |
+| — | ManifestAdmissionService (typed validation, idempotent upsert) | ✅ Complete |
+| — | ConstitutionArtifact + ConstitutionLoader (JSON Schema Draft-07) | ✅ Complete |
+| — | PromptPackBuilder (5 phases, triple redaction, SECRET_MARKERS) | ✅ Complete |
+| — | Fabric +8 fields, STEP 21 wiring, KernelService S2.10/Post-S8 | ✅ Complete |
+| — | 280 tests, 1 skip (Bridge Phase 2), 0 regressions | ✅ Complete |
+| — | Real-Fabric benchmark: verdict 49/50 (98%), resolve ~25ms | ✅ Complete |
+
+## Phase 1.1 — Open (Family Tool Constitution Enrichment, Epics 9–14)
+
+| Issue | Description | Priority |
+|---|---|---|
+| P1.1-01 | Calendar connector: populate full constitution, policy, guide cards, ontology, JSON schemas in ToolDefinition | High |
+| P1.1-02 | Tasks connector: full API design following calendar pattern | High |
+| P1.1-03 | Reminders connector: full API design | High |
+| P1.1-04 | Chores connector: full API design (write_requires_actor_role: parent/guardian) | High |
+| P1.1-05 | Shopping connector: full API design | Medium |
+| P1.1-06 | ManifestTranslator: register_definition_to_store() for family tools | High |
+| P1.1-07 | Wire into bootstrap_family_tools() so tools register in BOTH CapabilityRegistry AND GlobalProjectionStore | High |
+| P1.1-08 | Align resolution catalog names (tool.execute.family.calendar.create) with execution registry names (tool.execute.calendar.create_event) | High |
+| P1.1-09 | Filter PromptContract from discover_capabilities (activity profiles are not executable) | Medium |
+| P1.1-10 | ContextBuilder: read activity_profile from ToolDefinition, not YAML files | Medium |
+| P1.1-11 | Non-family domain scenario vocabulary alignment (agriculture/enterprise/government/healthcare expected_resource_kinds → real catalog resource_kinds) | Medium |

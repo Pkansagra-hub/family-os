@@ -7,7 +7,7 @@ flowchart TB
 %% =====================================================================================
 %% CAPABILITY FABRIC (K1) -- DEEP AI AGENT ARCHITECTURE
 %% =====================================================================================
-%% STATUS: COMPLETE (Matches implemented code as of 2026-02-08)
+%% STATUS: COMPLETE + Phase 1 (Matches implemented code as of 2026-06-05 · GATE-P1 passed)
 %%
 %% The Capability Fabric is K1's central resolution, retrieval, and execution engine.
 %% Layer 2.5 in K1 Cognitive Architecture Skeleton.
@@ -81,6 +81,7 @@ flowchart TB
 %%
 %% GOVERNING DOCUMENTS:
 %%   Design: k1/fabric/fabric_discussion.md (26 sections)
+%%   Phase 1 Plan: k1/fabric/docs/phase1_implementation_plan.md (~3100 lines, 39 issues)
 %%   Skeleton: architecture_diagrams/k1/k1_cognitive_architecture_skeleton.mmd
 %%   Integration Guide: k1/fabric/docs/fabric_integration_guide.md
 %%   ADRs: ADR-K004, ADR-0005, ADR-0017, ADR-0028, ADR-1.1.9
@@ -573,8 +574,59 @@ subgraph FABRIC["Capability Fabric -- Layer 2.5 (Resolution + Retrieval + Execut
 
 end
 
-%% =====================================================================================
-%% EXTERNAL TOUCHPOINTS (Components Fabric Interacts With)
+%% =====================================================================================  %% PHASE 1 — SITUATED RESOLUTION SUBSYSTEM (NEW, Epics 1-8)
+  %% ==================================================================================
+
+  subgraph PHASE1_STORES["Phase 1 Stores (Epic 1)"]
+    direction TB
+    GPS["GlobalProjectionStore (global_projection_store.py)<br/>Shared SQLite WAL · 11 tables + FTS5<br/>50 connectors · 182 capabilities · graph ontology<br/>find_capabilities · search_capabilities (BM25) · lookup_capability_by_type"]:::registry
+    LPS["LocalProjectionStore (local_projection_store.py)<br/>Per-session :memory: · 4 tables<br/>connected_resources · household_members · alias_index"]:::registry
+    IDEM["IdempotencyStore (idempotency_store.py)<br/>Shared SQLite WAL · state machine<br/>not_seen→in_flight→succeeded/failed · succeeded immutable"]:::registry
+  end
+
+  subgraph PHASE1_CONNECTORS["Phase 1 Connectors (Epic 2)"]
+    direction TB
+    CONN_DEF["8 Dataclasses: ServiceDefinition, CapabilityDefinition,<br/>ConnectorDefinition, ConstitutionDefinition, PolicyDefinition,<br/>GuideCardDefinition, OntologyDefinition, InputFieldSpec"]:::type_registry
+    CONN_BUILDER["build_connector_definition(domain, svc) -> ConnectorDefinition<br/>10-step expansion: derive IDs → generate caps per resource_kind<br/>→ build constitution with prereq reads + HIL gates + verifiers<br/>→ ontology identity + operation aliases"]:::factory
+    CONN_CATALOG["DOMAIN_SERVICES (domain_catalog.py)<br/>5 domains × 10 services = 50 connectors<br/>family · enterprise · government · agriculture · healthcare<br/>Cap naming: tool.{mode}.{domain}.{svc.id}.{action}"]:::contract
+  end
+
+  subgraph PHASE1_RESOLVER["Phase 1 Resolver (Epic 3 · Contract A)"]
+    direction TB
+    REQ_FRAME["RequestFrame (frozen)<br/>intents[] · person_refs[] · resource_refs[]<br/>time_window_hint · safety_context<br/>NO keyword heuristics — Back provides explicit hints"]:::type_registry
+    RES_PROJ["ResolveResourcesService (Epic 3.4)<br/>alias_index → ResourceUniverse<br/>ResourceCandidate · PersonCandidate · UnresolvedRef"]:::engine
+    TYPE_RES["CapabilityTypeResolver (Epic 3.5)<br/>4-step graph traversal via capability_type_index<br/>→ list[ResolvedIntentType] · confidence scoring"]:::engine
+  end
+
+  subgraph PHASE1_GOVERNANCE["Phase 1 Governance (Epics 4-5)"]
+    direction TB
+    POLICY_SEL["PolicySelectorService (Epic 4.1)<br/>Gates on typed ResolvedIntentType<br/>Verdict: deny > needs_hil > allow_with_gate > allow<br/>Deterministic HIL matching (no eval)"]:::safety
+    VERIF_RUNNER["VerificationPlanRunner (Epic 4.2)<br/>Post-write verification · read_after_write<br/>Protocol ports: BindingLike · ObservationLike · NativeReadbackPort"]:::safety
+    MANIFEST_ADMIT["ManifestAdmissionService (Epic 4.3)<br/>ConnectorDefinition → GlobalProjectionStore<br/>admit() · admit_all() · FTS5 rebuilt once per batch<br/>14-field validation · idempotent upsert"]:::validator
+    CONST_ARTIFACT["ConstitutionArtifact + 6 sub-types (Epic 5.1)<br/>PrerequisiteRead · ConflictRule · HILGate<br/>MutationStep · VerificationRequirement<br/>JSON Schema Draft-07 · validate_constitution()"]:::type_registry
+    CONST_LOADER["ConstitutionLoader (Epic 5.2)<br/>Single read path · lazy semantic validation<br/>load() · get_prerequisite_reads() · get_hil_gates()"]:::engine
+  end
+
+  subgraph PHASE1_ORCHESTRATION["Phase 1 Orchestration (Epic 6)"]
+    direction TB
+    CAP_BINDER["CapabilityBinderService (Epic 6.1)<br/>3-pass: typed graph→exact match→BM25 FTS5<br/>→ BindingBundle (primary+prereqs+companions+verifiers)<br/>Deduplication by binding_id"]:::engine
+    SITUATED_RES["ResolveSituationService (Epic 6.2)<br/>THE entry point Back calls<br/>13-step verdict cascade<br/>→ ResolutionEnvelope {verdict, binding_bundle, prompt_pack}"]:::engine
+    PROMPT_PACK["PromptPackBuilder (Epic 6.3)<br/>5 disclosure phases · triple redaction<br/>SECRET_MARKERS enforcement · PromptPackLeakError<br/>5 card types · stale cards flagged not hidden"]:::engine
+  end
+
+  subgraph PHASE1_WIRING["Phase 1 Wiring (Epic 7)"]
+    direction TB
+    FABRIC_FIELDS["Fabric +8 fields (all None-default)<br/>global_projection_store · situated_resolver<br/>policy_selector · constitution_loader · prompt_pack_builder"]:::fabric_core
+    STEP21["Factory STEP 21: _wire_phase1()<br/>ConstitutionLoader(shared) · LocalProjectionStore(:memory:)<br/>All 8 resolver deps wired · idempotency→facade<br/>VerificationPlanRunner NOT wired (kernel does it post-S8)"]:::factory
+    KERNEL_INT["KernelService Integration (Epic 7.3)<br/>S2.10: open stores · S3: pass to shared Fabric<br/>Post-S8: admit catalog · P3: per-session LocalProjectionStore<br/>Shutdown: close stores"]:::step
+  end
+
+  subgraph PHASE1_GATE["Phase 1 Gate (Epic 8)"]
+    direction TB
+    GATE_P1["GATE-P1: Fabric standalone proven<br/>280 tests pass · 1 skip (Bridge=Phase 2)<br/>Benchmark: verdict 49/50 (98%) · resolve ~25ms<br/>50-connector catalog · zero regressions"]:::invariant
+  end
+
+  %% ==================================================================================%% EXTERNAL TOUCHPOINTS (Components Fabric Interacts With)
 %% =====================================================================================
 
 subgraph TOUCHPOINTS["External Touchpoints (Fabric Interfaces)"]

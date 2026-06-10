@@ -2,8 +2,8 @@
 
 > **Audience:** FamilyOS internal team building connectors for the kernel.
 > **Scope:** Every artifact, schema, constitution, policy card, guide card, ontology registration, adapter, test, and admission step required to ship a production connector.
-> **Status:** Living document. Phase 1 of the 4-plane roadmap.
-> **Prerequisite reading:** `docs/whiteboard/back_tool_contract_whiteboard.md` (architecture), `k1/fabric/CONTRACT.md` (contract format).
+> **Status:** Living document. Updated 2026-06-05 — Phase 1 (GATE-P1) complete. Real code in `k1/fabric/connectors/`.
+> **Prerequisite reading:** `k1/fabric/docs/phase1_implementation_plan.md` (Phase 1 spec), `k1/fabric/CONTRACT.md` (Fabric contracts), `k1/fabric/ARCHITECTURE.md` (component map).
 
 ---
 
@@ -27,7 +27,7 @@ The top-level registration document. Stored in `GlobalProjectionStore.connectors
 
 ```yaml
 connector_id: "family.calendar"          # domain.connector_name — globally unique
-connector_type: "native_local"           # native_local | bridge | ifl_read | ifl_write | system
+connector_type: "native"                # native | bridge | ifl  (SQL CHECK constraint)
 provider_type: "LOCAL"                   # LOCAL | MCP | BRIDGE | AGENT | WORKFLOW
 label: "Family Calendar"                 # Human-readable
 description: >-                          # What this connector does (appears in LLM context)
@@ -40,8 +40,8 @@ resource_kinds:                          # Resource types this connector manages
   - "calendar_event"
   - "appointment"
 actor_scope: ["parent", "admin", "system"]  # Who can use this connector
-admission_verdict: "admitted"            # admitted | pending | rejected | suspended
-registration_type: "executable"          # executable | guide_only
+admission_verdict: "admitted"            # admitted | pending | rejected
+registration_type: "static"             # static | dynamic | discovered
 constitution: {}                         # See §1.3 — embedded or ref
 policy_declarations:                     # See §1.4 — embedded or ref
   write_requires_actor_role: []          # Empty = default-allow (all roles can write)
@@ -51,20 +51,26 @@ policy_declarations:                     # See §1.4 — embedded or ref
 capabilities: []                         # See §1.2 — list of capability records
 ```
 
-**Required fields (14):** `connector_id`, `connector_type`, `provider_type`, `label`, `description`, `version`, `provider_id`, `resource_kinds`, `actor_scope`, `admission_verdict`, `registration_type`, `constitution`, `policy_declarations`, `capabilities`
+**Fields (16 total):** See `k1/fabric/connectors/definition.py` `ConnectorDefinition` dataclass.
+
+11 identity fields: `connector_id`, `connector_type`, `provider_type`, `label`, `description`, `version`, `provider_id`, `resource_kinds`, `actor_scope`, `admission_verdict`, `registration_type`.
+5 payload fields: `capabilities`, `constitution`, `policy`, `guide_cards`, `ontology`.
 
 ### 1.2 Capability Schemas
 
 Each capability is one operation the connector can perform. Stored in `GlobalProjectionStore.capabilities`.
 
-**Naming convention:** `tool.{effect_type}.{domain}.{connector}.{action}`
+**Naming convention:** `tool.{invocation_mode}.{domain}.{service_id}.{action_name}`
+
+Per `k1/fabric/connectors/builder.py` `_cap_name()`. invocation_mode = `read` or `execute`.
 
 ```yaml
 # Example: tool.execute.family.calendar.create
 capability_name: "tool.execute.family.calendar.create"
 connector_id: "family.calendar"
-operation: "create"                      # create | list | update | delete | send | fire | search
-effect: "write"                          # read | write | side_effect | system
+invocation_mode: "execute"              # read | execute
+action_name: "create"                    # list | search | create | update | delete | send
+effect: "write"                          # read | write | delete | compute
 resource_kind: "calendar_event"
 description: "Create a calendar event with conflict detection."
 
@@ -112,21 +118,22 @@ output_schema_ref: "calendar_event_mutation.schema.json"
 # }
 
 safety_band_min: "GREEN"                 # Minimum band required to invoke
-risk_class: "write"                      # benign | read_only | write | safety_sensitive | side_effect
+risk_class: "benign"                     # benign | sensitive | dangerous
 idempotency: "required"                  # required | supported | none
 compensation_capability: "tool.execute.family.calendar.delete"
-record_type: "executable"                # executable | guide_only | catalog_ref
+record_type: "executable_capability"     # executable_capability | activity_profile | workflow | agent
 synthetic: false                         # true = scale-test synthetic, false = real
 ```
 
-**Required capability fields (10):** `capability_name`, `connector_id`, `operation`, `effect`, `resource_kind`, `description`, `required_inputs`, `safety_band_min`, `risk_class`, `record_type`
+**Required capability fields:** `name` (capability_name), `action_name`, `invocation_mode`, `effect`, `resource_kind`, `description`, `safety_band_min`, `risk_class`, `record_type`
 
 **Read capability example:**
 
 ```yaml
 capability_name: "tool.read.family.calendar.list"
 connector_id: "family.calendar"
-operation: "list"
+invocation_mode: "read"
+action_name: "list"
 effect: "read"
 resource_kind: "calendar_event"
 description: "List calendar events in a time window."
@@ -139,9 +146,9 @@ optional_inputs:
   - {name: "cursor", type: "string", description: "Pagination cursor."}
 output_schema_ref: "calendar_event_list.schema.json"
 safety_band_min: "GREEN"
-risk_class: "read_only"
+risk_class: "benign"
 idempotency: null
-record_type: "executable"
+record_type: "executable_capability"
 ```
 
 ### 1.3 Connector Constitution
@@ -204,12 +211,15 @@ constitution:
   # ── Mutation sequencing: order of operations ──
   mutation_sequencing:
     - order: 1
+      phase: "read"
       operation: "list"
       description: "Read current calendar state."
     - order: 2
+      phase: "mutate"
       operation: "create"
       description: "Create event if no conflicts."
     - order: 3
+      phase: "read"
       operation: "list"
       description: "Verify event was created (read_after_write)."
 
@@ -222,9 +232,9 @@ constitution:
       description: "Validate returned event matches expected schema."
 
   # ── Summaries (injected into LLM prompt, human-readable) ──
-  precondition_sum: "List calendar before creating events to check for time conflicts."
-  companion_resource_sum: "Calendar conflicts with chores and tasks in the same time window."
-  hil_trigger_sum: "HIL required when end time or calendar is missing, or when a time conflict exists."
+precondition_summary: "List calendar before creating events to check for time conflicts."
+companion_resource_summary: "Calendar conflicts with chores and tasks in the same time window."
+hil_trigger_summary: "HIL required when end time or calendar is missing, or when a time conflict exists."
   degradation_policy: "If read_after_write verification fails, retry once then submit degraded with evidence."
 ```
 
@@ -256,9 +266,6 @@ policy_declarations:
       prompt: "Ask a parent to confirm this calendar change."
     - condition: "create_event_with_external_attendees"
       prompt: "This event includes people outside the household. Confirm."
-
-  # ── Safety band constraints ──
-  minimum_safety_band: "GREEN"
 ```
 
 ### 1.5 Guide Cards
@@ -689,28 +696,36 @@ Before marking `admission_verdict: "admitted"`, verify:
 ## 8. Quick Reference — File Locations
 
 ```text
-k1/contracts/tools/{connector_name}.yaml           # Tool contract (Fabric contract format)
-k1/tools/family/{connector}/service.py             # LOCAL provider implementation
-k1/tools/family/{connector}/schemas/               # JSON Schema files
-k1/tools/family/{connector}/constitution.yaml      # Connector constitution
-k1/tools/family/{connector}/policy.yaml            # Policy declarations
-k1/tools/family/{connector}/guides.yaml            # Guide cards
-k1/tools/family/{connector}/ontology.yaml          # Domain ontology registration
-bridge/ifl/adapters/{connector}/manifest.yaml      # IFL manifest (MCP/Bridge connectors)
-bridge/ifl/adapters/{connector}/mcp_server.py      # MCP server implementation
-bridge/ifl/adapters/{connector}/oauth_server.py    # OAuth flow (if needed)
+k1/fabric/connectors/domain_catalog.py             # ServiceDefinition entries (real catalog · 50 connectors)
+k1/fabric/connectors/definition.py                 # 8 typed dataclasses (ConnectorDefinition, CapabilityDefinition, etc.)
+k1/fabric/connectors/builder.py                    # build_connector_definition() — 10-step expansion
+k1/fabric/manifest_admission.py                    # ManifestAdmissionService — validate + upsert into GlobalProjectionStore
+k1/fabric/stores/global_projection_store.py         # GlobalProjectionStore — 11 tables, FTS5, graph ontology
+k1/fabric/stores/local_projection_store.py          # LocalProjectionStore — per-session connected resources + aliases
+k1/fabric/constitution/schema.py                   # ConstitutionArtifact + CONSTITUTION_JSON_SCHEMA (Draft-07)
+k1/fabric/constitution/loader.py                   # ConstitutionLoader — single read path
+k1/fabric/resolver/situated_resolver.py             # ResolveSituationService — 13-step verdict cascade
+k1/fabric/resolver/capability_binder.py             # CapabilityBinderService — 3-pass discovery
+k1/fabric/policy/selector.py                        # PolicySelectorService — role/band/HIL gating
+k1/fabric/verification/runner.py                    # VerificationPlanRunner — post-write verification
+k1/fabric/prompt_pack/builder.py                    # PromptPackBuilder — 5 phases, triple redaction
+k1/tools/family/{connector}/service.py             # LOCAL provider implementation (CalendarToolService, etc.)
 tests/k1/tools/family/{connector}/                 # Adapter unit tests
-tests/k1/fabric/constitution/                      # Constitution compliance tests
-tests/k1/concierge/                                # E2E integration tests
-scripts/probe_back_resolver_benchmark.py           # Scenario gate entries
+tests/k1/fabric/                                   # Fabric component tests (resolver, stores, policy, etc.)
+tests/k1/fabric/integration/test_pipeline_e2e.py   # E2E integration gate (GAP-P1-023)
+scripts/probe_back_fabric_resolver_benchmark.py    # Real-Fabric resolver benchmark (50 scenarios, 5 domains)
 ```
 
 ---
 
 ## 9. Example: Full Calendar Connector Package
 
-See reference implementation at:
-- Manifest: `poc/back_tool_contract_v2/connectors/domain_catalog.py` (family.calendar)
-- POC store: `poc/back_tool_contract_v2/stores/global_projection_store.py`
-- Constitution: `poc/back_tool_contract_v2/resolve_situation.py` (_determine_verdict cascade)
-- Benchmark: `scripts/probe_back_resolver_benchmark.py` (F01-F10 family scenarios)
+See Phase 1 reference implementation at:
+- Catalog: `k1/fabric/connectors/domain_catalog.py` → `DOMAIN_SERVICES["family"][0]` (calendar ServiceDefinition)
+- Builder: `k1/fabric/connectors/builder.py` → `build_connector_definition("family", svc)`
+- Store: `k1/fabric/stores/global_projection_store.py` — `GlobalProjectionStore` (11 tables, FTS5)
+- Admission: `k1/fabric/manifest_admission.py` → `ManifestAdmissionService.admit(definition)`
+- Constitution: `k1/fabric/constitution/schema.py` → `ConstitutionArtifact` + `CONSTITUTION_JSON_SCHEMA`
+- Resolver: `k1/fabric/resolver/situated_resolver.py` → `ResolveSituationService` (13-step cascade)
+- Benchmark: `scripts/probe_back_fabric_resolver_benchmark.py` (50 scenarios across 5 domains, real Fabric)
+- Plan: `k1/fabric/docs/phase1_implementation_plan.md` (39 issues, 8 epics, complete spec)

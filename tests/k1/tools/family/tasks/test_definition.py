@@ -63,9 +63,11 @@ def test_sse_topics_format() -> None:
                 assert parts[-1] == "v1", f"missing version suffix: {topic}"
 
 
-def test_all_task_actions_reference_activity_prompt_template() -> None:
+def test_no_task_action_carries_legacy_prompt_template() -> None:
+    # Legacy per-action prompt_template was removed with the activity-profile
+    # YAMLs; actions now inherit only the definition-level activity_profile.
     for action in TASKS_DEFINITION.actions:
-        assert action.prompt_template == "tasks_activity_v1", action.name
+        assert action.prompt_template is None, action.name
 
 
 def test_task_contracts_inherit_activity_profile_metadata() -> None:
@@ -75,5 +77,5 @@ def test_task_contracts_inherit_activity_profile_metadata() -> None:
     contract = build_contract(TASKS_DEFINITION, action)
 
     assert contract.activity_profile == "tasks.v1"
-    assert contract.prompt_template == "tasks_activity_v1"
+    assert contract.prompt_template is None
     assert "task_management" in contract.domain

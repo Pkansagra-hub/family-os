@@ -245,7 +245,7 @@ class RetrievalEngine:
         # These are lightweight stdlib-based frozen dataclasses.
         from k1.fabric.retrieval.hard_filter import FilterCandidate
         from k1.fabric.retrieval.soft_ranker import RankerCandidate
-        from k1.fabric.types import RetrievalResult, ScoredCapability
+        from k1.fabric.types import PromptContract, RetrievalResult, ScoredCapability
 
         start = time.monotonic()
 
@@ -269,13 +269,29 @@ class RetrievalEngine:
         else:
             all_contracts = list(self._registry_port.list_all())
 
+        # -- Step 0.5: Capability vs. prompt split ----------------------
+        # Activity-profile YAMLs (k1/contracts/prompts/*.yaml) are parsed
+        # into PromptContract objects and registered into the SAME
+        # CapabilityRegistry as real tools, sharing domain tags such as
+        # ``family`` / ``calendar``.  Without this split they leak into
+        # discover_capabilities results and break Back's tool selection
+        # (Back tries to "invoke" a prompt template).  The discriminator is
+        # robust: a real PromptContract instance OR the legacy provider_type
+        # / name heuristic (covers test doubles and prompt.* capabilities).
+        def _is_prompt_contract(contract: Any) -> bool:
+            if isinstance(contract, PromptContract):
+                return True
+            provider_type = (getattr(contract, "provider_type", "") or "").lower()
+            name = (getattr(contract, "name", "") or "").lower()
+            return provider_type.startswith("prompt") or name.startswith("prompt.")
+
         if filter_prompt_type:
-            all_contracts = [
-                c
-                for c in all_contracts
-                if (getattr(c, "provider_type", "") or "").lower().startswith("prompt")
-                or (getattr(c, "name", "") or "").lower().startswith("prompt.")
-            ]
+            # find_relevant_prompts: prompt templates ONLY.
+            all_contracts = [c for c in all_contracts if _is_prompt_contract(c)]
+        else:
+            # discover_capabilities: invocable capabilities ONLY -- never
+            # surface activity-profile prompts to Back.
+            all_contracts = [c for c in all_contracts if not _is_prompt_contract(c)]
 
         logger.debug(
             "_run_pipeline: step0 all_contracts=%d query_domains=%s safety_band=%s",

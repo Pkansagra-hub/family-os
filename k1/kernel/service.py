@@ -94,9 +94,7 @@ from k1.memory_writer.health.circuit_breaker import CircuitBreaker as MWCircuitB
 from k1.model_hub.adapters.config_adapter import ConfigAdapter
 from k1.model_hub.adapters.credential_store_adapter import CredentialStoreAdapter
 from k1.model_hub.adapters.event_bus_adapter import EventBusAdapter as MHEventBusAdapter
-from k1.model_hub.adapters.health_report_adapter import (
-    HealthReportAdapter as MHHealthReportAdapter,
-)
+from k1.model_hub.adapters.health_report_adapter import HealthReportAdapter as MHHealthReportAdapter
 from k1.model_hub.adapters.prometheus_adapter import PrometheusAdapter
 from k1.model_hub.adapters.session_state_prod import SessionStateProdAdapter
 from k1.model_hub.factory import ModelHubFactory
@@ -118,19 +116,13 @@ from k1.orchestrator.config import OrchestratorConfig
 from k1.orchestrator.factory import OrchestratorFactory
 from k1.orchestrator.workflows.persistence import SQLiteWorkflowAdapter
 from k1.planner.adapters.bridge_adapter import BridgeAdapter as PlannerBridgeAdapter
-from k1.planner.adapters.delta_bus_adapter import (
-    DeltaBusAdapter as PlannerDeltaBusAdapter,
-)
-from k1.planner.adapters.event_bus_adapter import (
-    EventBusAdapter as PlannerEventBusAdapter,
-)
+from k1.planner.adapters.delta_bus_adapter import DeltaBusAdapter as PlannerDeltaBusAdapter
+from k1.planner.adapters.event_bus_adapter import EventBusAdapter as PlannerEventBusAdapter
 from k1.planner.adapters.fabric_registry_adapter import FabricRegistryAdapter
 from k1.planner.adapters.fabric_retrieval_adapter import FabricRetrievalAdapter
 from k1.planner.adapters.llm_gateway_adapter import LLMGatewayAdapter
 from k1.planner.adapters.mailbox_adapter import MailboxAdapter as PlannerMailboxAdapter
-from k1.planner.adapters.session_state_adapter import (
-    SessionStateReadAdapter as PlannerStateAdapter,
-)
+from k1.planner.adapters.session_state_adapter import SessionStateReadAdapter as PlannerStateAdapter
 from k1.planner.factory import PlannerFactory
 
 # M5.E3.I2 + I3: k1.selfmodel kernel wiring (S2.6 + P3.5).
@@ -269,6 +261,14 @@ class KernelService:
         # IdempotencyStore, and NativeToolProvider registered into the
         # shared Fabric. Closed during shutdown / cleanup.
         self._family_tools: Any | None = None
+
+        # Phase 1 Fabric (Epic 7.3): shared GlobalProjectionStore +
+        # IdempotencyStore. Created at S2.10 when
+        # ``KernelConfig.enable_fabric_stores`` is True, passed to the
+        # shared Fabric (factory step 21), and closed during shutdown.
+        # ``None`` when the flag is off (default).
+        self._global_projection_store: Any | None = None
+        self._idempotency_store: Any | None = None
 
         # M4: optional hidden per-session SectionUpdateBackgroundWorker.
         # The worker is disabled by default in KernelConfig and receives an
@@ -759,6 +759,25 @@ class KernelService:
                 errors.append(exc)
                 logger.warning("shutdown: FamilyToolsBundle close failed: %s", exc)
             self._family_tools = None
+
+        # ── Reverse S2.10: Close Phase 1 Fabric stores ────────
+        if self._global_projection_store is not None:
+            try:
+                self._global_projection_store.close()
+                self._log_lifecycle("Phase1_store_closed", "GlobalProjectionStore")
+            except Exception as exc:
+                errors.append(exc)
+                logger.warning("shutdown: GlobalProjectionStore close failed: %s", exc)
+            self._global_projection_store = None
+
+        if self._idempotency_store is not None:
+            try:
+                self._idempotency_store.close()
+                self._log_lifecycle("Phase1_store_closed", "IdempotencyStore")
+            except Exception as exc:
+                errors.append(exc)
+                logger.warning("shutdown: IdempotencyStore close failed: %s", exc)
+            self._idempotency_store = None
 
         # ── Reverse S2: ModelHub plugin drain (P2.3) ──────────
         if self._model_hub is not None:
@@ -1905,6 +1924,31 @@ class KernelService:
         )
         self._session_routing_reader = session_routing_reader
 
+        # ── S2.10: Phase 1 Fabric stores (before S3) ──────────
+        # Created BEFORE the shared Fabric so the factory can wire them
+        # (step 21).  Standalone SQLite files — no bus/bridge/model-hub
+        # dependency.  Gated behind enable_fabric_stores (default False).
+        if self._config.enable_fabric_stores:
+            try:
+                from k1.fabric.stores.global_projection_store import (
+                    GlobalProjectionStore,
+                )
+                from k1.fabric.stores.idempotency_store import IdempotencyStore
+
+                gps = GlobalProjectionStore(self._config.global_projection_db_path or ":memory:")
+                gps.open()
+                self._global_projection_store = gps
+
+                idem = IdempotencyStore(self._config.idempotency_db_path or ":memory:")
+                idem.open()
+                self._idempotency_store = idem
+                self._log_lifecycle("S2.10_complete", "GlobalProjectionStore+IdempotencyStore")
+            except Exception:
+                await self._bridge.disconnect()
+                self._bus.close()
+                self._router.close()
+                raise
+
         # ── S3: Shared Fabric ─────────────────────────────
         try:
             event_port = EventPortProdAdapter(bus)
@@ -1924,6 +1968,10 @@ class KernelService:
                 delta_bus=delta_bus,
                 state_reader=session_routing_reader,
                 hil_port=self._hil_service,  # E7.M1.1
+                # Phase 1 (Epic 7.3): None when enable_fabric_stores is off,
+                # which keeps factory step 21 inert (backward compatible).
+                global_projection_store=self._global_projection_store,
+                idempotency_store=self._idempotency_store,
             )
             # W8: opt-in module loader hot-reload watcher. Off by default
             # (factory called start(watch=False)); flip on for prod
@@ -2098,6 +2146,16 @@ class KernelService:
                 self._log_lifecycle("S8_complete", "FamilyToolsBundle")
             else:
                 self._log_lifecycle("S8_skipped", "FamilyToolsBundle")
+
+            # ── Post-S8: Phase 1 domain catalog + verifier ───
+            # Load the 50-connector domain catalog into the shared
+            # GlobalProjectionStore so resolve_situation can discover it,
+            # and wire the VerificationPlanRunner (which needs the native
+            # provider registered during S8).  Best-effort: a failure here
+            # must never break boot — resolve_situation simply has fewer
+            # connectors / no verifier.  Gated behind enable_fabric_stores.
+            if self._config.enable_fabric_stores and self._global_projection_store is not None:
+                self._load_phase1_catalog_and_verifier()
         except Exception:
             # S7 or verification failed — tear down S6 through S1.
             if self._planner_task is not None:
@@ -2174,6 +2232,51 @@ class KernelService:
             except Exception:
                 logger.warning("E15.10: tool-SSE consumer error; retrying in 5 s", exc_info=True)
                 await asyncio.sleep(5)
+
+    def _load_phase1_catalog_and_verifier(self) -> None:
+        """Post-S8: admit the Phase 1 domain catalog into the shared store.
+
+        Loads the 50-connector domain catalog (Epic 2) into the shared
+        ``GlobalProjectionStore`` via ``ManifestAdmissionService`` (Epic 4.3)
+        so ``resolve_situation`` can discover those connectors.
+
+        Best-effort: any failure is logged and swallowed — a catalog-load
+        failure must never break kernel boot.
+
+        Note on the verifier: ``VerificationPlanRunner`` (Epic 4.2) requires a
+        ``NativeReadbackPort``.  The S8 ``NativeToolProvider`` does not
+        implement that port, and no readback adapter exists in Phase 1, so the
+        verifier is intentionally left unwired (``fabric.verification_runner``
+        stays ``None``) rather than wired to an incompatible provider.
+        """
+        gps = self._global_projection_store
+        if gps is None:
+            return
+        try:
+            from k1.fabric.connectors.domain_catalog import (
+                DOMAIN_SERVICES,
+                build_domain_corpus,
+            )
+            from k1.fabric.manifest_admission import ManifestAdmissionService
+
+            admission = ManifestAdmissionService(gps)
+            for domain_id in DOMAIN_SERVICES:
+                corpus = build_domain_corpus(domain_id)
+                results = admission.admit_all(corpus)
+                admitted = sum(1 for r in results if r.admission_verdict == "admitted")
+                logger.info(
+                    "Phase 1 catalog loaded: domain=%s connectors=%d admitted=%d",
+                    domain_id,
+                    len(corpus),
+                    admitted,
+                )
+            self._log_lifecycle("Phase1_catalog_loaded", "DomainCatalog")
+        except Exception:
+            logger.warning(
+                "Phase 1 domain catalog load failed (resolve_situation will have "
+                "fewer connectors)",
+                exc_info=True,
+            )
 
     def _bootstrap_family_tools(self) -> Any:
         """Build the FamilyToolsBundle (M15) and register it with Fabric.
@@ -2567,6 +2670,19 @@ class KernelService:
                 if self._shared_fabric is not None
                 else None
             )
+            # Phase 1 (Epic 7.3): per-session LocalProjectionStore over the
+            # shared GlobalProjectionStore + IdempotencyStore.  Created only
+            # when enable_fabric_stores is on; otherwise all three are None
+            # and create_with_ports behaves exactly as before (inert).
+            session_local_store = None
+            if self._config.enable_fabric_stores and self._global_projection_store is not None:
+                from k1.fabric.stores.local_projection_store import (
+                    LocalProjectionStore,
+                )
+
+                session_local_store = LocalProjectionStore(":memory:")
+                session_local_store.open()
+
             session_fabric = FabricFactory.create_with_ports(
                 state_reader=session_state_reader,
                 event_port=session_event_port,
@@ -2577,6 +2693,9 @@ class KernelService:
                 production_mode=True,
                 hil_port=session_hil_service,  # P1.5: session-bus-bound HIL
                 capability_registry=_shared_registry,
+                global_projection_store=self._global_projection_store,
+                local_projection_store=session_local_store,
+                idempotency_store=self._idempotency_store,
             )
 
             # P3.1: Re-register the singleton NativeToolProvider with this

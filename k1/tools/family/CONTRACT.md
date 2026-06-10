@@ -35,13 +35,13 @@ M1 prompt/profile fields:
 
 Initial reviewed activity profiles are attached directly to declarations:
 
-| Adapter | `ToolDefinition.activity_profile` | Prompt template coverage |
+| Adapter | `ToolDefinition.activity_profile` | Back execution profile |
 | --- | --- | --- |
-| `calendar` | `calendar.v1` | All calendar actions use `calendar_activity_v1`. |
-| `tasks` | `tasks.v1` | All task actions use `tasks_activity_v1`. |
-| `reminders` | `reminders.v1` | User-invokable reminder actions use `reminders_activity_v1`; `fire_reminder` remains scheduler-only with no prompt template. |
-| `chores` | `chores.v1` | All chore actions use `chores_activity_v1`. |
-| `shopping` | `shopping.v1` | All shopping actions use `shopping_activity_v1`; child-added items require parent/guardian approval. |
+| `calendar` | `calendar.v1` | Backed (`back_execution_profile=True`); guidance from `guide_cards`. |
+| `tasks` | `tasks.v1` | Backed; guidance from `guide_cards`. |
+| `reminders` | `reminders.v1` | Backed; `fire_reminder` is scheduler-only with no profile. |
+| `chores` | `chores.v1` | Unbacked — generic discovery fallback. |
+| `shopping` | `shopping.v1` | Unbacked; child-added items require parent/guardian approval. |
 
 Family settings and future family adapters must stay on generic discovery behavior until they have reviewed prompt assets and explicit metadata. Do not infer profiles from free text, action names, or capability-name prefixes.
 

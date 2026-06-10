@@ -127,7 +127,7 @@ class KernelConfig:
     # in for prod profiles that need live contract updates without a
     # restart. Test profiles should leave it disabled to avoid daemon
     # threads leaking across test cases.
-    module_loader_watch: bool = False
+    module_loader_watch: bool = True
     # E7.M1.2: HIL (Human-in-the-Loop) service configuration.
     # When enable_hil_service=True (default), KernelService.startup() builds a
     # single HumanInTheLoopService (k1.hil.service) at S2.5 and threads the
@@ -156,6 +156,15 @@ class KernelConfig:
     #   * RecallCitationWrapper around ToolContext.recall_fn
     # Defaults to False so existing kernel + session tests are unchanged.
     enable_self_model: bool = False
+    # Phase 1 Fabric (Epics 1-7): when True, KernelService creates the shared
+    # GlobalProjectionStore + IdempotencyStore at S2.10, passes them to the
+    # shared Fabric (factory step 21), admits the domain catalog after S8,
+    # and wires per-session LocalProjectionStores. Defaults to False so
+    # existing kernel + session tests are byte-identical (no stores created,
+    # all Phase 1 Fabric fields stay None).
+    enable_fabric_stores: bool = True
+    global_projection_db_path: str = "./data/global_projection.db"
+    idempotency_db_path: str = "./data/idempotency.db"
     # Temporal/spatial/grounding are on by default after the M3 exit gate.
     # Operators can still disable each slice explicitly for isolated tests
     # or incident rollback.
@@ -188,7 +197,7 @@ class KernelConfig:
     # (K1FamilyStore + IdempotencyStore + ToolRegistry + NativeToolProvider)
     # and registers it with the shared Fabric. Defaults to False so legacy
     # deployments and the existing test suite are unchanged.
-    enable_family_tools: bool = False
+    enable_family_tools: bool = True
     family_tools_db_path: str = "./data/k1_family.db"
     # Dotted import paths to ``BaseToolService`` subclasses to register, e.g.
     # ``("k1.tools.family.adapters.calendar:CalendarToolService",)``. Empty

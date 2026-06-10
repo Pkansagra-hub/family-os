@@ -461,6 +461,9 @@ class ConciergeRuntime:
                     fsm_state=self._fsm,
                     hil_port=self._hil_port,
                     grounding=self._grounding,
+                    temporal=self._temporal,  # ← Phase 2 Epic 15.1
+                    spatial=self._spatial,  # ← Phase 2 Epic 15.1
+                    self_model=self._self_model,  # ← Phase 2 Epic 15.1
                 )
             except SuspensionResolutionNotFound as exc:
                 # M6 E6.2 (C08): back_resume_handler already published

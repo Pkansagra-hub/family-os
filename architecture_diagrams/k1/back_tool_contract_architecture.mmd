@@ -5,7 +5,7 @@ config:
 flowchart TB
 
     %% ======================================================================
-    %% THE DUMB-LLM PRINCIPLE — Design axiom
+    %% THE DUMB-LLM PRINCIPLE
     %% ======================================================================
     DUMB_LLM["An LLM cannot plan from information it does not have.
 It cannot infer a check it was never told to perform.
@@ -13,13 +13,13 @@ Knowledge lives on the connector contract, not in the prompt."]
     DUMB_LLM -.->|"this axiom governs everything below"| RULES
 
     %% ======================================================================
-    %% RULES — Non-negotiable invariants
+    %% RULES
     %% ======================================================================
     subgraph RULES["Eight Non-Negotiable Rules"]
         direction LR
         R1["1. No action without a permission ticket (binding_id)"]
         R2["2. No side effect without policy approval"]
-        R3["3. No 'done' without proof it worked"]
+        R3["3. No done without proof it worked"]
         R4["4. The AI never sees raw internals"]
         R5["5. All options must be considered before acting"]
         R6["6. Every failure is a typed error, never None"]
@@ -28,28 +28,17 @@ Knowledge lives on the connector contract, not in the prompt."]
     end
 
     %% ======================================================================
-    %% L0 — ENTRY + TIER ROUTING
+    %% L0 - TIER ROUTING
     %% ======================================================================
-    subgraph L0["Step 1-2: What Kind of Request Is This?"]
-        FRONT["Front Actor
-Captures what the user wants"]:::talk
-        FSM["FSM State Authority
-Organizes the task into a standard format"]:::gate
-        TG["Tier Gate - Routes by complexity
-LOW = Front just talks (no tools)
-MEDIUM = Back does one thing
-HIGH = Planner handles multi-step"]:::gate
-        T1["Tier 1: Just Talk (Front)
-No tool access. May escalate to Tier 2."]:::talk
-        T2["Tier 2: Do One Thing (Back)
-Takes action through a single tool.
-BackTaskEnvelope -> resolve_situation"]:::do
-        T3["Tier 3: Make a Plan (Planner + Orchestrator)
-Breaks down cross-resource tasks.
-Sketch -> Expand -> Validate -> Commit.
-Executes as a DAG with rollback."]:::plan
+    subgraph L0["Tier Routing"]
+        FRONT["Front Actor. Captures what the user wants."]:::talk
+        FSM["FSM State Authority. Organizes the task into a standard format."]:::gate
+        TG["Tier Gate. LOW=Front talks, MEDIUM=Back single-pass, HIGH=Planner DAG."]:::gate
+        T1["Tier 1: Just Talk (Front). No tool access. May escalate."]:::talk
+        T2["Tier 2: Back LLM (SINGLE-PASS). Extract, resolve ONCE, execute plan, verify, submit."]:::do
+        T3["Tier 3: Planner + Orchestrator. Multi-step cross-resource DAG."]:::plan
     end
-    FRONT -->|"Step 1"| FSM
+    FRONT --> FSM
     FSM --> TG
     TG -->|"conversation"| T1
     TG -->|"single action"| T2
@@ -57,456 +46,185 @@ Executes as a DAG with rollback."]:::plan
     RULES -.->|"governs"| L0
 
     %% ======================================================================
-    %% L1 — INTAKE
+    %% L1 - BACK LLM: Extract Intent + Resolve ONCE
     %% ======================================================================
-    subgraph L1["Step 3-4: Understanding What You Asked"]
-        ENV["Parse the Task Envelope
-Validates the request has all required fields
-(task_id, actor, safety band, budget, etc.)
+    subgraph L1["Back LLM: Extract Intent then Resolve ONCE"]
+        ENV["Parse Task Envelope. Validates: task_id, actor, safety band, budget. Code: BackTaskEnvelope."]:::intake
+        BUDGET_IN["Check Budget. max_iterations, max_fabric_calls, max_prompt_tokens. Code: ExecutionBudget."]:::intake
+        FRAME["LLM Extraction to RequestFrame. operation_hint: create|list|update|delete. resource_kind_hint: calendar_event|chore|meal_plan. subject_hint, params: person_hint+time_hint. person_refs, resource_refs, time_window_hint. Code: RequestFrame."]:::intake
 
-Code: BackTaskEnvelope [Contract E]"]:::intake
-        BUDGET_IN["Check Budget
-max_iterations | max_fabric_calls | max_prompt_tokens
+        RESOLVER["resolve_situation(frame) - ONE CALL. ResolveSituationService.resolve(). Code: k1/fabric/resolver/situated_resolver.py."]:::resolver
 
-Code: ExecutionBudget [Contract Q]"]:::intake
-        FRAME["Build the Request Frame
-For each intent: maps words to operations
-- 'create'/'add'/'schedule' -> create
-- 'calendar'/'tasks' -> resource kind
-Extracts: who (Riley), what (appointment),
-when (tomorrow 5pm), where (family calendar)
-
-Code: RequestFrame [Contract A]"]:::intake
+        R1_RES["1. Resource Resolution. Alias lookup, connected resources, household members, scope proof. -> candidate_universe."]:::resolver
+        R2_TYP["2. Type Resolution. 4-step graph: operation, concept, resource_family, typed capability. -> intent_resolutions."]:::resolver
+        R3_POL["3. Policy Selection (ADVISORY). Role check, safety band, HIL conditions, prerequisite reads from constitution. -> policy_bundle (machine recommendation, NOT enforcement)."]:::policy
+        R4_BIND["4. Capability Binding. 3-pass discovery: typed > exact > BM25. Constitution-driven prereq+companion. required_inputs+optional_inputs DENORMALIZED on every binding. -> binding_bundle (primary+prerequisites+verifiers)."]:::binding
+        R5_EXEC["5. Constitution + execution_plan. constitution_loader.load(connector_id). _build_execution_plan(): prereq,primary,verifier. Each step: capability_name, required_inputs[], optional_inputs[], resource_id, depends_on[], completed. 13-step cascade -> machine_verdict (ADVISORY ONLY). verdict retained for backward compat. -> constitution + execution_plan."]:::resolver
     end
-    T2 -->|"Step 3"| ENV
+    T2 --> ENV
     ENV -.->|"budget limits"| BUDGET_IN
-    ENV -->|"Step 4"| FRAME
+    ENV -->|"LLM extraction"| FRAME
+    FRAME -->|"Step 5"| RESOLVER
+    RESOLVER --> R1_RES --> R2_TYP --> R3_POL --> R4_BIND --> R5_EXEC
 
     %% ======================================================================
-    %% L1.5 — DISCOVERY (How We Find Candidate Tools)
+    %% ENVELOPE - The complete 23-key wire contract
     %% ======================================================================
-    subgraph DISCOVERY["Step 4.5: Discovery — Finding Candidate Capabilities"]
+    subgraph ENVELOPE["ResolutionEnvelope.to_dict() - 23 keys, NOTHING withheld"]
         direction TB
-        DISC_PRINCIPLE["ARCHITECTURAL PRINCIPLE
-Knowledge lives on connector contracts, not in extraction heuristics.
-When users install new connectors, the system self-describes
-— no lookup tables need updating."]:::principle
-        DISC_OLD["OLD: Lexical Prefix Discovery
-Matches words against hardcoded NAMESPACES/DOMAINS lists.
-Searches: connector_id LIKE 'stripe.payments%'
-Fails for: 'energy', 'camera', 'health' (unknown words)
-Fails at scale: variant tools crowd out exact matches
-50K tools: 100% recall but 31% verdict accuracy"]:::old_approach
-        DISC_NEW["NEW: Manifest-Aware Semantic Discovery
-Searches connector labels + resource_kinds + descriptions.
-FTS5 (BM25) on capability descriptions.
-TF-IDF enriched with connector manifest context.
-'Show my energy usage' -> matches 'Home Assistant Energy' label
-Zero hardcoded lookup tables. Survives dynamic ecosystems.
-50K tools: 99.77% recall, 99.80% verdict accuracy"]:::new_approach
-        DISC_FLOW{"Discovery returns
-top-50 candidate capabilities
-to the Resolver"}
-        DISC_BENCH["BENCHMARK RESULTS (scale curve)
-│ Scale │ Old Verdict │ New Verdict │ Novel Domains │
-│ 1K    │ 88.00%      │ 96.00%      │ 100%          │
-│ 5K    │ 97.00%      │ 97.80%      │ 90%           │
-│ 50K   │ 31.00%      │ 99.80%      │ 90%           │"]:::bench
+        E_ID["identity: resolution_id, request_id."]:::resolver
+        E_VERDICT["verdict surface: verdict, machine_verdict (advisory), sub_reason."]:::resolver
+        E_PLAN["EXECUTION_PLAN (the single-pass artifact that kills re-resolve). Ordered steps: prereq(read),primary(mutate),verifier(verify). Each step: capability_name, binding_id, resource_id, required_inputs[], optional_inputs[], depends_on[], completed. depends_on encodes read-before-write and verify-after-write. ALWAYS fully populated regardless of gate verdict."]:::new_approach
+        E_INFO["FULL info surface (previously withheld from to_dict). request_frame (intents+user values+time_window). candidate_universe (resource_candidates+person_candidates+unresolved). intent_resolutions (typed intent to capability mapping). policy_bundle (verdict,gates,hil_triggers,roles_allowed). binding_bundle (primary+prereqs+companions+verifiers+unbound_roles). constitution (execution_phases, prerequisite_reads, hil_gates, mutation_sequencing, verification_requirements, degradation_policy)."]:::resolver
+        E_OTHER["authorization: allowed_next_actions, allowed_capability_names, capability_name_to_binding, hil_request, recovery_directive, diagnostics, completeness, freshness, prompt_pack, created_at, expires_at."]:::resolver
     end
-    DISC_PRINCIPLE -.-> DISC_OLD
-    DISC_PRINCIPLE -.-> DISC_NEW
-    DISC_OLD --> DISC_FLOW
-    DISC_NEW --> DISC_FLOW
-    DISC_FLOW --> RESOLVER
-    DISC_BENCH -.-> DISC_NEW
+    R5_EXEC --> E_PLAN
+    R1_RES --> E_INFO
+    R2_TYP --> E_INFO
+    R3_POL --> E_INFO
+    R4_BIND --> E_INFO
+    R5_EXEC --> E_INFO
 
     %% ======================================================================
-    %% L2 — RESOLVER OVERVIEW
+    %% BACK LLM REASONING - The brain reads the envelope and self-plans
     %% ======================================================================
-    subgraph L2["Step 5-9: Can We Do This? Three Checks"]
-        Q1_OV["Q1: Who and what are we talking about?
-Resolves Riley -> person.riley
-Handles: no match, 1 match, or multiple matches"]:::resolver
-        Q2_OV["Q2: Are we allowed?
-Checks: role (parent=yes, child=no),
-safety band (GREEN < AMBER < RED),
-preconditions (must list before creating)"]:::policy
-        Q3_OV["Q3: Do we have the right tool?
-Exact lookup in registry (no AI search ranking)
-Creates a permission ticket (binding_id)
-Disclosure: names -> commit -> full schemas"]:::binding
-        RESOLVER["Orchestrator (ResolveSituationService)
-Runs all three checks in order.
-Returns a verdict and a PromptPack for the AI."]:::resolver
+    subgraph BACK_REASON["Back LLM: Reads envelope then Self-plans then Executes"]
+        BACK_READ["Back reads the FULL envelope. 1. execution_plan: ordered steps with depends_on. 2. constitution: rules for read-before-write, HIL gates, verification. 3. request_frame.intents[].params: user-provided VALUES. 4. candidate_universe.resource_candidates: resolved resource IDs. 5. binding_bundle: every bound capability with required_inputs. 6. policy_bundle: advisory policy verdict+gates."]:::loop
+
+        BACK_PLAN["Back self-plans. I have step 1 (prereq read) and step 2 (primary write). Step 2 depends_on step 1. Constitution says execution_phases=[read,mutate]. Constitution says prerequisite_reads require read-before-write. I will run step 1, check its result against hil_gates, then run step 2. No second resolve call needed - the plan is already complete."]:::loop
+
+        BACK_EXEC["Back executes the plan IN ORDER. For each uncompleted step in execution_plan: 1. Map required_inputs names to values from request_frame.intents[].params + candidate_universe. 2. Construct CapabilityRequest with capability_name + params. 3. Call fabric.execute(CapabilityRequest). 4. Check result against constitution.hil_gates. 5. If gate fires: suspend with needs_human (NOT re-resolve). 6. If verification required: run verifier step from plan. 7. Mark step completed, proceed to next."]:::do
+
+        BACK_SUBMIT["After all steps: submit_result(completed). If HIL suspended: submit_result(needs_human). If blocked: submit_result(cannot_execute, reason)."]:::submit
     end
-    FRAME -->|"Step 4.5"| DISCOVERY
-    DISC_FLOW -->|"Step 5"| RESOLVER
-    RESOLVER --> Q1_OV --> Q2_OV --> Q3_OV
+    E_PLAN --> BACK_READ
+    E_INFO --> BACK_READ
+    E_VERDICT --> BACK_READ
+    BACK_READ --> BACK_PLAN
+    BACK_PLAN --> BACK_EXEC
+    BACK_EXEC -->|"all steps done"| BACK_SUBMIT
+    BACK_EXEC -->|"HIL gate fired"| HIL_HUMAN
 
     %% ======================================================================
-    %% Q1 — RESOURCE RESOLUTION
+    %% HIL - Human in the Loop (Back-driven, NOT resolver-driven)
     %% ======================================================================
-    subgraph Q1["Q1 Detail: Who and What Are We Talking About?"]
-        AD["Alias Lookup
-Query: alias_index WHERE name = 'Riley'
-Exact match first. Fuzzy fallback only if exact returns nothing."]:::resolver
-        ADQ{"How many matches?"}
-        AD1["1 match -> Resolved
-Riley -> person.riley_k (child)
-Also finds their linked calendar."]:::resolver
-        AD2["2+ matches -> AMBIGUOUS
-Two Rileys exist (Riley K + Riley T)
-Cannot pick one. Must ask user.
-Result: needs_disambiguation"]:::verdict_hil
-        AD0["0 matches -> NOT FOUND
-Try fuzzy search. Still 0.
-Result: missing_required_params"]:::verdict_block
-        RES["Resource Lookup
-Same pattern for 'family calendar'
-Checks: is it active? can this user access it?"]:::resolver
-        CONN["Connector Admission
-Is the connector admitted and executable?
-Guide-only connectors are excluded from binding."]:::resolver
-        SCOPE["Scope Proof
-Records every entity considered.
-Completeness: complete / partial / unknown"]:::resolver
+    subgraph HIL["Human-in-the-Loop (Back self-checks, NOT resolver)"]
+        HIL_HUMAN["Back suspends with needs_human. Back reads constitution.hil_gates to build the prompt. Back presents options from candidate_universe. Human provides missing field or disambiguation choice. Back resumes: re-runs SAME execution_plan. Completed steps are skipped (completed=true). NO re-resolve needed: the plan did not change."]:::verdict_hil
     end
-    Q1_OV --> AD
-    AD --> ADQ
-    ADQ -->|"1 match"| AD1 --> RES --> CONN --> SCOPE
-    ADQ -->|"2+ matches"| AD2
-    ADQ -->|"0 matches"| AD0
+    BACK_EXEC -->|"ambiguous person or resource"| HIL_HUMAN
+    HIL_HUMAN -->|"human answers"| BACK_EXEC
 
     %% ======================================================================
-    %% Q2 — POLICY SELECTION
+    %% FABRIC EXECUTION
     %% ======================================================================
-    subgraph Q2["Q2 Detail: Are We Allowed to Do This?"]
-        RC["Role Check
-Parent can create events.
-Child cannot write to family calendar.
-Result: blocked_by_policy if denied."]:::policy
-        SC["Safety Band Check
-capability.safety_band_min: GREEN < AMBER < RED
-Task=GREEN but tool needs AMBER? -> denied.
-Safety axes must be explicit, not ambiguous."]:::policy
-        HC["HIL Trigger Check
-Constitution says: delete_event with participants > 1
-needs human approval before executing.
-Must present options honestly."]:::verdict_hil
-        PC["Precondition Check
-Constitution says: must list_events before create_event
-This is a prerequisite read gate.
-Result: can_execute_with_gate"]:::verdict_go
-        PO["PolicyBundle - The Full Decision Record
-Verdict, gates, triggers, verifier requirements,
-safety evidence, deny reasons.
-Sent to the binding layer."]:::policy
+    subgraph FABRIC_EXEC["fabric.execute() - 9-step pipeline"]
+        PF["fabric internal preflight. 1. Emit k1.capability.invoked event. 2. Resolve provider from contract. 3. Conscience gate (social act check). 4. HIL gate (fabric-level pre-execution). 5. Build context (params+session+trace). 6. Instantiate provider. 7. Execute via CircuitBreaker. 8. Validate output (structural,schema,semantic). 9. Emit completed/failed event + learning signal."]:::exec
+        NA["Native Tools (SQLite). Calendar, Chores, Meals, Tasks, Shopping."]:::do
+        BR["Bridge Adapters. External services via bridge ports."]:::exec
     end
-    Q2_OV --> RC
-    Q2_OV --> SC
-    Q2_OV --> HC
-    RC -->|"denied"| PO
-    SC -->|"denied"| PO
-    RC -->|"allowed"| PC
-    SC -->|"allowed"| PC
-    HC --> PO
-    PC -->|"gate"| PO
+    BACK_EXEC -->|"CapabilityRequest"| PF
+    PF -->|"resolve"| NA
+    PF -->|"resolve"| BR
 
     %% ======================================================================
-    %% Q3 — CAPABILITY BINDING
+    %% VERIFICATION
     %% ======================================================================
-    subgraph Q3["Q3 Detail: Do We Have the Right Tool?"]
-        EL["Exact Registry Lookup
-SELECT capabilities WHERE resource_kind=calendar_event
-AND operation=create AND effect=write
-AND record_type=executable
-NO AI-powered search ranking for authority decisions."]:::binding
-        ELQ{"Found in registry?"}
-        EL1["Found -> Create Permission Ticket
-binding_id = hash(connector:capability:resource:actor)
-Role: primary_write or prerequisite_read
-Carries input/output schema refs."]:::binding
-        EL0["Not Found -> Cannot Execute
-No executable tool exists for this operation.
-Result: missing_capability"]:::verdict_block
-        SC2["Freshness Check
-Is the connected resource data stale?
-Stale + write intent = blocked.
-Must refresh projection first."]:::verdict_block
-        P1["Phase 1: Show Tool Names Only
-AI sees: tool_name_cards with descriptions
-NO schemas, NO internals visible yet."]:::binding
-        P2["Phase 2: AI Commits to Tools
-AI explicitly names which tools it will use.
-Gate validates: are these real tools from Phase 1?"]:::binding
-        P3["Phase 3: Show Full Schemas
-Only for committed tools.
-AI sees: requires calendar_id, title, start, end"]:::binding
+    subgraph VERIFY["Verification (constitution-driven)"]
+        V_CHK["Back reads constitution.verification_requirements. If method=read_after_write: Back re-runs the prereq read step from execution_plan. Compares result with what was written. If verified: submit_result(completed). If mismatch: recovery or needs_human."]:::verify
     end
-    Q3_OV --> EL
-    EL --> ELQ
-    ELQ -->|"found"| EL1 --> SC2
-    ELQ -->|"not found"| EL0
-    SC2 -->|"fresh"| P1 --> P2 --> P3
-    SC2 -->|"stale"| EL0
+    FABRIC_EXEC -->|"CapabilityResult"| V_CHK
+    V_CHK -->|"verified"| BACK_SUBMIT
+    V_CHK -->|"mismatch"| HIL_HUMAN
 
     %% ======================================================================
-    %% OUTPUT — What the resolver returns
-    %% ======================================================================
-    subgraph OUTPUT["Step 9: Resolver Returns Its Decision"]
-        OV["ResolutionEnvelope - The Authority Decision
-One of 10 verdict values. Carries:
-- Candidate Universe (all resolved resources)
-- Policy Bundle ref + Binding Bundle ref
-- Completeness, freshness, expiry"]:::resolver
-        OA["allowed_next_actions - Enforced Gate
-The AI can ONLY do what's in this list.
-Not guidance text. A hard runtime gate."]:::resolver
-        PP["PromptPack - What the AI Actually Sees
-Phase-specific context:
-- connector_summary: tool names + descriptions
-- schema_binding: full schemas for committed tools
-- execution: invocation guidance
-- final: submit_result instructions"]:::prompt
-        OR["Redaction Security Audit
-prompt_visible_leak_count must be 0.
-NEVER: raw manifests, tokens, secrets,
-binding_ids, or resource IDs."]:::verify
-    end
-    SCOPE --> OV
-    PO --> OV
-    P3 --> OV
-    AD2 --> OV
-    AD0 --> OV
-    EL0 --> OV
-    SC2 --> OV
-    OV -->|"Step 9"| OA --> PP --> OR
-
-    %% ======================================================================
-    %% L3 — VERDICT
-    %% ======================================================================
-    subgraph L3["Step 10: The Verdict — What Happens Next"]
-        VGO["Go Ahead
-can_execute - all clear, proceed
-can_execute_with_gate - do this preread first"]:::verdict_go
-        VHIL["Needs You
-needs_disambiguation - 'Which Riley?'
-missing_required_params - 'What time?'
-promote_to_tier3 - too complex, handing to planner"]:::verdict_hil
-        VBL["Blocked
-blocked_by_policy - you're not allowed
-stale_projection - data too old to write safely
-missing_capability - no tool for that
-cannot_execute - budget or safety limit
-incomplete_world - can't confirm what exists"]:::verdict_block
-    end
-    OV --> VGO
-    OV --> VHIL
-    OV --> VBL
-    VHIL -->|"user answers -> re-resolve"| Q1_OV
-    VBL -->|"refresh data -> retry"| Q1_OV
-
-    %% ======================================================================
-    %% L4 — EXECUTION LOOP
-    %% ======================================================================
-    subgraph L4["Step 11-14: The AI Tries to Do It"]
-        L4A["Step 11: Resolve
-Call resolve_situation with current progress.
-Get updated allowed_next_actions."]:::loop
-        L4B["Step 12: Act
-AI picks an action from the allowed list.
-Calls invoke_capability or re-resolves."]:::loop
-        L4C["Step 13: Execute
-Invoke the actual tool (create event, send message).
-Preflight: binding valid? params correct? idempotent?"]:::do
-        L4D["Step 14: Verify
-Did it actually work?
-Read back the event and compare."]:::verify
-        L4E["Loop or Finish
-More steps? -> back to Step 11.
-Done? -> submit_result(completed).
-Budget exhausted? -> cannot_execute.
-Error? -> try recovery or block."]:::loop
-        BUDGET_TRACK["Budget Tracking
-Counts: iterations, API calls, tokens, time.
-Enforced at every step.
-No silent budget overflow."]:::loop
-    end
-    VGO --> L4A
-    L4A --> L4B
-    L4B -->|"invoke"| L4C
-    L4C -->|"needs verification"| L4D
-    L4D -->|"verified"| L4E
-    L4D -->|"failed"| VBL
-    L4E -->|"more steps"| L4A
-    L4E -.-> BUDGET_TRACK
-
-    %% ======================================================================
-    %% L5 — SERVICE CALL
-    %% ======================================================================
-    subgraph L5["Step 13: Talking to the Real Service"]
-        PF["Preflight Checks (ordered - fail any = blocked)
-1. Is the permission ticket still valid?
-2. Do the params match the schema?
-3. Is the idempotency key present?
-4. Did this already succeed? (duplicate = no-op)
-5. Is the policy still in effect?
-6. Does the safety band still match?
-7. Is the resource data still fresh?"]:::exec
-        NA["Local Services (SQLite)
-Calendar, Tasks, Reminders, Notes, Contacts"]:::do
-        BR["Connected Apps
-Google Calendar, Slack, Email, Notion, Todoist"]:::exec
-        IF["External APIs
-School Calendar, Bank, Package Tracking,
-Restaurant Booking, Rideshare, Transit"]:::exec
-        ERR["Error Handler
-If any check fails or the service errors,
-produce a typed error with recovery guidance:
-retry, ask user, refresh data, or block."]:::exec
-    end
-    L4C --> PF
-    PF -->|"pass"| NA
-    PF -->|"pass"| BR
-    PF -->|"pass"| IF
-    PF -->|"fail"| ERR
-    NA -->|"success"| L4D
-    BR -->|"success"| L4D
-    IF -->|"success"| L4D
-    NA -->|"error"| ERR
-    BR -->|"error"| ERR
-    IF -->|"error"| ERR
-
-    %% ======================================================================
-    %% L6 — VERIFICATION + SUBMIT
-    %% ======================================================================
-    subgraph L6["Step 14-16: Did It Actually Work?"]
-        VER["Verification Plan
-How we confirm it worked:
-1. Read back and compare (read_after_write)
-2. Validate output format (output_schema)
-3. Compare before/after snapshots
-4. Provider sends confirmation receipt
-5. External system confirms
-6. Policy attests completion
-7. Explicitly unavailable (needs degraded policy)"]:::verify
-        L6A["Verification Result
-Status: verified, mismatch, stale, or degraded
-If mismatch: recovery guidance provided."]:::verify
-        L6B["Submit Result
-Report back: completed (with proof),
-needs_hil (need you to decide),
-cannot_execute (reason given),
-failed (typed error code)."]:::submit
-    end
-    L4D --> VER
-    VER -->|"verified"| L6A
-    VER -->|"unverifiable"| L6B
-    L6A -->|"verified"| L6B
-    L6A -->|"mismatch"| ERR
-    L6B --> L4E
-
-    %% ======================================================================
-    %% DATA STORES
+    %% STORES
     %% ======================================================================
     subgraph STORES["Data Stores"]
-        SG["Global Capability Registry
-40 connectors, 100K capabilities at 5ms lookup.
-Connectors, capabilities, resource kinds, constitutions."]:::store
-        SL["Local User Data
-Connected resources, household members,
-alias index, projection snapshots.
-Freshness: fresh, stale, or unknown."]:::store
-        SI["Idempotency Store
-Tracks idempotency keys.
-Duplicate = return prior result (no second action)."]:::store
-        PR["Provider Data
-Local SQLite data: events, tasks, reminders."]:::store
+        SG["GlobalProjectionStore. 182 capabilities, 50 connectors, 11 tables + FTS5."]:::store
+        SL["LocalProjectionStore. Connected resources, household members, alias index, projection snapshots. Freshness: fresh|stale|unknown."]:::store
+        SI["IdempotencyStore. State machine: not_seen,in_flight,succeeded|failed. Duplicate returns prior result."]:::store
     end
-    EL -.->|"reads capabilities"| SG
-    RC -.->|"reads policy"| SG
-    PC -.->|"reads constitution"| SG
-    AD -.->|"resolve names"| SL
-    RES -.->|"find resources"| SL
+    R1_RES -.->|"reads"| SL
+    R2_TYP -.->|"reads"| SG
+    R3_POL -.->|"reads policy+constitution"| SG
+    R4_BIND -.->|"reads capabilities"| SG
+    R5_EXEC -.->|"reads constitution"| SG
     PF -.->|"idempotency check"| SI
-    NA -.->|"read/write data"| PR
 
     %% ======================================================================
-    %% CONTRACT REFERENCE (concise)
+    %% AMBIGUITY handling
     %% ======================================================================
-    subgraph REFS["Contract Reference (from Design Docs)"]
-        direction LR
-        CA["A = RequestFrame"]:::resolver
-        CB["B = ResolveSituationRequest"]:::resolver
-        CC["C = PolicyBundle"]:::policy
-        CD["D = BindingBundle"]:::binding
-        CE["E = ResolutionEnvelope"]:::resolver
-        CF["F = CandidateUniverse"]:::resolver
-        CG["G = PromptPack"]:::prompt
-        CH["H = Invocation"]:::exec
-        CI["I = HIL Request/Response"]:::verdict_hil
-        CJ["J = SubmitResult"]:::submit
-        CK["K = ErrorObservation"]:::verdict_block
-        CL["L = PlanGraph (Tier 3)"]:::plan
-        CM["M = Verification"]:::verify
-        CN["N = AuthorityDecisionRecord"]:::store
-        CO["O = SafetyContext"]:::policy
-        CP["P = ManifestAdmission"]:::binding
-        CQ["Q = ExecutionBudget"]:::intake
+    subgraph AMBIGUITY["Ambiguity: Exposed, NOT resolved by the resolver"]
+        AD["Alias Lookup. Query alias_index WHERE name=Riley. Exact match first. Fuzzy only if exact returns nothing."]:::resolver
+        ADQ{"How many matches?"}
+        AD1["1 match: Resolved. person_id, linked resources, role."]:::verdict_go
+        AD2["2+ matches: AMBIGUOUS. candidate_universe.unresolved populated. candidate_universe.person_candidates populated. Back shows the human the options. NOT a resolver decision."]:::verdict_hil
+        AD0["0 matches: NOT FOUND. candidate_universe.unresolved populated. Back asks human to clarify."]:::verdict_hil
+        RES_R["Resource Lookup. Same pattern for family calendar. active? accessible? admitted connector?"]:::resolver
     end
+    R1_RES --> AD
+    AD --> ADQ
+    ADQ -->|"1"| AD1 --> RES_R
+    ADQ -->|"2+"| AD2
+    ADQ -->|"0"| AD0
+    AD2 -->|"exposed in envelope"| BACK_READ
+    AD0 -->|"exposed in envelope"| BACK_READ
+
+    %% ======================================================================
+    %% POLICY detail
+    %% ======================================================================
+    subgraph POLICY_DETAIL["Policy: ADVISORY, not enforcement"]
+        RC["Role Check. Parent can create events. Child cannot write to family calendar. policy_bundle.policy_verdict=deny (advisory)."]:::policy
+        SC["Safety Band Check. capability.safety_band_min: GREEN < AMBER < RED. policy_bundle with safety_mapping_evidence."]:::policy
+        PC["Prerequisite Reads (constitution). Constitution says: list_events before create_event. binding_bundle.prerequisites populated. execution_plan step 2 depends_on step 1."]:::policy
+    end
+    R3_POL --> RC
+    R3_POL --> SC
+    R3_POL --> PC
+
+    %% ======================================================================
+    %% BINDING detail
+    %% ======================================================================
+    subgraph BINDING_DETAIL["CapabilityBinding: Complete tool contract (25 fields)"]
+        BIND_FIELDS["Every CapabilityBinding: capability_name, connector_id, invocation_mode, action_name, effect, resource_kind, resource_id, role (primary|companion|prereq|verifier|alternative), confidence, source (typed_intent|exact_match|bm25_search), REQUIRED_INPUTS[] (denormalized from CapabilityRecord), OPTIONAL_INPUTS[] (denormalized from CapabilityRecord), authority_verdict, binding_id, freshness_state, effect_summary, safety_requirement, limitations."]:::binding
+    end
+    R4_BIND --> BIND_FIELDS
 
     %% ======================================================================
     %% VERDICT TAXONOMY
     %% ======================================================================
-    subgraph TX["10 Possible Verdicts"]
+    subgraph TX["10 Verdicts (advisory machine_verdict)"]
         direction LR
-        TX1["can_execute = All clear"]:::verdict_go
-        TX2["can_execute_with_gate = Do preread first"]:::verdict_go
-        TX3["needs_disambiguation = Which Riley?"]:::verdict_hil
-        TX4["missing_required_params = What time?"]:::verdict_hil
-        TX5["promote_to_tier3 = Too complex for me"]:::verdict_hil
-        TX6["blocked_by_policy = Not allowed"]:::verdict_block
-        TX7["stale_projection = Data outdated"]:::verdict_block
-        TX8["missing_capability = No tool"]:::verdict_block
-        TX9["cannot_execute = Budget/safety limit"]:::verdict_block
-        TX10["incomplete_world = Can't confirm"]:::verdict_block
+        TX1["can_execute"]:::verdict_go
+        TX2["can_execute_with_gate"]:::verdict_go
+        TX3["needs_disambiguation"]:::verdict_hil
+        TX4["missing_required_params"]:::verdict_hil
+        TX5["promote_to_tier3"]:::verdict_hil
+        TX6["blocked_by_policy"]:::verdict_block
+        TX7["stale_projection"]:::verdict_block
+        TX8["missing_capability"]:::verdict_block
+        TX9["cannot_execute"]:::verdict_block
+        TX10["needs_hil"]:::verdict_hil
     end
-    OV -.->|"see also"| TX
 
     %% ======================================================================
-    %% HAPPY PATH
+    %% HAPPY PATH - Single-pass end-to-end
     %% ======================================================================
-    subgraph HP["Example: Add Riley Dentist Appointment Tomorrow 5pm"]
+    subgraph HP["Happy Path: Add Riley dentist appointment next Monday 3pm"]
         direction LR
-        H1["1. MEDIUM tier to Back"]:::happy
-        H2["2. Parse: create event, Riley, family calendar, tomorrow 5pm"]:::happy
-        H3["3. Resolve: Riley OK, Policy OK, Tool bound"]:::happy
-        H4["4. Verdict: can_execute_with_gate"]:::happy
-        H5["5. Loop: list_events -> resolve -> create_event"]:::happy
-        H6["6. Execute: Calendar SQLite INSERT"]:::happy
-        H7["7. Verify: get_event matches -> submit completed"]:::happy
+        H1["1. Front dispatches to Back (MEDIUM tier)."]:::happy
+        H2["2. Back LLM extracts: create calendar_event, Riley, Mon 3pm."]:::happy
+        H3["3. resolve_situation ONCE: ResolutionEnvelope."]:::happy
+        H4["4. execution_plan: step1=list_events(read), step2=create_event(write). step2.depends_on=[step1.binding_id]."]:::happy
+        H5["5. Back runs step 1: list_events(time_min=Mon, time_max=Tue). No conflicts."]:::happy
+        H6["6. Back runs step 2: create_event(title, start=Mon 3pm, end=Mon 4pm). INSERT."]:::happy
+        H7["7. Constitution says verify: read_after_write. Back runs list_events again. Confirms event exists. submit_result(completed)."]:::happy
     end
     H1 --> H2 --> H3 --> H4 --> H5 --> H6 --> H7
 
     %% ======================================================================
-    %% READING GUIDE
+    %% CLASS DEFS
     %% ======================================================================
-    subgraph GUIDE["Color Guide"]
-        direction LR
-        G1["Purple = Understanding (L1)"]:::intake
-        G2["Blue = AI Decision (L4)"]:::loop
-        G3["Green = External Action (L5)"]:::do
-        G4["Yellow = Verification (L6)"]:::verify
-        G5["Red = Needs Human / Blocked"]:::gate
-        G6["Orange = Just Talking (T1)"]:::talk
-        G7["Dark Green = Policy Checks"]:::policy
-        G8["Magenta = Permission Tickets"]:::binding
-        G9["Teal = Planner (Tier 3)"]:::plan
-        G10["Bold Green = Proceed"]:::verdict_go
-        G11["Bold Yellow = Needs Info"]:::verdict_hil
-        G12["Bold Red = Blocked/Failed"]:::verdict_block
-    end
-
     classDef gate fill:#1a1a2e,stroke:#e94560,stroke-width:2,color:#eee
     classDef talk fill:#2a2a1e,stroke:#f77f00,stroke-width:2,color:#eee
     classDef do fill:#1a2a2e,stroke:#4cc9f0,stroke-width:2,color:#eee
@@ -523,10 +241,5 @@ Local SQLite data: events, tasks, reminders."]:::store
     classDef verify fill:#2e2a1e,stroke:#ffd166,stroke-width:2,color:#eee
     classDef submit fill:#1a2e1e,stroke:#06d6a0,stroke-width:2,color:#eee
     classDef store fill:#1e1e1e,stroke:#6c757d,stroke-width:1.5,color:#aaa
-    classDef proof fill:#1a1a2e,stroke:#ef476f,stroke-width:1.5,color:#ddd
-    classDef prompt fill:#2e1a2e,stroke:#b5179e,stroke-width:2,color:#eee
     classDef happy fill:#1a3a1e,stroke:#06d6a0,stroke-width:3,color:#0f0
-    classDef principle fill:#1a1a3e,stroke:#f72585,stroke-width:2,color:#ffd166
-    classDef old_approach fill:#2a1a1a,stroke:#e71d36,stroke-width:2,color:#faa
     classDef new_approach fill:#1a2e1a,stroke:#06d6a0,stroke-width:2.5,color:#0f0
-    classDef bench fill:#1e1e2e,stroke:#7209b7,stroke-width:1.5,color:#ccc

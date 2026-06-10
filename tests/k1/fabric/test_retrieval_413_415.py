@@ -792,6 +792,89 @@ class TestRetrievalEngineFindRelevantPrompts:
         assert len(result.capabilities) == 0
 
 
+class TestActivityProfilePromptExclusion:
+    """Regression: activity-profile PromptContracts must NOT leak into
+    discover_capabilities.
+
+    Activity YAMLs (k1/contracts/prompts/*.yaml) are parsed into real
+    PromptContract objects -- which carry NO ``provider_type`` and whose
+    ``name`` (e.g. ``calendar_activity_v1``) does NOT start with
+    ``prompt.`` -- and are registered into the same CapabilityRegistry as
+    real tools, sharing domain tags like ``family`` / ``calendar``.  Before
+    the fix they leaked into Back's discover_capabilities results and broke
+    tool selection.  They must instead be reachable ONLY via
+    find_relevant_prompts.
+    """
+
+    @staticmethod
+    def _engine_with(contracts: List[Any]) -> RetrievalEngine:
+        # Local builder (the module-level _make_engine joins c.capabilities,
+        # which a PromptContract does not have).
+        idx = EmbeddingIndex(EmbeddingIndexConfig(dimension=DIM))
+        embed_port = FakeEmbeddingPort(DIM)
+        registry = FakeRegistry(contracts)
+        for c in contracts:
+            name = getattr(c, "name", "")
+            if name:
+                idx.add_vector(name, embed_port.embed(getattr(c, "description", "")))
+        return RetrievalEngine(
+            embedding_index=idx,
+            hard_filter=HardFilter(),
+            soft_ranker=SoftRanker(),
+            top_k_selector=TopKSelector(),
+            embedding_port=embed_port,
+            registry_port=registry,
+            config=None,
+        )
+
+    @staticmethod
+    def _fixtures() -> tuple:
+        from k1.fabric.types import PromptContract
+
+        # Mirrors calendar_activity_v1.yaml: PromptContract with no
+        # provider_type and a name that does NOT start with "prompt.".
+        prompt = PromptContract(
+            name="calendar_activity_v1",
+            version="1.0.0",
+            domain=["calendar", "family", "coordination"],
+            description="Calendar activity execution guidance.",
+            activity_profile="calendar.v1",
+            intent_match=["schedule family event"],
+        )
+        # The real invocable tool Back actually needs.
+        tool = FakeContract(
+            name="tool.execute.calendar.create_event",
+            domain=["family", "calendar"],
+            description="Create a new calendar event.",
+            provider_type="LOCAL",
+        )
+        return prompt, tool
+
+    def test_discover_capabilities_excludes_activity_prompt(self) -> None:
+        prompt, tool = self._fixtures()
+        engine = self._engine_with([prompt, tool])
+        result = engine.discover_capabilities(domain=["family"], intent="schedule a calendar event")
+        names = {c.contract.name for c in result.capabilities if c.contract}
+        assert "tool.execute.calendar.create_event" in names
+        assert "calendar_activity_v1" not in names
+
+    def test_find_relevant_prompts_returns_activity_prompt(self) -> None:
+        prompt, tool = self._fixtures()
+        engine = self._engine_with([prompt, tool])
+        result = engine.find_relevant_prompts(domain=["family"], intent="schedule a calendar event")
+        names = {c.contract.name for c in result.capabilities if c.contract}
+        assert "calendar_activity_v1" in names
+        assert "tool.execute.calendar.create_event" not in names
+
+    def test_discover_with_no_domain_also_excludes_prompts(self) -> None:
+        # list_all() path (no domain hint) must apply the same split.
+        prompt, tool = self._fixtures()
+        engine = self._engine_with([prompt, tool])
+        result = engine.discover_capabilities(intent="calendar event")
+        names = {c.contract.name for c in result.capabilities if c.contract}
+        assert "calendar_activity_v1" not in names
+
+
 class TestRetrievalEngineConfig:
     """Test RetrievalEngineConfig."""
 

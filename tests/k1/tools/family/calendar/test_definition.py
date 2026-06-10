@@ -64,11 +64,11 @@ def test_calendar_write_actions_expose_generic_metadata() -> None:
         assert "_semantic" in params["metadata"].description
 
 
-def test_core_calendar_actions_reference_activity_prompt_template() -> None:
+def test_core_calendar_actions_have_no_legacy_prompt_template() -> None:
     for name in _EXPECTED_ACTIONS:
         spec = CALENDAR_DEFINITION.find_action(name)
         assert spec is not None
-        assert spec.prompt_template == "calendar_activity_v1"
+        assert spec.prompt_template is None
 
 
 def test_action_kinds_partition_correctly() -> None:

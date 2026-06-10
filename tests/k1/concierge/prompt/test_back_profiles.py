@@ -7,13 +7,16 @@ from k1.concierge.prompt.back_profiles import (
 )
 
 
-def test_registry_loads_profiles_from_prompt_contracts() -> None:
+def test_registry_loads_backed_calendar_profile_from_definition() -> None:
     profile = get_back_execution_profile("calendar.v1")
 
     assert profile is not None
-    assert profile.prompt_template == "calendar_activity_v1"
+    # Post-removal: backed family profiles are sourced from the connector
+    # ToolDefinition (activity_profile + guide_cards), not a prompt-contract
+    # YAML, so there is no legacy prompt_template.
+    assert profile.prompt_template is None
     assert profile.domains[0] == "calendar"
-    assert any("fixed-time coordination" in item for item in profile.guidance)
+    assert any("LIST the calendar first" in item for item in profile.guidance)
 
 
 def test_selects_calendar_profile_from_structured_domain_metadata() -> None:

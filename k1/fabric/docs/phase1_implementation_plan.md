@@ -3205,6 +3205,10 @@ IdempotencyStore (Epic 1.6) — shared, SQLite
           default=None,
           description="Roles that can use this connector. Defaults to ['parent','admin','system']."
       )
+      snapshot_types: Optional[list[str]] = Field(
+          default=None,
+          description="Snapshot types this connector participates in. E.g. ['daily_snapshot','weekly_overview']. Empty/absent = no participation. Used by lookup() tool for dynamic snapshot assembly."
+      )
   ```
 
 - **Also:** Add `input_schema` + `output_schema` (full JSON Schema dicts) to `ActionSpec` as optional fields alongside the existing skinny `params`/`result` `FieldSpec` lists. When present, these are used for `GlobalProjectionStore`. When absent, `FieldSpec` remains the source.
@@ -3217,6 +3221,7 @@ IdempotencyStore (Epic 1.6) — shared, SQLite
 - **What:** Populate ALL new fields on `CALENDAR_DEFINITION`:
   - `resource_kinds: ["calendar_event", "appointment"]` (was singular `entity_type`)
   - `actor_scope: ["parent", "admin", "system"]`
+  - `snapshot_types: ["daily_snapshot", "weekly_overview"]` — appears in daily and weekly lookups
   - `constitution:` — full constitution (see below)
   - `policy_declarations:` — policy rules (see below)
   - `guide_cards:` — migrate from `k1/contracts/prompts/calendar_activity_v1.yaml`
@@ -3225,7 +3230,14 @@ IdempotencyStore (Epic 1.6) — shared, SQLite
 
 ### Issue 9.3 — Calendar Constitution
 
-- **What:** Write the `constitution` block. This is the most important artifact — it tells the resolver WHAT to enforce.
+> **Design principle:** The constitution encodes procedural rules Back's LLM reads
+> to act correctly. Visibility / sensitive-keyword redaction is a session-level
+> kernel policy (the LLM IS the logged-in user — what data it sees is enforced
+> before it ever reaches the LLM). Role gates live in `policy_declarations`;
+> the constitution focuses on what to check, what to do when a check fires,
+> and what other tools/resources coordinate with this connector.
+
+- **What:** Write the `constitution` block.
 
   ```yaml
   constitution:
@@ -3233,70 +3245,170 @@ IdempotencyStore (Epic 1.6) — shared, SQLite
     constitution_id: "family.calendar.v1"
     schema_version: "1.0.0"
     execution_phases: ["read", "mutate"]
+
+    # ── What MUST I check before acting? ──
     prerequisite_reads:
       - operation: "list"
         resource_kind: "calendar_event"
-        reason: "Check for time-window conflicts before creating or updating events."
+        reason: "Check for time-window conflicts with existing events before creating or updating."
         required: true
         timeout_ms: 5000
+      - operation: "list"
+        resource_kind: "chore"
+        reason: "Assigned chores in the same time window may conflict — warn the user."
+        required: false  # advisory only — Back warns, doesn't block
+        timeout_ms: 3000
+      - operation: "list"
+        resource_kind: "task"
+        reason: "Due tasks in the same time window may conflict — warn the user."
+        required: false
+        timeout_ms: 3000
+
+    # ── What could go wrong, and WHAT DO I DO about it? ──
     conflict_analysis_rules:
       - check: "time_overlap"
-        with_resource_kinds: ["calendar_event", "chore", "task"]
-        description: "New event must not overlap existing events, chores, or tasks."
+        with_resource_kinds: ["calendar_event"]
+        description: "Two events at overlapping times for the same attendees."
+        resolution: "Present the conflict to the user with these options: create anyway, pick a different time, or cancel. Do NOT silently overwrite."
+      - check: "time_overlap"
+        with_resource_kinds: ["chore"]
+        description: "An assigned chore is due during this event's time window."
+        resolution: "Warn: '{child} has chore '{chore_title}' due at {due_time}'. Offer: create event anyway, reschedule the chore, or cancel this event."
+      - check: "time_overlap"
+        with_resource_kinds: ["task"]
+        description: "A task is due during this event's time window."
+        resolution: "Warn: '{assignee} has task '{task_title}' due'. Offer: create event anyway or cancel."
       - check: "participant_availability"
         description: "All attendees must be free in the target time window."
+        resolution: "If any participant has a conflicting event, list the conflict and ask whether to proceed."
+
+    # ── What other tools/resources should I coordinate with? ──
     companion_resource_roles:
       - resource_kind: "chore"
         role: "conflict_source"
+        description: "Calendar events may conflict with assigned chores in the same time window. When the user says 'assign kitchen cleanup to Riley weekly', that is a CHORE, not a calendar event — use family.chores."
       - resource_kind: "task"
         role: "conflict_source"
+        description: "Calendar events may conflict with due tasks."
+      - resource_kind: "reminder"
+        role: "dependency"
+        description: "Events can trigger reminders via event_offset triggers."
+      - resource_kind: "shopping_item"
+        role: "suggestion_source"
+        description: "Events like 'birthday party Saturday' may suggest shopping items ('order cake?')."
+
+    # ── When do I STOP and ask the human? ──
     hil_gates:
       - trigger: "missing_required_field"
+        field: "title"
+        prompt: "What should this event be called?"
+      - trigger: "missing_required_field"
+        field: "start"
+        prompt: "What time does this event start?"
+      - trigger: "missing_required_field"
         field: "end"
-        prompt: "What time should this event end?"
+        prompt: "What time does this event end? (I'll default to 1 hour if not sure.)"
       - trigger: "missing_required_field"
         field: "resource_id"
         prompt: "Which calendar should I add this to?"
       - trigger: "time_conflict_detected"
-        prompt: "This event conflicts with {conflict_title} at {conflict_time}. Create anyway?"
+        prompt: "This time conflicts with: {conflict_summary}. What should I do?"
         options: ["Create anyway", "Pick a different time", "Cancel"]
       - trigger: "ambiguous_person"
-        prompt: "Which person did you mean?"
+        prompt: "Which person did you mean? I found: {candidate_names}."
+      - trigger: "child_creates_event"
+        prompt: "{child_name} is creating an event. Notify parents?"
+        options: ["Yes, notify parents", "Just create it"]
+
+    # ── What order do I execute? ──
     mutation_sequencing:
       - order: 1
         phase: "read"
         operation: "list"
-        description: "Read current calendar state before mutating."
+        description: "Read current calendar + chores + tasks for the target time window."
       - order: 2
         phase: "mutate"
         operation: "create"
-        description: "Create the event if no conflicts detected."
+        description: "Create the event if no blocking conflicts. If a soft conflict exists, present it to the user per conflict_analysis_rules resolution guidance above."
       - order: 3
         phase: "read"
         operation: "list"
         description: "Verify event was created (read_after_write)."
+
+    # ── How do I prove it worked? ──
     verification_requirements:
       - method: "read_after_write"
+        description: "Read back the created event and confirm all fields match."
         required_for_submit: true
       - method: "output_schema"
-    precondition_summary: "List calendar before creating events to check for time conflicts."
-    companion_resource_summary: "Calendar conflicts with chores and tasks in the same time window."
-    hil_trigger_summary: "HIL required when end time or calendar is missing, or when a time conflict exists."
-    degradation_policy: "If read_after_write verification fails, retry once then submit degraded."
+        description: "Validate the returned event matches the expected schema."
+
+    # ── Summaries (injected into Back's prompt) ──
+    precondition_summary: >
+      Before creating or updating an event, I MUST list the calendar for the
+      target time window. I SHOULD also check chores and tasks for soft conflicts.
+      I present all conflicts to the user — I never silently overwrite.
+    companion_resource_summary: >
+      Calendar events conflict with chores and tasks in the same time window.
+      Events can trigger reminders. Recurring events like birthdays can suggest
+      shopping items. If the user describes something recurring with reward
+      tracking, that is a CHORE (family.chores), not a calendar event.
+    hil_trigger_summary: >
+      I need human input when: title/start/end/calendar are missing, a time
+      conflict is detected, a person reference is ambiguous, or a child is
+      creating an event that should notify parents.
+    degradation_policy: >
+      If read_after_write verification fails, retry once. If still failing,
+      submit degraded with the created event_id but flag verification=failed.
   ```
 
 ### Issue 9.4 — Calendar Policy Declarations
+
+> **Design principle:** Policy declarations are enforced by
+> `PolicySelectorService` — they gate what the LLM is ALLOWED to do based
+> on actor role and safety band. The LLM does not read these; the resolver
+> enforces them and reports violations via `machine_verdict`. Visibility
+> (who can see what data) is a session-level kernel concern, not a
+> connector policy — it's applied BEFORE data reaches the LLM.
 
 - **What:** Write `policy_declarations`:
 
   ```yaml
   policy_declarations:
-    write_requires_actor_role: []           # default-allow
-    read_allowed_roles: []
+    # ── Per-operation role gates ──
+    # create_event: any household role can create
+    # update_event: parent/guardian only (kids can't edit after creation)
+    # delete_event: parent/guardian only
+    # set_visibility: parent only
+    # connect_feed: parent only
+    # list_feeds: parent/guardian only
+    # respond_to_invite: any role
+    operation_role_gates:
+      create_event: ["parent", "child", "guardian"]
+      update_event: ["parent", "guardian"]
+      delete_event: ["parent", "guardian"]
+      set_visibility: ["parent"]
+      connect_feed: ["parent"]
+      disconnect_feed: ["parent"]
+      list_feeds: ["parent", "guardian"]
+      respond_to_invite: ["parent", "child", "guardian"]
+
+    # ── Safety band minimums per operation ──
+    operation_safety_bands:
+      create_event: "GREEN"
+      update_event: "GREEN"
+      delete_event: "AMBER"
+      set_visibility: "AMBER"
+      connect_feed: "AMBER"
+      disconnect_feed: "AMBER"
+
+    # ── Protected resource patterns (reads require specified role) ──
     protected_resources:
       - resource_id_pattern: "cal_parent_*"
-        reason: "Parent calendar contains sensitive appointments."
+        reason: "Parent calendar may contain sensitive appointments."
         required_role: "parent"
+
+    # ── HIL triggers (policy-level, enforced by PolicySelectorService) ──
     hil_triggers:
       - condition: "write_operation AND actor_role == 'child'"
         prompt: "Ask a parent to confirm this calendar change."
@@ -3442,7 +3554,16 @@ IdempotencyStore (Epic 1.6) — shared, SQLite
 - Policy gated on `ResolvedIntentType` (Epic 4.1, Fix 7)
 - Registered via `register_definition_to_store()` at `bootstrap_family_tools()` (Epic 9.8-9.9)
 
-### Issue 10.1 — Tasks Constitution (YAML)
+### Issue 10.1 — Tasks Constitution
+
+> **Design principle:** Tasks are one-shot to-do items. Chores are recurring
+>
+> - gamified with reward ledgers. Back's LLM needs to know the difference
+> so when the user says "assign kitchen cleanup to Riley every Tuesday"
+> (which sounds like a task), Back recognizes it as a CHORE and crosses over
+> to `family.chores`. This distinction lives in `companion_resource_roles`
+> (so the resolver discovers the chore connector as a companion) AND in
+> guide cards (so Back's prompt teaches the LLM the distinction).
 
 ```yaml
 constitution:
@@ -3450,17 +3571,48 @@ constitution:
   constitution_id: "family.tasks.v1"
   schema_version: "1.0.0"
   execution_phases: ["read", "mutate"]
+
+  # ── What MUST I check before acting? ──
   prerequisite_reads:
     - operation: "list"
       resource_kind: "task"
-      reason: "Check for duplicate tasks before creating."
+      reason: "Check for duplicate tasks (same title + same assignee) before creating."
       required: true
       timeout_ms: 5000
+    - operation: "list"
+      resource_kind: "calendar_event"
+      reason: "Check for scheduling conflicts — a task due Friday may conflict with an event."
+      required: false  # advisory — Back warns, doesn't block
+      timeout_ms: 3000
+
+  # ── What could go wrong, and WHAT DO I DO about it? ──
   conflict_analysis_rules:
     - check: "duplicate"
       with_resource_kinds: ["task"]
       description: "New task title must not match an existing open task for the same assignee."
-  companion_resource_roles: []
+      resolution: "Tell the user: '{assignee} already has an open task '{existing_title}'. Create anyway or update the existing task?"
+    - check: "due_date_vs_calendar"
+      with_resource_kinds: ["calendar_event"]
+      description: "A task due at a specific time may conflict with a calendar event."
+      resolution: "Warn the user if the task's due window overlaps a calendar event for the same assignee. Do not block — tasks are flexible."
+
+  # ── What other tools/resources should I coordinate with? ──
+  companion_resource_roles:
+    - resource_kind: "calendar_event"
+      role: "dependency"
+      description: "Calendar events can auto-create tasks ('Riley has soccer at 5pm — create pack cleats task due 4:30pm')."
+    - resource_kind: "chore"
+      role: "distinct_sibling"
+      description: >
+        CRITICAL DISTINCTION: Tasks are ONE-SHOT ('pick up Riley today').
+        Chores are RECURRING + GAMIFIED ('vacuum living room every Saturday,
+        earn $2'). If the user describes something recurring with rewards,
+        points, or allowance — that is a CHORE, not a task. Use
+        family.chores, not family.tasks. If the user says 'assign kitchen
+        cleanup to Riley weekly', that is a chore. If the user says 'remind
+        Riley to do homework tonight', that is a task.
+
+  # ── When do I STOP and ask the human? ──
   hil_gates:
     - trigger: "missing_required_field"
       field: "title"
@@ -3469,27 +3621,117 @@ constitution:
       field: "assignee"
       prompt: "Who should this task be assigned to?"
     - trigger: "ambiguous_person"
-      prompt: "Which person did you mean?"
+      prompt: "Which person did you mean? I found: {candidate_names}."
+    - trigger: "duplicate_detected"
+      prompt: "{assignee} already has '{existing_title}'. Create anyway or update the existing one?"
+      options: ["Create anyway", "Update existing", "Cancel"]
+
+  # ── What order do I execute? ──
   mutation_sequencing:
-    - order: 1, phase: "read", operation: "list", description: "Read current task list before mutating."
-    - order: 2, phase: "mutate", operation: "create", description: "Create the task if no duplicate detected."
-    - order: 3, phase: "read", operation: "list", description: "Verify task was created (read_after_write)."
+    - order: 1
+      phase: "read"
+      operation: "list"
+      description: "Read current task list + calendar for the assignee."
+    - order: 2
+      phase: "mutate"
+      operation: "create"
+      description: "Create the task if no duplicate detected. Warn about calendar conflicts if any."
+    - order: 3
+      phase: "read"
+      operation: "list"
+      description: "Verify task was created (read_after_write)."
+
+  # ── How do I prove it worked? ──
   verification_requirements:
     - method: "read_after_write"
+      description: "Read back the created task and confirm all fields match."
       required_for_submit: true
     - method: "output_schema"
-  precondition_summary: "List tasks before creating to check for duplicates."
-  companion_resource_summary: null
-  hil_trigger_summary: "HIL required when task title or assignee is missing."
-  degradation_policy: "If read_after_write verification fails, retry once then submit degraded."
+      description: "Validate the returned task matches the expected schema."
+
+  # ── Summaries (injected into Back's prompt) ──
+  precondition_summary: >
+    Before creating a task, I MUST list existing tasks to check for duplicates
+    (same title + same assignee). I SHOULD check the assignee's calendar for
+    scheduling awareness. Tasks are flexible — I warn about conflicts but
+    don't block.
+  companion_resource_summary: >
+    Tasks can be auto-created from calendar events. Tasks are DISTINCT from
+    chores: tasks are one-shot, chores are recurring with reward tracking.
+    See the 'Tasks vs Chores' guide card for the full distinction rules.
+  hil_trigger_summary: >
+    I need human input when: task title or assignee is missing, the person
+    reference is ambiguous, or a duplicate task is detected.
+  degradation_policy: >
+    If read_after_write verification fails, retry once then submit degraded.
 ```
 
 ### Issue 10.2 — Tasks Policy + Guide Cards + Ontology
 
-- **Policy:** `write_requires_actor_role: []` (default-allow), `read_allowed_roles: []`, no protected resources, no HIL triggers.
-- **Guide cards:** Migrate `k1/contracts/prompts/tasks_activity_v1.yaml` → `ToolDefinition.guide_cards`. Include task management guidance: list before create, assign explicitly, use priority hints.
-- **Ontology:** `concept_aliases`: "todo"→"task", "homework"→"task", "errand"→"task". `resource_connector_edges`: `{resource_family: "task", connector_id: "family.tasks", role: "primary"}`. `operation_equivalences`: `{canonical: "list", equivalent: "search"}`. `operation_aliases`: "assign"→update, "complete"→update, "finish"→update, "add"→create.
-- **JSON Schemas:** Add `input_schema` + `output_schema` (Draft-07) to all `ActionSpec` entries in `TASKS_DEFINITION`.
+- **Manifest:** `snapshot_types: ["daily_snapshot", "weekly_overview"]` — tasks appear in daily and weekly lookups.
+
+- **Policy:** Per-operation role gates — `create_task`: any role, `reassign_task`: parent/guardian only, `complete_task`: any role. Safety bands: `create_task`: GREEN, `reassign_task`: AMBER. No protected resources.
+
+  ```yaml
+  policy_declarations:
+    operation_role_gates:
+      create_task: ["parent", "child", "guardian"]
+      update_task: ["parent", "guardian"]
+      complete_task: ["parent", "child", "guardian"]
+      delete_task: ["parent", "guardian"]
+      reassign_task: ["parent", "guardian"]
+    operation_safety_bands:
+      create_task: "GREEN"
+      reassign_task: "AMBER"
+      delete_task: "AMBER"
+  ```
+
+- **Guide cards:** The Tasks-vs-Chores distinction is the critical card. Also: list before create, assign explicitly, use priority/urgency hints, auto-create from calendar events.
+
+  ```yaml
+  guide_cards:
+    - guide_id: "family.tasks.guide.01"
+      title: "Tasks vs Chores — Know the Difference"
+      content: |
+        TASKS are ONE-SHOT to-do items:
+          "Pick up Riley from school today"
+          "Remind Riley to do homework tonight"
+          "Buy birthday cake for Saturday's party"
+        Tasks have NO rewards, NO recurrence, NO parent verification gate.
+        When done, just mark complete_task().
+
+        CHORES are RECURRING + GAMIFIED:
+          "Vacuum living room every Saturday — earn $2"
+          "Clean kitchen nightly — earn $1.50"
+          "Mow the lawn weekly — earn $5"
+        Chores have rewards, allowance tracking, parent verify_chore() gate,
+        and redemption via redeem_reward().
+
+        RED FLAGS that mean CHORE not task:
+        - "every [day/week/Saturday]" → recurring = chore
+        - "earn [$amount]" or "points" or "allowance" → reward = chore
+        - "assign [child] to [recurring duty]" → chore
+        - Parent needs to "verify" or "approve" → chore
+
+        If ANY red flag is present, use family.chores tools, not family.tasks.
+      relevance: "always"
+      disclosure_phase: "connector_summary"
+
+    - guide_id: "family.tasks.guide.02"
+      title: "Creating Tasks from Calendar Events"
+      content: |
+        Calendar events often imply tasks:
+        - "Riley has soccer at 5pm" → create "pack cleats" task due 4:30pm
+        - "Family dinner Saturday" → create "buy groceries" task due Friday
+        - "Doctor appointment Tuesday" → create "fill prescription" task
+
+        When you see a calendar event, check if it implies a task and
+        suggest it to the user. Do NOT auto-create without asking.
+      relevance: "on_conflict"
+      disclosure_phase: "tool_name_selection"
+  ```
+
+- **Ontology:** `concept_aliases`: "todo"→"task", "homework"→"task", "errand"→"task", "remind me to"→"task". `resource_connector_edges`: `{resource_family: "task", connector_id: "family.tasks", role: "primary"}`, `{resource_family: "calendar_event", connector_id: "family.tasks", role: "companion"}`, `{resource_family: "chore", connector_id: "family.tasks", role: "companion"}`. `operation_aliases`: "assign"→create, "complete"→complete_task, "finish"→complete_task, "add"→create.
 
 ### Issue 10.3 — Tasks Tests
 
@@ -3505,7 +3747,15 @@ constitution:
 
 **Goal:** Upgrade reminders with full constitution, policy, guide cards, ontology, and JSON schemas. Follows the calendar pattern (Epic 9) with reminder-specific rules.
 
-### Issue 11.1 — Reminders Constitution (YAML)
+### Issue 11.1 — Reminders Constitution
+
+> **Design principle:** Reminders are pure notifications — they fire at a time,
+> they notify, they're done. They are NOT tracked action items (that's a task)
+> and NOT recurring gamified duties (that's a chore). Reminders do NOT check
+> for calendar conflicts — a reminder at 3pm ("take pill") and a soccer
+> event at 3pm are orthogonal. The only cross-app concern is: if the reminder
+> references a calendar event ("30 minutes before Riley's soccer"), verify the
+> event still exists so the reminder doesn't fire on a deleted event.
 
 ```yaml
 constitution:
@@ -3513,20 +3763,46 @@ constitution:
   constitution_id: "family.reminders.v1"
   schema_version: "1.0.0"
   execution_phases: ["read", "mutate"]
+
+  # ── What MUST I check before acting? ──
   prerequisite_reads:
     - operation: "list"
       resource_kind: "reminder"
-      reason: "Check for duplicate reminders at the same time for the same person."
+      reason: "Check for duplicate reminders (same person + same time + same message) before creating."
       required: true
       timeout_ms: 5000
+    - operation: "list"
+      resource_kind: "calendar_event"
+      reason: "If the reminder has an event_ref, verify the referenced calendar event still exists. If deleted, the reminder would fire at a computed time based on nothing — warn the user."
+      required: false  # advisory — only when event_ref is set
+      timeout_ms: 3000
+
+  # ── What could go wrong, and WHAT DO I DO about it? ──
   conflict_analysis_rules:
     - check: "duplicate"
       with_resource_kinds: ["reminder"]
-      description: "New reminder must not duplicate an existing reminder at the same time."
+      description: "New reminder must not duplicate an existing reminder for the same person at the same time with the same message."
+      resolution: "Tell the user: '{person} already has a reminder '{existing_message}' at {time}'. Offer: create anyway or cancel."
+    - check: "invalid_event_ref"
+      with_resource_kinds: ["calendar_event"]
+      description: "The referenced calendar event no longer exists (deleted or moved)."
+      resolution: "Warn: 'The event '{event_title}' was deleted. The reminder will still fire at {computed_time} but won't reference a valid event.' Offer: create anyway, pick a different event, or cancel."
+
+  # ── What other tools/resources should I coordinate with? ──
   companion_resource_roles:
     - resource_kind: "calendar_event"
       role: "dependency"
-      description: "Reminder may reference a calendar event."
+      description: "Reminders can fire at event offsets ('30 minutes before Riley's soccer'). The reminder depends on the event existing — if the event is deleted, warn the user per conflict_analysis_rules above."
+    - resource_kind: "task"
+      role: "distinct_sibling"
+      description: >
+        CRITICAL DISTINCTION: Reminders are PURE NOTIFICATIONS ('remind Riley
+        to take medicine at 8pm'). Tasks are ONE-SHOT action items ('pick up
+        Riley today'). If the user says 'remind me to X', that's a reminder.
+        If the user says 'I need to X' or 'add X to my list', that's a task.
+        See the 'Reminders vs Tasks' guide card for the full distinction rules.
+
+  # ── When do I STOP and ask the human? ──
   hil_gates:
     - trigger: "missing_required_field"
       field: "time"
@@ -3534,28 +3810,117 @@ constitution:
     - trigger: "missing_required_field"
       field: "person"
       prompt: "Who is this reminder for?"
+    - trigger: "missing_required_field"
+      field: "message"
+      prompt: "What should the reminder say?"
     - trigger: "ambiguous_person"
-      prompt: "Which person did you mean?"
+      prompt: "Which person did you mean? I found: {candidate_names}."
+
+  # ── What order do I execute? ──
   mutation_sequencing:
-    - order: 1, phase: "read", operation: "list", description: "Read current reminders before mutating."
-    - order: 2, phase: "mutate", operation: "create", description: "Create the reminder if no duplicate detected."
-    - order: 3, phase: "read", operation: "list", description: "Verify reminder was created (read_after_write)."
+    - order: 1
+      phase: "read"
+      operation: "list"
+      description: "Read current reminders + calendar event if event_ref is set."
+    - order: 2
+      phase: "mutate"
+      operation: "create"
+      description: "Create the reminder if no duplicate detected. Warn about invalid event_ref if applicable."
+    - order: 3
+      phase: "read"
+      operation: "list"
+      description: "Verify reminder was created (read_after_write)."
+
+  # ── How do I prove it worked? ──
   verification_requirements:
     - method: "read_after_write"
+      description: "Read back the created reminder and confirm all fields match."
       required_for_submit: true
     - method: "output_schema"
-  precondition_summary: "List reminders before creating to check for duplicates."
-  companion_resource_summary: "Reminders may reference calendar events."
-  hil_trigger_summary: "HIL required when reminder time or person is missing."
-  degradation_policy: "If read_after_write verification fails, retry once then submit degraded."
+      description: "Validate the returned reminder matches the expected schema."
+
+  # ── Summaries (injected into Back's prompt) ──
+  precondition_summary: >
+    Before creating a reminder, I MUST list existing reminders for the same
+    person to check for duplicates. If the reminder references a calendar
+    event (event_ref), I SHOULD verify the event still exists. Reminders are
+    pure notifications — I do NOT check for calendar scheduling conflicts.
+  companion_resource_summary: >
+    Reminders can fire at calendar event offsets. Reminders are DISTINCT from
+    tasks: reminders are pure notifications ('remind me to X at Y time'),
+    tasks are action items ('I need to do X'). See the 'Reminders vs Tasks'
+    guide card for the full distinction rules.
+  hil_trigger_summary: >
+    I need human input when: reminder time, person, or message is missing, or
+    a person reference is ambiguous.
+  degradation_policy: >
+    If read_after_write verification fails, retry once then submit degraded.
 ```
 
 ### Issue 11.2 — Reminders Policy + Guide Cards + Ontology
 
-- **Policy:** `write_requires_actor_role: []` (default-allow). Protected: `rem_*` patterns restricted to `["parent", "self"]`.
-- **Guide cards:** Migrate `k1/contracts/prompts/reminders_activity_v1.yaml`. Include: specify clear time, remind for specific person, reference events in notes.
-- **Ontology:** `concept_aliases`: "alert"→"reminder", "nag"→"reminder", "notify"→"reminder", "remind me"→"reminder". `resource_connector_edges`: `{resource_family: "reminder", connector_id: "family.reminders", role: "primary"}`, `{resource_family: "calendar_event", connector_id: "family.reminders", role: "companion"}`. `operation_equivalences`: `{canonical: "list", equivalent: "search"}`. `operation_aliases`: "remind"→create, "set"→create, "snooze"→update.
-- **JSON Schemas:** Add `input_schema` + `output_schema` to all `ActionSpec` entries in `REMINDERS_DEFINITION`.
+- **Manifest:** `snapshot_types: ["daily_snapshot", "weekly_overview"]` — reminders appear in daily and weekly lookups.
+
+- **Policy:** Per-operation role gates — `create_reminder`: any role (anyone can set reminders), `delete_reminder`: self or parent (you can delete your own; parents can delete kids'), `update_reminder`: self or parent. All operations GREEN safety band — reminders are low-risk. No protected resources.
+
+  ```yaml
+  policy_declarations:
+    operation_role_gates:
+      create_reminder: ["parent", "child", "guardian"]
+      update_reminder: ["parent", "child", "guardian"]
+      delete_reminder: ["parent", "child", "guardian"]
+    operation_safety_bands:
+      create_reminder: "GREEN"
+      update_reminder: "GREEN"
+      delete_reminder: "GREEN"
+  ```
+
+- **Guide cards:** The Reminders-vs-Tasks distinction is the critical card. Also: specify clear time + message, reference calendar events with offset syntax, reminders are cheap — don't over-gate with HIL.
+
+  ```yaml
+  guide_cards:
+    - guide_id: "family.reminders.guide.01"
+      title: "Reminders vs Tasks — Know the Difference"
+      content: |
+        REMINDERS are PURE NOTIFICATIONS:
+          "Remind Riley to take medicine at 8pm"
+          "Remind me to call the dentist tomorrow at 9am"
+          "Remind Riley 30 minutes before soccer practice"
+        Reminders fire once, notify, and are done. No tracking, no completion
+        state, no rewards. They are cheap — create freely.
+
+        TASKS are ONE-SHOT ACTION ITEMS:
+          "Pick up Riley from school today"
+          "Buy birthday cake for Saturday's party"
+          "I need to finish the report by Friday"
+        Tasks are tracked, have completion state, and may have due dates.
+
+        RED FLAGS that mean TASK not reminder:
+        - "I need to [do X]" → task
+        - "add [X] to my list" → task
+        - "[X] is due [date]" → task
+        - "don't forget to [X]" → could be either — ask if they want a reminder or a task
+
+        If ANY red flag is present, consider family.tasks instead of family.reminders.
+      relevance: "always"
+      disclosure_phase: "connector_summary"
+
+    - guide_id: "family.reminders.guide.02"
+      title: "Creating Reminders from Calendar Events"
+      content: |
+        Reminders can fire at offsets from calendar events:
+        - "Remind Riley 30 minutes before soccer practice"
+        - "Remind me 1 hour before the dentist appointment"
+        - "Remind everyone at event start for family dinner"
+
+        Offset syntax: "{N} minutes/hours before/after {event}".
+        Always verify the event still exists before creating the reminder.
+        If the event is deleted, warn the user but still allow reminder creation.
+      relevance: "on_conflict"
+      disclosure_phase: "tool_name_selection"
+  ```
+
+- **Ontology:** `concept_aliases`: "alert"→"reminder", "nag"→"reminder", "notify"→"reminder", "remind me"→"reminder", "ping"→"reminder". `resource_connector_edges`: `{resource_family: "reminder", connector_id: "family.reminders", role: "primary"}`, `{resource_family: "calendar_event", connector_id: "family.reminders", role: "companion"}`, `{resource_family: "task", connector_id: "family.reminders", role: "companion"}`. `operation_aliases`: "remind"→create, "set"→create, "snooze"→update, "notify"→create.
 
 ### Issue 11.3 — Reminders Tests
 
@@ -3570,7 +3935,16 @@ constitution:
 
 **Goal:** Upgrade chores with full constitution, policy, guide cards, ontology, and JSON schemas.
 
-### Issue 12.1 — Chores Constitution (YAML)
+### Issue 12.1 — Chores Constitution
+
+> **Design principle:** Chores are recurring + gamified with reward ledgers.
+> Back's LLM needs to know the chore lifecycle: `create_chore()` (parent assigns)
+> → `complete_chore()` (child marks done) → `verify_chore()` (parent confirms)
+> → reward credits → `redeem_reward()` (child spends earnings). This is the
+> core gamification loop. Calendar events take precedence over recurring chore
+> slots because events are specific one-time commitments; chores are flexible
+> recurring duties. Workload balance is checked procedurally (count chores per
+> person) but the resolution is always advisory — the parent decides.
 
 ```yaml
 constitution:
@@ -3578,20 +3952,52 @@ constitution:
   constitution_id: "family.chores.v1"
   schema_version: "1.0.0"
   execution_phases: ["read", "mutate"]
+
+  # ── What MUST I check before acting? ──
   prerequisite_reads:
     - operation: "list"
       resource_kind: "chore"
-      reason: "Check for existing chore assignments before creating or reassigning."
+      reason: "Check for duplicate chore assignments (same assignee + same title + same recurrence pattern) before creating."
       required: true
       timeout_ms: 5000
+    - operation: "list"
+      resource_kind: "calendar_event"
+      reason: "Check the assignee's calendar for the chore's recurring time window. A 'Saturdays 10am' chore may conflict with a specific Saturday event."
+      required: false  # advisory — calendar events take precedence, but chores are flexible
+      timeout_ms: 3000
+
+  # ── What could go wrong, and WHAT DO I DO about it? ──
   conflict_analysis_rules:
+    - check: "duplicate"
+      with_resource_kinds: ["chore"]
+      description: "New chore must not duplicate an existing chore for the same assignee with the same title and recurrence pattern."
+      resolution: "Tell the user: '{assignee} already has chore '{existing_title}' with the same schedule. Create anyway or update the existing chore?"
     - check: "time_overlap"
-      with_resource_kinds: ["calendar_event", "chore"]
-      description: "New chore must not conflict with scheduled events or other chores."
+      with_resource_kinds: ["calendar_event"]
+      description: "The chore's recurring time slot conflicts with a specific calendar event. Calendar events take precedence because they are specific one-time commitments; chores are recurring and flexible."
+      resolution: "Warn: '{assignee} has '{event_title}' during the chore's regular time on {dates}. The child can work around the event — do not block. Offer: keep chore as-is (child works around event), adjust time for those specific dates, or cancel."
+    - check: "workload_balance"
+      with_resource_kinds: ["chore"]
+      description: "One household member has significantly more chores than others. This is a fairness check — advisory only, never blocking."
+      resolution: "If one person has ≥3 more chores than another, mention it: '{person} has {n} chores/week, {other} has {m}. Would you like to balance the workload?' The parent always decides — do NOT block chore creation for workload balance."
+
+  # ── What other tools/resources should I coordinate with? ──
   companion_resource_roles:
     - resource_kind: "calendar_event"
       role: "conflict_source"
-      description: "Chores may conflict with calendar events in the same time window."
+      description: "Calendar events take precedence over recurring chore slots. Chores are flexible — the child works around specific events."
+    - resource_kind: "task"
+      role: "distinct_sibling"
+      description: >
+        CRITICAL DISTINCTION: Chores are RECURRING + GAMIFIED ('vacuum every
+        Saturday, earn $2'). Tasks are ONE-SHOT ('pick up Riley today'). If
+        the user describes something recurring with rewards, points, or
+        allowance — that is a CHORE. If the user says 'assign kitchen cleanup
+        to Riley weekly', that is a chore. If the user says 'remind Riley to
+        do homework tonight', that is a task (family.tasks) or a reminder
+        (family.reminders). See the 'Chores vs Tasks' guide card.
+
+  # ── When do I STOP and ask the human? ──
   hil_gates:
     - trigger: "missing_required_field"
       field: "title"
@@ -3599,28 +4005,164 @@ constitution:
     - trigger: "missing_required_field"
       field: "assignee"
       prompt: "Who should do this chore?"
+    - trigger: "missing_required_field"
+      field: "frequency"
+      prompt: "How often should this chore be done? (daily, weekly, every Saturday, etc.)"
     - trigger: "ambiguous_person"
-      prompt: "Which person did you mean?"
+      prompt: "Which person did you mean? I found: {candidate_names}."
+    - trigger: "time_conflict_detected"
+      prompt: "This chore's time conflicts with: {conflict_summary}. What should I do?"
+      options: ["Keep chore as-is (child works around event)", "Adjust time for conflicting dates", "Cancel"]
+    - trigger: "child_marks_complete"
+      prompt: "{child_name} marked '{chore_title}' as done. Verify completion?"
+      options: ["Yes, verify — credit reward", "Not yet — remind them what's needed", "Reject — chore not done properly"]
+
+  # ── What order do I execute? ──
   mutation_sequencing:
-    - order: 1, phase: "read", operation: "list", description: "Read current chore list before mutating."
-    - order: 2, phase: "mutate", operation: "create", description: "Create the chore if no conflicts detected."
-    - order: 3, phase: "read", operation: "list", description: "Verify chore was created (read_after_write)."
+    - order: 1
+      phase: "read"
+      operation: "list"
+      description: "Read current chore list + calendar for the assignee's recurring time window."
+    - order: 2
+      phase: "mutate"
+      operation: "create"
+      description: "Create the chore if no duplicate detected. Warn about calendar conflicts (advisory). Check workload balance (advisory)."
+    - order: 3
+      phase: "read"
+      operation: "list"
+      description: "Verify chore was created (read_after_write)."
+
+  # ── How do I prove it worked? ──
   verification_requirements:
     - method: "read_after_write"
+      description: "Read back the created chore and confirm all fields match."
       required_for_submit: true
     - method: "output_schema"
-  precondition_summary: "List chores before creating to check for conflicts with existing chores and calendar events."
-  companion_resource_summary: "Chores conflict with calendar events in the same time window."
-  hil_trigger_summary: "HIL required when chore title or assignee is missing."
-  degradation_policy: "If read_after_write verification fails, retry once then submit degraded."
+      description: "Validate the returned chore matches the expected schema."
+
+  # ── Summaries (injected into Back's prompt) ──
+  precondition_summary: >
+    Before creating a chore, I MUST list existing chores to check for duplicates
+    (same assignee + same title + same recurrence). I SHOULD check the assignee's
+    calendar for time-window conflicts. Calendar events take precedence over
+    recurring chore slots — chores are flexible. I SHOULD also check workload
+    balance across household members (advisory only).
+  companion_resource_summary: >
+    Calendar events take precedence over recurring chore slots. Chores are
+    DISTINCT from tasks: chores are recurring + gamified with reward ledgers,
+    tasks are one-shot action items. Chores follow a lifecycle:
+    create → complete (child) → verify (parent) → reward credits → redeem.
+    See the 'Chores vs Tasks' and 'How Gamification Works' guide cards.
+  hil_trigger_summary: >
+    I need human input when: chore title, assignee, or frequency is missing,
+    a person reference is ambiguous, a calendar time conflict is detected,
+    or a child marks a chore as complete (parent verification is the core
+    gamification mechanic).
+  degradation_policy: >
+    If read_after_write verification fails, retry once then submit degraded.
 ```
 
 ### Issue 12.2 — Chores Policy + Guide Cards + Ontology
 
-- **Policy:** `write_requires_actor_role: ["parent", "guardian"]` — only parents/guardians can assign. Protected: `chore_points_*` restricted to `["parent", "self"]`. HIL trigger: child write → ask parent.
-- **Guide cards:** Migrate `k1/contracts/prompts/chores_activity_v1.yaml`. Include: list before assign, check calendar availability, be specific, set due dates.
-- **Ontology:** `concept_aliases`: "clean"→"chore", "housework"→"chore". `resource_connector_edges`: `{resource_family: "chore", connector_id: "family.chores", role: "primary"}`, `{resource_family: "calendar_event", connector_id: "family.chores", role: "companion"}`. `operation_equivalences`: `{canonical: "list", equivalent: "search"}`. `operation_aliases`: "assign"→create, "complete"→update, "finish"→update.
-- **JSON Schemas:** Add `input_schema` + `output_schema` to all `ActionSpec` entries in `CHORES_DEFINITION`.
+- **Manifest:** `snapshot_types: ["daily_snapshot", "weekly_overview"]` — chores appear in daily and weekly lookups.
+
+- **Policy:** Per-operation role gates reflect the chore lifecycle: `create_chore`: parent/guardian only (parents assign), `complete_chore`: any role (kids mark done, but goes to parent verification), `verify_chore`: parent/guardian only (the gamification gate), `redeem_reward`: any role with AMBER safety band (kids CAN redeem their own money, but parents may want visibility).
+
+  ```yaml
+  policy_declarations:
+    operation_role_gates:
+      create_chore: ["parent", "guardian"]
+      update_chore: ["parent", "guardian"]
+      delete_chore: ["parent", "guardian"]
+      complete_chore: ["parent", "child", "guardian"]
+      verify_chore: ["parent", "guardian"]
+      redeem_reward: ["parent", "child", "guardian"]
+    operation_safety_bands:
+      create_chore: "GREEN"
+      verify_chore: "GREEN"
+      redeem_reward: "AMBER"
+      delete_chore: "AMBER"
+    protected_resources:
+      - resource_id_pattern: "chore_ledger_*"
+        reason: "Reward ledger contains allowance and earnings data."
+        required_role: "parent"
+    hil_triggers:
+      - condition: "redeem_reward AND actor_role == 'child' AND amount > 10"
+        prompt: "{child_name} wants to redeem ${amount}. Approve?"
+  ```
+
+- **Guide cards:** Three critical cards: Chores-vs-Tasks distinction, the gamification lifecycle, and fair workload distribution.
+
+  ```yaml
+  guide_cards:
+    - guide_id: "family.chores.guide.01"
+      title: "Chores vs Tasks — Know the Difference"
+      content: |
+        CHORES are RECURRING + GAMIFIED:
+          "Vacuum living room every Saturday — earn $2"
+          "Clean kitchen nightly — earn $1.50"
+          "Mow the lawn weekly — earn $5"
+        Chores have: recurrence schedule, reward amount, parent verify_chore()
+        gate, allowance tracking, and redemption via redeem_reward().
+
+        TASKS are ONE-SHOT to-do items:
+          "Pick up Riley from school today"
+          "Buy birthday cake for Saturday's party"
+        Tasks have NO rewards, NO recurrence, NO parent verification gate.
+
+        RED FLAGS that mean CHORE not task:
+        - "every [day/week/Saturday]" → recurring = chore
+        - "earn [$amount]" or "points" or "allowance" → reward = chore
+        - "assign [child] to [recurring duty]" → chore
+        - Parent needs to "verify" or "approve" → chore
+        - "weekly", "daily", "monthly" → recurring = chore
+
+        If ANY red flag is present, use family.chores, not family.tasks.
+      relevance: "always"
+      disclosure_phase: "connector_summary"
+
+    - guide_id: "family.chores.guide.02"
+      title: "How Chore Gamification Works"
+      content: |
+        The chore lifecycle has 4 stages:
+
+        1. CREATE — Parent assigns chore with title, assignee, frequency,
+           and reward amount. Example: "Riley vacuums living room every
+           Saturday, earns $2."
+
+        2. COMPLETE — Child marks the chore as done. This is NOT final —
+           it enters a pending verification state. The child sees their
+           chore marked complete but reward is not yet credited.
+
+        3. VERIFY — Parent confirms the chore was done properly. This is
+           the gamification gate. Only after verification are rewards
+           credited to the child's ledger. The constitution HIL gate
+           'child_marks_complete' fires here — always ask the parent.
+
+        4. REDEEM — Child (or parent) redeems accumulated rewards.
+           Policy: any role can redeem, but amounts over $10 trigger
+           parent approval when initiated by a child.
+
+        NEVER skip verification. The parent gate is what makes chores a
+        trust-building tool, not just a todo list.
+      relevance: "always"
+      disclosure_phase: "connector_summary"
+
+    - guide_id: "family.chores.guide.03"
+      title: "Fair Workload Distribution"
+      content: |
+        When assigning chores, check the balance across household members:
+        - Count chores per person (active, not completed).
+        - If one person has ≥3 more chores than another, mention it.
+        - Example: "Riley has 5 chores/week, Jordan has 1. Want to balance?"
+        - This is ADVISORY ONLY — the parent always decides.
+        - Do NOT block chore creation for workload balance.
+        - Consider age-appropriateness: younger kids get fewer/simpler chores.
+      relevance: "on_conflict"
+      disclosure_phase: "tool_name_selection"
+  ```
+
+- **Ontology:** `concept_aliases`: "clean"→"chore", "housework"→"chore", "duty"→"chore", "responsibility"→"chore", "allowance"→"chore". `resource_connector_edges`: `{resource_family: "chore", connector_id: "family.chores", role: "primary"}`, `{resource_family: "calendar_event", connector_id: "family.chores", role: "companion"}`, `{resource_family: "task", connector_id: "family.chores", role: "companion"}`. `operation_aliases`: "assign"→create_chore, "complete"→complete_chore, "finish"→complete_chore, "verify"→verify_chore, "approve"→verify_chore, "redeem"→redeem_reward, "cash out"→redeem_reward.
 
 ### Issue 12.3 — Chores Tests
 
@@ -3635,7 +4177,14 @@ constitution:
 
 **Goal:** Upgrade shopping with full constitution, policy, guide cards, ontology, and JSON schemas.
 
-### Issue 13.1 — Shopping Constitution (YAML)
+### Issue 13.1 — Shopping Constitution
+
+> **Design principle:** Shopping is the simplest family connector — a shared list
+> with no cross-app coordination requirements. It's a leaf node in the connector
+> graph: other connectors may suggest shopping items (calendar events suggest
+> "order cake"), but shopping doesn't need to read back from them. The only
+> procedural rule is: list before add to avoid duplicates. Everything else is
+> guide card material (best practices for list management).
 
 ```yaml
 constitution:
@@ -3643,44 +4192,152 @@ constitution:
   constitution_id: "family.shopping.v1"
   schema_version: "1.0.0"
   execution_phases: ["read", "mutate"]
+
+  # ── What MUST I check before acting? ──
   prerequisite_reads:
     - operation: "list"
       resource_kind: "shopping_item"
-      reason: "Check for duplicate items before adding to the list."
+      reason: "Check for duplicate items (same name, active list) before adding. The user may have already added 'milk' — adding it again creates confusion."
       required: true
       timeout_ms: 5000
+
+  # ── What could go wrong, and WHAT DO I DO about it? ──
   conflict_analysis_rules:
     - check: "duplicate"
       with_resource_kinds: ["shopping_item"]
-      description: "New item must not duplicate an existing item on the active list."
-  companion_resource_roles: []
+      description: "New item name matches an existing active item on the shopping list."
+      resolution: "Tell the user: '{item_name}' is already on the list (added {when}, quantity: {qty}). Options: add anyway (separate entry), update quantity of existing item, or skip. Do NOT silently create a duplicate."
+
+  # ── What other tools/resources should I coordinate with? ──
+  companion_resource_roles:
+    []
+    # Shopping is a LEAF NODE in the connector graph. Other connectors may
+    # suggest shopping items (calendar.birthday → 'order cake?', chore.supplies
+    # → 'buy cleaning spray?'), but those suggestions flow FROM other connectors
+    # TO shopping — not the reverse. Shopping does not need to read calendar,
+    # tasks, chores, or reminders to function correctly. The empty companion
+    # list is intentional and correct.
+
+  # ── When do I STOP and ask the human? ──
   hil_gates:
     - trigger: "missing_required_field"
       field: "name"
       prompt: "What item should I add to the shopping list?"
     - trigger: "missing_required_field"
       field: "quantity"
-      prompt: "How many do you need?"
+      prompt: "How many do you need? (I'll default to 1 if not sure.)"
+    - trigger: "duplicate_detected"
+      prompt: "'{item_name}' is already on the list (qty: {existing_qty}). What should I do?"
+      options: ["Add anyway (separate entry)", "Update quantity to {new_qty}", "Skip"]
+
+  # ── What order do I execute? ──
   mutation_sequencing:
-    - order: 1, phase: "read", operation: "list", description: "Read current shopping list before mutating."
-    - order: 2, phase: "mutate", operation: "create", description: "Add item if no duplicate detected."
-    - order: 3, phase: "read", operation: "list", description: "Verify item was added (read_after_write)."
+    - order: 1
+      phase: "read"
+      operation: "list"
+      description: "Read current active shopping list to check for duplicates."
+    - order: 2
+      phase: "mutate"
+      operation: "create"
+      description: "Add the item if no duplicate detected. If duplicate, present options per conflict_analysis_rules."
+    - order: 3
+      phase: "read"
+      operation: "list"
+      description: "Verify item was added (read_after_write)."
+
+  # ── How do I prove it worked? ──
   verification_requirements:
     - method: "read_after_write"
+      description: "Read back the shopping list and confirm the new item appears with correct name and quantity."
       required_for_submit: true
     - method: "output_schema"
-  precondition_summary: "List shopping items before adding to check for duplicates."
-  companion_resource_summary: null
-  hil_trigger_summary: "HIL required when item name or quantity is missing."
-  degradation_policy: "If read_after_write verification fails, retry once then submit degraded."
+      description: "Validate the returned item matches the expected schema."
+
+  # ── Summaries (injected into Back's prompt) ──
+  precondition_summary: >
+    Before adding an item, I MUST list the active shopping list to check for
+    duplicates. Shopping is a shared family resource — anyone can add, anyone
+    can mark purchased. I present duplicate conflicts to the user rather than
+    silently creating a second entry.
+  companion_resource_summary: >
+    Shopping is self-contained — no cross-connector dependencies. Other
+    connectors (calendar, chores) may suggest shopping items to the user,
+    but shopping itself does not need to coordinate with them.
+  hil_trigger_summary: >
+    I need human input when: item name or quantity is missing, or a duplicate
+    item is detected on the active list.
+  degradation_policy: >
+    If read_after_write verification fails, retry once then submit degraded.
 ```
 
 ### Issue 13.2 — Shopping Policy + Guide Cards + Ontology
 
-- **Policy:** `write_requires_actor_role: []` (default-allow — shopping lists are shared). No protected resources.
-- **Guide cards:** Migrate `k1/contracts/prompts/shopping_activity_v1.yaml`. Include: list before add, group similar items, note quantities/preferences, mark purchased.
-- **Ontology:** `concept_aliases`: "groceries"→"shopping_item", "buy"→"shopping_item", "shopping list"→"shopping_item". `resource_connector_edges`: `{resource_family: "shopping_item", connector_id: "family.shopping", role: "primary"}`. `operation_equivalences`: `{canonical: "list", equivalent: "search"}`. `operation_aliases`: "add"→create, "buy"→update, "purchased"→update.
-- **JSON Schemas:** Add `input_schema` + `output_schema` to all `ActionSpec` entries in `SHOPPING_DEFINITION`.
+- **Manifest:** `snapshot_types: ["daily_snapshot"]` — shopping appears in daily lookups only (not weekly — shopping lists aren't time-window-specific enough for a weekly overview).
+
+- **Policy:** Shopping lists are shared family resources — all roles can add, update, and mark purchased. No operation is restricted. The only nuance: marking items as "purchased" (which removes them from the active list) is AMBER to prevent accidental clearing. No protected resources.
+
+  ```yaml
+  policy_declarations:
+    operation_role_gates:
+      create_item: ["parent", "child", "guardian"]
+      update_item: ["parent", "child", "guardian"]
+      mark_purchased: ["parent", "child", "guardian"]
+      delete_item: ["parent", "child", "guardian"]
+    operation_safety_bands:
+      create_item: "GREEN"
+      update_item: "GREEN"
+      mark_purchased: "AMBER"
+      delete_item: "AMBER"
+  ```
+
+- **Guide cards:** Two cards: general shopping list management best practices, and how to handle duplicates.
+
+  ```yaml
+  guide_cards:
+    - guide_id: "family.shopping.guide.01"
+      title: "How to Manage the Family Shopping List"
+      content: |
+        The family shopping list is a shared resource — everyone adds to it,
+        everyone marks items as purchased.
+
+        Best practices:
+        1. Always LIST the active list before adding — avoid duplicates.
+        2. Be specific: "2% milk - half gallon" not just "milk".
+        3. Include quantity: "bananas (6)", "paper towels (2-pack)".
+        4. Note preferences: "gluten-free bread", "Riley's favorite yogurt".
+        5. Group-related items: if adding multiple baking items, mention it.
+        6. Mark items purchased when bought — keeps the list clean.
+        7. Don't delete purchased items — they become purchase history.
+
+        The shopping list is NOT a todo list. For "remember to go shopping",
+        use family.tasks. For "buy milk every Tuesday", consider
+        family.chores (recurring) or family.reminders (notification).
+      relevance: "always"
+      disclosure_phase: "connector_summary"
+
+    - guide_id: "family.shopping.guide.02"
+      title: "Duplicate Items — Add or Update?"
+      content: |
+        When the user says "add milk" and milk is already on the list:
+
+        ASK what they want:
+        - "Add anyway" → create a separate entry (they may want 2 half-gallons
+          from different stores, or one for today and one for later)
+        - "Update quantity" → change existing item qty from 1 to 2
+        - "Skip" → do nothing
+
+        DEFAULT guidance: if the duplicate has the SAME specifics (same brand,
+        same size), suggest updating quantity. If the duplicate has DIFFERENT
+        specifics ("whole milk" vs "2% milk"), treat as different items —
+        add separately without asking.
+
+        Never silently skip. The user said to add something — either do it
+        or explain why you're not doing it.
+      relevance: "on_conflict"
+      disclosure_phase: "tool_name_selection"
+  ```
+
+- **Ontology:** `concept_aliases`: "groceries"→"shopping_item", "buy"→"shopping_item", "shopping list"→"shopping_item", "purchase"→"shopping_item", "errand"→"shopping_item", "supplies"→"shopping_item". `resource_connector_edges`: `{resource_family: "shopping_item", connector_id: "family.shopping", role: "primary"}`. Note: no companion edges — shopping is a leaf node. `operation_aliases`: "add"→create_item, "buy"→mark_purchased, "purchased"→mark_purchased, "got it"→mark_purchased, "need"→create_item, "pick up"→mark_purchased.
 
 ### Issue 13.3 — Shopping Tests
 
@@ -3762,9 +4419,9 @@ Post-S8 (Epic 7.3):
 |-----------|----------|-------------|----------------------|-------------------|
 | Calendar | `calendar_event`, `appointment` | create, list, update, delete | time_overlap, participant_availability, prerequisite list-before-create | Protected parent calendar |
 | Tasks | `task` | create, list, update, delete | duplicate title+assignee | Default-allow |
-| Reminders | `reminder` | create, list, update, delete | duplicate time+person, calendar_event dependency | Restricted read for other members |
-| Chores | `chore` | create, list, update, delete | time_overlap with calendar, parent/guardian write-only | Child assignment gated |
-| Shopping | `shopping_item` | create, list, update, delete | duplicate item name | Default-allow (shared list) |
+| Reminders | `reminder` | create, list, update, delete | duplicate time+person+message, invalid_event_ref, calendar_event dependency, task distinct_sibling | Self-or-parent delete/update, all GREEN safety |
+| Chores | `chore` | create, complete, verify, redeem, list, update, delete | duplicate title+assignee+frequency, time_overlap with calendar (advisory), workload_balance (advisory), 4-stage gamification lifecycle | Parent-only assign/verify, child can complete+redeem, AMBER on redeem >$10 |
+| Shopping | `shopping_item` | create, list, update, delete, mark_purchased | duplicate item name with resolution guidance, empty companions (leaf node) | All roles can add/update/purchase, AMBER on mark_purchased+delete |
 
 **What the kernel provides back:**
 
@@ -3812,3 +4469,2312 @@ Post-S8 (Epic 7.3):
 | **Total** | **26** | **5 new test files** | **8 modified** | **35+ tests (5 new + existing tools)** |
 
 **Phase 1 + Phase 1.1 combined: 65 issues, 32 new files, 11 modified, ~285 tests.**
+
+---
+
+# Phase 2 — Back Actor Tool Contract Migration
+
+> **Milestone:** GATE-P2 — Back LLM resolves situations, enforces constitutions, and executes bound capabilities on live kernel.
+> **Predecessor:** Phase 1.1 (GATE-P1.1 must pass first)
+> **Successor:** Phase 3 — Front LLM prompt redesign + dispatch redesign (TBD)
+> **Scope:** Epics 15–18. Touches Back actor, Back prompt, Back tool schemas, session wiring, and integration tests.
+> **Design source:** `docs/whiteboard/back_tool_contract_whiteboard.md`, `docs/api/back_tool_contract_v2_COMPONENT_MAP.md`, `k1/docs/future_work/front_llm_read_k1surface.md`
+
+---
+
+## Architecture Context: What Changes and Why
+
+**Today (legacy model):**
+
+```
+Back receives task → discover_capabilities(query) → top-K catalog results →
+  invoke_capability(capability_name) → CapabilityFabric → NativeToolProvider
+```
+
+Problems:
+
+- Back does its own capability discovery (brittle keyword match, no constitution enforcement)
+- No temporal/spatial/selfmodel context in Back's prompt
+- `resolve_situation` exists but Back can't call it (not in tool schemas)
+- Back prompt teaches "discover then choose" — wrong mental model for a worker
+
+**Target (Phase 2):**
+
+```
+Back receives task → resolve_situation(RequestFrame) → ResolutionEnvelope {
+    ResourceUniverse, PolicyBundle, BindingBundle,
+    PromptPack, verdict, allowed_capability_names, allowed_next_actions
+  } → Back chooses from allowed_capability_names → invoke_capability(binding_id, ...)
+```
+
+- Back calls ONE tool (`resolve_situation`) that does ALL discovery, policy gating, constitution enforcement
+- `discover_capabilities` kept as fallback (not primary)
+- Temporal, spatial, selfmodel, grounding all reach Back's prompt via unified execution context block
+- Back prompt teaches "read the envelope, pick from allowed, execute, submit"
+
+---
+
+## Key File Touch Points — Phase 2 At a Glance
+
+| File | Epic 15 | Epic 16 | Epic 17 | Epic 18 | What Changes |
+|------|---------|---------|---------|---------|-------------|
+| `k1/concierge/session.py` | ✅ | — | — | — | `_back_consumer()` passes `temporal`, `spatial`, `selfmodel` to `route_back_envelope()` |
+| `k1/concierge/actors/back_router.py` | ✅ | — | — | — | `route_back_envelope()` signature gains `temporal`, `spatial`, `selfmodel` params |
+| `k1/concierge/actors/back.py` | ✅ | ✅ | — | — | `back_handler()` gains `temporal`, `spatial`, `selfmodel` params; `_build_execution_grounding_block()` extended; `_filter_back_tools()` adds `resolve_situation` |
+| `k1/concierge/prompt/back_prompt.py` | ✅ | ✅ | ✅ | — | `build_back_prompt()` gains temporal/spatial/selfmodel blocks; `available_tools_note` updated; prompt fully redesigned |
+| `k1/concierge/tools/schemas_back.py` | — | ✅ | — | — | `resolve_situation` schema added; `BACK_TIER_ALLOWLISTS` updated; `discover_capabilities` kept as fallback |
+| `k1/fabric/fabric.py` | — | ✅ | — | — | `_handle_resolve_situation()` verified for Back dispatcher call path |
+| `k1/concierge/react/back_execution_plan.py` | — | ✅ | — | — | May need `resolve_situation` execution item; TBD during discovery |
+| `k1/kernel/service.py` | ✅ | — | — | — | Reference only — P3.5-P3.8 already creates temporal/spatial/grounding/selfmodel handles |
+| `k1/concierge/factory.py` | ✅ | — | — | — | Reference only — `PortBundle` already wires to `ConciergeRuntime` |
+| `k1/temporal/adapters/session_state_adapter.py` | ✅ | — | — | — | Verify temporal handle is accessible for Back prompt rendering |
+| `k1/spatial/adapters/session_state_adapter.py` | ✅ | — | — | — | Verify spatial handle is accessible for Back prompt rendering |
+| `tests/k1/concierge/actors/test_back_resolve_situation_live.py` | — | — | — | ✅ | New — end-to-end integration gate |
+
+---
+
+## Epic 15: Context Plumbing — Temporal, Spatial, SelfModel, Grounding → Back
+
+**Goal:** Mirror Front LLM's context path for Back. Today only `grounding` reaches Back (via `_back_consumer()` → `route_back_envelope()` → `back_handler()` → `_build_execution_grounding_block()`). Temporal, spatial, and selfmodel handles exist on `ConciergeRuntime` but are never passed to Back's handler or injected into Back's prompt.
+
+---
+
+### 🔍 DISCOVERY COMPLETE (2026-06-09) — What Exists vs. What's Missing
+
+**Four subagents explored every file in `k1/temporal/`, `k1/spatial/`, `k1/selfmodel/`, `k1/grounding/`, `k1/concierge/session.py`, `k1/concierge/actors/back.py`, `k1/concierge/actors/front.py`, `k1/kernel/service.py`.**
+
+---
+
+#### Discovered Handle APIs
+
+| Handle | File | Key Method for Prompt Injection | "Back" Consumer Supported? |
+|--------|------|-------------------------------|---------------------------|
+| **TemporalHandle** | `k1/temporal/kernel/handle.py:23` | `get_projection(consumer)` → `TemporalProjection` → `render_execution_block(projection)` | ✅ `consumer="back"` works. `render_execution_block()` already exists at `k1/temporal/service/projection_renderer.py:41` |
+| **SpatialHandle** | `k1/spatial/kernel/handle.py:20` | `get_projection(consumer)` → `SpatialProjection` | ✅ `consumer="back"` works. `DEFAULT_CONSUMER_PRECISION` already has `"back": "semantic"` at `k1/spatial/constants.py:62` |
+| **GroundingHandle** | `k1/grounding/kernel/handle.py:145` | `get_projection(consumer)` → `GroundingProjection` | ✅ Already wired. `_build_execution_grounding_block()` calls `grounding.get_projection("back")` at `back.py:158` |
+| **SelfModelHandle** | `k1/selfmodel/kernel/handle.py:66` | `render_capsule()` → `GroundingCapsule` → `.as_prompt_text()` | ⚠️ `render_capsule()` exists but only Front calls it (`front.py:1433`). Back never calls it. |
+
+**Key finding:** ALL four handles already have "get context for actor" methods. Temporal + Spatial use `get_projection(consumer="back")`. SelfModel uses `render_capsule()`. Grounding already works. **No new API methods need to be created on the handles.**
+
+---
+
+#### Discovered ConciergeRuntime Storage
+
+| Handle | Runtime Attribute | Setter Method | Stored? |
+|--------|------------------|---------------|---------|
+| `temporal` | `self._temporal` | `set_temporal(handle)` — `session.py:297` | ✅ YES |
+| `spatial` | `self._spatial` | `set_spatial(handle)` — `session.py:308` | ✅ YES |
+| `grounding` | `self._grounding` | `set_grounding(handle)` — `session.py:319` | ✅ YES |
+| `self_model` | `self._self_model` | `set_self_model(handle)` — `session.py:330` | ✅ YES |
+
+**Key finding:** ALL four handles are already stored on `ConciergeRuntime`. The kernel already calls `concierge.set_self_model(session_self_model)` at `service.py:3022`. **No new setters or attributes needed on ConciergeRuntime.**
+
+---
+
+#### Discovered Front vs Back Consumer Wiring
+
+| What's Passed | `_front_consumer()` at `session.py:404` | `_back_consumer()` at `session.py:461` |
+|---------------|----------------------------------------|---------------------------------------|
+| `temporal=self._temporal` | ✅ Yes | ❌ **MISSING** |
+| `spatial=self._spatial` | ✅ Yes | ❌ **MISSING** |
+| `grounding=self._grounding` | ✅ Yes | ✅ Yes |
+| `self_model=self._self_model` | ✅ Yes | ❌ **MISSING** |
+
+```python
+# session.py:404 — Front consumer (WHAT WE MIRROR)
+await front_handler(
+    ...,
+    temporal=self._temporal,      # ← handle
+    spatial=self._spatial,        # ← handle
+    grounding=self._grounding,    # ← handle
+    self_model=self._self_model,  # ← handle
+)
+
+# session.py:461 — Back consumer (THE GAP)
+await route_back_envelope(
+    ...,
+    grounding=self._grounding,    # ← ONLY grounding
+    # NO temporal, NO spatial, NO self_model
+)
+```
+
+---
+
+#### Discovered Handler Signatures
+
+| Parameter | `front_handler()` at `front.py:1145` | `back_handler()` at `back.py:940` | `back_resume_handler()` at `back.py:1236` |
+|-----------|--------------------------------------|-----------------------------------|------------------------------------------|
+| `temporal` | ✅ `temporal: Any = None` | ❌ Missing | ❌ Missing |
+| `spatial` | ✅ `spatial: Any = None` | ❌ Missing | ❌ Missing |
+| `grounding` | ✅ `grounding: Any = None` | ✅ `grounding: Any = None` | ❌ Missing |
+| `self_model` | ✅ `self_model: Any = None` | ❌ Missing | ❌ Missing |
+
+---
+
+#### Discovered Front's Actual Context Usage (What Back Should Mirror)
+
+**Temporal in Front:**
+
+- Front does NOT directly build a temporal context block from `TemporalHandle`
+- Front's `grounding.refresh_turn()` internally pulls temporal + spatial data
+- Fallback: If `grounding is None`, Front calls `temporal.refresh_turn()` + `temporal.build_projection(consumer="front")` at `front.py:1311-1324`
+- The rendered `== NOW ==` block comes from `DynamicPromptBuilder._build_now_block(ss)` which reads the temporal section from SessionState (written by `TemporalStateAdapter`)
+
+**Spatial in Front:**
+
+- Front does NOT directly access `SpatialHandle` at all
+- Spatial context is mediated entirely through Grounding: `grounding.refresh_turn()` → `GroundingProjection.spatial` → `SpatialProjection`
+- Rendered into prompt via `render_place_block()` / `render_place_and_device_block_v2()` from `k1/grounding/service/prompt_block_renderer.py`
+
+**SelfModel in Front:**
+
+- `front_handler` calls `self_model.render_capsule()` → `GroundingCapsule` at `front.py:1433`
+- Capsule passed to `DynamicPromptBuilder.build(grounding_capsule=grounding_capsule)` for Stage 9.5 prompt injection
+
+**Back currently:**
+
+- Gets NO live temporal handle (only `resolved_temporal_refs` from task dispatch payload)
+- Gets NO live spatial handle at all
+- Gets NO self_model capsule in prompt
+- `_build_execution_grounding_block()` at `back.py:140` tries task payload grounding first, falls back to `grounding.get_projection("back")` — this is correct but covers only grounding, not the other three
+
+---
+
+#### Discovered: self_model Already Gates back_dispatcher
+
+`SelfModelHandle.install_into_session()` at `selfmodel/kernel/handle.py:90` already:
+
+1. Installs `ConciergePolicyGate` on `back_dispatcher` (line 104-117) — ✅ tool gating works
+2. Wraps `back_ctx.recall_fn` with `RecallCitationWrapper` — ✅ recall citations work
+3. Does NOT inject `GroundingCapsule` into Back's prompt — ❌ missing
+
+The kernel calls this at `service.py:3005`:
+
+```python
+session_self_model.install_into_session(
+    front_dispatcher=...,
+    back_dispatcher=...,     # ← Back dispatcher IS wired for policy gating
+    front_ctx=...,
+    back_ctx=...,            # ← Back context IS wired for recall wrapping
+)
+```
+
+---
+
+#### The Fix: Exactly 3 Lines in `_back_consumer()`, 3 Params in `route_back_envelope()`, 3 Params in `back_handler()`
+
+The change is mechanically simple — add the THREE missing params to mirror Front's path:
+
+```
+session.py:    _back_consumer()          + temporal, spatial, self_model → route_back_envelope()
+back.py:       route_back_envelope()     + temporal, spatial, self_model → back_handler()
+back.py:       back_handler()            + temporal, spatial, self_model → build_back_prompt()
+back_prompt.py: build_back_prompt()      + temporal_block, spatial_block, selfmodel_block → BACK_SYSTEM_PROMPT
+```
+
+**No new API methods, no new ConciergeRuntime attributes, no new kernel wiring needed.** All four handles already exist, are stored, and have methods that return prompt-ready data.
+
+---
+
+#### Design Decision: Separate Blocks vs. Unified Block
+
+**Recommendation: Keep separate blocks.** The handles produce different types of context:
+
+- `render_execution_block(temporal_projection)` → "== TEMPORAL CONTEXT ==" (deadlines, windows, resolved times)
+- Spatial → "== SPATIAL CONTEXT ==" (device location, home, places)
+- `render_capsule()` → "== SELFMODEL ==" (preferences, patterns, persona)
+- Existing `_build_execution_grounding_block()` → "== EXECUTION GROUNDING ==" (combined grounding projection)
+
+Separate blocks give Back clearer signal. The prompt template already has a "SESSION CONTEXT" section that can hold all four.
+
+---
+
+### Issue 15.1 — Wire Temporal/Spatial/SelfModel Through Back Consumer
+
+- **Files:** `k1/concierge/session.py` lines 461-470, `k1/concierge/actors/back.py` lines 1661-1677
+- **What:** Add 3 params to `_back_consumer()` → `route_back_envelope()` → `back_handler()` chain.
+- **Concrete change in `session.py` `_back_consumer()`:**
+
+  ```python
+  await route_back_envelope(
+      envelope=back_env,
+      model=self._model,
+      ss=self._session_state,
+      bus=self._bus,
+      tool_dispatcher=self._back_dispatcher,
+      fsm_state=self._fsm,
+      hil_port=self._hil_port,
+      grounding=self._grounding,
+      temporal=self._temporal,        # ← NEW
+      spatial=self._spatial,          # ← NEW
+      self_model=self._self_model,    # ← NEW
+  )
+  ```
+
+- **Concrete change in `back.py` `route_back_envelope()`:** Add `temporal: Any = None`, `spatial: Any = None`, `self_model: Any = None` to signature. Forward to `back_handler()`. Also forward to `back_resume_handler()` for consistency.
+- **Risk:** LOW — all three are `Optional` with default `None`. Existing callers (tests) don't break. The handles already exist on `ConciergeRuntime` and are `None`-safe.
+
+### Issue 15.2 — Extend back_handler() Signature
+
+- **File:** `k1/concierge/actors/back.py` line 940
+- **What:** `back_handler()` gains `temporal: Any = None`, `spatial: Any = None`, `self_model: Any = None` params. Passed through to `build_back_prompt()` and `_build_execution_grounding_block()`.
+- **Also:** `back_resume_handler()` at line 1236 gains same params for consistency (suspended task resumes get stale context otherwise).
+
+### Issue 15.3 — Build Temporal Context Block for Back Prompt
+
+- **File:** `k1/concierge/actors/back.py` — new function `_build_temporal_context_block()`
+- **What:** Calls `temporal.get_projection("back")` → `render_execution_block(projection)` to produce a `str` block.
+- **Implementation sketch:**
+
+  ```python
+  async def _build_temporal_context_block(temporal: Any | None, task: dict) -> str:
+      if temporal is None:
+          return ""
+      try:
+          projection = await temporal.get_projection("back")
+          from k1.temporal.service.projection_renderer import render_execution_block
+          return render_execution_block(projection)
+      except Exception:
+          logger.warning("back_handler: temporal context block failed", exc_info=True)
+          return ""
+  ```
+
+- **Existing renderer:** `render_execution_block(projection)` at `k1/temporal/service/projection_renderer.py:41` — already built, tested, and used by other paths. Just needs to be called from Back.
+- **Note:** TemporalHandle caches projections per-consumer. `get_projection("back")` is a cached convenience wrapper over `build_projection(consumer="back")`.
+
+### Issue 15.4 — Build Spatial Context Block for Back Prompt
+
+- **File:** `k1/concierge/actors/back.py` — new function `_build_spatial_context_block()`
+- **What:** Calls `spatial.get_projection("back")` → formats into a `str` block.
+- **Implementation sketch:**
+
+  ```python
+  async def _build_spatial_context_block(spatial: Any | None, task: dict) -> str:
+      if spatial is None:
+          return ""
+      try:
+          projection = await spatial.get_projection("back")
+          # SpatialProjection → prompt text. Mirror grounding's pattern:
+          # grounding/service/prompt_block_renderer.py already has
+          # render_place_block() and render_place_and_device_block_v2()
+          # that accept GroundingProjection. For standalone spatial, we
+          # may need a simpler formatter or reuse Grounding's renderers
+          # by constructing a minimal GroundingProjection wrapper.
+          return _format_spatial_projection_for_back(projection)
+      except Exception:
+          logger.warning("back_handler: spatial context block failed", exc_info=True)
+          return ""
+  ```
+
+- **Discovery needed:** `SpatialProjection` has fields like `current_location`, `device_location`, `home_location`, `nearby_places`. Decide which fields Back needs for execution decisions. Simpler than grounding — Back probably only needs device location + home.
+
+### Issue 15.5 — Build SelfModel Context Block for Back Prompt
+
+- **File:** `k1/concierge/actors/back.py` — new function `_build_selfmodel_context_block()`
+- **What:** Calls `self_model.render_capsule()` → `capsule.as_prompt_text()`.
+- **Implementation sketch:**
+
+  ```python
+  async def _build_selfmodel_context_block(self_model: Any | None) -> str:
+      if self_model is None:
+          return ""
+      try:
+          capsule = self_model.render_capsule()
+          if capsule is None:
+              return ""
+          # GroundingCapsule.as_prompt_text() returns the persona/self text
+          return capsule.as_prompt_text() if hasattr(capsule, "as_prompt_text") else str(capsule)
+      except Exception:
+          logger.warning("back_handler: selfmodel context block failed", exc_info=True)
+          return ""
+  ```
+
+- **This is the EXACT same pattern Front uses** at `front.py:1433`: `grounding_capsule = self_model.render_capsule()`.
+- **What Back gets:** Persona preferences, known patterns about the user, self-model constitution rules. This tells Back "the user prefers morning appointments" or "the user is vegan" — context that affects execution decisions.
+
+### Issue 15.6 — Inject New Context Blocks into build_back_prompt()
+
+- **File:** `k1/concierge/prompt/back_prompt.py` lines 411-494
+- **What:** `build_back_prompt()` gains `temporal_context_block: str = ""`, `spatial_context_block: str = ""`, `selfmodel_context_block: str = ""` params.
+- **Template change:** `BACK_SYSTEM_PROMPT` gains three placeholders in the `== SESSION CONTEXT ==` section:
+
+  ```
+  == SESSION CONTEXT ==
+  {temporal_context_block}
+  {spatial_context_block}
+  {selfmodel_context_block}
+  {execution_grounding_block}
+  Beliefs: {beliefs_summary}
+  Active tasks: {task_state_summary}
+  Completed artifacts: {artifacts_summary}
+  Safety band: {safety_band}
+  User preferences: {persona_prefs}
+  ```
+
+- **Empty blocks render as nothing** — backward compatible when handles are `None`.
+- **Decision:** Separate blocks (not unified). Rationale: each handle produces a different type of context with different headers, and keeping them separate lets Back distinguish "the user prefers..." (selfmodel) from "the current time is..." (temporal) from "you are at..." (spatial).
+
+### Issue 15.7 — Verify Full Context Chain End-to-End
+
+- **File:** New test — `tests/k1/concierge/actors/test_back_context_wiring.py`
+- **Test:** `test_temporal_reaches_back_prompt` — mock `TemporalHandle`, verify `render_execution_block` output appears in prompt
+- **Test:** `test_spatial_reaches_back_prompt` — mock `SpatialHandle`, verify spatial block appears in prompt
+- **Test:** `test_selfmodel_reaches_back_prompt` — mock `SelfModelHandle.render_capsule()`, verify capsule text appears in prompt
+- **Test:** `test_grounding_still_reaches_back_prompt` — regression: existing grounding block still works
+- **Test:** `test_all_four_contexts_in_prompt` — combined smoke test with all handles
+- **Test:** `test_handles_none_still_works` — all handles `None` → prompt builds without errors (backward compat)
+- **Run:** `pytest tests/k1/concierge/actors/test_back_context_wiring.py -v`
+
+### Issue 15.1 — Wire Temporal/Spatial/SelfModel Through Back Consumer
+
+- **Files:** `k1/concierge/session.py`, `k1/concierge/actors/back_router.py`
+- **What:** `_back_consumer()` passes `temporal=self._temporal`, `spatial=self._spatial`, `selfmodel=self._self_model` to `route_back_envelope()`. `route_back_envelope()` signature updated.
+- **Discovery needed:** Does `ConciergeRuntime` have a `_self_model` attribute? Check `session.py` to see how `session_self_model.install_into_session()` stores the handle. The self_model may need to be stored as `self._self_model` in `set_self_model()`.
+- **Risk:** Medium — changing Back consumer signature may affect tests that mock `route_back_envelope`.
+
+### Issue 15.2 — Extend back_handler() Signature
+
+- **File:** `k1/concierge/actors/back.py`
+- **What:** `back_handler()` gains `temporal`, `spatial`, `selfmodel` params (all `Optional`). These are passed through to `build_back_prompt()`.
+- **Note:** `back_resume_handler()` may also need these for consistency; TBD during discovery.
+
+### Issue 15.3 — Build Temporal Context Block for Back Prompt
+
+- **File:** `k1/concierge/actors/back.py` (or new helper in `k1/concierge/prompt/`)
+- **What:** `_build_temporal_context_block(temporal_handle, task_payload) -> str` renders Back-facing temporal context:
+  - Current time + timezone from `TemporalHandle`
+  - Relevant temporal anchors from the task's `temporal_anchor_id`
+  - Resolved time expressions from `resolved_temporal_refs` (already in task payload)
+- **Discovery needed:** Read `TemporalHandle` API to understand what `get_context_for_actor("back")` or equivalent method exists. May need to add a Back-specific context method.
+- **Reference:** Front LLM gets temporal context from `_extract_family_context(ss)` — but Front reads persona/preferences, not raw temporal anchors. Back needs different temporal data (execution-oriented: deadlines, windows, recurrence).
+
+### Issue 15.4 — Build Spatial Context Block for Back Prompt
+
+- **File:** `k1/concierge/actors/back.py` (or new helper)
+- **What:** `_build_spatial_context_block(spatial_handle, task_payload) -> str` renders Back-facing spatial context:
+  - Device location from `SpatialHandle`
+  - Household location context
+  - Relevant spatial anchors from the task's `spatial_context_id`
+- **Discovery needed:** Read `SpatialHandle` API. Is there a `get_context_for_actor("back")` method? What spatial data is relevant for Back's execution decisions?
+
+### Issue 15.5 — Build SelfModel Context Block for Back Prompt
+
+- **File:** `k1/concierge/actors/back.py` (or new helper)
+- **What:** `_build_selfmodel_context_block(selfmodel_handle, session_id, principal_id) -> str` renders Back-facing selfmodel context:
+  - Persona preferences relevant to task execution
+  - Known user patterns (e.g., "user prefers morning appointments", "user always buys organic")
+  - Policy gates already installed via `install_into_session()`
+- **Discovery needed:** Read `SelfModelHandle` API. What data does it expose for prompt injection? Does it have `get_prompt_context()` or similar? The `install_into_session()` path gates `back_dispatcher` — we need the prompt-injection path in addition.
+
+### Issue 15.6 — Inject New Context Blocks into build_back_prompt()
+
+- **File:** `k1/concierge/prompt/back_prompt.py`
+- **What:** `build_back_prompt()` gains `temporal_context_block`, `spatial_context_block`, `selfmodel_context_block` params. `BACK_SYSTEM_PROMPT` gains `{temporal_context_block}`, `{spatial_context_block}`, `{selfmodel_context_block}` placeholders in the SESSION CONTEXT section.
+- **Discovery needed:** Decide whether to keep separate blocks or merge into one `{execution_context_block}`. Separate blocks give Back clearer signal about where each piece of context comes from. Merged block is simpler. TBD during discovery.
+
+### Issue 15.7 — Verify Full Context Chain End-to-End
+
+- **File:** New test — `tests/k1/concierge/actors/test_back_context_wiring.py`
+- **Test:** `test_temporal_reaches_back_prompt` — verify temporal block appears in built prompt
+- **Test:** `test_spatial_reaches_back_prompt` — verify spatial block appears in built prompt
+- **Test:** `test_selfmodel_reaches_back_prompt` — verify selfmodel block appears in built prompt
+- **Test:** `test_grounding_still_reaches_back_prompt` — regression: grounding block still works
+- **Test:** `test_all_four_contexts_in_prompt` — combined smoke test
+- **Run:** `pytest tests/k1/concierge/actors/test_back_context_wiring.py -v`
+
+---
+
+## Epic 16: Tool Contract Migration — Register resolve_situation as Back Tool
+
+**Goal:** Make `resolve_situation` the PRIMARY tool Back calls to understand what to do. Keep `discover_capabilities` as fallback. The `resolve_situation` meta-tool already exists in Fabric (`_handle_resolve_situation()` at `k1/fabric/fabric.py:1757`). It just needs to be registered as a Back-callable tool.
+
+---
+
+### 🔍 DISCOVERY COMPLETE (2026-06-09) — How Tools Reach Fabric
+
+**Four subagents explored the complete Back tool dispatch chain: ToolDispatcher, TOOL_REGISTRY, implementations.py, FabricDispatchAdapter, Fabric, ResolveSituationService.**
+
+---
+
+#### Discovered: Back Already Reaches Fabric via `ctx.dispatch`
+
+```
+Back LLM tool_call
+  → ToolDispatcher.dispatch()                    [dispatcher.py:477, 7-step pipeline]
+    → execute_tool(name, args, ctx)              [implementations.py:2037, dict lookup]
+      → TOOL_REGISTRY["discover_capabilities"]   [@_register decorator, implementations.py:1361]
+        → ctx.dispatch.discover_capabilities()   [IDispatchPort method]
+          → FabricDispatchAdapter                [adapters/fabric_dispatch.py:369]
+            → self._fabric.discover_capabilities()  [IFabricPort = Fabric container]
+              → Fabric.retrieval → RetrievalEngine  [4-step semantic pipeline]
+```
+
+**The `FabricDispatchAdapter` stores `self._fabric`** (the actual `Fabric` container instance). Back's `ToolDispatcher` stores `self.ctx.dispatch` → `FabricDispatchAdapter` → `self._fabric`. The chain is:
+
+```
+ToolDispatcher → ToolContext → FabricDispatchAdapter → Fabric container → situated_resolver
+```
+
+**Key finding: NO new Fabric wiring is needed.** The `Fabric._handle_resolve_situation()` method already exists at `fabric.py:1757`. The `ResolveSituationService` is already wired into Fabric's `situated_resolver` attribute at `FabricFactory._wire_phase1_stores()` (`factory.py:1101`). Back just needs a tool that calls it.
+
+---
+
+#### Discovered: How Tools Are Registered (The Pattern)
+
+Tools follow a **4-step registration pattern**:
+
+| Step | What | Where | Example |
+|------|------|-------|---------|
+| 1 | Define `ToolSchema` | `schemas_back.py` (or `schemas_fabric.py` for shared) | `BATCH_INVOKE_CAPABILITIES_SCHEMA` at line 38 |
+| 2 | Add to schema list | `BACK_TOOL_SCHEMAS` list | `schemas_back.py:251` |
+| 3 | Add to tier allowlist | `BACK_TIER_ALLOWLISTS` dict | `schemas_back.py:260-274` |
+| 4 | Register handler | `implementations.py` via `@_register("name")` | `@_register("discover_capabilities")` at line 1361 |
+
+**`TOOL_REGISTRY`** is a flat `dict[str, callable]` at `implementations.py:137`. Every tool handler is a key in this dict. There is no meta-tool concept, no routing table — it's a simple dict lookup via `execute_tool()` at line 2037:
+
+```python
+async def execute_tool(tool_name, args, ctx):
+    fn = TOOL_REGISTRY.get(tool_name)    # ← simple dict lookup
+    result = fn(args, ctx)
+    if inspect.isawaitable(result):
+        result = await result
+    return result
+```
+
+**Architecture: Only ONE path to the LLM.** Steps 1-3 above (schema → list → allowlist) feed into `_filter_back_tools()` → `react_loop(tools=...)` → `tools` array (function-calling definitions). This is what the LLM sees — a JSON array of `{name, description, parameters}` objects, identical to how Front receives tools (see `front_prompt_latest.json`). Step 4 (`@_register`) feeds into `TOOL_REGISTRY` — the BACKEND dispatch table, never seen by the LLM. There is no second path, no meta-tool registration system. The `available_tools_note` in the system prompt is just guidance prose — it does NOT register tools.
+
+---
+
+#### Discovered: The Fabric Dispatch Path We Need
+
+Back currently uses TWO patterns to reach Fabric:
+
+| Pattern | Handler Calls | Fabric Method | Used By |
+|---------|--------------|---------------|---------|
+| **Dedicated method** | `ctx.dispatch.discover_capabilities()` | `Fabric.discover_capabilities()` via `FabricDispatchAdapter.discover_capabilities()` | discover_capabilities |
+| **General dispatch** | `ctx.dispatch.dispatch_direct(CapabilityRequest(...))` | `Fabric.execute()` via `FabricDispatchAdapter.dispatch_direct()` | invoke_capability |
+
+**For `resolve_situation`, we need a THIRD pattern** — a dedicated dispatch method:
+
+```python
+# In implementations.py — the handler
+@_register("resolve_situation")
+async def execute_resolve_situation(args: dict, ctx: ToolContext) -> ToolResult:
+    payload = _build_resolve_payload(args, ctx)
+    result = await ctx.dispatch.resolve_situation(payload)
+    return ToolResult(status="ok", data=result)
+
+# In FabricDispatchAdapter — the adapter method (NEW)
+async def resolve_situation(self, payload: dict) -> dict:
+    return await self._fabric._handle_resolve_situation(payload)
+```
+
+**`IDispatchPort`** (the protocol at `ports.py:106`) currently has: `discover_capabilities`, `lookup_capability`, `dispatch_direct`, `dispatch_envelope`. We add `resolve_situation`.
+
+---
+
+#### Discovered: What Fields Back LLM Controls vs. What's Auto-Filled
+
+`_build_resolve_request()` at `fabric.py:1889` deserializes the payload dict → `ResolveSituationRequest`. Required keys: `actor_id`, `space_id`, `session_id`, `frame`.
+
+| Field | Source | LLM-Visible? |
+|-------|--------|-------------|
+| `actor_id` | `ctx.session_manager` → session principal | ❌ Auto-filled |
+| `space_id` | `ctx.active_space_id` or `"family:default"` | ❌ Auto-filled |
+| `session_id` | `ctx.active_session_id` | ❌ Auto-filled |
+| `request_id` | Generated UUID | ❌ Auto-filled |
+| `tier` | `ctx.active_task_tier` or `"MEDIUM"` | ❌ Auto-filled (from task) |
+| `safety_band` | `ctx.safety_band` or `"GREEN"` | ❌ Auto-filled (from task) |
+| **`frame`** | LLM provides via JSON Schema | ✅ **LLM controls** |
+| `disclosure_phase` | `"connector_summary"` default, LLM can override | ⚠️ Optional override |
+| `freshness_policy` | `"allow_stale_reads"` default, LLM can override | ⚠️ Optional override |
+| `prompt_budget_tokens` | `8000` default, LLM can override | ⚠️ Optional override |
+| `idempotency_keys` | LLM provides if needed | ⚠️ Optional |
+| `completed_prerequisite_bindings` | Dispatcher tracks from prior calls | ❌ Auto-filled |
+| `previous_resolution_id` | Dispatcher tracks | ❌ Auto-filled |
+| `budget_remaining` | From budget tracker | ❌ Auto-filled |
+
+**The JSON Schema Back's LLM sees should expose:**
+
+- **Required:** `frame` (with `intents`, `time_window_hint`, `person_refs`, `resource_refs`, `safety_context` sub-fields)
+- **Optional:** `idempotency_keys`, `disclosure_phase`, `freshness_policy`, `prompt_budget_tokens`
+
+---
+
+#### Discovered: What Back Gets Back (ResolutionEnvelope)
+
+`ResolutionEnvelope` at `situated_resolver.py:87` has 20 fields. The `to_dict()` returns:
+
+```json
+{
+  "verdict": "can_execute",
+  "machine_verdict": "can_execute",
+  "sub_reason": null,
+  "allowed_capability_names": ["tool.execute.family.calendar.create"],
+  "allowed_next_actions": ["create a calendar event for Riley..."],
+  "capability_name_to_binding": {"tool.execute.family.calendar.create": "bind-abc123"},
+  "execution_plan": [{
+    "step": 1, "type": "prerequisite_read",
+    "capability_name": "tool.read.family.calendar.list",
+    "required_inputs": [...]
+  }, {
+    "step": 2, "type": "primary_write",
+    "capability_name": "tool.execute.family.calendar.create",
+    "required_inputs": [{"name": "title", "type": "string"}, ...]
+  }],
+  "hil_request": null,
+  "recovery_directive": null,
+  "diagnostics": [...],
+  "completeness": "full",
+  "freshness": "fresh",
+  "binding_bundle": {...},
+  "policy_bundle": {...},
+  "constitution": {...},
+  "prompt_pack": {...}
+}
+```
+
+**This is the complete surface Back's LLM reads to decide what to do.** The `allowed_capability_names` list is the ONLY capabilities Back can invoke. The `execution_plan` tells Back the order (prerequisite reads first, then writes, then verifications).
+
+---
+
+#### Current Back Tools (7 schemas, all in schemas_back.py:251)
+
+| # | Tool | Source | Category |
+|---|------|--------|----------|
+| 1 | `recall_memory` | `schemas_front.py:355` (imported) | read |
+| 2 | `discover_capabilities` | `schemas_fabric.py:27` (imported) | read |
+| 3 | `invoke_capability` | `schemas_fabric.py:95` (imported) | action |
+| 4 | `batch_invoke_capabilities` | `schemas_back.py:38` | action |
+| 5 | `spawn_via_fabric` | `schemas_back.py:99` | action |
+| 6 | `execute_workflow` | `schemas_back.py:149` | action |
+| 7 | `submit_result` | `schemas_back.py:197` | control |
+
+**`BACK_TIER_ALLOWLISTS`** at `schemas_back.py:260-274`: `simple`/`LOW` = tools 1-5+7; `plan`/`MEDIUM`/`HIGH` = all 7. MEDIUM and HIGH are identical for Back tools.
+
+**`_filter_back_tools()`** at `back.py:216`: Looks up tier in allowlist, filters `BACK_TOOL_SCHEMAS` by name membership. Unknown tiers fall back to `["submit_result"]` only.
+
+---
+
+### Issue 16.1 — Add resolve_situation Tool Schema
+
+- **File:** `k1/concierge/tools/schemas_back.py`, after `BATCH_INVOKE_CAPABILITIES_SCHEMA` (~line 97)
+- **What:** Define `RESOLVE_SITUATION_SCHEMA` as a new `ToolSchema`:
+
+  ```python
+  RESOLVE_SITUATION_SCHEMA = ToolSchema(
+      name="resolve_situation",
+      description=(
+          "PRIMARY TOOL — call this FIRST for every task. "
+          "Resolves what capabilities are available, checks policies, "
+          "enforces constitution rules, and returns exactly which "
+          "actions you are allowed to perform. "
+          "Returns a ResolutionEnvelope with verdict, allowed_capability_names, "
+          "allowed_next_actions, execution_plan, and prompt_pack."
+      ),
+      parameters={
+          "type": "object",
+          "properties": {
+              "frame": {
+                  "type": "object",
+                  "description": "The task frame with intents, time windows, person/ resource refs",
+                  "required": ["intents"],
+                  "properties": {
+                      "intents": {
+                          "type": "array",
+                          "description": "What the user wants done. Each intent has action, domain, operation_hint, resource_kind_hint, subject_hint, params",
+                          "items": {
+                              "type": "object",
+                              "properties": {
+                                  "action": {"type": "string", "description": "Natural language action e.g. 'schedule', 'buy', 'remind'"},
+                                  "domain": {"type": "string", "description": "e.g. 'family', 'health', 'finance'"},
+                                  "operation_hint": {"type": "string", "description": "e.g. 'create', 'read', 'update', 'delete'"},
+                                  "resource_kind_hint": {"type": "string", "description": "e.g. 'calendar_event', 'task', 'shopping_item'"},
+                                  "subject_hint": {"type": "string", "description": "Who or what this is about"},
+                                  "params": {"type": "object", "description": "Additional parameters"}
+                              },
+                              "required": ["action"]
+                          }
+                      },
+                      "time_window_hint": {
+                          "type": "object",
+                          "description": "Time expressions from the user request",
+                          "properties": {
+                              "raw_phrase": {"type": "string"},
+                              "resolved_start": {"type": "string"},
+                              "resolved_end": {"type": "string"}
+                          }
+                      },
+                      "person_refs": {
+                          "type": "array",
+                          "description": "People mentioned in the request",
+                          "items": {"type": "object", "properties": {"raw": {"type": "string"}, "needs_resolution": {"type": "boolean"}}}
+                      },
+                      "resource_refs": {
+                          "type": "array",
+                          "description": "Resources mentioned in the request",
+                          "items": {"type": "object", "properties": {"raw": {"type": "string"}, "resource_kind_hint": {"type": "string"}, "needs_resolution": {"type": "boolean"}}}
+                      },
+                      "safety_context": {
+                          "type": "object",
+                          "description": "Safety band and overrides",
+                          "properties": {"safety_band": {"type": "string", "enum": ["GREEN", "AMBER", "RED"]}}
+                      }
+                  }
+              },
+              "idempotency_keys": {
+                  "type": "array", "items": {"type": "string"},
+                  "description": "Optional keys for deduplication"
+              },
+              "disclosure_phase": {
+                  "type": "string",
+                  "enum": ["connector_summary", "capability_names_only", "full_disclosure"],
+                  "description": "How much detail to return. Default: connector_summary"
+              },
+              "freshness_policy": {
+                  "type": "string",
+                  "enum": ["strict_freshness", "allow_stale_reads", "bypass_freshness"],
+                  "description": "How strict to be about data freshness. Default: allow_stale_reads"
+              },
+              "prompt_budget_tokens": {
+                  "type": "integer", "minimum": 500, "maximum": 32000,
+                  "description": "Max tokens for the prompt_pack. Default: 8000"
+              }
+          },
+          "required": ["frame"]
+      },
+      returns={"type": "object", "description": "ResolutionEnvelope with verdict, allowed_capability_names, allowed_next_actions, execution_plan, prompt_pack"},
+      category="read",
+      side_effects=False,
+      actor="back",
+  )
+  ```
+
+- **Add to `BACK_TOOL_SCHEMAS`** list as FIRST entry (line 251):
+
+  ```python
+  BACK_TOOL_SCHEMAS: list[ToolSchema] = [
+      RESOLVE_SITUATION_SCHEMA,           # NEW — primary resolution tool
+      RECALL_MEMORY_SCHEMA,
+      DISCOVER_CAPABILITIES_SCHEMA,
+      ...
+  ]
+  ```
+
+### Issue 16.2 — Add resolve_situation to Back Tool Allowlists
+
+- **File:** `k1/concierge/tools/schemas_back.py` lines 260-274
+- **What:** Add `"resolve_situation"` as FIRST entry in `_BACK_SIMPLE_LIST`:
+
+  ```python
+  _BACK_SIMPLE_LIST: list[str] = [
+      "resolve_situation",          # ← NEW — primary tool, always available
+      "recall_memory",
+      "discover_capabilities",
+      "invoke_capability",
+      "batch_invoke_capabilities",
+      "submit_result",
+  ]
+  ```
+
+- **`plan`/MEDIUM/HIGH automatically inherit it** via `_BACK_SIMPLE_LIST + _BACK_PLAN_EXTRA`.
+
+### Issue 16.3 — Register resolve_situation Handler in implementations.py
+
+- **File:** `k1/concierge/tools/implementations.py` — new handler after `execute_discover_capabilities` (~line 1465)
+- **What:** Register `@_register("resolve_situation")` handler that builds payload + calls dispatch:
+
+  ```python
+  @_register("resolve_situation")
+  async def execute_resolve_situation(args: dict, ctx: ToolContext) -> ToolResult:
+      """Resolve a task situation via Fabric's situated resolver.
+
+      Auto-fills identity/session fields from ToolContext. The LLM
+      only provides the frame (intents, time_window, person_refs, etc.)
+      and optional overrides.
+      """
+      try:
+          import uuid as _uuid
+
+          # ── Build payload: auto-fill identity, LLM provides frame ──
+          frame = args.get("frame", {})
+          payload = {
+              "actor_id": str(getattr(ctx, "active_principal_id", "") or ""),
+              "space_id": str(getattr(ctx, "active_space_id", "") or "family:default"),
+              "session_id": str(getattr(ctx, "active_session_id", "") or ""),
+              "tier": str(getattr(ctx, "active_task_tier", "") or "MEDIUM"),
+              "safety_band": str(getattr(ctx, "safety_band", "") or "GREEN"),
+              "frame": frame,
+              "request_id": "req-" + _uuid.uuid4().hex[:12],
+          }
+
+          # Optional LLM overrides
+          for key in ("disclosure_phase", "freshness_policy",
+                       "prompt_budget_tokens", "idempotency_keys"):
+              if key in args:
+                  payload[key] = args[key]
+
+          # ── Dispatch to Fabric ──
+          if not hasattr(ctx.dispatch, "resolve_situation"):
+              return ToolResult(
+                  status="error",
+                  data={"verdict": "cannot_execute",
+                        "sub_reason": "resolve_situation_not_wired",
+                        "message": "Fabric dispatch adapter does not support resolve_situation"}
+              )
+
+          result = await ctx.dispatch.resolve_situation(payload)
+          return ToolResult(status="ok", data=result)
+      except Exception as exc:
+          return ToolResult(
+              status="error",
+              data={"verdict": "cannot_execute",
+                    "sub_reason": "handler_exception",
+                    "message": str(exc)}
+          )
+  ```
+
+### Issue 16.4 — Add resolve_situation to IDispatchPort + FabricDispatchAdapter
+
+- **Files:** `k1/concierge/ports.py` line 106, `k1/concierge/adapters/fabric_dispatch.py` line 34
+- **What:** Add `resolve_situation` to the protocol and adapter:
+
+  ```python
+  # ports.py — IDispatchPort protocol (add method)
+  async def resolve_situation(self, payload: dict) -> dict: ...
+
+  # fabric_dispatch.py — FabricDispatchAdapter (add method ~line 92)
+  async def resolve_situation(self, payload: dict) -> dict:
+      """Route resolve_situation to Fabric's PUBLIC resolve_situation() method.
+
+      🔴 PORT/ADAPTER FIX: Calls self._fabric.resolve_situation(request)
+      (public port method at fabric.py:1740), NOT the private
+      _handle_resolve_situation(). Deserializes dict to
+      ResolveSituationRequest internally.
+      """
+      if not hasattr(self._fabric, "resolve_situation"):
+          return {"verdict": "cannot_execute", "sub_reason": "handler_not_available"}
+      try:
+          from k1.fabric.types import ResolveSituationRequest
+          request = _build_resolve_request_from_payload(payload)
+          envelope = self._fabric.resolve_situation(request)  # PUBLIC port
+          return envelope.to_dict()
+      except Exception as exc:
+          return {"verdict": "cannot_execute", "sub_reason": "handler_exception",
+                  "diagnostics": [{"type": "handler_error", "error": str(exc)}]}
+  ```
+
+- **Risk:** LOW — `resolve_situation` is optional (the handler checks `hasattr`). If the adapter doesn't support it, Back gets a clear `cannot_execute` verdict with `resolve_situation_not_wired` reason.
+
+### Issue 16.5 — Update available_tools_note in Back Prompt
+
+- **File:** `k1/concierge/prompt/back_prompt.py` — `build_back_prompt()` lines 455-480
+- **What:** Replace the hardcoded tool-name lists with guidance-only prose. **The LLM already knows WHAT tools it has from the `tools` array (function-calling definitions auto-generated from `BACK_TOOL_SCHEMAS` + allowlist).** The `available_tools_note` should only teach HOW to use them — order, strategy, rules.
+
+  ```python
+  # BEFORE (bad — hardcoded tool names, redundant with function definitions):
+  available_tools_note = (
+      "YOUR AVAILABLE TOOLS (LOW tier): recall_memory, discover_capabilities, "
+      "invoke_capability, batch_invoke_capabilities, submit_result.\n"
+      "You do NOT have spawn_via_fabric or execute_workflow.\n"
+      "PREFER batch_invoke_capabilities when invoking 2+ capabilities."
+  )
+
+  # AFTER (good — guidance only, no tool name lists):
+  available_tools_note = (
+      "TOOL USAGE ORDER:\n"
+      "  1. resolve_situation — ALWAYS first. Understand what you can do.\n"
+      "  2. recall_memory — ONLY for historical context the dispatch lacks.\n"
+      "  3. invoke / batch_invoke — Execute what resolve_situation allows.\n"
+      "  4. discover_capabilities — FALLBACK ONLY. Use when resolve_situation\n"
+      "     cannot find a capability.\n"
+      "  5. submit_result — ALWAYS last. The only way to finish.\n"
+      "\n"
+      "PREFER batch_invoke_capabilities for 2+ independent invocations.\n"
+      "Copy capability names EXACTLY from resolve_situation's output.\n"
+      "Never guess or invent capability names."
+  )
+  ```
+
+- **No tier differentiation needed** — the same guidance applies to LOW, MEDIUM, and HIGH. The LLM's `tools` array automatically reflects tier differences (e.g., `spawn_via_fabric` only appears in MEDIUM+ tiers via allowlist filtering).
+- **Architecture note:** There is only ONE path for tools to reach the LLM: `BACK_TOOL_SCHEMAS` → `_filter_back_tools(tier)` → `react_loop(tools=...)` → `tools` array (function-calling definitions). `TOOL_REGISTRY` is the backend handler dispatch table (not LLM-facing). `available_tools_note` is guidance prose in the system prompt (not a tool registration path).
+
+### Issue 16.6 — Verify resolve_situation Works from Back Dispatcher
+
+- **File:** New test — `tests/k1/concierge/actors/test_back_resolve_situation_tool.py`
+- **Test:** `test_resolve_situation_schema_valid` — schema parses with `ToolSchema` fields correct
+- **Test:** `test_resolve_situation_in_simple_allowlist` — appears in `_BACK_SIMPLE_LIST`
+- **Test:** `test_resolve_situation_in_back_schemas` — appears in `BACK_TOOL_SCHEMAS`
+- **Test:** `test_resolve_situation_handler_registered` — `TOOL_REGISTRY["resolve_situation"]` exists
+- **Test:** `test_resolve_situation_auto_fills_identity` — handler populates `actor_id`, `space_id`, `session_id` from `ToolContext`
+- **Test:** `test_resolve_situation_calls_fabric_adapter` — mock `ctx.dispatch.resolve_situation()` called with expected payload
+- **Test:** `test_resolve_situation_returns_envelope_dict` — returns `ToolResult(status="ok")` with `verdict` key
+- **Test:** `test_resolve_situation_unwired_returns_error` — when `ctx.dispatch` lacks `resolve_situation`, returns error envelope
+- **Test:** `test_discover_capabilities_still_works` — regression: fallback tool still functional
+- **Run:** `pytest tests/k1/concierge/actors/test_back_resolve_situation_tool.py -v`
+
+### Issue 16.7 — Add Batch Names Lookup to discover_capabilities
+
+- **File:** `k1/concierge/tools/schemas_fabric.py` — `DISCOVER_CAPABILITIES_SCHEMA`
+- **File:** `k1/concierge/tools/implementations.py` — `execute_discover_capabilities`
+- **What:** Add an optional `names: list[str]` parameter to `discover_capabilities`. When Back passes explicit capability names, skip semantic search entirely and use O(1) exact lookup via `registry.lookup(name)` for each name. Returns all matching schemas in a single batch response.
+
+**Problem this solves (GAP-P2-032):** When Back resolves a situation and the constitution lists companion resources (e.g., calendar's constitution says "list chores for soft conflict check"), Back knows the EXACT companion tool names (`tool.read.chores.list_chores`, `tool.read.tasks.list_tasks`) but has no way to get their input schemas in one call. Without batch lookup, Back must either:
+
+1. Call `discover_capabilities(intent="list chores")` once per companion tool — slow, heuristic-dependent, fragile (BM25 may not match the exact name).
+2. Guess the params from the tool name — unsafe.
+
+**Schema extension:**
+
+```json
+{
+  "name": "discover_capabilities",
+  "parameters": {
+    "properties": {
+      "intent": {"type": "string", "description": "Natural language query (use empty string when names is provided)."},
+      "domain": {"type": "string", "description": "Domain hint to narrow search."},
+      "names": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Exact capability names for batch deterministic schema lookup. When provided, skips semantic search and returns schemas for each name via O(1) exact match. USE THIS when the constitution or a prior resolution tells you the EXACT companion tool names (e.g., tool.read.chores.list_chores). Returns score=1.0 for found names; silently omits missing names."
+      },
+      "constraints": {"type": "object", "description": "Capability requirements."}
+    },
+    "required": ["intent"]
+  }
+}
+```
+
+**Handler logic (in execute_discover_capabilities, before semantic search):**
+
+```python
+# NEW: batch deterministic lookup via exact capability names
+names: list[str] | None = args.get("names")
+if names:
+    caps: list[dict[str, Any]] = []
+    for name in names:
+        contract = await _lookup_capability_contract_exact(ctx, name)
+        if contract is not None:
+            caps.append({
+                "name": name,
+                "description": getattr(contract, "description", ""),
+                "domain": (contract.domain[0] if contract.domain else ""),
+                "domains": list(contract.domain) if contract.domain else [],
+                "score": 1.0,  # deterministic exact match
+                "prompt_template": str(getattr(contract, "prompt_template", "") or ""),
+                "activity_profile": str(getattr(contract, "activity_profile", "") or ""),
+                "tool_instructions": str(getattr(contract, "tool_instructions", "") or ""),
+                "limitations": list(getattr(contract, "limitations", ()) or ()),
+                "schema": _capability_prompt_schema(contract),
+            })
+    return ToolResult(
+        tool_name="discover_capabilities",
+        status="ok",
+        data={"capabilities": caps, "count": len(caps)},
+    )
+
+# else: existing semantic search path (unchanged)
+intent = args.get("intent", "")
+...
+```
+
+**Design decisions:**
+- `names` takes priority: when provided, semantic search is skipped entirely.
+- `intent` remains `required` in the schema for backward compatibility; Back passes a non-empty placeholder (e.g., `"companion tool lookup"`) when using `names`.
+- Score = 1.0 for exact name matches (deterministic, not heuristic).
+- Missing names are silently omitted (Back already knows the name; if it's missing, the contract is gone — a hard error).
+- No per-session caching for batch names (O(1) lookups are too cheap to warrant cache complexity).
+
+**Risk:** LOW — additive parameter, existing semantic search path unchanged. The `_lookup_capability_contract_exact` helper already handles `dispatch.lookup(name)` and `dispatch.lookup_capability(name)` fallbacks.
+
+### Issue 16.8 — Tests: discover_capabilities Batch Names
+
+- **File:** New test — `tests/k1/concierge/tools/test_discover_capabilities_batch_names.py`
+- **Test:** `test_batch_names_returns_schemas_for_valid_names` — three real capability names → three schemas returned, all score=1.0
+- **Test:** `test_batch_names_omits_missing_name` — one valid + one nonexistent name → valid returned, missing silently omitted
+- **Test:** `test_batch_names_skips_semantic_search` — when `names` provided, `ctx.dispatch.discover_capabilities` is NEVER called (verified via mock assertion)
+- **Test:** `test_batch_names_backward_compat_semantic_still_works` — calling without `names` still performs semantic search (regression)
+- **Test:** `test_batch_names_empty_list_returns_empty` — `names=[]` → empty capabilities, no error
+- **Test:** `test_batch_names_calendar_companion_scenario` — simulate Back asking for calendar companion tools: `names=["tool.read.chores.list_chores", "tool.read.tasks.list_tasks", "tool.read.reminders.list_reminders"]` → all three schemas returned with correct required_inputs
+- **Test:** `test_batch_names_contract_has_input_schema` — each returned capability has `schema.required_inputs` and `schema.optional_inputs` populated from the real `CapabilityContract`
+- **Run:** `pytest tests/k1/concierge/tools/test_discover_capabilities_batch_names.py -v`
+
+---
+
+## Epic 17: Back Prompt Redesign — resolve_situation-First Model
+
+**Goal:** Rewrite `BACK_SYSTEM_PROMPT` to teach Back the `resolve_situation`-first execution model. The current prompt (~250 lines, ~1800 words, 8 sections) teaches "discover capabilities, then choose, then invoke." The new prompt teaches "call resolve_situation, read the envelope, execute what's allowed, submit."
+
+---
+
+### 🔍 DISCOVERY COMPLETE (2026-06-09) — Full Prompt Anatomy + Gap Analysis
+
+**Read every line of `k1/concierge/prompt/back_prompt.py` (530 lines) and `k1/concierge/actors/back.py` lines 326-440 (snapshot) + lines 990-1130 (prompt assembly).**
+
+---
+
+#### How the Prompt Is Formed (End-to-End)
+
+```
+back_handler() [back.py:940]
+  │
+  ├─ 1. _read_ss_snapshot(ss) [back.py:326]
+  │     Reads 7 SS sections → returns dict with 7 keys:
+  │       beliefs_prompt, referents, task_state_prompt,
+  │       task_artifacts_prompt, safety_band, history_entries, persona_prefs
+  │
+  ├─ 2. _build_execution_grounding_block(task, grounding) [back.py:140]
+  │     Tries task payload grounding → live grounding.get_projection("back") → raw fields
+  │
+  ├─ 3. build_back_prompt(task, beliefs, referents, task_state, task_artifacts,
+  │                        safety_band, persona_prefs, max_tool_calls,
+  │                        execution_profile_block, execution_grounding_block,
+  │                        resolved_temporal_refs) [back_prompt.py:411]
+  │     │
+  │     ├─ Generates available_tools_note from tier
+  │     ├─ Renders resolved_temporal_refs into execution_grounding_block
+  │     └─ BACK_SYSTEM_PROMPT.format(task_json=..., beliefs_summary=...,
+  │           task_state_summary=..., artifacts_summary=..., safety_band=...,
+  │           persona_prefs=..., max_tool_calls=..., execution_profile_block=...,
+  │           execution_grounding_block=..., available_tools_note=...)
+  │
+  └─ 4. Messages = chat history + task as ModelMessage(role="user", content=task_json)
+```
+
+**The prompt is a natural language document** with `{variable}` holes filled by Python `.format()`. It reads like prose, not a schema. This is correct — Back is an LLM, not a parser.
+
+---
+
+#### Current Variable Inventory (10 variables)
+
+| # | Variable | Populated From | In Prompt Section |
+|---|----------|---------------|-------------------|
+| 1 | `{task_json}` | `task` dict → `json.dumps(task, indent=2)` | `== TASK DISPATCH ==` |
+| 2 | `{beliefs_summary}` | `snapshot["beliefs_prompt"]` (beliefs_active SS section) | `== SESSION CONTEXT ==` |
+| 3 | `{task_state_summary}` | `snapshot["task_state_prompt"]` (task_state SS section) | `== SESSION CONTEXT ==` |
+| 4 | `{artifacts_summary}` | `snapshot["task_artifacts_prompt"]` (task_artifacts SS section) | `== SESSION CONTEXT ==` |
+| 5 | `{safety_band}` | `_get_safety_band(control SS section)` | `== SESSION CONTEXT ==` |
+| 6 | `{persona_prefs}` | `snapshot["persona_prefs"]` (persona SS section → payment/dietary/accessibility) | `== SESSION CONTEXT ==` |
+| 7 | `{max_tool_calls}` | Tier config (`back_max_tool_calls`) | `== BUDGET ==` |
+| 8 | `{execution_profile_block}` | Activity profile YAML → `_execution_profile_block_for_selection()` | `== REACT EXECUTION PROTOCOL ==` (mid-section, after header) |
+| 9 | `{execution_grounding_block}` | Grounding handle or task payload fields | `== REACT EXECUTION PROTOCOL ==` (mid-section, after profile_block) |
+| 10 | `{available_tools_note}` | Generated in `build_back_prompt()` from tier | `== TOOL SELECTION RULES ==` |
+
+**Not used but available:** `referents` dict (from scoreboard SS section) is passed to `build_back_prompt()` but has NO `{referents}` placeholder in the template. It's silently ignored.
+
+---
+
+#### Current Prompt Section-by-Section Map
+
+| # | Section | Lines in Template | What It Teaches Back | Verdict |
+|---|---------|-------------------|---------------------|---------|
+| 1 | `== IDENTITY ==` | ~35 lines | "You are the Worker. Pure executor." What Back IS, is NOT, produces. Built-in knowledge boundaries. | **KEEP** (nearly unchanged) |
+| 2 | `== REACT EXECUTION PROTOCOL ==` | ~120 lines | 8-step Think-Act-Observe loop: ORIENT → CHECK → ASSESS → DISCOVER → SAFETY → INVOKE → EVALUATE → SUBMIT. Teaches discover_capabilities as the core workflow. | **REPLACE** (resolve_situation-first protocol) |
+| 3 | `== TOOL SELECTION RULES ==` | ~55 lines | Capability naming conventions, domain hints, web search workflow, mandatory tool usage order (recall → discover → invoke → batch → submit). Teaches discover_capabilities as PRIMARY. | **REPLACE** (resolve_situation as primary, discover as fallback) |
+| 4 | `== RESULT FORMAT ==` | ~30 lines | submit_result(complete) fields: final_answer, results, artifacts_created, semantic_context. Authority boundaries. | **KEEP** (minor updates for ResolutionEnvelope evidence) |
+| 5 | `== AMBIGUITY HANDLING ==` | ~4 lines | Max 2 suspensions. On third: pick best, note reasoning. | **KEEP** (unchanged) |
+| 6 | `== ANTI-PATTERNS (NEVER DO THESE) ==` | ~22 lines | 11 NEVER-DO rules: no user-facing text, no re-execution, no capability name invention, no submit before invoke, etc. | **UPDATE** (add resolve_situation rules, remove discover-specific anti-patterns) |
+| 7 | `== BUDGET ==` | ~6 lines | `{max_tool_calls}` tool calls remaining. Plan upfront. | **KEEP** (update for resolve_situation cost model) |
+| 8 | `== TASK DISPATCH ==` | 1 line | `{task_json}` — the raw task payload as JSON. | **KEEP** (unchanged) |
+| 9 | `== SESSION CONTEXT ==` | 5 lines | Beliefs, task_state, artifacts, safety_band, persona_prefs. | **EXPAND** (add temporal, spatial, selfmodel, grounding blocks + scoreboard) |
+
+---
+
+#### Missing Session State: What Back Doesn't Know About
+
+`_read_ss_snapshot()` at `back.py:326` reads 7 SS sections but **explicitly skips**:
+
+| SS Section | Read? | Injected into Prompt? | Should Back Know? |
+|------------|-------|----------------------|-------------------|
+| `beliefs_active` | ✅ Yes | ✅ `{beliefs_summary}` | — |
+| `scoreboard` | ✅ Yes (as `referents` dict) | ❌ **NO `{referents}` placeholder exists** | ✅ Yes — pronoun resolution helps Back understand "she said" / "that task" |
+| `task_state` | ✅ Yes | ✅ `{task_state_summary}` | — |
+| `task_artifacts` | ✅ Yes | ✅ `{artifacts_summary}` | — |
+| `control` | ✅ Yes (safety_band only) | ✅ `{safety_band}` | — |
+| `history_active` | ✅ Yes | ❌ (used for chat history, not prompt) | — |
+| `persona` | ✅ Yes (payment/dietary/accessibility) | ✅ `{persona_prefs}` | — |
+| **`temporal`** | ❌ Explicitly skipped | ❌ | ✅ **YES** — Back needs current time, timezone, windows for execution decisions |
+| **`spatial`** | ❌ Never mentioned | ❌ | ✅ **YES** — Back needs device/home location context |
+| **`affective_now`** | ❌ Explicitly skipped | ❌ | ❌ No — Front's emotional state, irrelevant to Back |
+| **`clarifications`** | ❌ Explicitly skipped | ❌ | ❌ No — Front's concern |
+| **`narrative_active`** | ❌ Explicitly skipped | ❌ | ❌ No — Front's thread tracking |
+
+**Gap:** `scoreboard` referents are read but silently dropped. `temporal` and `spatial` SS sections exist but Back never reads them. Epic 15 adds live handle projections for temporal/spatial/selfmodel/grounding — but the SS sections contain DIFFERENT data (e.g., resolved expressions cached from prior turns).
+
+---
+
+#### New Variable Inventory After Epic 17 (13 variables)
+
+| # | Variable | Epic | Source |
+|---|----------|------|--------|
+| 1-6 | `{task_json}`, `{beliefs_summary}`, `{task_state_summary}`, `{artifacts_summary}`, `{safety_band}`, `{persona_prefs}` | Existing | SS snapshot (unchanged) |
+| 7 | `{max_tool_calls}` | Existing | Tier config (unchanged) |
+| 8 | `{available_tools_note}` | Epic 16 | Updated: resolve_situation as primary |
+| 9 | `{temporal_context_block}` | **Epic 15** | `TemporalHandle.get_projection("back")` → `render_execution_block()` |
+| 10 | `{spatial_context_block}` | **Epic 15** | `SpatialHandle.get_projection("back")` → formatted text |
+| 11 | `{selfmodel_context_block}` | **Epic 15** | `SelfModelHandle.render_capsule()` → `as_prompt_text()` |
+| 12 | `{execution_grounding_block}` | Existing | Grounding handle (unchanged, stays) |
+| 13 | `{scoreboard_summary}` | **Epic 17** | `snapshot["referents"]` → formatted text (was read but never injected) |
+
+**Removed:** `{execution_profile_block}` — activity profiles are now guide cards inside the ResolutionEnvelope's prompt_pack. Back no longer needs pre-injected activity guidance; it discovers context through resolve_situation.
+
+---
+
+#### Target Prompt Structure (9 sections)
+
+| # | Section | Status | What It Teaches |
+|---|---------|--------|-----------------|
+| 1 | `== IDENTITY ==` | KEEP (minor edits) | "You are the Worker." Built-in knowledge boundaries. |
+| 2 | `== EXECUTION CONTEXT ==` | **NEW** | `{temporal_context_block}`, `{spatial_context_block}`, `{selfmodel_context_block}`, `{execution_grounding_block}` — Back's live situational awareness. |
+| 3 | `== YOUR PRIMARY TOOL: resolve_situation ==` | **NEW** | Teaches Back that `resolve_situation` is ALWAYS step 1. Describes what it does, what it returns. |
+| 4 | `== HOW TO READ A RESOLUTION ENVELOPE ==` | **NEW** | Teaches Back the verdict model. Each verdict → what to do next. Not a flowchart — natural language guidance. |
+| 5 | `== EXECUTION PROTOCOL ==` | **REPLACE** (was REACT PROTOCOL) | 4-step loop: RESOLVE → EXECUTE → VERIFY → SUBMIT. Much simpler than 8-step discover-then-invoke. |
+| 6 | `== TOOL REFERENCE ==` | **REPLACE** (was TOOL SELECTION RULES) | `{available_tools_note}` + tool usage order. resolve_situation first, discover_capabilities as fallback. |
+| 7 | `== RESULT FORMAT ==` | KEEP (minor updates) | submit_result fields. Add guidance for including ResolutionEnvelope evidence. |
+| 8 | `== GUARDRAILS ==` | **MERGE** (was AMBIGUITY + ANTI-PATTERNS + BUDGET) | Ambiguity limits, anti-patterns, budget rules. Consolidated — Back doesn't need three separate guardrail sections. |
+| 9 | `== TASK DISPATCH ==` | KEEP | `{task_json}` |
+| 10 | `== SESSION STATE ==` | **EXPAND** (was SESSION CONTEXT) | `{scoreboard_summary}`, `{beliefs_summary}`, `{task_state_summary}`, `{artifacts_summary}`, `{safety_band}`, `{persona_prefs}` |
+
+---
+
+#### Section 4 Design: HOW TO READ A RESOLUTION ENVELOPE
+
+This is the most critical new section. It must teach Back what each verdict means in natural language — NOT as a flowchart or decision tree.
+
+**Design principle:** The verdict names may evolve. Don't hard-code exact strings like `"can_execute_with_gate"` as if they're API enums. Instead, describe the SEMANTICS of each verdict category in natural language, and let the LLM pattern-match the actual verdict string from the envelope.
+
+```
+== HOW TO READ A RESOLUTION ENVELOPE ==
+When you call resolve_situation, you receive a ResolutionEnvelope with a
+"verdict" field. This tells you what you are allowed to do.
+
+EXECUTABLE VERDICTS (you CAN act):
+  If the verdict indicates the task can proceed:
+    → Look at "allowed_capability_names" — these are the ONLY capability
+      names you may invoke. Do not use any other name.
+    → Look at "execution_plan" — this is the ordered sequence of steps.
+      Typically: prerequisite_read(s) first, then primary_write, then
+      optional verification.
+    → Look at "allowed_next_actions" — these are natural language
+      descriptions of what to do. Use them to understand intent.
+    → Invoke the capabilities in order. Use batch_invoke_capabilities
+      when multiple steps are independent.
+    → When all steps complete: submit_result(complete).
+
+  If the verdict indicates the task can proceed but has a gate:
+    → Same as above, but the execution_plan may include a verification
+      step. Execute the verification capability AFTER the primary action.
+    → The gate may require you to check something before or after.
+      Follow the execution_plan order exactly.
+
+BLOCKING VERDICTS (you CANNOT act):
+  If the verdict indicates the task is blocked by policy:
+    → submit_result(cannot_execute, reason=<copy the sub_reason from envelope>).
+    → Do NOT try discover_capabilities. Policy blocks are authoritative.
+
+  If the verdict indicates no capability was found:
+    → You MAY try discover_capabilities as a fallback search.
+    → If discover also finds nothing: submit_result(cannot_execute).
+    → If discover finds something: you may invoke it directly (no need
+      to re-call resolve_situation).
+
+HUMAN-IN-THE-LOOP VERDICTS:
+  If the verdict indicates the task needs human input:
+    → Look at "hil_request" in the envelope for the exact question.
+    → Call submit_result(needs_human, questions=[<the question>]).
+    → The task will be suspended and resumed after the human responds.
+
+  If the verdict indicates ambiguity (unclear who or what):
+    → submit_result(needs_human, clarification=<what needs clarifying>).
+
+STALE DATA VERDICTS:
+  If the verdict indicates the projection is stale:
+    → Re-call resolve_situation with freshness_policy="bypass_freshness".
+    → This tells the resolver to skip cache and get fresh data.
+    → Then proceed with the new envelope's verdict.
+
+IDEMPOTENCY:
+  If you re-call resolve_situation with the same idempotency_keys,
+  you will get the SAME resolution_id. Use this to avoid duplicate work.
+```
+
+---
+
+#### Section 5 Design: EXECUTION PROTOCOL (4 Steps)
+
+Replaces the current 8-step REACT EXECUTION PROTOCOL. Much simpler:
+
+```
+== EXECUTION PROTOCOL ==
+You operate in a 4-step loop. Every task follows this sequence.
+
+STEP 1 — RESOLVE:
+  Call resolve_situation(frame={...}) with the task's intents, time windows,
+  person references, and resource references from the TASK DISPATCH.
+  This is ALWAYS your first tool call. No exceptions.
+
+  The frame should contain:
+    - intents: what the user wants done (action, domain, hints)
+    - time_window_hint: any time expressions from the request
+    - person_refs: people mentioned
+    - resource_refs: resources mentioned
+
+  You receive a ResolutionEnvelope. Read the verdict.
+
+STEP 2 — EXECUTE:
+  If the verdict allows execution:
+    - Follow the execution_plan order.
+    - Use ONLY capability names from allowed_capability_names.
+    - Copy capability names EXACTLY — they are registry-owned.
+    - Batch independent invocations with batch_invoke_capabilities.
+    - If a prerequisite_read returns data needed for the primary_write,
+      use that data in the write's params.
+
+  If the verdict blocks execution:
+    - Follow the envelope's guidance (see HOW TO READ A RESOLUTION ENVELOPE).
+    - Do not try to work around a policy block.
+
+STEP 3 — VERIFY (if required):
+  If the execution_plan includes a verification step:
+    - Execute it after the primary action.
+    - If verification fails: the capability's result will indicate recovery.
+    - If verification passes: proceed to submit.
+
+STEP 4 — SUBMIT:
+  Call submit_result(complete) with:
+    - final_answer: factual summary of what was done
+    - results: ALL invoke_capability results verbatim
+    - artifacts_created: durable outputs
+    - Include the resolution_id from the envelope in semantic_context
+      so future turns can reference this resolution.
+```
+
+---
+
+#### Section 6 Design: TOOL REFERENCE
+
+Replaces the current TOOL SELECTION RULES. Shorter, resolve_situation-first:
+
+```
+== TOOL REFERENCE ==
+{available_tools_note}
+
+MANDATORY TOOL ORDER:
+  1. resolve_situation — ALWAYS first. Call exactly ONCE per task
+     (unless the envelope says "stale_projection" — then call again
+     with freshness_policy="bypass_freshness").
+  2. recall_memory — ONLY for historical context the dispatch lacks.
+     Do NOT use for live system-of-record data. Do NOT use as a
+     substitute for resolve_situation.
+  3. discover_capabilities(names=[...]) — AFTER resolve_situation,
+     when the constitution or envelope tells you companion tool names
+     (e.g., "list chores for conflict check"), call discover_capabilities
+     with the `names` parameter to get their input schemas in ONE batch.
+     Pass the EXACT capability names from the constitution verbatim.
+     Do NOT call discover_capabilities(intent=...) for this — use `names`.
+  4. invoke_capability / batch_invoke_capabilities — Execute allowed
+     capabilities. Prefer batch_invoke_capabilities for 2+ calls.
+     Copy capability names EXACTLY from allowed_capability_names.
+  5. discover_capabilities(intent=...) — FALLBACK ONLY. Use ONLY when
+     resolve_situation returns missing_capability and you need to
+     search for alternatives. Never call before resolve_situation.
+  6. submit_result — ALWAYS at the end. The ONLY way to finish a task.
+
+COMPANION TOOL SCHEMA DISCOVERY:
+  When resolve_situation returns a constitution that mentions companion
+  tools (e.g., "Before action: list chores for soft conflict check"),
+  you MUST discover their schemas before invoking them.  Use:
+
+    discover_capabilities(
+      intent="companion tool lookup",
+      names=[
+        "tool.read.chores.list_chores",
+        "tool.read.tasks.list_tasks"
+      ]
+    )
+
+  This returns ALL schemas in ONE call.  The constitution tells you the
+  EXACT companion tool names — copy them verbatim into the `names` array.
+  Do NOT call discover_capabilities once per tool; do NOT use the
+  `intent`-based search for tools you already know the names of.
+
+CAPABILITY NAMES ARE REGISTRY-OWNED:
+  You do not know capability names. resolve_situation tells you the
+  exact names in allowed_capability_names. Copy them verbatim.
+  Never guess, infer, or construct a capability name.
+```
+
+---
+
+### 🔍 CONVERSATION INJECTION DISCOVERY (2026-06-09) — 3 Injections From Existing Data, 1 Deferred
+
+**Three subagents explored `history_active`, `TypedHistoryEntry`, `build_chat_history_for_back`, Front's dispatch_task handler, `TaskDispatch`, and the FSM's history write protocol.**
+
+---
+
+#### Discovery: 3 of 4 Injections Already Have Data In Memory
+
+Back's `_read_ss_snapshot()` at `back.py:326` already loads `history_entries` (list of `TypedHistoryEntry`) into `snapshot["history_entries"]`. This list is currently used ONLY for building `ModelMessage` objects via `build_chat_history_for_back()`. But it contains ALL the data needed for three additional prompt injections — we just never rendered them.
+
+| Injection | Data Source | Status |
+|-----------|------------|--------|
+| `{triggering_utterance}` | `snapshot["history_entries"]` — last `entry_type == "user"` | ✅ Data exists in memory |
+| `{conversation_prefix}` | `snapshot["history_entries"]` — last `entry_type == "final"` | ✅ Data exists in memory |
+| `{recent_history}` | `snapshot["history_entries"]` — last N entries of types `"user"`, `"final"`, `"hitl_response"` | ✅ Data exists in memory |
+| `{front_checks}` | Front's `ToolDispatcher.call_history` — garbage collected after react_loop | ❌ Data does NOT persist |
+
+---
+
+#### Grounded Code Paths — What Exists Today
+
+**FSM's `_write_history()`** at `controller.py:1701` writes these entry types to `controller.history` (the richest source):
+
+| entry_type | text content | role | Written when |
+|-----------|-------------|------|-------------|
+| `"user"` | Raw user input message | `"user"` | User speaks (`_on_user_input`) |
+| `"final"` | Front's conversational response | `"assistant"` | Front responds (`_on_response_final`) |
+| `"weave"` | Async result presentation | `"assistant"` | Weave delivery |
+| `"proactive"` | Proactive fill delivery | `"assistant"` | Proactive delivery |
+| `"hitl_request"` | HITL question string | `"assistant"` | Task suspended |
+| `"hitl_response"` | User's HITL answer | `"user"` | Task resumed |
+| `"task_complete"` | Back task completed | `"system"` | Back finishes |
+| `"error"` / `"cancel_confirmed"` | Task failure/cancel | `"system"` | Back fails |
+
+**`build_chat_history_for_back()`** at `history.py:76` already filters to `"user"`, `"final"`, `"hitl_response"` — but truncates text to 500 chars and returns `ModelMessage` objects. For prompt injection we need the FULL text and a plain-text format.
+
+**Already-existing extraction pattern** in `session.py:619`:
+
+```python
+for entry in reversed(self._fsm.history):
+    if getattr(entry, "entry_type", None) == "user":
+        turn_transcript = entry.text or ""
+        break
+```
+
+This is the EXACT pattern for extracting `{triggering_utterance}` and `{conversation_prefix}` — just filter for different entry types.
+
+**No new FSM code, no new SS reads, no new TaskDispatch fields needed.** The `snapshot["history_entries"]` list is already loaded in `back_handler` at line 1025. We just need to iterate it and format the text.
+
+---
+
+#### Injection 14: `{triggering_utterance}` — The Raw User Message
+
+**Data:** Last `TypedHistoryEntry` with `entry_type == "user"` from `snapshot["history_entries"]`.
+
+**Extraction (in `back_handler`, ~3 lines):**
+
+```python
+def _extract_triggering_utterance(history_entries: list) -> str:
+    for entry in reversed(history_entries):
+        if getattr(entry, "entry_type", None) == "user":
+            return entry.text or ""
+    return ""
+```
+
+**Why:** The `task_json` contains parsed intents (structured) but not the raw user text. The user might say *"I'm tired of pasta, can you figure out dinner with that salmon from yesterday?"* — Back receives `intents: [{action: "suggest recipes", ...}]` but loses "I'm tired of pasta" (emotional context) and "from yesterday" (freshness concern).
+
+---
+
+#### Injection 15: `{conversation_prefix}` — What Front Told the User
+
+**Data:** Last `TypedHistoryEntry` with `entry_type in ("final", "proactive", "weave")` from `snapshot["history_entries"]`.
+
+**Extraction (in `back_handler`, ~3 lines):**
+
+```python
+def _extract_conversation_prefix(history_entries: list) -> str:
+    for entry in reversed(history_entries):
+        if getattr(entry, "entry_type", None) in ("final", "proactive", "weave"):
+            return entry.text or ""
+    return ""
+```
+
+**Why:** Front may have told the user "Let me check your calendar first... OK, you're free after 6pm. I see salmon in the fridge. Let me find recipes." Back doesn't know Front already checked the calendar — it might re-check unnecessarily. This injection tells Back what the user already knows.
+
+---
+
+#### Injection 16: `{recent_history}` — Full Recent Conversation
+
+**Data:** Last N `TypedHistoryEntry` objects from `snapshot["history_entries"]`, filtered to `"user"`, `"final"`, `"hitl_response"`, rendered as readable text WITHOUT 500-char truncation.
+
+**Renderer (new ~15-line helper in `back.py`):**
+
+```python
+def _render_recent_history_for_prompt(entries: list, window: int = 10) -> str:
+    """Render recent conversation as readable text for Back's prompt.
+
+    Reuses the same entry-type filter as build_chat_history_for_back()
+    (history.py:76) but renders as natural language text instead of
+    ModelMessage objects and does NOT truncate to 500 chars.
+    """
+    relevant = [e for e in entries if getattr(e, "entry_type", None) in ("user", "final", "hitl_response")]
+    lines = []
+    for entry in relevant[-window:]:
+        entry_type = getattr(entry, "entry_type", "")
+        text = getattr(entry, "text", "") or ""
+        if entry_type == "user":
+            lines.append(f"User: {text}")
+        elif entry_type == "hitl_response":
+            lines.append(f"User (answering question): {text}")
+        else:
+            lines.append(f"Front: {text}")
+        lines.append("")
+    return "\n".join(lines)
+```
+
+**Existing code reused:**
+
+- Entry type filter: same as `build_chat_history_for_back()` at `history.py:82`
+- Role mapping: same as `history_to_back_context()` at `history_writer.py:213`
+- The `_ENTRY_PREFIX` dict at `history_writer.py:196` for label ideas
+
+**Why:** The `messages` array (ModelMessage objects) is the primary conversation context for the LLM. But having a readable text summary in the system prompt gives Back a SECOND comprehension path. LLMs process system prompts differently from conversation messages — dual-path context improves understanding. Also removes the 500-char truncation that loses detail.
+
+---
+
+#### Injection 17: `{front_checks}` — DEFERRED to Phase 3
+
+**Why deferred:** Front's tool call history exists in `ToolDispatcher.call_history` / `get_call_summaries()` but is **garbage-collected** after `react_loop()` returns. No FSM history entries are written for Front's tool calls. `TaskDispatch.context_snapshot` exists but is **never populated**. No `front_checks` / `pre_dispatch` / `already_checked` concept exists anywhere in the codebase.
+
+**Three options for Phase 3:**
+
+| Option | What | Effort | Risk |
+|--------|------|--------|------|
+| A | `front_handler` calls `tool_dispatcher.get_call_summaries()` before dispatching, attaches to payload as new `TaskDispatch.front_tool_summaries` field | Medium | Low |
+| B | FSM writes history entries for Front tool calls via `TOPIC_TOOL_STARTED`/`TOPIC_TOOL_COMPLETED` (already emitted at `dispatcher.py:668`) | High | Medium |
+| C | Defer entirely — `resolve_situation` handles prerequisite tracking via `completed_prerequisite_bindings` | Zero | None |
+
+**Recommendation: Option C for Phase 2.** The resolver's 13-step cascade already tracks what's been done. Back follows the `execution_plan` — it doesn't need to independently know what Front checked.
+
+---
+
+#### Updated Variable Inventory (10 → 16)
+
+| # | Variable | Epic | Source | New Code Needed? |
+|---|----------|------|--------|-----------------|
+| 1-6 | `{task_json}`, `{beliefs_summary}`, `{task_state_summary}`, `{artifacts_summary}`, `{safety_band}`, `{persona_prefs}` | Existing | SS snapshot | None |
+| 7 | `{max_tool_calls}` | Existing | Tier config | None |
+| 8 | `{available_tools_note}` | Epic 16 | Updated | None |
+| 9 | `{temporal_context_block}` | Epic 15 | `TemporalHandle.get_projection("back")` | Handle wiring |
+| 10 | `{spatial_context_block}` | Epic 15 | `SpatialHandle.get_projection("back")` | Handle wiring |
+| 11 | `{selfmodel_context_block}` | Epic 15 | `SelfModelHandle.render_capsule()` | Handle wiring |
+| 12 | `{execution_grounding_block}` | Existing | Grounding handle | None |
+| 13 | `{scoreboard_summary}` | Epic 17 | `snapshot["referents"]` (was read but never injected) | ~5 line formatter |
+| **14** | **`{triggering_utterance}`** | **Epic 17** | **`snapshot["history_entries"]` last `"user"`** | **~3 line extraction** |
+| **15** | **`{conversation_prefix}`** | **Epic 17** | **`snapshot["history_entries"]` last `"final"`** | **~3 line extraction** |
+| **16** | **`{recent_history}`** | **Epic 17** | **`snapshot["history_entries"]` last N entries** | **~15 line renderer** |
+| — | `{front_checks}` | Deferred | Front's dispatcher history (not persisted) | Phase 3 |
+
+**Removed:** `{execution_profile_block}` — activity profiles now delivered via ResolutionEnvelope.prompt_pack.
+
+---
+
+### Issue 17.1 — Map Current Prompt Sections: KEEP / UPDATE / REPLACE / NEW
+
+- **File:** `k1/concierge/prompt/back_prompt.py` lines 41-315 (`BACK_SYSTEM_PROMPT` constant)
+- **What:** Section-by-section audit of the current 250-line prompt. Every line mapped to KEEP, UPDATE, REPLACE, or NEW.
+- **Map (see table above in "Current Prompt Section-by-Section Map"):**
+  - KEEP (minor edits): IDENTITY, RESULT FORMAT, TASK DISPATCH
+  - REPLACE: REACT EXECUTION PROTOCOL → EXECUTION PROTOCOL, TOOL SELECTION RULES → TOOL REFERENCE
+  - MERGE: AMBIGUITY + ANTI-PATTERNS + BUDGET → GUARDRAILS
+  - NEW: EXECUTION CONTEXT, YOUR PRIMARY TOOL: resolve_situation, HOW TO READ A RESOLUTION ENVELOPE
+  - EXPAND: SESSION CONTEXT → SESSION STATE (add scoreboard + Epic 15 blocks)
+
+### Issue 17.2 — Write New BACK_SYSTEM_PROMPT
+
+- **File:** `k1/concierge/prompt/back_prompt.py` — replace `BACK_SYSTEM_PROMPT` constant
+- **What:** Full rewrite as a natural language document with `{variable}` fill-in-the-blanks. Same `.format()` substitution pattern. New structure:
+  1. `== IDENTITY ==` — KEEP (minor: remove "You are NOT aware of who the user is" since selfmodel now provides persona context)
+  2. `== EXECUTION CONTEXT ==` — NEW — `{temporal_context_block}`, `{spatial_context_block}`, `{selfmodel_context_block}`, `{execution_grounding_block}`
+  3. `== YOUR PRIMARY TOOL: resolve_situation ==` — NEW — teaches Back this is ALWAYS step 1
+  4. `== HOW TO READ A RESOLUTION ENVELOPE ==` — NEW — verdict semantics in natural language
+  5. `== EXECUTION PROTOCOL ==` — REPLACE — 4-step RESOLVE→EXECUTE→VERIFY→SUBMIT
+  6. `== TOOL REFERENCE ==` — REPLACE — `{available_tools_note}` + mandatory order
+  7. `== RESULT FORMAT ==` — KEEP (add: include resolution_id in semantic_context)
+  8. `== GUARDRAILS ==` — MERGE — ambiguity limits + anti-patterns + budget
+  9. `== TASK DISPATCH ==` — KEEP — `{task_json}`
+  10. `== SESSION STATE ==` — EXPAND — `{scoreboard_summary}`, `{beliefs_summary}`, `{task_state_summary}`, `{artifacts_summary}`, `{safety_band}`, `{persona_prefs}`
+- **Design constraint:** The prompt must be a natural language document. No flowcharts, no pseudo-code, no structured schemas. Back is an LLM — teach it in prose.
+- **Variable naming convention:** Keep existing variable names unchanged where possible. New variables follow the same `{snake_case}` convention.
+- **Risk:** HIGH — this is the core behavioral change. Must be tested with Epic 18 integration gate.
+
+### Issue 17.3 — Update build_back_prompt() Signature + Logic
+
+- **File:** `k1/concierge/prompt/back_prompt.py` lines 411-494 (`build_back_prompt()`)
+- **What:** Update function signature and body for new variables:
+
+  ```python
+  def build_back_prompt(
+      task: dict[str, Any],
+      beliefs: str = "",
+      referents: dict[str, Any] | None = None,
+      task_state: str = "",
+      task_artifacts: str = "",
+      safety_band: str = "GREEN",
+      persona_prefs: dict[str, Any] | None = None,
+      max_tool_calls: int | None = None,
+      # ── Epic 15: New context blocks ──
+      temporal_context_block: str = "",       # NEW
+      spatial_context_block: str = "",         # NEW
+      selfmodel_context_block: str = "",       # NEW
+      # ── Existing, kept ──
+      execution_grounding_block: str = "",
+      resolved_temporal_refs: dict[str, Any] | None = None,
+      # ── REMOVED: execution_profile_block (now in prompt_pack) ──
+  ) -> str:
+  ```
+
+- **Changes:**
+  - ADD: `temporal_context_block`, `spatial_context_block`, `selfmodel_context_block` params
+  - REMOVE: `execution_profile_block` param (activity profiles now delivered via ResolutionEnvelope.prompt_pack)
+  - ADD: `scoreboard_summary` generation from `referents` dict (was passed but never used)
+  - SIMPLIFY: `available_tools_note` — no longer hardcoded tool-name lists per tier. Single guidance prose block teaching tool ORDER (not names). The LLM already knows WHAT tools it has from the `tools` array (function-calling definitions auto-generated from `BACK_TOOL_SCHEMAS` + allowlist). See Issue 16.5.
+  - UPDATE: `.format()` call with new placeholder names
+- **Backward compatibility:** All new params default to `""`. Existing callers that don't pass them get empty blocks.
+
+### Issue 17.4 — Update _read_ss_snapshot() to Include Scoreboard Summary
+
+- **File:** `k1/concierge/actors/back.py` lines 326-440 (`_read_ss_snapshot()`)
+- **What:** Add `scoreboard_summary` to the returned dict. Currently `referents` are read but silently dropped because no `{referents}` placeholder exists in the old prompt.
+
+  ```python
+  return {
+      "beliefs_prompt": ...,
+      "referents": _get_referents(scoreboard),
+      "scoreboard_summary": _render_scoreboard_for_back(scoreboard),  # NEW
+      "task_state_prompt": ...,
+      ...
+  }
+  ```
+
+- **`_render_scoreboard_for_back()`** — new helper that formats scoreboard referents as a brief text block:
+
+  ```
+  Referents: {"she" → "Riley (daughter)", "that task" → "Buy groceries (task-abc123)", ...}
+  ```
+
+- **Why:** Back currently can't resolve pronouns. If the task says "remind her about that", Back has no idea who "her" is or what "that" refers to. Scoreboard has this resolution.
+
+### Issue 17.5 — Wire New Context Blocks into back_handler()
+
+- **File:** `k1/concierge/actors/back.py` lines 1060-1098 (prompt assembly section)
+- **What:** After Epic 15 wires `temporal`, `spatial`, `self_model` into `back_handler()`, build the three context blocks and pass them to `build_back_prompt()`:
+
+  ```python
+  # After Epic 15: temporal, spatial, self_model are available as params
+  temporal_block = await _build_temporal_context_block(temporal, task)
+  spatial_block = await _build_spatial_context_block(spatial, task)
+  selfmodel_block = await _build_selfmodel_context_block(self_model)
+
+  system_prompt = build_back_prompt(
+      task=task,
+      beliefs=snapshot["beliefs_prompt"],
+      ...
+      temporal_context_block=temporal_block,      # NEW
+      spatial_context_block=spatial_block,          # NEW
+      selfmodel_context_block=selfmodel_block,      # NEW
+      # REMOVED: execution_profile_block=...       # No longer passed
+      execution_grounding_block=execution_grounding_block,
+      resolved_temporal_refs=resolved_temporal_refs,
+  )
+  ```
+
+- **Note:** The `execution_profile_block` param is REMOVED from the `build_back_prompt()` call. Activity profiles now arrive via `ResolutionEnvelope.prompt_pack` when Back calls `resolve_situation`.
+
+### Issue 17.6 — Verify Prompt Coherence + Regression
+
+- **File:** New test — `tests/k1/concierge/prompt/test_back_prompt_redesign.py`
+- **Tests:**
+  - `test_all_placeholders_resolve` — `.format()` with all 13 variables, no `KeyError`
+  - `test_prompt_contains_resolve_situation_guidance` — "resolve_situation" appears in PRIMARY TOOL and TOOL REFERENCE sections
+  - `test_prompt_contains_envelope_reading_guide` — verdict semantics described in natural language
+  - `test_prompt_contains_context_blocks` — temporal/spatial/selfmodel/grounding placeholders present
+  - `test_prompt_contains_scoreboard` — `{scoreboard_summary}` placeholder present
+  - `test_old_discover_first_language_removed` — "call discover_capabilities" NOT in STEP 1 position
+  - `test_discover_is_fallback_only` — "discover_capabilities" only appears in FALLBACK context
+  - `test_prompt_length_under_4096_tokens` — fits in model context with room for task + envelope
+  - `test_new_variables_default_to_empty` — passing `""` for new blocks produces valid prompt
+  - `test_existing_variables_still_work` — `task_json`, `beliefs_summary`, etc. still inject correctly
+  - `test_execution_profile_block_removed` — `{execution_profile_block}` no longer in template
+  - `test_backward_compat_old_call_signature` — calling with old params (no new blocks) still works
+- **Run:** `pytest tests/k1/concierge/prompt/test_back_prompt_redesign.py -v`
+
+### Issue 17.7 — Build Conversation Injections from Existing snapshot["history_entries"]
+
+- **File:** `k1/concierge/actors/back.py` — new extraction helpers (~25 lines total)
+- **What:** Three small functions that extract text from `snapshot["history_entries"]` (already in memory — zero new data reads):
+  1. `_extract_triggering_utterance(history_entries)` — last `entry_type == "user"` text (~3 lines)
+  2. `_extract_conversation_prefix(history_entries)` — last `entry_type in ("final", "proactive", "weave")` text (~3 lines)
+  3. `_render_recent_history_for_prompt(history_entries, window=10)` — last N `"user"`/`"final"`/`"hitl_response"` entries as readable text, no truncation (~15 lines)
+- **Existing code reused:**
+  - Entry type filter from `build_chat_history_for_back()` at `history.py:82`
+  - Extraction pattern from `session.py:619` (`reversed(history)` + `entry_type` check)
+  - Role label mapping from `history_to_back_context()` at `history_writer.py:213`
+- **Why window=10:** Back currently gets only 3-5 chat history entries (as messages). For prompt text, we can afford more — 10 entries gives Back roughly 5 full conversation turns of context without truncation.
+- **Risk:** LOW — all three functions are pure text extraction from data already in memory. No I/O, no state mutation.
+
+### Issue 17.8 — Wire Conversation Injections into build_back_prompt()
+
+- **File:** `k1/concierge/prompt/back_prompt.py` — `build_back_prompt()` signature
+- **What:** Add three new params:
+
+  ```python
+  def build_back_prompt(
+      ...,
+      triggering_utterance: str = "",       # NEW — Issue 17.7
+      conversation_prefix: str = "",         # NEW — Issue 17.7
+      recent_history: str = "",              # NEW — Issue 17.7
+  ) -> str:
+  ```
+
+- **Template additions:** `BACK_SYSTEM_PROMPT` gains three placeholders in the `== SESSION STATE ==` section (or a new `== CONVERSATION CONTEXT ==` section):
+
+  ```
+  == CONVERSATION CONTEXT ==
+  {triggering_utterance}
+  {conversation_prefix}
+  {recent_history}
+  ```
+
+- **Default behavior:** All three default to `""` — empty blocks render as nothing. Backward compatible.
+
+### Issue 17.9 — Wire Conversation Injections into back_handler()
+
+- **File:** `k1/concierge/actors/back.py` — prompt assembly section (~line 1060)
+- **What:** Call the three extraction functions and pass results to `build_back_prompt()`:
+
+  ```python
+  history_entries = snapshot["history_entries"]
+  triggering_utterance = _extract_triggering_utterance(history_entries)
+  conversation_prefix = _extract_conversation_prefix(history_entries)
+  recent_history = _render_recent_history_for_prompt(history_entries, window=10)
+
+  system_prompt = build_back_prompt(
+      task=task,
+      ...,
+      triggering_utterance=triggering_utterance,        # NEW
+      conversation_prefix=conversation_prefix,            # NEW
+      recent_history=recent_history,                      # NEW
+  )
+  ```
+
+### Issue 17.10 — Verify Conversation Injections
+
+- **File:** New tests in `tests/k1/concierge/prompt/test_back_prompt_redesign.py`
+- **Tests:**
+  - `test_triggering_utterance_extracted` — last `"user"` entry text appears in prompt
+  - `test_conversation_prefix_extracted` — last `"final"` entry text appears in prompt
+  - `test_recent_history_rendered` — last N entries rendered as "User: ...\nFront: ..."
+  - `test_recent_history_not_truncated` — text longer than 500 chars preserved
+  - `test_no_user_entry_returns_empty` — empty history → empty blocks
+  - `test_backward_compat_no_new_params` — calling without new params still works
+
+---
+
+## Epic 18: Integration Gate — Prove Back Executes on Live Kernel
+
+**Goal:** End-to-end test proving Back can receive a task, call `resolve_situation` via LLM, read the `ResolutionEnvelope`, invoke a bound capability, and submit a complete result. This is the GATE-P2 proof — Back + Fabric + Kernel working together.
+
+**Test scenario:**
+
+```
+User utterance: "Add dentist appointment for Riley next Monday at 3pm"
+  → Front LLM → dispatch_task → FSM → Back (LOW tier)
+  → Back LLM calls resolve_situation(task_frame)
+  → ResolveSituationService executes 13-step cascade
+  → ResolutionEnvelope {
+      verdict: "can_execute",
+      allowed_capability_names: ["tool.execute.family.calendar.create"],
+      allowed_next_actions: [{
+        action: "create a calendar event",
+        capability: "tool.execute.family.calendar.create",
+        required_inputs: [...]
+      }],
+      prompt_pack: PromptPack(summary="Create dentist appointment...")
+    }
+  → Back LLM calls invoke_capability("tool.execute.family.calendar.create", {...})
+  → CapabilityFabric → NativeToolProvider → CalendarService → event created
+  → Back LLM calls submit_result(complete, final_answer="Created dentist appointment...")
+  → FSM → WeavePolicy → Front: "Done! Riley has a dentist appointment Monday at 3pm."
+```
+
+### Issue 18.1 — Build Integration Test Fixture
+
+- **File:** `tests/k1/concierge/actors/test_back_resolve_situation_live.py`
+- **What:** Test fixture that:
+  1. Starts a minimal kernel with Fabric stores enabled (`KernelConfig.enable_fabric_stores=True`)
+  2. Registers Calendar connector with full constitution (from Epic 9)
+  3. Creates a session with temporal/spatial/grounding/selfmodel handles
+  4. Wires Back actor with `resolve_situation` in tool allowlist
+  5. Provides a mock model backend that returns realistic LLM responses (or uses a real model for live testing)
+- **Discovery needed:** What's the minimal kernel subset needed? Can we reuse `tests/k1/fabric/` fixtures? Does Back need a real LLM or can we use a scripted response pattern?
+
+### Issue 18.2 — Test: resolve_situation → can_execute → invoke → complete
+
+- **File:** `tests/k1/concierge/actors/test_back_resolve_situation_live.py`
+- **Test:** `test_back_calendar_create_happy_path`
+  - Given: task dispatch for "Add dentist appointment for Riley next Monday at 3pm"
+  - When: Back handler processes the task
+  - Then: `resolve_situation` returns `can_execute` with calendar.create binding
+  - And: `invoke_capability` creates the calendar event
+  - And: `submit_result(complete)` is called with evidence
+  - And: No policy violations, no HIL gates triggered
+- **Run:** `pytest tests/k1/concierge/actors/test_back_resolve_situation_live.py::test_back_calendar_create_happy_path -v`
+
+### Issue 18.3 — Test: resolve_situation → blocked_by_policy → cannot_execute
+
+- **File:** Same test file
+- **Test:** `test_back_delete_protected_calendar_blocked`
+  - Given: task dispatch for "Delete the family shared calendar"
+  - When: Back handler processes the task
+  - Then: `resolve_situation` returns `blocked_by_policy` (protected parent calendar)
+  - And: Back calls `submit_result(cannot_execute, reason="blocked_by_policy: ...")`
+  - And: No calendar was deleted
+- **Run:** `pytest tests/k1/concierge/actors/test_back_resolve_situation_live.py::test_back_delete_protected_calendar_blocked -v`
+
+### Issue 18.4 — Test: resolve_situation → needs_hil → submit suspended
+
+- **File:** Same test file
+- **Test:** `test_back_ambiguous_person_triggers_hil`
+  - Given: task dispatch mentioning "schedule a meeting with Alex" (ambiguous — two Alexes in household)
+  - When: Back handler processes the task
+  - Then: `resolve_situation` returns `needs_disambiguation`
+  - And: Back calls `submit_result(needs_human, questions=[...])` with disambiguation question
+  - And: Task is suspended (not failed)
+- **Run:** `pytest tests/k1/concierge/actors/test_back_resolve_situation_live.py::test_back_ambiguous_person_triggers_hil -v`
+
+### Issue 18.5 — Test: resolve_situation → discover_capabilities fallback
+
+- **File:** Same test file
+- **Test:** `test_back_fallback_to_discover_when_resolve_returns_missing_capability`
+  - Given: task dispatch for an operation that has no bound capability
+  - When: `resolve_situation` returns `missing_capability`
+  - Then: Back falls back to `discover_capabilities` for alternative search
+  - And: If fallback also finds nothing, Back calls `submit_result(cannot_execute)`
+- **Run:** `pytest tests/k1/concierge/actors/test_back_resolve_situation_live.py::test_back_fallback_to_discover_when_resolve_returns_missing_capability -v`
+
+---
+
+## Phase 2 Summary
+
+| Epic | Issues | Files Created | Files Modified | Tests |
+|------|--------|--------------|----------------|-------|
+| 15 — Context Plumbing | 7 | 1 (test) | 4 (session.py, back_router.py, back.py, back_prompt.py) | GAP-028 (5 tests) |
+| 16 — Tool Contract Migration | 5 | 1 (test) | 3 (schemas_back.py, back.py, back_prompt.py) | GAP-029 (5 tests) |
+| 17 — Back Prompt Redesign | 3 | 1 (test) | 1 (back_prompt.py) | GAP-030 (5 tests) |
+| 18 — Integration Gate | 5 | 1 (test) | 0 (test-only) | GAP-031 (5 tests) |
+| **Total** | **20** | **4 new test files** | **~6 modified** | **~20 tests** |
+
+**Phase 1 + Phase 1.1 + Phase 2 combined: 85 issues, 36 new files, ~17 modified, ~305 tests.**
+
+---
+
+## Discovery Checklist — What Each Epic MUST Research Before Implementation
+
+### Epic 15 Discovery Items
+
+- [ ] Does `ConciergeRuntime` store `_self_model`? If not, add `set_self_model()` method
+- [ ] What is `TemporalHandle.get_context_for_actor("back")` API? Does it exist or need creation?
+- [ ] What is `SpatialHandle.get_context_for_actor("back")` API? Does it exist or need creation?
+- [ ] What is `SelfModelHandle.get_prompt_context()` API? Does it exist or need creation?
+- [ ] Should context blocks be separate (`{temporal_context_block}`, `{spatial_context_block}`, `{selfmodel_context_block}`) or merged into one `{execution_context_block}`?
+- [ ] Does `back_resume_handler()` also need temporal/spatial/selfmodel params?
+
+### Epic 16 Discovery Items
+
+- [ ] Read `ResolveSituationRequest` dataclass fully — which fields should be in the JSON Schema vs. auto-filled by Back dispatcher?
+- [ ] How does Back's tool dispatcher reach Fabric? Is the Fabric instance accessible from `ToolDispatcher`?
+- [ ] Does `_maybe_rebind_back_dispatcher()` need a new meta-tool registration path for `resolve_situation`?
+- [ ] Are there concurrency concerns with Back calling `resolve_situation` while Front is simultaneously using Fabric?
+- [ ] What does the `ResolutionEnvelope` dict look like when returned to Back's LLM? Is it too large? Does it need `disclosure_phase` control?
+
+### Epic 17 Discovery Items
+
+- [ ] Read full current `BACK_SYSTEM_PROMPT` (~200 lines) — map each section to KEEP/UPDATE/REPLACE
+- [ ] What verdict names are stable vs. likely to change? Don't over-fit prompt to specific verdict strings
+- [ ] How does the new prompt interact with `BackExecutionWorkItem` tracking? Does Back need to track which binding it's executing?
+- [ ] What's the model context limit? Verify prompt + envelope + tools fit within budget
+
+### Epic 18 Discovery Items — ALL RESOLVED (2026-06-09)
+
+- [x] What's the minimal kernel subset? **Pattern A (direct handler) for unit tests, Pattern B (KernelService test_mode) for full integration.**
+- [x] Real LLM or scripted? **Scripted via `TestModelHubBridge` (Pattern A, proven in `test_back_handler_profile_wiring.py`).**
+- [x] Test ordering dependencies? **Calendar connector registered via `register_definition_to_store()` in fixture setup.**
+- [x] Cleanup? **In-memory SQLite stores (`:memory:`) — no filesystem cleanup needed.**
+
+---
+
+## Phase 2 Final Coherence Sweep
+
+### Port/Adapter Compliance
+
+| Check | Result |
+|-------|--------|
+| Epic 15: Handle params through consumer→handler chain | ✅ `TemporalHandle`, `SpatialHandle`, `SelfModelHandle` — port-compatible facades |
+| Epic 16: `FabricDispatchAdapter.resolve_situation()` | 🔴→✅ **FIXED** — calls public `self._fabric.resolve_situation(request)`, not private `_handle_resolve_situation` |
+| Epic 16: `execute_resolve_situation()` handler | ✅ Uses `ctx.dispatch.resolve_situation()` — protocol path |
+| Epic 17: Conversation injection helpers | ✅ Duck-typing via `getattr()` — no `TypedHistoryEntry` import needed |
+| Epic 18: Test fixtures | ✅ Reuses Patterns A/B/C — no new kernel boot paths |
+| All: Zero new direct imports from `k1.fabric.fabric` | ✅ |
+| All: Zero new direct imports from `k1.spatial.service.*` | ✅ |
+| All: Zero new direct imports from `k1.selfmodel.*` internals | ✅ |
+| All: Zero new direct imports from `k1.grounding.service.*` | ✅ |
+
+### Kernel Feature Flags Required for Phase 2
+
+| Flag | Default | Required? | Why |
+|------|---------|-----------|-----|
+| `enable_temporal` | `True` | ✅ Required | Epic 15 temporal context |
+| `enable_spatial` | `True` | ✅ Required | Epic 15 spatial context |
+| `enable_grounding` | `True` | ✅ Required | Existing — already used by Back |
+| `enable_self_model` | `False` | ⚠️ Optional | Epic 15 selfmodel context (gracefully degrades if False) |
+| `enable_fabric_stores` | `True` | ✅ Required | Epic 16 resolve_situation tool |
+| `enable_family_tools` | `True` | ✅ Required | Calendar connector for integration tests |
+| `enable_hil_service` | `True` | ✅ Required | HIL gate testing in Epic 18 |
+| `test_mode` | `False` | ✅ Required (tests only) | Uses `StubProviderPlugin` for LLM calls |
+
+### Variable Count Final: 16 prompt variables
+
+| # | Variable | Epic | Data Source |
+|---|----------|------|------------|
+| 1-6 | `{task_json}`, `{beliefs_summary}`, `{task_state_summary}`, `{artifacts_summary}`, `{safety_band}`, `{persona_prefs}` | Existing | SS snapshot |
+| 7 | `{max_tool_calls}` | Existing | Tier config |
+| 8 | `{available_tools_note}` | Epic 16 | Generated from tier |
+| 9 | `{temporal_context_block}` | Epic 15 | `TemporalHandle.get_projection("back")` |
+| 10 | `{spatial_context_block}` | Epic 15 | `SpatialHandle.get_projection("back")` |
+| 11 | `{selfmodel_context_block}` | Epic 15 | `SelfModelHandle.render_capsule()` |
+| 12 | `{execution_grounding_block}` | Existing | Grounding handle |
+| 13 | `{scoreboard_summary}` | Epic 17 | `snapshot["referents"]` |
+| 14 | `{triggering_utterance}` | Epic 17 | `snapshot["history_entries"]` last `"user"` |
+| 15 | `{conversation_prefix}` | Epic 17 | `snapshot["history_entries"]` last `"final"` |
+| 16 | `{recent_history}` | Epic 17 | `snapshot["history_entries"]` last N entries |
+
+---
+
+# Phase 2.5 — Front LLM Read Surface (`lookup`)
+
+> **Milestone:** GATE-P2.5 — Front LLM can call `lookup()` to dynamically discover and read from connected family data sources.
+> **Predecessor:** Phase 2 (GATE-P2 must pass first)
+> **Successor:** Phase 3 — Front LLM prompt redesign + dispatch redesign (TBD)
+> **Scope:** Epics 19–21. New `lookup` tool bridging GPS→LPS dynamic discovery, a `snapshot_types` pipeline through the store layer, and a `LookupAdapter` wired into the kernel.
+> **Design source:** `k1/docs/future_work/front_llm_read_k1surface.md`
+
+---
+
+## Architecture Context: What `lookup` Enables
+
+**Today (legacy model):**
+
+```
+Front LLM sees user message → DynamicPromptBuilder builds a fixed prompt from
+  SessionState sections → Front responds conversationally → No read-only data
+  access beyond what was pre-loaded into grounding context
+```
+
+**Problem:** Front can't dynamically discover "what data is available right now" — it only sees pre-loaded SS snapshots. A user asking "what's on the calendar today?" gets whatever the grounding projection loaded at session start, not live data. Front has NO read tool to query family data sources.
+
+**Target (Phase 2.5):**
+
+```
+Front LLM sees user message → calls lookup() with a natural language query
+  → LookupAdapter resolves GPS → LPS dynamic discovery → returns typed
+  snapshot from matching connectors → Front LLM reads snapshot data and
+  responds conversationally
+```
+
+- `lookup` is a READ-ONLY tool — no mutations, no side effects
+- Domain-agnostic: same tool works for calendars, tasks, chores, shopping, reminders
+- Dynamic GPS→LPS discovery: `lookup` finds connectors via `snapshot_types` field in GPS, then reads data via LPS (connected resources)
+- `snapshot_types` is the bridge: connectors declare which snapshot views they participate in (`daily_snapshot`, `weekly_overview`, `contextual_probe`)
+
+---
+
+## Key File Touch Points — Phase 2.5 At a Glance
+
+| File | Epic 19 | Epic 20 | Epic 21 | What Changes |
+|------|---------|---------|---------|-------------|
+| `k1/tools/family/definition.py` | ✅ | — | — | `ToolDefinition.snapshot_types` field added (already designed in Epic 9.1) |
+| `k1/fabric/stores/global_projection_store.py` | ✅ | — | — | `connectors` table gains `snapshot_types_json` column; `ConnectorRecord` gains `snapshot_types` field; new `list_connectors_by_snapshot_type()` query method |
+| `k1/fabric/manifest_translator.py` | ✅ | — | — | `register_definition_to_store()` writes `snapshot_types` to connector record |
+| `k1/concierge/adapters/lookup.py` | — | ✅ | — | **NEW** `LookupAdapter` class with `build_lookup_fn()` closure |
+| `k1/concierge/ports.py` | — | ✅ | — | `ILookupPort` protocol added; `IDispatchPort` unchanged |
+| `k1/concierge/factory.py` | — | ✅ | — | `PortBundle` gains `lookup: ILookupPort` field |
+| `k1/concierge/tools/context.py` | — | ✅ | — | `ToolContext` gains `lookup_fn: Callable | None` attribute |
+| `k1/kernel/service.py` | — | ✅ | — | P4: `LookupAdapter` created + wired into `PortBundle` |
+| `k1/fabric/stores/local_projection_store.py` | — | ✅ | — | `list_connected_resources()` extended with `snapshot_type` filter (verify existing API) |
+| `k1/concierge/tools/schemas_front.py` | — | — | ✅ | `LOOKUP_SCHEMA` defined; added to `_FRONT_SIMPLE` allowlist |
+| `k1/concierge/tools/implementations.py` | — | — | ✅ | `execute_lookup` handler registered via `@_register("lookup")` |
+| `tests/k1/concierge/tools/test_lookup.py` | — | — | ✅ | **NEW** integration test for `lookup` tool |
+| 5 connector definition files (calendar, tasks, reminders, chores, shopping) | ✅ | — | — | `snapshot_types` populated (already designed in Epics 9-13) |
+
+---
+
+## Epic 19: Store Layer — `snapshot_types` Pipeline
+
+**Goal:** Build the end-to-end `snapshot_types` pipeline: `ToolDefinition.snapshot_types` → `ConnectorRecord.snapshot_types` → `connectors` table column → `list_connectors_by_snapshot_type()` query → `lookup` tool discovers participating connectors.
+
+**Why:** `snapshot_types` is the bridge between declarative connector metadata ("I participate in daily snapshots") and runtime dynamic discovery ("which connectors should I read for a daily overview?"). Without this pipeline, `lookup` can't dynamically discover which connectors to query.
+
+**Design derivation:** `snapshot_types` was designed in Epic 9.1 as an `Optional[list[str]]` field on `ToolDefinition`. It has been populated in Epics 9.2, 10.2, 11.2, 12.2, 13.2 for all 5 family connectors. The connector values are:
+
+| Connector | `snapshot_types` |
+|-----------|-----------------|
+| `family.calendar` | `["daily_snapshot", "weekly_overview"]` |
+| `family.tasks` | `["daily_snapshot", "weekly_overview"]` |
+| `family.reminders` | `["daily_snapshot", "weekly_overview"]` |
+| `family.chores` | `["daily_snapshot", "weekly_overview"]` |
+| `family.shopping` | `["daily_snapshot"]` |
+
+**Codebase status (verified 2026-06-09):** `snapshot_types` is **100% design-only** — zero matches in any `k1/**/*.py` file. The `connectors` table has NO `snapshot_types_json` column. `ConnectorRecord` has NO `snapshot_types` field. The full pipeline from `ToolDefinition` → store → query needs to be built from scratch.
+
+---
+
+### Issue 19.1 — Add `snapshot_types` Field to ConnectorRecord
+
+- **File:** `k1/fabric/stores/global_projection_store.py` — `ConnectorRecord` dataclass
+- **What:** Add `snapshot_types: list[str] = field(default_factory=list)` to `ConnectorRecord`.
+- **Default:** `[]` (empty list) — connectors that don't participate in any snapshot views.
+- **Coherence:** Must match `ToolDefinition.snapshot_types: Optional[list[str]]` (Epic 9.1). The manifest translator (Issue 19.5) handles the `Optional` → `list` coercion.
+
+### Issue 19.2 — Add `snapshot_types_json` Column to `connectors` Table
+
+- **File:** `k1/fabric/stores/global_projection_store.py` — `_ensure_schema()` method
+- **What:** Add `snapshot_types_json TEXT NOT NULL DEFAULT '[]'` column to the `connectors` CREATE TABLE statement.
+- **Migration:** Since this is Phase 2.5 (post-GATE-P2), use `ALTER TABLE connectors ADD COLUMN snapshot_types_json TEXT NOT NULL DEFAULT '[]'` in a migration block if the table already exists. For fresh installs, include in CREATE TABLE.
+- **Serialization:** JSON array of strings, e.g. `'["daily_snapshot", "weekly_overview"]'`.
+
+### Issue 19.3 — Update `upsert_connector()` to Write `snapshot_types`
+
+- **File:** `k1/fabric/stores/global_projection_store.py` — `upsert_connector()` method
+- **What:** Add `snapshot_types_json` to the INSERT/UPDATE SQL. Serialize `connector.snapshot_types` to JSON via `json.dumps(sort_keys=True)`.
+- **Coherence:** Existing `resource_kinds_json` column uses the same pattern — follow it.
+
+### Issue 19.4 — Update `get_connector()` / `list_connectors()` to Read `snapshot_types`
+
+- **File:** `k1/fabric/stores/global_projection_store.py` — `get_connector()`, `list_connectors()`
+- **What:** Deserialize `snapshot_types_json` → `list[str]` when constructing `ConnectorRecord` from a DB row. Use `json.loads()` with default `[]`.
+
+### Issue 19.5 — Update `register_definition_to_store()` to Populate `snapshot_types`
+
+- **File:** `k1/fabric/manifest_translator.py` — `register_definition_to_store()`
+- **What:** When building `ConnectorRecord` from `ToolDefinition`, populate `snapshot_types` from `definition.snapshot_types` (coerce `None` → `[]`).
+- **One-line change:** `snapshot_types=definition.snapshot_types or []`
+
+### Issue 19.6 — Add `list_connectors_by_snapshot_type()` Query Method
+
+- **File:** `k1/fabric/stores/global_projection_store.py`
+- **What:** New public method:
+
+  ```python
+  def list_connectors_by_snapshot_type(self, snapshot_type: str) -> list[ConnectorRecord]:
+      """Return all connectors that participate in the given snapshot type.
+
+      Uses JSON_EACH or LIKE pattern matching on snapshot_types_json.
+      Returns empty list if no connectors match.
+      """
+  ```
+
+- **Implementation options (TBD during code discovery):**
+  - **Option A:** SQLite `json_each()` — `SELECT * FROM connectors WHERE EXISTS (SELECT 1 FROM json_each(snapshot_types_json) WHERE value = ?)`
+  - **Option B:** LIKE pattern — `WHERE snapshot_types_json LIKE '%"daily_snapshot"%'`
+  - **Recommendation A:** `json_each` is correct; LIKE has false positives on overlapping names.
+- **Also add:** `list_snapshot_types() -> list[str]` — returns distinct snapshot types across all connectors. Useful for `lookup` to know what snapshot types are available.
+
+### Issue 19.7 — Verify `local_projection_store.list_connected_resources()` Readiness
+
+- **File:** `k1/fabric/stores/local_projection_store.py`
+- **What:** Verify the existing `list_connected_resources()` method can be filtered by `resource_kind` and `actor_id`. This is what `lookup` uses to find matching connected resources after discovering connectors via GPS.
+- **Discovery needed:** Does `list_connected_resources()` support `resource_kind` filtering? If not, add it. The existing signature is `list_connected_resources(actor_id, *, resource_kind=None, status="active")` per Epic 1.5 — verify this matches the actual implementation.
+
+### Issue 19.8 — Tests for `snapshot_types` Pipeline
+
+- **GAP-P2.5-001:** `tests/k1/fabric/stores/test_snapshot_types.py`
+  - `TestConnectorRecordHasSnapshotTypes` — `ConnectorRecord.snapshot_types` field exists, defaults to `[]`
+  - `TestUpsertAndReadSnapshotTypes` — write connector with `snapshot_types=["daily_snapshot"]`, read back, verify
+  - `TestSnapshotTypesEmptyByDefault` — connector without snapshot_types → `[]` on read
+  - `TestListConnectorsBySnapshotType` — 3 connectors: 2 with "daily_snapshot", 1 with "weekly_overview" → `list_connectors_by_snapshot_type("daily_snapshot")` returns 2
+  - `TestListConnectorsBySnapshotTypeNoMatch` — unknown snapshot type → empty list
+  - `TestListSnapshotTypes` — returns deduplicated list across all connectors
+  - `TestManifestTranslatorPopulatesSnapshotTypes` — `register_definition_to_store()` with a definition that has `snapshot_types=["daily_snapshot"]` → store has correct JSON
+  - `TestManifestTranslatorCoercesNoneToEmpty` — `snapshot_types=None` → stored as `[]`
+- **Run:** `pytest tests/k1/fabric/stores/test_snapshot_types.py -v`
+
+---
+
+## Epic 20: Adapter + Kernel Wiring — `LookupAdapter`
+
+**Goal:** Build `LookupAdapter` that implements dynamic GPS→LPS discovery. Wire it into `PortBundle`, `ToolContext`, and kernel P4 lifecycle.
+
+**Design:** `lookup` is domain-agnostic. The Front LLM provides a natural language query + optional snapshot_type hint. The adapter:
+
+1. Queries GPS for connectors with matching `snapshot_types`
+2. For each matching connector, queries LPS for connected resources
+3. Reads fresh data from each connected resource via the connector's native adapter
+4. Returns a typed `LookupResult` with per-connector snapshots
+
+---
+
+### Issue 20.1 — Define `LookupResult` Dataclass
+
+- **File:** `k1/concierge/adapters/lookup.py` (NEW)
+- **What:** Typed return dataclass for the lookup operation:
+
+  ```python
+  @dataclass(frozen=True)
+  class ConnectorSnapshot:
+      """Snapshot data from one connector for a lookup query."""
+      connector_id: str                    # "family.calendar"
+      resource_kind: str                   # "calendar_event"
+      snapshot_type: str                   # "daily_snapshot"
+      data: list[dict[str, Any]]           # raw rows from the connector
+      freshness: str                       # 'fresh' | 'stale' | 'unknown'
+      error: str | None = None             # per-connector error message
+
+  @dataclass(frozen=True)
+  class LookupResult:
+      """Complete result of a lookup() call."""
+      lookup_id: str
+      query: str                           # original natural language query
+      snapshot_type: str | None            # resolved snapshot type
+      connectors_queried: int              # how many connectors were attempted
+      snapshots: list[ConnectorSnapshot]   # per-connector results
+      omissions: list[str]                 # connectors found but skipped (stale, error, permission)
+      diagnostics: list[str]               # human-readable diagnostics
+      created_at: str
+  ```
+
+### Issue 20.2 — Build `build_lookup_fn()` Closure
+
+- **File:** `k1/concierge/adapters/lookup.py`
+- **What:** `build_lookup_fn(global_store, local_store, native_dispatch) -> Callable` that returns the actual `lookup()` async function. This follows the same closure pattern used by `recall_memory` (a closure is built at wiring time and injected into `ToolContext`).
+- **Implementation sketch:**
+
+  ```python
+  def build_lookup_fn(
+      global_store: GlobalProjectionStore,
+      local_store: LocalProjectionStore,
+      native_dispatch: Any,  # NativeToolProvider or equivalent
+  ):
+      async def lookup(
+          query: str,
+          *,
+          actor_id: str,
+          space_id: str,
+          snapshot_type: str | None = None,
+          max_connectors: int = 5,
+      ) -> LookupResult:
+          """Domain-agnostic dynamic data discovery.
+
+          1. Discover: query GPS for connectors matching snapshot_type.
+          2. Resolve: query LPS for connected resources matching connectors.
+          3. Read: dispatch read to each connected resource's native adapter.
+          4. Return: LookupResult with per-connector snapshots.
+          """
+          ...
+
+      return lookup
+  ```
+
+- **Discovery needed:** The exact call pattern for dispatching a read to a native adapter. Back uses `ctx.dispatch.dispatch_direct(CapabilityRequest(...))` for invoke. For `lookup`, we need a read-only path — possibly `ctx.dispatch.discover_capabilities()` or a new `read_resource()` method on native providers.
+
+### Issue 20.3 — Create `LookupAdapter` Class
+
+- **File:** `k1/concierge/adapters/lookup.py`
+- **What:** `LookupAdapter` wraps `build_lookup_fn()` and implements the `ILookupPort` protocol:
+
+  ```python
+  class LookupAdapter:
+      def __init__(self, lookup_fn: Callable): ...
+      async def lookup(self, query: str, *, actor_id: str, space_id: str,
+                       snapshot_type: str | None = None) -> LookupResult: ...
+  ```
+
+### Issue 20.4 — Add `ILookupPort` Protocol to `ports.py`
+
+- **File:** `k1/concierge/ports.py`
+- **What:** New protocol alongside existing `IDispatchPort`:
+
+  ```python
+  class ILookupPort(Protocol):
+      async def lookup(self, query: str, *, actor_id: str, space_id: str,
+                       snapshot_type: str | None = None) -> LookupResult: ...
+  ```
+
+### Issue 20.5 — Add `lookup` to `PortBundle` + Wire in `factory.py`
+
+- **File:** `k1/concierge/factory.py` — `PortBundle` dataclass
+- **What:** Add `lookup: ILookupPort | None = None` field. Wire `LookupAdapter` into `_build_port_bundle()`:
+
+  ```python
+  # In _build_port_bundle(), after temporal/spatial/grounding wiring:
+  lookup_fn = build_lookup_fn(
+      global_store=runtime._global_projection_store,
+      local_store=session_local_store,
+      native_dispatch=...,  # TBD during discovery
+  )
+  port_bundle.lookup = LookupAdapter(lookup_fn)
+  ```
+
+- **Discovery needed:** Where does `PortBundle` get `global_projection_store` and `local_projection_store`? These may need to be added to `ConciergeRuntime` or passed through the factory chain.
+
+### Issue 20.6 — Add `lookup_fn` to `ToolContext`
+
+- **File:** `k1/concierge/tools/context.py` — `ToolContext` dataclass
+- **What:** Add `lookup_fn: Callable | None = None` attribute. This is set by the concierge factory when creating the tool context for Front's dispatcher.
+- **Follow pattern:** `recall_fn` at `context.py` is the existing example — `lookup_fn` follows the same injection pattern.
+
+### Issue 20.7 — Kernel P4 Wiring for `LookupAdapter`
+
+- **File:** `k1/kernel/service.py` — `_create_session_tier2()` per-session P4
+- **What:** After creating `ConciergeRuntime` and wiring `PortBundle`, create `LookupAdapter` and attach it:
+
+  ```python
+  # In P4, after concierge is created and port_bundle is assembled:
+  from k1.concierge.adapters.lookup import build_lookup_fn, LookupAdapter
+
+  lookup_fn = build_lookup_fn(
+      global_store=self._global_projection_store,
+      local_store=session_local_store,
+      native_dispatch=...,  # TBD
+  )
+  port_bundle.lookup = LookupAdapter(lookup_fn)
+  front_ctx.lookup_fn = lookup_fn  # inject into Front's ToolContext
+  ```
+
+- **Discovery needed:** The `native_dispatch` parameter needs the same provider dispatch that Back uses for `invoke_capability`. Find the correct reference in the kernel's P4 wiring.
+
+### Issue 20.8 — Tests for LookupAdapter
+
+- **GAP-P2.5-002:** `tests/k1/concierge/adapters/test_lookup_adapter.py`
+  - `TestLookupResultShape` — dataclass fields correct
+  - `TestBuildLookupFnReturnsCallable` — `build_lookup_fn(...)` returns async callable
+  - `TestLookupDiscoversConnectors` — GPS has 2 connectors with "daily_snapshot" → `lookup(snapshot_type="daily_snapshot")` discovers 2
+  - `TestLookupResolvesConnectedResources` — LPS has connected resources matching discovered connectors → data read
+  - `TestLookupSkipsStaleResources` — stale connected resource → omitted with reason
+  - `TestLookupNoMatchingConnectors` — unknown snapshot_type → empty snapshots, diagnostics explain
+  - `TestLookupMaxConnectorsLimit` — 10 connectors match but max_connectors=3 → only 3 returned
+- **Run:** `pytest tests/k1/concierge/adapters/test_lookup_adapter.py -v`
+
+---
+
+## Epic 21: Tool Surface — `lookup` Tool for Front LLM
+
+**Goal:** Register `lookup` as a Front-callable tool. Front LLM sees it in its tool list, can call it with natural language queries, and receives structured `LookupResult` data to incorporate into its conversational response.
+
+---
+
+### Issue 21.1 — Define `LOOKUP_SCHEMA`
+
+- **File:** `k1/concierge/tools/schemas_front.py` — after existing `RECALL_MEMORY_SCHEMA` (~line 355)
+- **What:** Define `LOOKUP_SCHEMA` as a new `ToolSchema`:
+
+  ```python
+  LOOKUP_SCHEMA = ToolSchema(
+      name="lookup",
+      description=(
+          "Read current data from connected family resources. "
+          "Use this to answer questions like 'what's on the calendar today?', "
+          "'what chores are due?', 'what's on the shopping list?'. "
+          "You provide a natural language query and optional snapshot_type hint. "
+          "Returns a LookupResult with per-connector snapshot data. "
+          "This is READ-ONLY — no data is modified."
+      ),
+      parameters={
+          "type": "object",
+          "properties": {
+              "query": {
+                  "type": "string",
+                  "description": "Natural language description of what data to look up. E.g. 'today's calendar events', 'active chores', 'shopping list'"
+              },
+              "snapshot_type": {
+                  "type": "string",
+                  "enum": ["daily_snapshot", "weekly_overview", "contextual_probe"],
+                  "description": "Optional hint for which snapshot view to use. Omit to auto-detect from the query."
+              },
+              "max_results": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 20,
+                  "description": "Maximum number of results per connector. Default: 10."
+              },
+          },
+          "required": ["query"]
+      },
+      returns={"type": "object", "description": "LookupResult with snapshots array, each containing connector_id, resource_kind, data rows, freshness"},
+      category="read",
+      side_effects=False,
+      actor="front",
+  )
+  ```
+
+- **Add to `FRONT_TOOL_SCHEMAS`** list (same file):
+
+  ```python
+  FRONT_TOOL_SCHEMAS: list[ToolSchema] = [
+      ...,
+      LOOKUP_SCHEMA,           # NEW
+  ]
+  ```
+
+### Issue 21.2 — Add `lookup` to Front Tool Allowlist
+
+- **File:** `k1/concierge/tools/schemas_front.py` — `_FRONT_SIMPLE` list
+- **What:** Add `"lookup"` to the list of Front tools available in the simple/LOW tier:
+
+  ```python
+  _FRONT_SIMPLE: list[str] = [
+      "recall_memory",
+      "lookup",               # ← NEW
+      ...
+  ]
+  ```
+
+- **Front LLM always has `lookup` available** — it's a read-only tool with no side effects.
+
+### Issue 21.3 — Register `execute_lookup` Handler
+
+- **File:** `k1/concierge/tools/implementations.py` — new handler
+- **What:** Register `@_register("lookup")` handler:
+
+  ```python
+  @_register("lookup")
+  async def execute_lookup(args: dict, ctx: ToolContext) -> ToolResult:
+      """Read current data from connected family resources.
+
+      Domain-agnostic: works for calendars, tasks, chores, shopping,
+      reminders — any connector that declares snapshot_types.
+      """
+      try:
+          if not hasattr(ctx, "lookup_fn") or ctx.lookup_fn is None:
+              return ToolResult(
+                  status="error",
+                  data={"lookup_id": "", "snapshots": [],
+                        "diagnostics": ["lookup_fn not wired — Phase 2.5 stores not available"]}
+              )
+
+          query = str(args.get("query", ""))
+          if not query.strip():
+              return ToolResult(status="error", data={"diagnostics": ["query is required"]})
+
+          snapshot_type = args.get("snapshot_type")  # None = auto-detect
+          max_results = int(args.get("max_results", 10))
+
+          result = await ctx.lookup_fn(
+              query=query,
+              actor_id=str(getattr(ctx, "active_principal_id", "") or ""),
+              space_id=str(getattr(ctx, "active_space_id", "") or "family:default"),
+              snapshot_type=snapshot_type,
+              max_connectors=max_results,
+          )
+          return ToolResult(status="ok", data=asdict(result))
+      except Exception as exc:
+          return ToolResult(status="error", data={"diagnostics": [str(exc)]})
+  ```
+
+### Issue 21.4 — Integration Test: `lookup` End-to-End
+
+- **File:** `tests/k1/concierge/tools/test_lookup.py` (NEW)
+- **GAP-P2.5-003:**
+  - `TestLookupSchemaValid` — schema parses with correct fields
+  - `TestLookupInFrontSimpleAllowlist` — appears in `_FRONT_SIMPLE`
+  - `TestLookupHandlerRegistered` — `TOOL_REGISTRY["lookup"]` exists
+  - `TestLookupCalendarDailySnapshot` — `lookup(query="today's events", snapshot_type="daily_snapshot")` → returns calendar data
+  - `TestLookupShoppingList` — `lookup(query="shopping list")` → returns shopping items from `family.shopping`
+  - `TestLookupAutoDetectsSnapshotType` — `lookup(query="what chores are due")` without explicit snapshot_type → auto-detects "daily_snapshot" from query context
+  - `TestLookupNoMatchingConnectors` — unknown domain → empty snapshots with diagnostics
+  - `TestLookupUnwiredReturnsError` — `ctx.lookup_fn` is None → error ToolResult
+  - `TestLookupIsReadOnly` — calling `lookup` does not modify any data (verify with second call returning same results)
+- **Run:** `pytest tests/k1/concierge/tools/test_lookup.py -v`
+
+---
+
+## Phase 2.5 Summary
+
+| Epic | Issues | Files Created | Files Modified | Tests |
+|------|--------|--------------|----------------|-------|
+| 19 — Store Layer | 8 | 1 (test) | 2 (global_projection_store.py, manifest_translator.py) + 5 connector defs (already done in Epics 9-13) | GAP-P2.5-001 (8 tests) |
+| 20 — Adapter + Kernel Wiring | 8 | 1 (lookup.py) + 1 (test) | 3 (ports.py, factory.py, context.py, service.py) | GAP-P2.5-002 (7 tests) |
+| 21 — Tool Surface | 4 | 1 (test) | 2 (schemas_front.py, implementations.py) | GAP-P2.5-003 (9 tests) |
+| **Total** | **20** | **4 new files** | **~7 modified** | **~24 tests** |
+
+**Phase 1 + 1.1 + 2 + 2.5 combined: 105 issues, 40 new files, ~24 modified, ~329 tests.**
+
+---
+
+## Phase 2.5 Discovery Checklist — What Each Epic MUST Research Before Implementation
+
+### Epic 19 Discovery Items
+
+- [ ] Verify `ConnectorRecord` current field list — confirm `snapshot_types` field doesn't already exist under a different name
+- [ ] Verify `connectors` table current column list — confirm `snapshot_types_json` column doesn't already exist
+- [ ] Check SQLite version for `json_each()` support (requires SQLite ≥ 3.38.0; check if any constraints)
+- [ ] Verify `register_definition_to_store()` current implementation — confirm exact line where `ConnectorRecord` is constructed
+- [ ] Verify 5 connector definition files (calendar/tasks/reminders/chores/shopping) — confirm `snapshot_types` field is populated as designed in Epics 9-13
+- [ ] Check if `list_connected_resources()` in LPS supports `resource_kind` filter as designed in Epic 1.5
+
+### Epic 20 Discovery Items
+
+- [ ] How does `lookup` dispatch a read to a native adapter? Explore existing `NativeToolProvider` read path vs. `invoke_capability` path
+- [ ] Where does `PortBundle` / `ConciergeRuntime` get `global_projection_store` and `local_projection_store` references?
+- [ ] What is the exact `native_dispatch` reference in the kernel P4 wiring? Can we reuse the same reference Back uses for `invoke_capability`?
+- [ ] Does `ToolContext` already have a `lookup_fn`-like pattern? Verify `recall_fn` injection pattern as template
+- [ ] Should `lookup` go through `ILookupPort` protocol (new, separate from `IDispatchPort`) or be added to `IDispatchPort`? **Recommendation:** Separate `ILookupPort` — lookup is a read-only tool for Front, distinct from Back's dispatch path.
+
+### Epic 21 Discovery Items
+
+- [ ] Verify `FRONT_TOOL_SCHEMAS` current list — confirm where `LOOKUP_SCHEMA` should be added
+- [ ] Verify `_FRONT_SIMPLE` current list — confirm all entries and where `"lookup"` fits
+- [ ] Verify `ToolContext` has `active_principal_id`, `active_space_id` attributes — confirm names for auto-fill
+- [ ] Check if Front's `react_loop` / tool dispatcher needs any change to support the new `lookup` category tool
+- [ ] Determine: should `lookup` be available to Front ONLY, or also to Back? **Recommendation:** Front-only for Phase 2.5. Back has `resolve_situation` which provides more structured access.
+
+---
+
+## Phase 2.5 Coherence Sweep
+
+### Port/Adapter Compliance
+
+| Check | Result |
+|-------|--------|
+| Epic 19: `GlobalProjectionStore` public query method | ✅ `list_connectors_by_snapshot_type()` — new public method |
+| Epic 19: `ManifestTranslator` field population | ✅ `register_definition_to_store()` reads `ToolDefinition.snapshot_types` |
+| Epic 20: `LookupAdapter` → `ILookupPort` protocol | ✅ New protocol, adapter implements it |
+| Epic 20: `PortBundle.lookup` → `ToolContext.lookup_fn` | ✅ Follows existing `recall_fn` injection pattern |
+| Epic 21: `execute_lookup` → `ctx.lookup_fn` | ✅ Protocol path — no direct Fabric import |
+| All: Zero new direct imports from `k1.fabric.fabric` | ✅ |
+| All: Zero new direct imports from `k1.spatial.*` | ✅ |
+| All: Zero new direct imports from `k1.selfmodel.*` | ✅ |
+
+### Kernel Feature Flags Required for Phase 2.5
+
+| Flag | Default | Required? | Why |
+|------|---------|-----------|-----|
+| `enable_fabric_stores` | `True` | ✅ Required | Epic 19 GPS + LPS queries |
+| `enable_front_tools` | `True` | ✅ Required | Epic 21 `lookup` tool registration |
+| `enable_family_tools` | `True` | ✅ Required | Connectors must have `snapshot_types` populated |
+
+### Data Flow: `lookup` End-to-End
+
+```
+Front LLM calls lookup(query="today's events")
+  → execute_lookup(args, ctx)                    [implementations.py]
+    → ctx.lookup_fn(query, actor_id, space_id)   [ToolContext → closure]
+      → LookupAdapter.lookup()                   [adapters/lookup.py]
+        → GPS.list_connectors_by_snapshot_type("daily_snapshot")
+          → returns [family.calendar, family.tasks, family.reminders,
+                     family.chores, family.shopping]
+        → For each connector:
+            LPS.list_connected_resources(actor_id, resource_kind=...)
+              → returns connected resource IDs
+            native_dispatch.read_resource(resource_id, ...)
+              → returns current data rows
+        → LookupResult {
+            snapshots: [
+              ConnectorSnapshot(connector_id="family.calendar", data=[...]),
+              ConnectorSnapshot(connector_id="family.tasks", data=[...]),
+              ...
+            ]
+          }
+  → ToolResult(status="ok", data=LookupResult)
+    → Front LLM reads snapshot data, responds conversationally
+```

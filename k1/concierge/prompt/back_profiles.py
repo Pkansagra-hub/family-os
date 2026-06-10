@@ -1,8 +1,17 @@
 """Back execution profile selection and rendering.
 
-Profiles are compact operating hints for the Back actor. The profile
-definitions come from prompt contracts under ``k1/contracts/prompts``; this
-module must not become a second hardcoded domain router.
+Profiles are compact operating hints for the Back actor. They come from two
+import-time sources:
+
+* Generic profiles (system-of-record, MCP, WASM) load from the prompt
+  contracts under ``k1/contracts/prompts``.
+* Backed family profiles (e.g. calendar, tasks, reminders) build from the
+  connector ``ToolDefinition``s that self-declare ``back_execution_profile``;
+  their guidance is derived from the connector ``guide_cards``.
+
+This module must not become a second hardcoded domain router: the set of
+backed profiles is owned by the connector definitions (via
+``back_execution_profile``), enumerated generically through the family catalog.
 
 Profiles help Back maintain execution discipline, but they never grant tools,
 bind capability names, authorize side effects, or override Fabric contracts,
@@ -413,6 +422,100 @@ def _load_profiles_from_prompt_contracts(
     return profiles
 
 
+def _load_family_profiles_from_definitions() -> dict[str, BackExecutionProfile]:
+    """Build backed Back profiles from connector ``ToolDefinition``s.
+
+    Generic, data-driven enumeration over the family catalog: a connector
+    contributes a profile only when it self-declares
+    ``back_execution_profile=True`` (e.g. calendar, tasks, reminders).
+    Connectors that leave it ``False`` (e.g. chores, shopping) are
+    intentionally unbacked and fall through to the generic discovery profile.
+
+    This deliberately avoids a hardcoded domain list: the set of backed
+    profiles is owned by the connector definitions, not by this module.
+    """
+    profiles: dict[str, BackExecutionProfile] = {}
+    try:
+        from k1.tools.family.catalog import FAMILY_TOOL_DEFINITIONS
+    except Exception:
+        logger.warning("Family tool catalog unavailable for Back profiles", exc_info=True)
+        return profiles
+
+    for definition in FAMILY_TOOL_DEFINITIONS:
+        if not getattr(definition, "back_execution_profile", False):
+            continue
+        profile_id = str(getattr(definition, "activity_profile", "") or "")
+        if not profile_id:
+            logger.warning(
+                "Connector %s declares back_execution_profile but no activity_profile",
+                getattr(definition, "adapter_id", "?"),
+            )
+            continue
+        adapter_id = str(getattr(definition, "adapter_id", "") or "")
+        domain_tags = tuple(str(tag) for tag in (getattr(definition, "domain_tags", None) or ()))
+        # domains[0] MUST be the adapter_id so structured-domain selection
+        # (intent.domain == primary_domain) resolves the right profile.
+        domains = (adapter_id, *domain_tags) if adapter_id else domain_tags
+        guidance = _guidance_from_guide_cards(getattr(definition, "guide_cards", None))
+        title = str(getattr(definition, "title", "") or profile_id)
+        profiles[profile_id] = BackExecutionProfile(
+            profile_id=profile_id,
+            title=title,
+            domains=domains,
+            prompt_template=None,
+            guidance=guidance,
+        )
+    return profiles
+
+
+def _guidance_from_guide_cards(
+    guide_cards: list[dict[str, Any]] | None,
+    *,
+    limit: int = 5,
+) -> tuple[str, ...]:
+    """Derive thin Back operating hints from connector guide cards.
+
+    Pulls the actionable list items embedded in each card's ``content``
+    (``- `` bullets or ``N.`` numbered steps), falling back to the card
+    ``title`` when a card carries no list items.  Intentionally thin: full
+    procedural guidance lives in the connector contract and the Fabric prompt
+    pack's guide cards; this is only the Back planning-phase reminder, bounded
+    to ``limit`` bullets.
+    """
+    if not guide_cards:
+        return ()
+    bullets: list[str] = []
+    seen: set[str] = set()
+
+    def _add(text: str) -> None:
+        item = text.strip()
+        if item and item not in seen:
+            seen.add(item)
+            bullets.append(item)
+
+    for card in guide_cards:
+        if not isinstance(card, dict):
+            continue
+        content = str(card.get("content", "") or "")
+        card_items: list[str] = []
+        for raw in content.splitlines():
+            line = raw.strip()
+            if line.startswith("- "):
+                card_items.append(line[2:].strip())
+            elif len(line) >= 2 and line[0].isdigit() and line[1] in ".)":
+                card_items.append(line[2:].strip())
+        if card_items:
+            for item in card_items:
+                _add(item)
+                if len(bullets) >= limit:
+                    return tuple(bullets[:limit])
+        else:
+            _add(str(card.get("title", "") or ""))
+            if len(bullets) >= limit:
+                return tuple(bullets[:limit])
+    return tuple(bullets[:limit])
+
+
 def _profile_from_prompt_contract(path: Path) -> BackExecutionProfile | None:
     import yaml
 
@@ -472,4 +575,17 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
-_PROFILES: dict[str, BackExecutionProfile] = _load_profiles_from_prompt_contracts()
+def _load_back_execution_profiles() -> dict[str, BackExecutionProfile]:
+    """Assemble the Back profile registry from both sources.
+
+    - Generic profiles (system-of-record, MCP, WASM) load from the surviving
+      ``k1/contracts/prompts/*.yaml`` prompt contracts.
+    - Backed family profiles (calendar, tasks, reminders) build from the
+      connector ``ToolDefinition``s that self-declare ``back_execution_profile``.
+    """
+    profiles = _load_profiles_from_prompt_contracts()
+    profiles.update(_load_family_profiles_from_definitions())
+    return profiles
+
+
+_PROFILES: dict[str, BackExecutionProfile] = _load_back_execution_profiles()
