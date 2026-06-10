@@ -467,22 +467,44 @@ def build_back_prompt(
 
     if tier == "LOW":
         available_tools_note = (
-            "YOUR AVAILABLE TOOLS (LOW tier): recall_memory, discover_capabilities, "
-            "invoke_capability, batch_invoke_capabilities, submit_result.\n"
-            "You do NOT have spawn_via_fabric or execute_workflow.\n"
-            "PREFER batch_invoke_capabilities when invoking 2+ capabilities."
+            "TOOL USAGE ORDER:\n"
+            "  1. resolve_situation — ALWAYS first. Understand what you can do.\n"
+            "  2. recall_memory — ONLY for historical context the dispatch lacks.\n"
+            "  3. invoke / batch_invoke — Execute what resolve_situation allows.\n"
+            "  4. discover_capabilities — FALLBACK ONLY. Use when resolve_situation\n"
+            "     cannot find a capability.\n"
+            "  5. submit_result — ALWAYS last. The only way to finish.\n"
+            "\n"
+            "PREFER batch_invoke_capabilities for 2+ independent invocations.\n"
+            "Copy capability names EXACTLY from resolve_situation's output.\n"
+            "Never guess or invent capability names."
         )
     elif tier == "MEDIUM":
         available_tools_note = (
-            "YOUR AVAILABLE TOOLS (MEDIUM tier): recall_memory, discover_capabilities, "
-            "invoke_capability, batch_invoke_capabilities, spawn_via_fabric, "
-            "execute_workflow, submit_result.\n"
-            "PREFER batch_invoke_capabilities when invoking 2+ capabilities."
+            "TOOL USAGE ORDER:\n"
+            "  1. resolve_situation — ALWAYS first. Understand what you can do.\n"
+            "  2. recall_memory — ONLY for historical context the dispatch lacks.\n"
+            "  3. invoke / batch_invoke / spawn_via_fabric / execute_workflow —\n"
+            "     Execute what resolve_situation allows.\n"
+            "  4. discover_capabilities — FALLBACK ONLY.\n"
+            "  5. submit_result — ALWAYS last.\n"
+            "\n"
+            "PREFER batch_invoke_capabilities for 2+ independent invocations.\n"
+            "Copy capability names EXACTLY from resolve_situation's output.\n"
+            "Never guess or invent capability names."
         )
     else:
         available_tools_note = (
-            "YOUR AVAILABLE TOOLS (HIGH tier): ALL tools available.\n"
-            "PREFER batch_invoke_capabilities when invoking 2+ capabilities."
+            "TOOL USAGE ORDER:\n"
+            "  1. resolve_situation — ALWAYS first.\n"
+            "  2. recall_memory — ONLY for historical context.\n"
+            "  3. invoke / batch_invoke / spawn_via_fabric / execute_workflow —\n"
+            "     Execute what resolve_situation allows.\n"
+            "  4. discover_capabilities — FALLBACK ONLY.\n"
+            "  5. submit_result — ALWAYS last.\n"
+            "\n"
+            "All tools available. Prefer batch_invoke for 2+ calls.\n"
+            "Copy capability names EXACTLY from resolve_situation's output."
         )
 
     prompt = BACK_SYSTEM_PROMPT.format(

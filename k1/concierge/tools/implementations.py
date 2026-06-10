@@ -1371,6 +1371,43 @@ async def execute_discover_capabilities(args: dict, ctx: ToolContext) -> ToolRes
     intent = args.get("intent", "")
     domain = args.get("domain")
     constraints = args.get("constraints")
+    names: list[str] | None = args.get("names")
+
+    # ── Phase 2 Epic 16.7: Batch names fast-path ──────────────────
+    # When Back knows exact companion tool names (from constitution or
+    # a prior resolve_situation), skip semantic search entirely and
+    # use O(1) exact lookup for each name.  One call returns all schemas.
+    if names:
+        logger.info(
+            "tool:discover_capabilities  names=%d",
+            len(names),
+        )
+        caps: list[dict[str, Any]] = []
+        for name in names:
+            contract = await _lookup_capability_contract_exact(ctx, name)
+            if contract is None:
+                continue
+            cap_dict: dict[str, Any] = {
+                "name": name,
+                "description": getattr(contract, "description", "") or "",
+                "domain": contract.domain[0] if contract.domain else "",
+                "domains": list(contract.domain) if contract.domain else [],
+                "score": 1.0,  # deterministic exact match
+            }
+            cap_dict["prompt_template"] = str(getattr(contract, "prompt_template", "") or "")
+            cap_dict["activity_profile"] = str(getattr(contract, "activity_profile", "") or "")
+            cap_dict["tool_instructions"] = str(getattr(contract, "tool_instructions", "") or "")
+            cap_dict["limitations"] = list(getattr(contract, "limitations", ()) or ())
+            cap_dict["schema"] = _capability_prompt_schema(contract)
+            caps.append(cap_dict)
+
+        return ToolResult(
+            tool_name="discover_capabilities",
+            status="ok",
+            data={"capabilities": caps, "count": len(caps)},
+        )
+
+    # ── Existing semantic search path ─────────────────────────────
     logger.info(
         "tool:discover_capabilities  intent=%s domain=%s has_fn=%s",
         intent[:80] if intent else "(empty)",
@@ -1476,6 +1513,97 @@ async def execute_discover_capabilities(args: dict, ctx: ToolContext) -> ToolRes
     )
     ctx.capability_cache[cache_key] = tool_result
     return tool_result
+
+
+# =========================================================================
+# BACK -- ACTION (3)
+# =========================================================================
+
+
+# =========================================================================
+# BACK -- resolve_situation (Phase 2 Epic 16.3)
+# =========================================================================
+
+
+@_register("resolve_situation")
+async def execute_resolve_situation(args: dict, ctx: ToolContext) -> ToolResult:
+    """Resolve a task situation through Fabric's situated resolver.
+
+    Phase 2 Epic 16: Back's PRIMARY tool.  Auto-fills identity fields
+    (actor_id, space_id, session_id) from ToolContext so the LLM only
+    provides the ``frame`` (intents, time_window, person_refs, etc.)
+    and optional overrides.
+
+    Delegates to ``ctx.dispatch.resolve_situation(payload)`` — never
+    imports Fabric directly.
+    """
+    frame = args.get("frame")
+    if not isinstance(frame, dict):
+        return ToolResult(
+            tool_name="resolve_situation",
+            status="error",
+            error="frame is required and must be an object",
+        )
+
+    if ctx.dispatch is None:
+        return ToolResult(
+            tool_name="resolve_situation",
+            status="error",
+            error="dispatch not wired — resolve_situation unavailable",
+        )
+
+    # Auto-fill identity from context (LLM never sees these)
+    sm = ctx.session_manager
+    actor_id = (
+        getattr(sm, "principal_id", None)
+        or getattr(sm, "active_principal_id", None)
+        or getattr(getattr(sm, "session", None), "principal_id", None)
+        or "unknown"
+    )
+    space_id = getattr(ctx, "active_space_id", None) or "family:default"
+    session_id = ctx.session_id or getattr(sm, "session_id", "") or "unknown"
+
+    payload: dict[str, Any] = {
+        "frame": frame,
+        "actor_id": str(actor_id),
+        "space_id": str(space_id),
+        "session_id": str(session_id),
+        "tier": getattr(ctx, "active_task_tier", None) or "MEDIUM",
+        "safety_band": _context_safety_band(ctx),
+    }
+
+    # Optional overrides the LLM may provide
+    for key in (
+        "disclosure_phase",
+        "freshness_policy",
+        "prompt_budget_tokens",
+        "idempotency_keys",
+    ):
+        value = args.get(key)
+        if value is not None:
+            payload[key] = value
+
+    logger.info(
+        "tool:resolve_situation  actor=%s space=%s frame_intents=%d",
+        actor_id,
+        space_id,
+        len(frame.get("intents", [])),
+    )
+
+    try:
+        result = await ctx.dispatch.resolve_situation(payload)
+        return ToolResult(
+            tool_name="resolve_situation",
+            status="ok",
+            data=result,
+        )
+    except Exception as exc:
+        logger.error("tool:resolve_situation failed: %s", exc, exc_info=True)
+        return ToolResult(
+            tool_name="resolve_situation",
+            status="error",
+            error=str(exc),
+        )
 
 
 # =========================================================================

@@ -134,6 +134,17 @@ class IDispatchPort(Protocol):
         """Execute a task envelope via Orchestrator (MED/HIGH tier path)."""
         ...
 
+    async def resolve_situation(self, payload: dict) -> dict:
+        """Resolve a task situation through Fabric's situated resolver.
+
+        Phase 2 Epic 16: Back's primary tool.  Accepts a payload dict
+        with ``frame`` (required), optional ``disclosure_phase``,
+        ``freshness_policy``, ``prompt_budget_tokens``, ``idempotency_keys``.
+        Returns a ``ResolutionEnvelope`` dict with verdict, allowed
+        capability names, execution plan, and prompt pack.
+        """
+        ...
+
 
 @runtime_checkable
 class IMemoryPort(Protocol):

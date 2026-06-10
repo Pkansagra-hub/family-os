@@ -31,6 +31,106 @@ from k1.concierge.tools.schemas_fabric import (
 from k1.concierge.tools.schemas_front import RECALL_MEMORY_SCHEMA
 
 # ===================================================================
+# READ -- resolve_situation (Phase 2 Epic 16.1)
+# ===================================================================
+
+RESOLVE_SITUATION_SCHEMA = ToolSchema(
+    name="resolve_situation",
+    description=(
+        "PRIMARY TOOL — call this FIRST for every task. Resolves the task "
+        "situation through Fabric's situated resolver: discovers available "
+        "capabilities, enforces constitution rules (prerequisite reads, "
+        "conflict checks, HIL gates), applies policy gates, and returns a "
+        "ResolutionEnvelope with verdict, allowed capability names, execution "
+        "plan, and prompt pack. Available in ALL tiers."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "frame": {
+                "type": "object",
+                "description": (
+                    "The resolution frame describing what you need to accomplish. "
+                    "Contains intents (action descriptions, domain hints, params), "
+                    "time_window_hint, person_refs, resource_refs, and safety_context."
+                ),
+                "properties": {
+                    "intents": {
+                        "type": "array",
+                        "description": "List of intent objects with action, domain, params, operation_hint, resource_kind_hint.",
+                        "items": {"type": "object"},
+                    },
+                    "time_window_hint": {
+                        "type": "object",
+                        "description": "Optional time window for the resolution (start, end, timezone).",
+                    },
+                    "person_refs": {
+                        "type": "array",
+                        "description": "Person references mentioned in the task (names, roles).",
+                        "items": {"type": "object"},
+                    },
+                    "resource_refs": {
+                        "type": "array",
+                        "description": "Resource references (calendar, task, chore IDs).",
+                        "items": {"type": "object"},
+                    },
+                    "safety_context": {
+                        "type": "object",
+                        "description": "Optional safety context override.",
+                    },
+                },
+                "required": ["intents"],
+            },
+            "disclosure_phase": {
+                "type": "string",
+                "description": (
+                    "Controls what fields are visible in the prompt pack. "
+                    "Default 'connector_summary' shows constitution + tool names. "
+                    "Use 'schema_binding' with committed_tool_names for full schemas. "
+                    "Use 'execution' for allowed tool calls only."
+                ),
+                "enum": [
+                    "loop_start",
+                    "connector_summary",
+                    "tool_name_selection",
+                    "schema_binding",
+                    "execution",
+                    "post_execution",
+                ],
+            },
+            "freshness_policy": {
+                "type": "string",
+                "description": "How to handle stale data. Default 'allow_stale_reads'.",
+                "enum": ["allow_stale_reads", "bypass_freshness", "require_fresh"],
+            },
+            "prompt_budget_tokens": {
+                "type": "integer",
+                "description": "Max tokens for the prompt pack. Default 8000.",
+                "minimum": 100,
+                "maximum": 32000,
+            },
+            "idempotency_keys": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Keys to prevent duplicate resolution. Same keys → same resolution_id.",
+            },
+        },
+        "required": ["frame"],
+    },
+    returns={
+        "type": "object",
+        "description": (
+            "ResolutionEnvelope with verdict, allowed_capability_names, "
+            "allowed_next_actions, execution_plan, capability_name_to_binding, "
+            "prompt_pack, hil_request, and diagnostics."
+        ),
+    },
+    actor="back",
+    category="read",
+    side_effects=False,
+)
+
+# ===================================================================
 # ACTION (continued -- batch invocation)
 # ===================================================================
 
@@ -291,6 +391,7 @@ SUBMIT_RESULT_SCHEMA = ToolSchema(
 
 BACK_TOOL_SCHEMAS: list[ToolSchema] = [
     # Read
+    RESOLVE_SITUATION_SCHEMA,  # Phase 2 Epic 16 — primary tool
     RECALL_MEMORY_SCHEMA,
     DISCOVER_CAPABILITIES_SCHEMA,
     # Action
@@ -307,6 +408,7 @@ BACK_TOOL_SCHEMAS: list[ToolSchema] = [
 # ===================================================================
 
 _BACK_SIMPLE_LIST: list[str] = [
+    "resolve_situation",  # Phase 2 Epic 16 — always available
     "recall_memory",
     "discover_capabilities",
     "invoke_capability",

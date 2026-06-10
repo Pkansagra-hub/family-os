@@ -49,6 +49,19 @@ DISCOVER_CAPABILITIES_SCHEMA = ToolSchema(
                     "Capability requirements " "(e.g. {'real_time': true, 'max_latency_ms': 5000})"
                 ),
             },
+            "names": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Exact capability names for batch deterministic schema lookup. "
+                    "When provided, skips semantic search and returns schemas "
+                    "for each name via O(1) exact match (score=1.0). USE THIS "
+                    "when the constitution or a prior resolution tells you the "
+                    "EXACT companion tool names (e.g., from resolve_situation's "
+                    "allowed_capability_names or constitution companion_resource_roles). "
+                    "Pass an empty intent string when using names."
+                ),
+            },
         },
         "required": ["intent"],
     },

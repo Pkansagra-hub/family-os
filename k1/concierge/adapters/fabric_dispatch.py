@@ -378,3 +378,21 @@ class FabricDispatchAdapter:
         if hasattr(self._fabric, "discover_capabilities"):
             return await self._fabric.discover_capabilities(intent=intent, domain=domain, **kwargs)
         return {"capabilities": [], "count": 0}
+
+    async def resolve_situation(self, payload: dict) -> dict:
+        """Route resolve_situation to Fabric's situated resolver.
+
+        Phase 2 Epic 16.4: Delegates to ``Fabric._handle_resolve_situation()``
+        which already handles dict→ResolveSituationRequest deserialization
+        and never raises (always returns a verdict dict).
+
+        When Fabric or its resolver is not wired, returns a clear
+        ``cannot_execute`` envelope.
+        """
+        handler = getattr(self._fabric, "_handle_resolve_situation", None)
+        if handler is None:
+            return {
+                "verdict": "cannot_execute",
+                "sub_reason": "resolve_situation_not_wired",
+            }
+        return await handler(payload)
