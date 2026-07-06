@@ -1,0 +1,82 @@
+# DeepSeek Provider Manifest
+# Verified against: https://api-docs.deepseek.com (2026-06-19)
+# MH-18: This manifest is the SOLE source of truth for DeepSeek capabilities.
+
+provider_id: deepseek
+display_name: DeepSeek
+plugin_class: k1.model_hub.plugins.deepseek_plugin.DeepSeekPlugin
+api_base: https://api.deepseek.com
+
+auth:
+  type: bearer
+  credential_key: DEEPSEEK_API_KEY
+
+capabilities:
+  - CHAT
+  - TOOL_CALL
+  - STRUCTURED
+  - REASON
+  - TOKEN_COUNT
+
+models:
+  - id: deepseek-v4-pro
+    capabilities: [CHAT, TOOL_CALL, STRUCTURED, REASON, TOKEN_COUNT]
+    cost_per_1m_input: 0.435
+    cost_per_1m_output: 0.87
+    max_context: 1048576
+    max_output: 393216
+    supports_streaming: true
+    supports_parallel_tools: true
+    tier: PREMIUM
+
+  - id: deepseek-v4-flash
+    capabilities: [CHAT, TOOL_CALL, STRUCTURED, REASON, TOKEN_COUNT]
+    cost_per_1m_input: 0.14
+    cost_per_1m_output: 0.28
+    max_context: 1048576
+    max_output: 393216
+    supports_streaming: true
+    supports_parallel_tools: true
+    tier: STANDARD
+
+  # Legacy models (deprecated 2026/07/24)
+  - id: deepseek-chat
+    capabilities: [CHAT, TOOL_CALL, STRUCTURED, TOKEN_COUNT]
+    cost_per_1m_input: 0.14
+    cost_per_1m_output: 0.28
+    max_context: 1048576
+    max_output: 393216
+    supports_streaming: true
+    supports_parallel_tools: true
+    tier: FAST
+
+  - id: deepseek-reasoner
+    capabilities: [CHAT, TOOL_CALL, STRUCTURED, REASON, TOKEN_COUNT]
+    cost_per_1m_input: 0.14
+    cost_per_1m_output: 0.28
+    max_context: 1048576
+    max_output: 393216
+    supports_streaming: true
+    supports_parallel_tools: true
+    tier: STANDARD
+
+circuit_breaker:
+  failure_threshold: 5
+  failure_window_s: 60
+  cooldown_s: 30
+
+health_check:
+  endpoint: https://api.deepseek.com/models
+  interval_s: 30
+  timeout_s: 5
+
+concurrency:
+  max_concurrent: 100
+
+rate_limits:
+  rpm: 500
+  tpm: 500000
+  headroom_pct: 0.80
+
+placement:
+  type: remote

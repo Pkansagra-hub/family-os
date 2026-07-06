@@ -65,6 +65,13 @@ FAMILY_SETTINGS_DEFINITION = ToolDefinition(
         "take effect immediately across all running family-tool adapters — "
         "no restart required."
     ),
+    # ── Phase 2.6 taxonomy (Epic 23.7) — adapter was created after Phase 1.1 ──
+    entity_type="family_setting",
+    resource_kinds=["setting"],
+    domain_id="family",
+    resource_families=["setting"],
+    domain_tags=["configuration", "policy", "feature_flags"],
+    actor_scope=["parent", "admin", "system"],
     tables_sql=_FAMILY_SETTINGS_DDL,
     actions=[
         # ── Visibility policy ────────────────────────────────────────────

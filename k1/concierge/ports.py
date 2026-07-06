@@ -137,11 +137,13 @@ class IDispatchPort(Protocol):
     async def resolve_situation(self, payload: dict) -> dict:
         """Resolve a task situation through Fabric's situated resolver.
 
-        Phase 2 Epic 16: Back's primary tool.  Accepts a payload dict
-        with ``frame`` (required), optional ``disclosure_phase``,
-        ``freshness_policy``, ``prompt_budget_tokens``, ``idempotency_keys``.
-        Returns a ``ResolutionEnvelope`` dict with verdict, allowed
-        capability names, execution plan, and prompt pack.
+        RES-001c (2026-06-16): Back's primary tool.  Accepts a payload dict
+        with ``action_text`` (required), optional ``context_hints`` (advisory
+        only — NEVER hard filters), ``disclosure_phase``, ``freshness_policy``,
+        ``prompt_budget_tokens``, ``idempotency_keys``.
+        Returns a ``ResolutionEnvelope`` dict with verdict (always
+        'can_execute'), connector, tools[], constitution teaching surface,
+        search_confidence, and alternative_connectors.
         """
         ...
 

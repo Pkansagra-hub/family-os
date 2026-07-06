@@ -63,9 +63,8 @@ try {
         $llmProvider = if ($env:LLM_PROVIDER) { $env:LLM_PROVIDER.Trim().ToLowerInvariant() } elseif ($env:GOOGLE_GENAI_USE_VERTEXAI -match '^(1|true|yes|on)$') { "vertex" } else { "google" }
         $vertexProviders = @("vertex", "vertex-ai", "vertex_ai", "agent-platform", "agent_platform", "gemini-enterprise", "gemini_enterprise", "google-cloud", "google_cloud")
         $googleProviders = @("google", "gemini", "developer", "ai-studio", "ai_studio", "google-ai", "google_ai")
-
+        $deepseekProviders = @("deepseek", "deepseek-v4", "deepseek_v4")
         if ($vertexProviders -contains $llmProvider) {
-            $env:GOOGLE_GENAI_USE_VERTEXAI = "True"
             if (-not $env:GOOGLE_CLOUD_PROJECT -and $env:GOOGLE_PROJECT_ID) {
                 $env:GOOGLE_CLOUD_PROJECT = $env:GOOGLE_PROJECT_ID
             }
@@ -92,8 +91,16 @@ try {
             Write-Host "  Mode: PRODUCTION (Gemini Developer API via ModelHub)" -ForegroundColor Green
             Write-Host "  Provider: google endpoint=generativelanguage.googleapis.com" -ForegroundColor DarkGray
         }
+        elseif ($deepseekProviders -contains $llmProvider) {
+            if (-not $env:DEEPSEEK_API_KEY) {
+                Write-Host "  ERROR: LLM_PROVIDER=deepseek requires DEEPSEEK_API_KEY." -ForegroundColor Red
+                exit 1
+            }
+            Write-Host "  Mode: PRODUCTION (DeepSeek via ModelHub)" -ForegroundColor Green
+            Write-Host "  Provider: deepseek endpoint=api.deepseek.com" -ForegroundColor DarkGray
+        }
         else {
-            Write-Host "  ERROR: unsupported LLM_PROVIDER='$llmProvider'. Supported: google, vertex." -ForegroundColor Red
+            Write-Host "  ERROR: unsupported LLM_PROVIDER='$llmProvider'. Supported: google, vertex, deepseek." -ForegroundColor Red
             exit 1
         }
     }

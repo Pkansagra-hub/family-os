@@ -140,5 +140,6 @@ async def test_back_prompt_gets_resolved_refs_and_no_date_calc_invocation() -> N
 
     assert result.status == "complete"
     assert dispatch.requests == []
-    assert "resolved_temporal_refs_typed:" in system_prompt
+    # Epic 17: resolved refs are woven into prose, not a raw typed block.
+    assert "already resolved these time expressions" in system_prompt
     assert "tomorrow (window)" in system_prompt

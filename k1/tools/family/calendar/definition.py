@@ -96,7 +96,7 @@ _CALENDAR_CONSTITUTION: dict[str, Any] = {
     "prerequisite_reads": [
         {
             "operation": "list",
-            "resource_kind": "calendar_event",
+            "resource_kind": "event",
             "reason": (
                 "Check for time-window conflicts with existing events "
                 "before creating or updating."
@@ -122,7 +122,7 @@ _CALENDAR_CONSTITUTION: dict[str, Any] = {
     "conflict_analysis_rules": [
         {
             "check": "time_overlap",
-            "with_resource_kinds": ["calendar_event"],
+            "with_resource_kinds": ["event"],
             "description": "Two events at overlapping times for the same attendees.",
             "resolution": (
                 "Present the conflict to the user with these options: create "
@@ -180,7 +180,7 @@ _CALENDAR_CONSTITUTION: dict[str, Any] = {
             "description": "Events can trigger reminders via event_offset triggers.",
         },
         {
-            "resource_kind": "shopping_item",
+            "resource_kind": "item",
             "role": "suggestion_source",
             "description": (
                 "Events like 'birthday party Saturday' may suggest shopping "
@@ -280,6 +280,108 @@ _CALENDAR_CONSTITUTION: dict[str, Any] = {
         "If read_after_write verification fails, retry once. If still failing, "
         "submit degraded with the created event_id but flag verification=failed."
     ),
+    # ── RES-017: Teaching surface fields (2026-06-17) ──────────────
+    "how_to_sequence": [
+        "1. Read current calendar + chores + tasks for the target time window.",
+        "2. Create the event if no blocking conflicts. If a soft conflict "
+        "exists, present it to the user per conflict resolution guidance.",
+        "3. Verify event was created (read_after_write).",
+    ],
+    "what_to_verify": [
+        "After create/update: Read back the event and confirm all fields "
+        "match the submitted values.",
+        "Validate the returned event matches the expected output schema.",
+    ],
+    "when_to_ask_human": [
+        {
+            "trigger": "missing_required_field",
+            "reason": "Event title is required.",
+            "prompt": "What should this event be called?",
+        },
+        {
+            "trigger": "missing_required_field",
+            "reason": "Start time is required.",
+            "prompt": "What time does this event start?",
+        },
+        {
+            "trigger": "missing_required_field",
+            "reason": "End time is required.",
+            "prompt": "What time does this event end? (I'll default to 1 hour if not sure.)",
+        },
+        {
+            "trigger": "missing_required_field",
+            "reason": "Target calendar must be selected.",
+            "prompt": "Which calendar should I add this to?",
+        },
+        {
+            "trigger": "time_conflict_detected",
+            "reason": "This time conflicts with an existing event, chore, or task.",
+            "prompt": "This time conflicts with: {conflict_summary}. What should I do?",
+        },
+        {
+            "trigger": "ambiguous_person",
+            "reason": "Person reference could not be resolved to a single member.",
+            "prompt": "Which person did you mean? I found: {candidate_names}.",
+        },
+        {
+            "trigger": "child_creates_event",
+            "reason": "A child is creating an event — parent notification may be required.",
+            "prompt": "{child_name} is creating an event. Notify parents?",
+        },
+    ],
+    "companion_connectors": [
+        {
+            "connector_id": "family.chores",
+            "role": "conflict_source",
+            "description": (
+                "Calendar events may conflict with assigned chores in the "
+                "same time window. When the user describes something "
+                "recurring with reward tracking, route to family.chores."
+            ),
+        },
+        {
+            "connector_id": "family.tasks",
+            "role": "conflict_source",
+            "description": "Calendar events may conflict with due tasks.",
+        },
+        {
+            "connector_id": "family.reminders",
+            "role": "dependency",
+            "description": "Events can trigger reminders via event_offset triggers.",
+        },
+        {
+            "connector_id": "family.shopping",
+            "role": "suggestion_source",
+            "description": (
+                "Events like 'birthday party Saturday' may suggest shopping "
+                "items ('order cake?')."
+            ),
+        },
+    ],
+    "conflict_rules": [
+        (
+            "If time_overlap with events: Two events at overlapping times "
+            "for the same attendees. Resolution: Present the conflict to "
+            "the user with options — create anyway, pick a different time, "
+            "or cancel. Do NOT silently overwrite."
+        ),
+        (
+            "If time_overlap with chores: An assigned chore is due during "
+            "this event's time window. Resolution: Warn that the child has "
+            "a chore due, offer to create event anyway, reschedule the "
+            "chore, or cancel."
+        ),
+        (
+            "If time_overlap with tasks: A task is due during this event's "
+            "time window. Resolution: Warn that the assignee has a task "
+            "due, offer to create event anyway or cancel."
+        ),
+        (
+            "If participant_availability: All attendees must be free in the "
+            "target time window. Resolution: If any participant has a "
+            "conflicting event, list the conflict and ask whether to proceed."
+        ),
+    ],
 }
 
 _CALENDAR_POLICY: dict[str, Any] = {
@@ -357,12 +459,12 @@ _CALENDAR_ONTOLOGY: dict[str, Any] = {
         {"alias": "calendar event", "canonical_concept": "calendar_event", "weight": 1.0},
     ],
     "concept_resource_edges": [
-        {"concept": "appointment", "resource_family": "calendar_event", "weight": 1.0},
-        {"concept": "calendar_event", "resource_family": "calendar_event", "weight": 1.0},
+        {"concept": "appointment", "resource_family": "event", "weight": 1.0},
+        {"concept": "calendar_event", "resource_family": "event", "weight": 1.0},
     ],
     "resource_connector_edges": [
         {
-            "resource_family": "calendar_event",
+            "resource_family": "event",
             "connector_id": "family.calendar",
             "weight": 1.0,
             "role": "primary",
@@ -372,7 +474,7 @@ _CALENDAR_ONTOLOGY: dict[str, Any] = {
         {
             "canonical_operation": "list",
             "equivalent_operation": "search",
-            "resource_family": "calendar_event",
+            "resource_family": "event",
         },
     ],
     "operation_aliases": [
@@ -426,11 +528,14 @@ CALENDAR_DEFINITION = ToolDefinition(
             description="Filter by visibility band: family | adults | named | private.",
         ),
     ],
-    can_reference=["task", "reminder", "shopping_item"],
+    can_reference=["task", "reminder", "item"],
     feature_flags=["m15_calendar"],
     domain_tags=["scheduling", "availability", "external_calendar"],
     # ── Phase 1.1 enrichment (Epics 9.2-9.6) ──
     resource_kinds=["calendar_event", "appointment"],
+    # ── Phase 2.6 taxonomy (Epic 23.2) ──
+    domain_id="family",
+    resource_families=["event"],
     actor_scope=["parent", "admin", "system"],
     snapshot_types=["daily_snapshot", "weekly_overview"],
     back_execution_profile=True,

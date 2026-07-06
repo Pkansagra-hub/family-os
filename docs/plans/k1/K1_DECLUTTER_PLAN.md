@@ -359,6 +359,10 @@ Without Phase 0, no other declutter can be measured: schemas, dispatcher, valida
 - Delete `front_dispatch_should_stay_conversational` + preflight reject.
 - Delete `context_read_gap_requires_dispatch` + `_front_policy_dispatch`.
 - Delete entire `back_execution_plan.py` + its gate in `loop.py`.
+  - **RETAINED (2026-06-18):** `BackExecutionPlan` is the shared coverage ledger for
+    Option B per-intent parallel workers (BackPool wiring). The deletion
+    recommendation applied to single-worker mode only. See
+    `docs/plans/back_pool_wiring_plan.md` Decision 7.
 - Delete spin nudges (Front recall, Back capability, Back progress).
 - Delete collection execution plans (~300 lines).
 - Delete safety short-circuit scan (Fabric already blocked).

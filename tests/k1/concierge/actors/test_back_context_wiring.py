@@ -108,13 +108,13 @@ async def _run_back_handler_and_get_prompt(**kwargs) -> str:
 
 
 class _MockTemporalHandle:
-    """Returns a TemporalProjection-like object for render_execution_block()."""
+    """Returns a TemporalProjection-like object for the prose renderer."""
 
     async def get_projection(self, consumer: str = "back"):
         class _MockAnchor:
             anchor_id = "t-mock-1"
             now_utc = "2026-06-09T17:00:00Z"
-            now_local = "2026-06-09 12:00 PM"
+            now_local = "2026-06-09T12:00:00-05:00"
             timezone = "America/Chicago"
             timezone_source = "device"
             local_date = "2026-06-09"
@@ -170,56 +170,57 @@ class _MockGroundingHandle:
 
 
 class TestBackPromptPlaceholderResolution:
-    """build_back_prompt() correctly substitutes all context block placeholders."""
+    """build_back_prompt() correctly substitutes all context narratives."""
 
-    def test_temporal_block_appears_in_prompt(self):
+    def test_temporal_narrative_appears_in_prompt(self):
         prompt = build_back_prompt(
             task={"task_id": "t1", "intents": [{"action": "test"}], "tier": "LOW"},
-            temporal_context_block="== TEMPORAL CONTEXT ==\nnow: 2026-06-09",
+            temporal_context_block="It is Tuesday night, June 9, 2026 in America/Chicago.",
         )
-        assert "== TEMPORAL CONTEXT ==" in prompt
-        assert "now: 2026-06-09" in prompt
+        assert "It is Tuesday night, June 9, 2026" in prompt
 
-    def test_spatial_block_appears_in_prompt(self):
+    def test_spatial_narrative_appears_in_prompt(self):
         prompt = build_back_prompt(
             task={"task_id": "t1", "intents": [{"action": "test"}], "tier": "LOW"},
-            spatial_context_block="== SPATIAL CONTEXT ==\nhome: Chicago",
+            spatial_context_block="The user is currently at home in Chicago.",
         )
-        assert "== SPATIAL CONTEXT ==" in prompt
-        assert "home: Chicago" in prompt
+        assert "currently at home in Chicago" in prompt
 
-    def test_selfmodel_block_appears_in_prompt(self):
+    def test_selfmodel_narrative_appears_in_prompt(self):
         prompt = build_back_prompt(
             task={"task_id": "t1", "intents": [{"action": "test"}], "tier": "LOW"},
-            selfmodel_context_block="== SELFMODEL ==\nprefers: morning",
+            selfmodel_context_block="You are acting on behalf of Alex, who prefers mornings.",
         )
-        assert "== SELFMODEL ==" in prompt
-        assert "prefers: morning" in prompt
+        assert "acting on behalf of Alex" in prompt
 
-    def test_all_three_blocks_appear_together(self):
+    def test_all_three_narratives_appear_together(self):
         prompt = build_back_prompt(
             task={"task_id": "t1", "intents": [{"action": "test"}], "tier": "LOW"},
-            temporal_context_block="== TEMPORAL ==\nt1",
-            spatial_context_block="== SPATIAL ==\ns1",
-            selfmodel_context_block="== SELFMODEL ==\nm1",
+            temporal_context_block="TEMPORAL-MARKER-T1",
+            spatial_context_block="SPATIAL-MARKER-S1",
+            selfmodel_context_block="SELFMODEL-MARKER-M1",
         )
-        assert "== TEMPORAL ==" in prompt
-        assert "== SPATIAL ==" in prompt
-        assert "== SELFMODEL ==" in prompt
+        assert "TEMPORAL-MARKER-T1" in prompt
+        assert "SPATIAL-MARKER-S1" in prompt
+        assert "SELFMODEL-MARKER-M1" in prompt
         # Ordering: temporal before spatial before selfmodel
-        assert prompt.index("== TEMPORAL ==") < prompt.index("== SPATIAL ==")
-        assert prompt.index("== SPATIAL ==") < prompt.index("== SELFMODEL ==")
+        assert prompt.index("TEMPORAL-MARKER-T1") < prompt.index("SPATIAL-MARKER-S1")
+        assert prompt.index("SPATIAL-MARKER-S1") < prompt.index("SELFMODEL-MARKER-M1")
 
-    def test_empty_blocks_produce_no_placeholder_leakage(self):
+    def test_empty_blocks_render_explicit_defaults(self):
         prompt = build_back_prompt(
             task={"task_id": "t1", "intents": [{"action": "test"}], "tier": "LOW"},
         )
         for placeholder in [
-            "{temporal_context_block}",
-            "{spatial_context_block}",
-            "{selfmodel_context_block}",
+            "{temporal_narrative}",
+            "{spatial_narrative}",
+            "{selfmodel_narrative}",
         ]:
             assert placeholder not in prompt, f"Leaked: {placeholder}"
+        # Empty blocks now render explicit absence statements, not blanks.
+        assert "current date and time were not resolved" in prompt
+        assert "location is unknown" in prompt
+        assert "No user profile is attached" in prompt
 
     def test_backward_compat_no_new_params(self):
         """Calling with only the old params must not raise KeyError."""
@@ -239,21 +240,21 @@ class TestTemporalContextReachesBackPrompt:
     """TemporalHandle output appears in the system prompt via back_handler."""
 
     @pytest.mark.asyncio
-    async def test_temporal_block_in_prompt(self):
+    async def test_temporal_narrative_in_prompt(self):
         temporal = _MockTemporalHandle()
         prompt = await _run_back_handler_and_get_prompt(temporal=temporal)
-        assert "== TEMPORAL CONTEXT ==" in prompt
-        assert "t-mock-1" in prompt
+        # Prose narrative built from the mock projection
+        assert "It is Tuesday" in prompt
+        assert "America/Chicago" in prompt
 
 
 class TestSpatialContextReachesBackPrompt:
     """SpatialHandle output appears in the system prompt via back_handler."""
 
     @pytest.mark.asyncio
-    async def test_spatial_block_in_prompt(self):
+    async def test_spatial_narrative_in_prompt(self):
         spatial = _MockSpatialHandle()
         prompt = await _run_back_handler_and_get_prompt(spatial=spatial)
-        assert "== SPATIAL CONTEXT ==" in prompt
         assert "Chicago" in prompt
         assert "123 Main St" in prompt
 
@@ -270,7 +271,7 @@ class TestSelfModelContextReachesBackPrompt:
 
 
 class TestAllContextsReachBackPrompt:
-    """All 3 handles + grounding produce blocks in the same prompt."""
+    """All 3 handles + grounding produce narratives in the same prompt."""
 
     @pytest.mark.asyncio
     async def test_all_four_contexts_in_prompt(self):
@@ -286,13 +287,13 @@ class TestAllContextsReachBackPrompt:
             grounding=grounding,
         )
 
-        assert "== TEMPORAL CONTEXT ==" in prompt
-        assert "== SPATIAL CONTEXT ==" in prompt
+        assert "It is Tuesday" in prompt
+        assert "123 Main St" in prompt
         assert "user_dietary: vegan" in prompt
 
         # Ordering: temporal → spatial → selfmodel → (grounding/profiles) → ss data
-        assert prompt.index("TEMPORAL") < prompt.index("SPATIAL")
-        assert prompt.index("SPATIAL") < prompt.index("user_dietary")
+        assert prompt.index("It is Tuesday") < prompt.index("123 Main St")
+        assert prompt.index("123 Main St") < prompt.index("user_dietary")
 
 
 class TestHandlesNoneStillWorks:
@@ -309,7 +310,8 @@ class TestHandlesNoneStillWorks:
         assert isinstance(prompt, str)
         assert len(prompt) > 100
         assert "== IDENTITY ==" in prompt
-        assert "== SESSION CONTEXT ==" in prompt
+        assert "== SITUATIONAL CONTEXT ==" in prompt
+        assert "== SESSION STATE ==" in prompt
 
 
 class TestGroundingStillReachesBackPrompt:
@@ -347,5 +349,6 @@ class TestGroundingStillReachesBackPrompt:
 
         request = model.inner.calls_for("back", "")[0]
         prompt = request.system_prompt
-        assert "== EXECUTION GROUNDING ==" in prompt
-        assert "g-task-001" in prompt
+        # Grounding now renders as provenance prose, not a raw block.
+        assert "grounding envelope g-task-001" in prompt
+        assert "temporal anchor ta-1" in prompt

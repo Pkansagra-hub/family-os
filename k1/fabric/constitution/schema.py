@@ -199,6 +199,13 @@ class ConstitutionArtifact:
     hil_trigger_summary: str | None = None
     degradation_policy: str | None = None
 
+    # ── RES-015: Back-facing teaching surface (prose, 2026-06-17) ──
+    how_to_sequence: list[str] = field(default_factory=list)
+    what_to_verify: list[str] = field(default_factory=list)
+    when_to_ask_human: list[dict] = field(default_factory=list)
+    companion_connectors: list[dict] = field(default_factory=list)
+    conflict_rules: list[str] = field(default_factory=list)
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize back to a plain dict (roundtrip-safe)."""
         return {
@@ -219,6 +226,12 @@ class ConstitutionArtifact:
             "companion_resource_summary": self.companion_resource_summary,
             "hil_trigger_summary": self.hil_trigger_summary,
             "degradation_policy": self.degradation_policy,
+            # RES-015: teaching surface fields
+            "how_to_sequence": list(self.how_to_sequence),
+            "what_to_verify": list(self.what_to_verify),
+            "when_to_ask_human": list(self.when_to_ask_human),
+            "companion_connectors": list(self.companion_connectors),
+            "conflict_rules": list(self.conflict_rules),
         }
 
 
@@ -227,7 +240,7 @@ class ConstitutionArtifact:
 CONSTITUTION_JSON_SCHEMA: dict = {
     "$schema": "https://json-schema.org/draft-07/schema#",
     "type": "object",
-    "additionalProperties": False,
+    "additionalProperties": True,  # RES-000b: allow new teaching surface fields
     "required": ["connector_id", "constitution_id", "schema_version", "execution_phases"],
     "properties": {
         "connector_id": {"type": "string", "pattern": r"^[a-z]+\.[a-z][a-z0-9_]*$"},
@@ -374,6 +387,12 @@ def validate_constitution(data: dict) -> ConstitutionArtifact:
         companion_resource_summary=_opt_str(data.get("companion_resource_summary")),
         hil_trigger_summary=_opt_str(data.get("hil_trigger_summary")),
         degradation_policy=_opt_str(data.get("degradation_policy")),
+        # RES-015/017: teaching surface fields (2026-06-17)
+        how_to_sequence=[str(s) for s in data.get("how_to_sequence", [])],
+        what_to_verify=[str(v) for v in data.get("what_to_verify", [])],
+        when_to_ask_human=[dict(h) for h in data.get("when_to_ask_human", [])],
+        companion_connectors=[dict(c) for c in data.get("companion_connectors", [])],
+        conflict_rules=[str(r) for r in data.get("conflict_rules", [])],
     )
 
 

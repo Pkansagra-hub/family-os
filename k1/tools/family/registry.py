@@ -31,7 +31,10 @@ import logging
 import sqlite3
 from typing import Any, Iterable, List, Optional, Type
 
-from k1.fabric.manifest_translator import register_definition, register_definition_to_store
+from k1.fabric.manifest_translator import (
+    register_definition,
+    register_definition_to_store,
+)
 from k1.tools.family.base_service import BaseToolService
 from k1.tools.family.events import EventEmitter
 from k1.tools.family.idem import IdempotencyStore
@@ -147,6 +150,8 @@ class ToolRegistry:
                         n_caps,
                         adapter_id,
                     )
+                    # RES-005: build connector-level FTS text from definition
+                    _ingest_connector_fts_for_family(svc.DEFINITION, gps)
                 except Exception:
                     logger.warning(
                         "ToolRegistry: GlobalProjectionStore projection failed "
@@ -190,3 +195,55 @@ class ToolRegistry:
         """Return the shared :class:`IdempotencyStore` (used by tests)."""
 
         return self._idem
+
+
+# ── RES-005: Connector FTS helper (2026-06-16) ──────────────────────────
+
+
+def _ingest_connector_fts_for_family(definition, gps) -> None:
+    """Build connector-level FTS text from a Family ToolDefinition.
+
+    Mirrors ManifestAdmissionService._ingest_connector_fts() but works
+    with the ToolDefinition shape used by family adapters.
+    """
+    parts: list[str] = [
+        definition.title or "",
+        definition.description or "",
+    ]
+    # Aggregate action names + descriptions from the definition
+    for action in getattr(definition, "actions", []) or []:
+        parts.append(getattr(action, "name", "") or "")
+        parts.append(getattr(action, "description", "") or "")
+    # Concept + operation aliases from ontology
+    ont = getattr(definition, "ontology", None)
+    if ont:
+        for entry in getattr(ont, "concept_aliases", []) or []:
+            if isinstance(entry, dict):
+                parts.append(entry.get("alias", ""))
+            else:
+                parts.append(str(entry))
+        for entry in getattr(ont, "operation_aliases", []) or []:
+            if isinstance(entry, dict):
+                parts.append(entry.get("alias", ""))
+            else:
+                parts.append(str(entry))
+    # Resource kinds
+    for rk in getattr(definition, "resource_kinds", []) or []:
+        parts.append(str(rk))
+
+    search_text = " ".join(p for p in parts if p)
+    if not search_text.strip():
+        return
+
+    # ToolDefinition uses adapter_id (e.g. "calendar"), not connector_id.
+    # Derive connector_id the same way register_definition_to_store does.
+    adapter_id = getattr(definition, "adapter_id", "") or ""
+    connector_id = f"family.{adapter_id}" if adapter_id else ""
+    if not connector_id:
+        return
+    gps.upsert_connector_fts_text(
+        connector_id=connector_id,
+        label=definition.title or "",
+        description=definition.description or "",
+        search_text=search_text,
+    )

@@ -57,6 +57,8 @@ class LocalProjectionStore:
                 actor_id TEXT NOT NULL,
                 resource_kind TEXT NOT NULL,
                 connector_id TEXT NOT NULL DEFAULT '',
+                backend_id TEXT NOT NULL DEFAULT '',
+                session_id TEXT NOT NULL DEFAULT '',
                 label TEXT NOT NULL DEFAULT '',
                 status TEXT NOT NULL DEFAULT 'active',
                 permissions TEXT NOT NULL DEFAULT 'read_write'
@@ -66,6 +68,15 @@ class LocalProjectionStore:
                 last_synced_at TEXT NOT NULL DEFAULT ''
             )
             """)
+        # Backward-compat: add columns if upgrading from schema without backend_id/session_id
+        for col, col_type in [
+            ("backend_id", "TEXT NOT NULL DEFAULT ''"),
+            ("session_id", "TEXT NOT NULL DEFAULT ''"),
+        ]:
+            try:
+                db.execute(f"ALTER TABLE connected_resources ADD COLUMN {col} {col_type}")
+            except Exception:
+                pass  # column already exists
         db.execute("""
             CREATE TABLE IF NOT EXISTS household_members (
                 person_id TEXT PRIMARY KEY,
@@ -98,11 +109,15 @@ class LocalProjectionStore:
         self._db.execute(
             """
             INSERT INTO connected_resources (resource_id, actor_id, resource_kind,
-                connector_id, label, status, permissions, freshness_state, last_synced_at)
-            VALUES (?,?,?,?,?,?,?,?,?)
+                connector_id, backend_id, session_id, label, status, permissions,
+                freshness_state, last_synced_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(resource_id) DO UPDATE SET
                 actor_id=excluded.actor_id, resource_kind=excluded.resource_kind,
-                connector_id=excluded.connector_id, label=excluded.label,
+                connector_id=excluded.connector_id,
+                backend_id=excluded.backend_id,
+                session_id=excluded.session_id,
+                label=excluded.label,
                 status=excluded.status, permissions=excluded.permissions,
                 freshness_state=excluded.freshness_state,
                 last_synced_at=excluded.last_synced_at
@@ -112,6 +127,8 @@ class LocalProjectionStore:
                 resource.get("actor_id", ""),
                 resource.get("resource_kind", ""),
                 resource.get("connector_id", ""),
+                resource.get("backend_id", ""),
+                resource.get("session_id", ""),
                 resource.get("label", ""),
                 resource.get("status", "active"),
                 resource.get("permissions", "read_write"),
@@ -153,6 +170,30 @@ class LocalProjectionStore:
                 """,
                 (actor_id, status),
             ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ── RES-011c: Session-aware backends (2026-06-17) ──────────────────
+
+    def get_connected_backends(
+        self,
+        session_id: str,
+        connector_id: str,
+    ) -> list[dict]:
+        """Return backends connected for this session + connector.
+
+        Returns list of {backend_id, label, status}.
+        Used by RES-011b to populate dynamic enums on tool schemas.
+        Read-only — the write path is owned by the native FamilyOS app
+        inbound API, NOT the resolver.
+        """
+        rows = self._db.execute(
+            """
+            SELECT DISTINCT backend_id, label, status
+            FROM connected_resources
+            WHERE session_id = ? AND connector_id = ? AND status = 'active'
+            """,
+            (session_id, connector_id),
+        ).fetchall()
         return [dict(r) for r in rows]
 
     # ── Household Members ──────────────────────────────────────────────

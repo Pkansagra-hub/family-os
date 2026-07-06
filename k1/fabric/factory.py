@@ -1061,11 +1061,8 @@ def _wire_phase1(
         provider that only exists after S8, so the kernel wires it later.
     """
     from k1.fabric.constitution.loader import ConstitutionLoader
-    from k1.fabric.policy.selector import PolicySelectorService
-    from k1.fabric.prompt_pack.builder import PromptPackBuilder
     from k1.fabric.resolver.capability_binder import CapabilityBinderService
-    from k1.fabric.resolver.capability_type_resolver import CapabilityTypeResolver
-    from k1.fabric.resolver.resource_projection import ResolveResourcesService
+    from k1.fabric.resolver.capability_type_resolver import ConnectorResolver
     from k1.fabric.resolver.situated_resolver import ResolveSituationService
     from k1.fabric.stores.local_projection_store import LocalProjectionStore
 
@@ -1085,29 +1082,17 @@ def _wire_phase1(
         local_store.open()
     fabric.local_projection_store = local_store
 
-    # 21d: resolver sub-components.
-    resource_resolver = ResolveResourcesService(global_projection_store, local_store)
-    type_resolver = CapabilityTypeResolver(global_projection_store, local_store)
-    policy_selector = PolicySelectorService(global_projection_store)
-    capability_binder = CapabilityBinderService(global_projection_store, local_store)
-    prompt_pack_builder = PromptPackBuilder(
-        global_projection_store,
-        constitution_loader=constitution_loader,
-    )
-    fabric.policy_selector = policy_selector
-    fabric.prompt_pack_builder = prompt_pack_builder
+    # 21d: resolver sub-components (RES-010/012 simplified, 2026-06-17).
+    connector_resolver = ConnectorResolver(global_projection_store)
+    capability_binder = CapabilityBinderService(global_projection_store)
 
-    # 21e: situated resolver (depends on all of the above).
+    # 21e: situated resolver (simplified constructor).
     fabric.situated_resolver = ResolveSituationService(
         global_projection_store,
         local_store,
-        resource_resolver=resource_resolver,
-        type_resolver=type_resolver,
-        policy_selector=policy_selector,
+        connector_resolver=connector_resolver,
         capability_binder=capability_binder,
         constitution_loader=constitution_loader,
-        prompt_pack_builder=prompt_pack_builder,
-        idempotency_store=idempotency_store,
     )
 
     # 21f: attach idempotency store to the facade for a future Step-0
@@ -1124,11 +1109,10 @@ def _wire_phase1(
 
     logger.info(
         "Phase 1 wiring complete: global_store=%s local_store=%s idempotency=%s "
-        "constitution_loader=%s situated_resolver=%s prompt_pack_builder=%s",
+        "constitution_loader=%s situated_resolver=%s",
         type(global_projection_store).__name__,
         type(local_store).__name__,
         type(idempotency_store).__name__ if idempotency_store else "None",
         type(constitution_loader).__name__,
         type(fabric.situated_resolver).__name__,
-        type(prompt_pack_builder).__name__,
     )

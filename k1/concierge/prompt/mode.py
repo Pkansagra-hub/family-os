@@ -62,79 +62,6 @@ class PromptMode(Enum):
 # Tool allowlist per mode (V2 Section 16.3, M4 Front deload cutover)
 # =========================================================================
 
-COGNITIVE_WRITE_TOOL_NAMES: frozenset[str] = frozenset(
-    {
-        "update_beliefs",
-        "update_scoreboard",
-        "update_clarifications",
-        "update_narrative",
-        "refine_affect",
-        "promote_belief",
-        "update_session_bundle",
-    }
-)
-
-
-LEGACY_TOOL_ALLOWLIST: dict[PromptMode, list[str]] = {
-    PromptMode.STANDARD: [
-        "update_beliefs",
-        "update_scoreboard",
-        "update_clarifications",
-        "update_narrative",
-        "recall_memory",
-        "summarize_context",
-        "dispatch_task",
-        "discover_capabilities",
-        "invoke_capability",
-    ],
-    PromptMode.CLARIFY_ASK: [
-        "update_clarifications",
-        "recall_memory",
-    ],
-    PromptMode.CLARIFY_RESOLVE: [
-        "update_beliefs",
-        "update_scoreboard",
-        "update_clarifications",
-        "promote_belief",
-        "recall_memory",
-        "dispatch_task",
-    ],
-    PromptMode.HITL_RELAY: [],
-    PromptMode.HITL_RESOLVE: [
-        "update_beliefs",
-    ],
-    PromptMode.PRESENT: [
-        "update_beliefs",
-        "update_narrative",
-    ],
-    PromptMode.WEAVE: [
-        "update_beliefs",
-        "update_narrative",
-        "update_scoreboard",
-    ],
-    PromptMode.CANCEL: [
-        "update_beliefs",
-        "update_narrative",
-    ],
-    PromptMode.INTERRUPT: [
-        "update_beliefs",
-        "update_scoreboard",
-        "update_clarifications",
-        "update_narrative",
-        "refine_affect",
-        "promote_belief",
-        "recall_memory",
-        "summarize_context",
-        "dispatch_task",
-        "discover_capabilities",
-        "invoke_capability",
-    ],
-    PromptMode.ERROR: [
-        "update_narrative",
-    ],
-}
-
-
 TOOL_ALLOWLIST: dict[PromptMode, list[str]] = {
     PromptMode.STANDARD: [
         "recall_memory",
@@ -166,10 +93,6 @@ TOOL_ALLOWLIST: dict[PromptMode, list[str]] = {
 }
 
 
-def _front_deload_cognitive_tools_enabled() -> bool:
-    return bool(getattr(get_config().prompt, "front_deload_cognitive_tools", True))
-
-
 def get_tool_allowlist(
     mode: PromptMode,
     affect_confidence: float = 1.0,
@@ -177,9 +100,8 @@ def get_tool_allowlist(
 ) -> list[str]:
     """Return the tool allowlist for a mode with conditional inclusions.
 
-        M4 deload cutover hides Front cognitive write tools by default. The legacy
-        allowlist remains available when prompt.front_deload_cognitive_tools is
-        explicitly disabled for rollback/comparison.
+    Cognitive write tools were migrated to ``k1.concierge.section_update``
+    (M4 front deloading). The single TOOL_ALLOWLIST is the authoritative source.
 
     Args:
         mode: The current PromptMode.
@@ -189,26 +111,13 @@ def get_tool_allowlist(
     Returns:
         List of tool names available for this mode.
     """
-    deload_enabled = _front_deload_cognitive_tools_enabled()
-    base = list(TOOL_ALLOWLIST[mode] if deload_enabled else LEGACY_TOOL_ALLOWLIST[mode])
+    base = list(TOOL_ALLOWLIST[mode])
 
     # HITL_RELAY is strictly text-only -- no conditional tools.
     # Adding tools here wastes the tight 2-iteration budget and
     # causes degenerate empty responses.
     if mode == PromptMode.HITL_RELAY:
         return base
-
-    if deload_enabled:
-        return base
-
-    # Legacy conditional: refine_affect when Phase 1 affect is uncertain.
-    threshold = get_config().prompt.affect_confidence_threshold
-    if affect_confidence < threshold and "refine_affect" not in base:
-        base.append("refine_affect")
-
-    # Legacy conditional: promote_belief for non-LOW tier tasks.
-    if tier != "LOW" and "promote_belief" not in base:
-        base.append("promote_belief")
 
     return base
 

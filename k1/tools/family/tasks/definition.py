@@ -82,7 +82,7 @@ _TASKS_CONSTITUTION: dict[str, Any] = {
         },
         {
             "operation": "list",
-            "resource_kind": "calendar_event",
+            "resource_kind": "event",
             "reason": (
                 "Check for scheduling conflicts -- a task due Friday may " "conflict with an event."
             ),
@@ -104,7 +104,7 @@ _TASKS_CONSTITUTION: dict[str, Any] = {
         },
         {
             "check": "due_date_vs_calendar",
-            "with_resource_kinds": ["calendar_event"],
+            "with_resource_kinds": ["event"],
             "description": "A task due at a specific time may conflict with a calendar event.",
             "resolution": (
                 "Warn the user if the task's due window overlaps a calendar "
@@ -114,7 +114,7 @@ _TASKS_CONSTITUTION: dict[str, Any] = {
     ],
     "companion_resource_roles": [
         {
-            "resource_kind": "calendar_event",
+            "resource_kind": "event",
             "role": "dependency",
             "description": (
                 "Calendar events can auto-create tasks ('Riley has soccer at "
@@ -211,6 +211,73 @@ _TASKS_CONSTITUTION: dict[str, Any] = {
     "degradation_policy": (
         "If read_after_write verification fails, retry once then submit degraded."
     ),
+    # ── RES-017: Teaching surface fields (2026-06-17) ──────────────
+    "how_to_sequence": [
+        "1. Read current task list + calendar for the assignee.",
+        "2. Create the task if no duplicate detected. Warn about calendar "
+        "conflicts if any (tasks are flexible — warn but don't block).",
+        "3. Verify task was created (read_after_write).",
+    ],
+    "what_to_verify": [
+        "After create/update: Read back the task and confirm all fields "
+        "match the submitted values.",
+        "Validate the returned task matches the expected output schema.",
+    ],
+    "when_to_ask_human": [
+        {
+            "trigger": "missing_required_field",
+            "reason": "Task title is required.",
+            "prompt": "What should the task be called?",
+        },
+        {
+            "trigger": "missing_required_field",
+            "reason": "Task assignee is required.",
+            "prompt": "Who should this task be assigned to?",
+        },
+        {
+            "trigger": "ambiguous_person",
+            "reason": "Person reference could not be resolved to a single member.",
+            "prompt": "Which person did you mean? I found: {candidate_names}.",
+        },
+        {
+            "trigger": "duplicate_detected",
+            "reason": "An open task with the same title already exists for this assignee.",
+            "prompt": "{assignee} already has '{existing_title}'. Create anyway or update the existing one?",
+        },
+    ],
+    "companion_connectors": [
+        {
+            "connector_id": "family.calendar",
+            "role": "dependency",
+            "description": (
+                "Calendar events can auto-create tasks ('Riley has soccer at "
+                "5pm — create pack cleats task due 4:30pm')."
+            ),
+        },
+        {
+            "connector_id": "family.chores",
+            "role": "distinct_sibling",
+            "description": (
+                "CRITICAL DISTINCTION: Tasks are ONE-SHOT ('pick up Riley "
+                "today'). Chores are RECURRING + GAMIFIED ('vacuum living room "
+                "every Saturday, earn $2'). If the user describes something "
+                "recurring with rewards, points, or allowance — that is a "
+                "CHORE, not a task. Use family.chores, not family.tasks."
+            ),
+        },
+    ],
+    "conflict_rules": [
+        (
+            "If duplicate with tasks: New task title matches an existing open "
+            "task for the same assignee. Resolution: Tell the user the task "
+            "already exists. Options: create anyway or update existing task."
+        ),
+        (
+            "If due_date_vs_calendar with events: A task due at a specific "
+            "time may conflict with a calendar event for the same assignee. "
+            "Resolution: Warn the user but do not block — tasks are flexible."
+        ),
+    ],
 }
 
 _TASKS_POLICY: dict[str, Any] = {
@@ -292,7 +359,7 @@ _TASKS_ONTOLOGY: dict[str, Any] = {
             "role": "primary",
         },
         {
-            "resource_family": "calendar_event",
+            "resource_family": "event",
             "connector_id": "family.tasks",
             "weight": 0.5,
             "role": "companion",
@@ -334,7 +401,7 @@ TASKS_DEFINITION = ToolDefinition(
         "voice commands, or chat.  Every write fans out via SSE so all "
         "household devices stay in sync."
     ),
-    entity_type="task_item",
+    entity_type="task",
     views=["list", "board", "calendar"],
     activity_profile="tasks.v1",
     domain_tags=["task_management", "delegation", "deadline"],
@@ -358,10 +425,13 @@ TASKS_DEFINITION = ToolDefinition(
             description="Filter by priority: low | medium | high.",
         ),
     ],
-    can_reference=["calendar_event", "reminder", "shopping_item"],
+    can_reference=["event", "reminder", "item"],
     feature_flags=["m15_tasks"],
     # ── Phase 1.1 enrichment (Epics 10.1-10.2) ──
     resource_kinds=["task"],
+    # ── Phase 2.6 taxonomy (Epic 23.3) ──
+    domain_id="family",
+    resource_families=["task"],
     actor_scope=["parent", "admin", "system"],
     snapshot_types=["daily_snapshot", "weekly_overview"],
     back_execution_profile=True,

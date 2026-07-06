@@ -1,37 +1,106 @@
 %% ======================================================================================
-%% K0-K1 BRIDGE - DETAILED ARCHITECTURE DIAGRAM (v2 — aligned with bridge_system_design.md)
+%% K0-K1 BRIDGE - UNIFIED ARCHITECTURE DIAGRAM (v1 documentation + v2 implementation)
 %% ======================================================================================
-%% Created:  2026-02-01 (v1, original)
-%% Rewrite:  2026-05-05 (v2, this file)
-%% v2 amendments vs v1 (see docs/architecture/whiteboard_k1/bridge_system_design.md):
-%%   - Deployment: v1 ships cloud-K0 multi-tenant; K1-only on devices.
-%%     K0-on-every-device collapsed to a single "v2: home K0 (deferred)" annotation.
-%%   - Sync: explicit L1 family-memory / L2 family-tool-state / L3 SessionState model
-%%     replaces the undifferentiated FamilySyncAdapter+P07 wiring.
-%%   - Multi-tenancy: cloud K0 internally partitioned by (tenant_id, user_id).
-%%   - MS-2.5 substrate added: contract registry (bridge/contracts/_meta + manifests),
-%%     codegen (tooling/contracts), CI gates (tooling/ci), CA bundle for manifest signing.
-%%   - Crypto reality: Ed25519 via bridge/core/signing.py + per-device verify keys via
-%%     ProvisioningLedger.DeviceKey. Removed v1's invented HMAC RequestSigner +
-%%     CapabilityToken/TokenIssuer (explicit v1 non-goals).
-%%   - Deleted v1 non-goals: FlatBufferCodec (JSON only), gRPCAdapter (HTTP only),
-%%     P2PManager/STUN/TURN/WebRTC (deferred post-v2), marketplace UI / external CA.
-%%   - IBridgePort: three real surfaces shown with MS-2.5 PR#1 rename targets
-%%     (IBridgeRuntime, IFabricK0Port, IPlannerWritePort) instead of one abstract port.
-%%   - Outbox enriched: dead_letter table, per-contract max_queue_age, drain_rate_per_sec.
-%%   - DEGRADED-mode auto-derived from manifest fields, not a hand-coded matrix.
-%%   - Wall-violation annotations on the two known production import violations.
-%% Remaining v2 risks/conflicts the diagram surfaces:
-%%   - bridge/_generated/ tree must stay K0/K1-disjoint (wall holds inside generated code)
-%%   - manifest signing CA (familyos_root_v1) is a SEPARATE trust root from envelope
-%%     signing (per-device keys via ProvisioningLedger). The two are explicitly distinct.
+%% Created:  2026-02-01 (v1, vision)
+%% Rewrite:  2026-05-05 (v2, implementation reality)
+%% Merged:   2026-06-14 (v1 docs + v2 implementation + native-app-as-aggregator)
+%%
+%% PURPOSE: Bridge as central security gateway between K0 (cloud) and K1 (device).
+%% Location: bridge/ (root level — NOT inside K0 or K1)
+%%
+%% EDGE-FIRST DESIGN PRINCIPLE:
+%%   - K1 is self-sufficient (works offline with reduced functionality)
+%%   - K0 is enhancement layer (cross-device sync, long-term memory, KG)
+%%   - Bridge handles K0 availability gracefully (queue when offline)
+%%   - SessionState COLD tier is LOCAL to K1 (not K0 dependent)
+%%
+%% FLOW DIRECTIONS:
+%%   - Command: K1 → K0 (ONE-WAY fire-and-forget, no response)
+%%   - Query:   K1 → K0 → K1 (REQUEST/RESPONSE, two-way)
+%%   - SSE:     K0 → K1 (ONE-WAY streaming, K0 pushes events)
+%%   - Feedback: K1 → K0 (ONE-WAY via obs.emit kind=feedback)
+%%   - IFL:     Native app → IFL backends (BIDIRECTIONAL, company-hosted + WASM)
+%%
+%% K0 PORTS (Bridge connects to):
+%%   - /k0/command.submit  - POST - Write any topic (ONE-WAY, no response)
+%%   - /k0/query.recall    - POST - Multi-selector recall bundles (REQUEST/RESPONSE)
+%%   - /k0/sse.subscribe   - GET  - Real-time event stream (K0 → K1 STREAMING)
+%%   - /k0/obs.emit        - POST - Telemetry + Feedback (ONE-WAY)
+%%
+%% COMMAND TOPICS (What K1 writes to K0 — canonical registry: k0/contracts/taxonomies/):
+%%   memory.write.v1      → st_epi   → P02 (Episodic memory from conversations)
+%%   session.snapshot.v1  → st_session → Archive (SessionState COLD tier)
+%%   beliefs.archive.v1   → st_beliefs → Archive (Evicted beliefs from Planner)
+%%   history.archive.v1   → st_history → Archive (Evicted turn history from Concierge)
+%%   plan.committed.v1    → st_epi   → P02 (Planner Stage 4 committed plans)
+%%   ifl.*                → st_epi   → P02 (IFL inbound: ifl.{category}.{adapter}.{event})
+%%   sync.delta           → st_sync  → P07 (CRDT device sync)
+%%   NOTE: Feedback flows through obs port (kind=feedback), NOT command topics
+%%
+%% QUERY SELECTORS (RecallSelector types — canonical catalog: k0/contracts/taxonomies/):
+%%   type: episodic  - topic: memory.write  - WAL position recall
+%%   type: semantic  - query: free-text     - pgvector similarity
+%%   type: session   - topic: session.*     - SessionState history
+%%   type: device    - topic: ifl.*         - IFL adapter event history
+%%   type: belief    - topic: beliefs.*     - Archived belief lookup
+%%   type: graph     - topic: any           - KG edge traversal
+%%
+%% SSE EVENTS (K0 → K1 — 12 topics, real chunked streaming MS-3d):
+%%   memory.formed.v1         - Memory consolidation complete
+%%   k0.learning.advisory.v1  - Validated feedback signal
+%%   k0.proactive.signal.v1   - Proactive agent trigger
+%%   curiosity.intent.v1      - Gap question from P06 → K1 Curiosity Agent
+%%   k0.sync.complete.v1      - Device sync finished
+%%   cognitive.vector.stored.v1 - Embedding indexed
+%%   p03.gap.detected.v1      - New knowledge gap detected
+%%   p03.complete.v1          - Gap resolution complete
+%%   p03.pattern.detected.v1  - Behavioral pattern detected
+%%   p03.truth.updated.v1     - Truth model updated
+%%   p07.sync.notification.v1 - Device sync notification
+%%   tool_state.changed.v1    - L2 family tool state fanout
+%%
+%% TWO-SYSTEM LEARNING ARCHITECTURE:
+%%   SYSTEM 1 — GAP RESOLUTION (Active Learning Loop):
+%%     P03 gap → st_learning_queue → P06 → P05 Attention → curiosity.intent.v1 (SSE)
+%%     → K1 Curiosity Agent → User answers → Command Port (memory.write + gap_id)
+%%     → P02 → st_hipp_events → P03 resolves gap
+%%   SYSTEM 2 — MODEL REFINEMENT (Algorithm Tuning):
+%%     K1 detects signal → FeedbackEnvelope → Obs Port (kind=feedback)
+%%     → P21 validates → st_feedback_signals → feedback.signal.<pipeline>.v1
+%%     → P02/P03/P08 learning modules → st_learned_weights
+%%
+%% FEEDBACK ENVELOPE (K1 → K0 via obs.emit kind=feedback):
+%%   feedback_id, pipeline_id (P02/P06/P08), tenant_id, space_id
+%%   signal_class: CORRECTION | VALIDATION | IMPLICIT | EXPLICIT | OUTCOME
+%%   signal_subtype: user_correction, reformulation_detected, etc.
+%%   correlation: session_id, event_ids[], wal_positions[], recall_id, target_entity_id
+%%   provenance: source_message_id, recall_context_hash, feedback_timestamp
+%%   payload: pipeline-specific (P02FeedbackPayload, P08FeedbackPayload)
+%%
+%% v2 IMPLEMENTATION ADDITIONS (vs v1 vision):
+%%   - MS-2.5 substrate: contract registry + codegen + CI gates + CA bundle
+%%   - 3-way port split: IBridgeRuntime / IFabricK0Port / IPlannerWritePort
+%%   - Topic versioning: .v1 suffixes on all topics
+%%   - Real crypto: Ed25519 via bridge/core/signing.py, 3 distinct trust roots
+%%   - Enriched outbox: dead_letter table, per-contract max_queue_age, drain pacing
+%%   - Auto-derived DEGRADED matrix from manifest fields
+%%   - Bridge Client: HttpBridgeClient(frozen dataclass) via BridgeRuntime.from_registry()
+%%   - Explicit L1/L2/L3 sync model + family.membership.v1
+%%   - Removed: FlatBufferCodec, gRPCAdapter, P2P/STUN/TURN/WebRTC (deferred)
+%%
+%% FIVE RESPONSIBILITIES:
+%%   1. Kernel Transport: K0 ↔ K1 memory/storage communication
+%%   2. Connector Security: Native app backend registration, auth, rate limiting
+%%   3. Device Sync: Multi-device family sync via K0 P07
+%%   4. IFL (Interkernel Fabric Language): Backend protocol adapters (BRIDGE OWNED)
+%%   5. Offline Awareness: Queue commands when K0 unavailable, drain when back
 %% ======================================================================================
 
 graph LR
     %% ======================================================================================
     %% K1 TOUCHPOINTS (Left Side - K1 Components that call Bridge)
     %% ======================================================================================
-    subgraph K1_TOUCHPOINTS["🧠 K1 KERNEL (device-resident; v1 = always K1-only)"]
+    subgraph K1_TOUCHPOINTS["🧠 K1 KERNEL (device-resident — K1 always on-device, K0 optional cloud)"]
         direction TB
 
         subgraph K1_SESSIONSTATE["SessionState (L5)"]
@@ -59,12 +128,17 @@ graph LR
             MW_GAP_ANSWER["Gap Answer Writer<br/>topic: memory.write.v1 + gap_id"]:::k1_caller
         end
 
-        subgraph K1_TOOLS["IFL-Connected Tools (MS-5+)"]
-            TOOL_HOME["Home / Transport / Finance /<br/>Health / Calendar / Shopping<br/>(all via Fabric → Gateway → IFL)"]:::k1_tool
+        subgraph K1_NATIVE_APPS["📱 Family Native Apps (GPS-Registered, Back LLM Tools)"]
+            NATIVE_SHOPPING["family.shopping<br/>price_check, place_order, list_items<br/>→ fans out to Walmart, Costco, Kroger..."]:::k1_native
+            NATIVE_CALENDAR["family.calendar<br/>create_event, check_schedule, sync<br/>→ fans out to Google Cal, Outlook..."]:::k1_native
+            NATIVE_TASKS["family.tasks<br/>create_task, mark_done, assign_to<br/>→ fans out to Todoist, TickTick..."]:::k1_native
+            NATIVE_FOOD["family.food<br/>plan_meals, place_delivery_order<br/>→ fans out to DoorDash, UberEats..."]:::k1_native
+            NATIVE_MONEY["family.money<br/>get_balances, transfer_funds<br/>→ fans out to Chase, BofA, Venmo..."]:::k1_native
+            NATIVE_BACKENDS["🔒 Hidden Data Backends<br/>walmart-api, doordash-api, chase-api...<br/>Native apps call these internally<br/>NEVER visible to Back LLM"]:::k1_backend
         end
 
         subgraph K1_FABRIC["Capability Fabric (L2.5)"]
-            FAB_INVOKE["fabric.invoke(adapter, action)<br/>via IFabricK0Port (renamed v2)"]:::k1_caller
+            FAB_INVOKE["fabric.invoke(capability_name, params)<br/>Back LLM calls native app tools<br/>→ Native app fans out to IFL backends"]:::k1_caller
             FAB_RECALL["fabric.invoke(k0.query)"]:::k1_caller
             FAB_SPAWN["fabric.spawn() — K1-internal"]:::k1_caller
         end
@@ -77,16 +151,16 @@ graph LR
         end
 
         subgraph K1_FEEDBACK_EMITTER["Feedback Emitter (K1 → K0 via OBS PORT)"]
-            FB_CONTEXT["ConversationContext"]:::k1_caller
-            FB_DETECTORS["Detectors:<br/>Correction / Validation /<br/>Reformulation"]:::k1_caller
+            FB_CONTEXT["ConversationContext<br/>Track event_ids, recall_id"]:::k1_caller
+            FB_DETECTORS["Detectors:<br/>CorrectionDetector<br/>ValidationDetector<br/>ReformulationDetector"]:::k1_caller
             FB_EMITTER["FeedbackEmitter<br/>obs.emit(kind=feedback)"]:::k1_caller
         end
 
         subgraph K1_PROACTIVE_FLOW["Proactive Agent Flow (Gap Resolution)"]
-            PROACTIVE_LISTEN["SSE Listener<br/>curiosity.intent.v1"]:::k1_caller
-            PROACTIVE_DECISION["Decision Engine"]:::k1_caller
-            PROACTIVE_BUDGET["Attention Budget Gate (3/day)"]:::k1_caller
-            CURIOSITY_AGENT["Curiosity Agent"]:::k1_caller
+            PROACTIVE_LISTEN["SSE Listener<br/>curiosity.intent.v1<br/>k0.learning.advisory.v1"]:::k1_caller
+            PROACTIVE_DECISION["Proactive Decision Engine<br/>LLM-based question framing"]:::k1_caller
+            PROACTIVE_BUDGET["Attention Budget Gate<br/>Token bucket (3/day)<br/>Context readiness check"]:::k1_caller
+            CURIOSITY_AGENT["Curiosity Agent<br/>Formulate natural question<br/>Respect politeness theory"]:::k1_caller
         end
 
         subgraph K1_PORTS_RENAMED["⚠️ MS-2.5 PR#1 Port Renames (was: 3× IBridgePort)"]
@@ -531,6 +605,68 @@ graph LR
     end
 
     %% ======================================================================================
+    %% 🌐 CROSS-OS EVENT MESH — ALL 8 OSes as PEERS (Push + Pull via IFL Event Bus)
+    %% ======================================================================================
+    subgraph CROSS_OS_MESH["🌐 CROSS-OS EVENT MESH — 8 SOVEREIGN OSes AS PEERS on IFL Event Bus"]
+        direction TB
+
+        %% ── ALL 8 OSes AS PEERS ──
+        subgraph CROSS_ALL_OS["ALL 8 OPERATING SYSTEMS — Every OS can PUSH events to AND PULL data from every other OS"]
+            direction LR
+            CROSS_FAMILY["🏠 FamilyOS<br/>6 apps · ~200 backends<br/>Consumer: families, patients<br/>Wearables: BP, HR, sleep, steps<br/>← SOURCE of live patient vitals"]:::cross_os_family
+            CROSS_HEALTH["🏥 HealthOS<br/>7 apps · ~300 backends<br/>Provider: doctors, hospitals<br/>QUERIES FamilyOS for vitals<br/>PUSHES Rx, appts, labs → all"]:::cross_os_professional
+            CROSS_FINANCE["💰 FinanceOS<br/>6 apps · ~500 backends<br/>Advisor: CPAs, wealth mgmt<br/>QUERIES FamilyOS for spending<br/>PUSHES plans, budgets → all"]:::cross_os_professional
+            CROSS_BANK["🏦 BankOS<br/>6 apps · ~200 backends<br/>Institution: banks, credit unions<br/>PUSHES fraud alerts, loans → all"]:::cross_os_professional
+            CROSS_ENTERPRISE["🏢 EnterpriseOS<br/>8 apps · ~1000 backends<br/>Employer: HR, payroll, benefits<br/>PUSHES leave, benefits, payroll → all"]:::cross_os_professional
+            CROSS_GOV["🏛️ GovOS<br/>6 apps · ~500 backends<br/>Government: benefits, permits<br/>PUSHES benefits, tax, court → all"]:::cross_os_professional
+            CROSS_AGRI["🌾 AgriOS<br/>6 apps · ~300 backends<br/>Producer: farmers, supply chain<br/>PUSHES harvest, prices, supply → all"]:::cross_os_professional
+            CROSS_PHARMA["💊 PharmaOS<br/>6 apps · ~50 backends<br/>Fulfillment: pharmacists<br/>QUERIES HealthOS for Rx<br/>PUSHES Rx ready, pickup → all"]:::cross_os_professional
+        end
+
+        %% ── BIDIRECTIONAL EVENT FLOWS ──
+        subgraph CROSS_BIDIRECTIONAL["⚡ IFL EVENT BUS — Bidirectional Push + Pull between ALL OSes"]
+            direction LR
+
+            subgraph CROSS_PUSH["📤 PUSH EVENTS (OS → OS via IFL)"]
+                direction LR
+                CROSS_E1["🏥→🏠 Rx issued + Appt scheduled<br/>🏥→💊 New e-prescription sent"]:::cross_os_event_bidir
+                CROSS_E2["🏥→💰 Diagnosis → LTC cost planning"]:::cross_os_event_bidir
+                CROSS_E3["💰→🏠 Plan approved + Budget alert"]:::cross_os_event_bidir
+                CROSS_E4["🏦→🏠 Loan approved · 🏦→💰 Fraud alert"]:::cross_os_event_bidir
+                CROSS_E5["🏢→🏠 Leave + Benefits + Payroll<br/>🏢→💰 Payroll → income update"]:::cross_os_event_bidir
+                CROSS_E6["🏛️→🏠 Benefits + Tax refund + Court<br/>🏛️→🏢 Permit approved"]:::cross_os_event_bidir
+                CROSS_E7["🌾→💰 Harvest → advisor revenue<br/>🌾→🏠 Supply disruption → price warn"]:::cross_os_event_bidir
+                CROSS_E8["💊→🏠 Rx ready for pickup<br/>💊→🏥 Rx fulfilled → doctor notified<br/>💊→🏥 Stock low + Prior auth required"]:::cross_os_event_bidir
+            end
+
+            subgraph CROSS_PULL["📥 PULL / QUERY (OS ← OS via IFL)"]
+                direction LR
+                CROSS_Q1["🏥 ← 🏠 QUERY patient snapshot<br/>'What is avg BP? Sleep pattern?<br/>Medication adherence? Weight trend?'<br/>← FamilyOS returns LIVE data"]:::cross_os_event_pull
+                CROSS_Q2["💰 ← 🏠 QUERY actual spending<br/>'What are real grocery patterns?<br/>Not self-reported — actual data.'"]:::cross_os_event_pull
+                CROSS_Q3["💊 ← 🏠 QUERY patient ETA<br/>'When is patient arriving?<br/>← FamilyOS returns ~1:00 PM'"]:::cross_os_event_pull
+                CROSS_Q4["🏥 ← 💊 QUERY Rx status<br/>'Was medication picked up?<br/>← PharmaOS returns YES/NO'"]:::cross_os_event_pull
+                CROSS_Q5["💰 ← 🏦 QUERY account activity<br/>'Any large deposits? Fraud?'<br/>← BankOS returns flagged events"]:::cross_os_event_pull
+            end
+        end
+
+        %% ── CLOSED LOOP ──
+        subgraph CROSS_LOOP_CLOSED["🔄 THE LOOP CLOSES — Every OS is both PRODUCER and CONSUMER"]
+            direction TB
+            CROSS_PATIENT["🏠 PATIENT SIDE (FamilyOS)<br/>Watch records BP → emits vitals.updated<br/>FamilyOS pushes to ALL consent-granted OSes<br/>Any OS can QUERY FamilyOS for live data"]:::cross_os_loop
+            CROSS_DOCTOR["🏥 DOCTOR SIDE (HealthOS)<br/>Opens patient profile → QUERIES FamilyOS<br/>Gets LIVE snapshot: BP 138/88, Adherence 3/7<br/>PUSHES new Rx → PharmaOS + FamilyOS<br/>PUSHES referral → FamilyOS"]:::cross_os_loop
+            CROSS_PHARMACY["💊 PHARMACY SIDE (PharmaOS)<br/>Receives Rx from HealthOS<br/>QUERIES FamilyOS for patient ETA<br/>Fills → PUSHES ready notification<br/>PUSHES fulfilled → HealthOS"]:::cross_os_loop
+            CROSS_PATIENT --> CROSS_DOCTOR
+            CROSS_DOCTOR --> CROSS_PHARMACY
+            CROSS_PHARMACY -.-> CROSS_PATIENT
+        end
+    end
+
+    %% ── CROSS-OS EDGES: ALL OSes are PEERS ──
+    CROSS_ALL_OS -->|"Every OS pushes events<br/>to every other OS<br/>via IFL event bus"| CROSS_BIDIRECTIONAL
+    CROSS_BIDIRECTIONAL -->|"Every OS can query<br/>every other OS<br/>with consent"| CROSS_LOOP_CLOSED
+    CROSS_LOOP_CLOSED -.->|"Data flows back →<br/>every OS sees live<br/>cross-domain truth"| CROSS_ALL_OS
+
+    %% ======================================================================================
     %% CONNECTION-TYPE LEGEND (every wire used in the diagram, with v1/v2/v3 status)
     %% ======================================================================================
     subgraph CONNECTION_TYPES_LEGEND["🔌 Connection-Type Legend (every wire on this canvas)"]
@@ -587,7 +723,10 @@ graph LR
     PROACTIVE_BUDGET --> CURIOSITY_AGENT
     CURIOSITY_AGENT --> MW_GAP_ANSWER
 
-    TOOL_HOME -->|"v2: via Fabric"| FAB_INVOKE
+    NATIVE_SHOPPING -->|"Back LLM invokes → native app fans out to IFL backends"| FAB_INVOKE
+    NATIVE_TASKS -->|"Back LLM invokes → native app fans out to IFL backends"| FAB_INVOKE
+    NATIVE_FOOD -->|"Back LLM invokes → native app fans out to IFL backends"| FAB_INVOKE
+    NATIVE_MONEY -->|"Back LLM invokes → native app fans out to IFL backends"| FAB_INVOKE
     FAB_INVOKE -->|"MS-5"| GATEWAY_PORT
     FAB_RECALL --> QUERY_PORT
 
@@ -762,6 +901,16 @@ graph LR
     %% K1 (blue)
     classDef k1_caller fill:#bbdefb,stroke:#1565c0,stroke-width:2px,color:#000
     classDef k1_tool   fill:#90caf9,stroke:#0d47a1,stroke-width:2px,color:#000
+    classDef k1_native fill:#a5d6a7,stroke:#2e7d32,stroke-width:3px,color:#000,font-weight:bold
+    classDef k1_backend fill:#e0e0e0,stroke:#757575,stroke-width:1px,color:#000,font-style:italic
+    classDef k1_native fill:#a5d6a7,stroke:#2e7d32,stroke-width:3px,color:#000,font-weight:bold
+
+    %% Cross-OS Event Mesh
+    classDef cross_os_family fill:#c8e6c9,stroke:#2e7d32,stroke-width:3px,color:#000,font-weight:bold
+    classDef cross_os_professional fill:#bbdefb,stroke:#1565c0,stroke-width:2px,color:#000
+    classDef cross_os_event_bidir fill:#fff3e0,stroke:#e65100,stroke-width:1px,color:#000
+    classDef cross_os_event_pull fill:#e1bee7,stroke:#7b1fa2,stroke-width:2px,color:#000,stroke-dasharray:4 2
+    classDef cross_os_loop fill:#fff9c4,stroke:#f57f17,stroke-width:2px,color:#000,font-weight:bold,font-style:italic
     classDef k1_local  fill:#4dd0e1,stroke:#00838f,stroke-width:3px,color:#000,font-weight:bold
 
     %% Bridge (orange/red)

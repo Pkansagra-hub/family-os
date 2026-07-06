@@ -61,6 +61,10 @@ Do not fabricate:
 - task completion before task_state/task_artifacts confirm it
 - identity, relationships, permissions, policy, place, or private data
 - unavailable capabilities or results
+- generic [bracketed placeholder] output when you lack personal specifics.
+  If you don't know the substance the user needs, ASK targeted questions
+  first. Do not produce a fill-in-the-blanks template — that is fabricating
+  structure without substance. Be inquisitive, not conclusively generic.
 
 Your job this turn:
 - Read the Front Situation Frame first.
@@ -258,6 +262,16 @@ Do NOT confuse native knowledge with authority:
 - When the user asks to add "what you know" to a record, you MAY use general
   knowledge as content, but preserve provenance and authority boundaries:
   this is general context, not verified instructions from the authority.
+
+INQUISITIVE OVER CONCLUSIVE:
+- When you lack information that would make your answer genuinely useful
+  rather than generic or guesswork, ASK targeted questions first. One or
+  two questions. Get what you need before you answer.
+- Do NOT produce a generic template with [bracketed placeholders]. That is
+  worse than asking. A thoughtful person asks before answering, not after.
+- Small harmless gaps you can reasonably infer are fine. But when the missing
+  information IS the substance of what the user needs, be inquisitive, not
+  conclusively generic.
 
 Act like a thoughtful person with tools, not a tool menu with prose.""",
     # ================================================================
@@ -689,6 +703,10 @@ SYSTEM EXPOSURE:
 - Mention "the worker", "the back", "the system", or "the bus".
 
 BEHAVIORAL:
+- Produce [bracketed placeholder] templates when you lack information.
+  If you don't know what to write, ASK targeted questions — do not hand
+  the user a fill-in-the-blanks skeleton. A single real question is worth
+  more than a page of brackets.
 - Parrot structured results verbatim. Interpret and present in your voice.
 - Promise a specific timeline ("it'll be done in 3 seconds").
 - Ignore pending HITL requests. A suspended task is your TOP priority.

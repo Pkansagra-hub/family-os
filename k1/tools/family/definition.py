@@ -423,6 +423,23 @@ class ToolDefinition(BaseModel):
             "'appointment']``."
         ),
     )
+    resource_families: Optional[list[str]] = Field(
+        default=None,
+        description=(
+            "Phase 2.6: taxonomy resource family IDs this connector "
+            "manages. E.g. ``['event']`` for calendar, ``['task']`` for "
+            "tasks.  Populates ``connector_resource_families`` at "
+            "bootstrap and becomes the ``family_id`` on ``CapabilityRecord``."
+        ),
+    )
+    domain_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Phase 2.6: taxonomy domain this connector belongs to "
+            "(e.g. ``'family'``, ``'health'``).  Populates "
+            "``connectors.domain_id`` at bootstrap."
+        ),
+    )
     actor_scope: Optional[list[str]] = Field(
         default=None,
         description=(

@@ -1,16 +1,16 @@
 """
-Back Tool Schemas -- 6 Tools for the Background Worker
+Back Tool Schemas -- 5 Tools for the Background Worker
 ======================================================
 
 V2 Design Ref: Section 6.2 (Back LLM tool schemas)
 
 Tool categories:
-  Read (2):    recall_memory (shared from Front), discover_capabilities
+  Read (2):    resolve_situation (primary), recall_memory
   Action (3):  invoke_capability, spawn_via_fabric, execute_workflow
   Control (1): submit_result
 
 Tier-based allowlists:
-  LOW  (4): recall_memory, discover_capabilities, invoke_capability, submit_result
+  LOW  (4): resolve_situation, recall_memory, invoke_capability, submit_result
   MEDIUM/HIGH (6): all
 """
 
@@ -31,55 +31,61 @@ from k1.concierge.tools.schemas_fabric import (
 from k1.concierge.tools.schemas_front import RECALL_MEMORY_SCHEMA
 
 # ===================================================================
-# READ -- resolve_situation (Phase 2 Epic 16.1)
+# READ -- resolve_situation (RES-001a: action_text-first contract)
 # ===================================================================
 
 RESOLVE_SITUATION_SCHEMA = ToolSchema(
     name="resolve_situation",
     description=(
-        "PRIMARY TOOL — call this FIRST for every task. Resolves the task "
-        "situation through Fabric's situated resolver: discovers available "
-        "capabilities, enforces constitution rules (prerequisite reads, "
-        "conflict checks, HIL gates), applies policy gates, and returns a "
-        "ResolutionEnvelope with verdict, allowed capability names, execution "
-        "plan, and prompt pack. Available in ALL tiers."
+        "PRIMARY TOOL — call this FIRST for every task. Returns a RESOLUTION "
+        "PACKET with three parts: CONNECTOR, TOOLS, and CONSTITUTION. "
+        "The verdict is always can_execute — the resolver never blocks. "
+        "Available in ALL tiers."
     ),
     parameters={
         "type": "object",
         "properties": {
-            "frame": {
+            "action_text": {
+                "type": "string",
+                "description": (
+                    "The user's raw utterance — the primary search signal. "
+                    "Pass the user's words directly: 'add eggs to my shopping list', "
+                    "'schedule dentist for Riley Monday 3pm', etc."
+                ),
+            },
+            "actor_id": {
+                "type": "string",
+                "description": "Auto-filled from session context. Do NOT populate manually.",
+            },
+            "session_id": {
+                "type": "string",
+                "description": "Auto-filled from session context. Do NOT populate manually.",
+            },
+            "space_id": {
+                "type": "string",
+                "description": "Auto-filled from session context. Do NOT populate manually.",
+            },
+            "context_hints": {
                 "type": "object",
                 "description": (
-                    "The resolution frame describing what you need to accomplish. "
-                    "Contains intents (action descriptions, domain hints, params), "
-                    "time_window_hint, person_refs, resource_refs, and safety_context."
+                    "ADVISORY boost signals only — NEVER hard filters. "
+                    "The resolver may use these to break ties but will never "
+                    "exclude a connector because of them."
                 ),
                 "properties": {
-                    "intents": {
-                        "type": "array",
-                        "description": "List of intent objects with action, domain, params, operation_hint, resource_kind_hint.",
-                        "items": {"type": "object"},
+                    "domain_hint": {
+                        "type": "string",
+                        "description": "Advisory domain tag (e.g., 'family', 'health').",
                     },
-                    "time_window_hint": {
-                        "type": "object",
-                        "description": "Optional time window for the resolution (start, end, timezone).",
+                    "resource_hint": {
+                        "type": "string",
+                        "description": "Advisory resource kind hint (e.g., 'calendar', 'shopping_list').",
                     },
-                    "person_refs": {
-                        "type": "array",
-                        "description": "Person references mentioned in the task (names, roles).",
-                        "items": {"type": "object"},
-                    },
-                    "resource_refs": {
-                        "type": "array",
-                        "description": "Resource references (calendar, task, chore IDs).",
-                        "items": {"type": "object"},
-                    },
-                    "safety_context": {
-                        "type": "object",
-                        "description": "Optional safety context override.",
+                    "operation_hint": {
+                        "type": "string",
+                        "description": "Advisory operation hint (e.g., 'create', 'read', 'update').",
                     },
                 },
-                "required": ["intents"],
             },
             "disclosure_phase": {
                 "type": "string",
@@ -115,14 +121,16 @@ RESOLVE_SITUATION_SCHEMA = ToolSchema(
                 "description": "Keys to prevent duplicate resolution. Same keys → same resolution_id.",
             },
         },
-        "required": ["frame"],
+        "required": ["action_text"],
     },
     returns={
         "type": "object",
         "description": (
-            "ResolutionEnvelope with verdict, allowed_capability_names, "
-            "allowed_next_actions, execution_plan, capability_name_to_binding, "
-            "prompt_pack, hil_request, and diagnostics."
+            "ResolutionEnvelope with verdict (always 'can_execute'), "
+            "connector {id, label, description}, tools[] with full schemas, "
+            "constitution teaching surface (how_to_sequence, what_to_verify, "
+            "when_to_ask_human), search_confidence, alternative_connectors, "
+            "and diagnostics."
         ),
     },
     actor="back",
@@ -393,7 +401,6 @@ BACK_TOOL_SCHEMAS: list[ToolSchema] = [
     # Read
     RESOLVE_SITUATION_SCHEMA,  # Phase 2 Epic 16 — primary tool
     RECALL_MEMORY_SCHEMA,
-    DISCOVER_CAPABILITIES_SCHEMA,
     # Action
     INVOKE_CAPABILITY_SCHEMA,
     BATCH_INVOKE_CAPABILITIES_SCHEMA,
@@ -410,7 +417,6 @@ BACK_TOOL_SCHEMAS: list[ToolSchema] = [
 _BACK_SIMPLE_LIST: list[str] = [
     "resolve_situation",  # Phase 2 Epic 16 — always available
     "recall_memory",
-    "discover_capabilities",
     "invoke_capability",
     "batch_invoke_capabilities",
     "submit_result",

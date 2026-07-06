@@ -66,6 +66,10 @@ class ConciergeRuntime:
         ledger: Any | None = None,
         ledger_store: Any | None = None,
         dead_letter_consumer: Any | None = None,
+        # M7 BP-07: BackPool runtime wiring
+        back_pool: Any | None = None,
+        back_topic_router: Any | None = None,
+        ready_queue: Any | None = None,
     ) -> None:
         self._bus = bus
         self._router = router
@@ -92,6 +96,9 @@ class ConciergeRuntime:
         self._ledger = ledger
         self._ledger_store = ledger_store
         self._dead_letter_consumer = dead_letter_consumer
+        self._back_pool = back_pool
+        self._back_topic_router = back_topic_router
+        self._ready_queue = ready_queue
         self._consumer_task: asyncio.Task[None] | None = None
         self._front_consumer_task: asyncio.Task[None] | None = None
         self._back_consumer_task: asyncio.Task[None] | None = None
@@ -103,6 +110,9 @@ class ConciergeRuntime:
         # P3.5 install). When None, front_handler runs with no grounding
         # capsule (pre-M4 baseline).
         self._self_model: Any = None
+        # Phase 2.6: live GPS registry snapshot (domains + resource families)
+        # injected into Back's prompt.  Set by Factory via set_registry_hints().
+        self._registry_hints: dict[str, Any] | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -327,6 +337,14 @@ class ConciergeRuntime:
         """Per-session SelfModelHandle, or None when disabled."""
         return self._self_model
 
+    def set_registry_hints(self, hints: dict[str, Any]) -> None:
+        """Set live registry hints (domains + resource_families) from GPS."""
+        if self._started:
+            logger.warning(
+                "set_registry_hints called after start — hints may not reach in-flight consumers"
+            )
+        self._registry_hints = hints
+
     def set_self_model(self, handle: Any) -> None:
         """Attach a SelfModelHandle for stage 9.5 grounding capsules.
 
@@ -412,6 +430,7 @@ class ConciergeRuntime:
                     grounding=self._grounding,
                     self_model=self._self_model,
                     opp_pipeline=getattr(self._fsm, "_opp_pipeline", None),
+                    fsm_controller=self._fsm,  # M7 BP-18/19/20: Active-HIL + Thin Front
                 )
                 await self._tick_experience()
             except asyncio.CancelledError:
@@ -426,6 +445,11 @@ class ConciergeRuntime:
         Back may await ``hil_port.needs_human(...)`` for the full human
         timeout. Running here in its own task means the Front consumer can
         keep delivering HIL relay envelopes to the user during that wait.
+
+        M7 BP-09/BP-09A: When ``enable_back_pool=True``, routes envelopes
+        through BackTopicRouter → ReadyQueue (dependency) → BackPool
+        (capacity admission) → worker asyncio.Task. Falls back to legacy
+        ``route_back_envelope`` when the feature gate is off.
         """
         from k1.concierge.actors.back import route_back_envelope
         from k1.concierge.config import get_config
@@ -434,6 +458,13 @@ class ConciergeRuntime:
         poll_interval = _kcfg.poll_interval_s
         dedup_limit = _kcfg.dedup_cache_size
         seen_back_ids: set[int] = set()
+
+        # M7 BP-09: cache pool-enabled check once (immutable after start())
+        _pool_enabled = (
+            self._back_topic_router is not None
+            and self._back_pool is not None
+            and getattr(self._fsm, "_back_pool_enabled", False)
+        )
 
         while True:
             back_env = self._back_mailbox.receive(timeout_ms=0)
@@ -452,23 +483,24 @@ class ConciergeRuntime:
                 continue
 
             try:
-                await route_back_envelope(
-                    envelope=back_env,
-                    model=self._model,
-                    ss=self._session_state,
-                    bus=self._bus,
-                    tool_dispatcher=self._back_dispatcher,
-                    fsm_state=self._fsm,
-                    hil_port=self._hil_port,
-                    grounding=self._grounding,
-                    temporal=self._temporal,  # ← Phase 2 Epic 15.1
-                    spatial=self._spatial,  # ← Phase 2 Epic 15.1
-                    self_model=self._self_model,  # ← Phase 2 Epic 15.1
-                )
+                if _pool_enabled:
+                    await self._dispatch_via_back_pool(back_env)
+                else:
+                    await route_back_envelope(
+                        envelope=back_env,
+                        model=self._model,
+                        ss=self._session_state,
+                        bus=self._bus,
+                        tool_dispatcher=self._back_dispatcher,
+                        fsm_state=self._fsm,
+                        hil_port=self._hil_port,
+                        grounding=self._grounding,
+                        temporal=self._temporal,
+                        spatial=self._spatial,
+                        self_model=self._self_model,
+                        registry_hints=self._registry_hints,
+                    )
             except SuspensionResolutionNotFound as exc:
-                # M6 E6.2 (C08): back_resume_handler already published
-                # task_failed on the bus before raising. Absorb to keep the
-                # Back consumer alive.
                 logger.warning(
                     "back_consumer: back resume failed -- "
                     "SuspensionResolutionNotFound task_id=%s",
@@ -479,6 +511,174 @@ class ConciergeRuntime:
             except Exception:
                 logger.exception("back_consumer: route_back_envelope raised")
             await asyncio.sleep(0)
+
+    async def _dispatch_via_back_pool(self, back_env: Any) -> None:
+        """BP-09/BP-09A: Route a Back envelope through BackTopicRouter + BackPool.
+
+        1. BackTopicRouter.route() → handler or None (discard)
+        2. Cancel topics → call handler synchronously (no pool worker)
+        3. Async topics → ReadyQueue dependency check → BackPool capacity
+           admission → spawn asyncio.Task worker
+        """
+        from k1.concierge.actors.back_pool import BackPoolExhausted, SessionLimitReached
+        from k1.concierge.actors.shared import parse_envelope_payload
+
+        router = self._back_topic_router
+        pool = self._back_pool
+        ready_q = self._ready_queue
+
+        # Step 1: Route via BackTopicRouter
+        handler = router.route(back_env)
+        if handler is None:
+            # Late envelope (task already released) or unknown topic — discard
+            return
+
+        topic = getattr(back_env, "topic", "") or ""
+
+        # Step 2: Cancel topics bypass the pool (synchronous, immediate)
+        if router.is_cancel_topic(topic):
+            try:
+                await handler(
+                    envelope=back_env,
+                    model=self._model,
+                    ss=self._session_state,
+                    bus=self._bus,
+                    tool_dispatcher=self._back_dispatcher,
+                    fsm_state=self._fsm,
+                    hil_port=self._hil_port,
+                    grounding=self._grounding,
+                    temporal=self._temporal,
+                    spatial=self._spatial,
+                    self_model=self._self_model,
+                    registry_hints=self._registry_hints,
+                )
+            except Exception:
+                logger.exception("back_consumer: cancel handler raised topic=%s", topic)
+            return
+
+        # Step 3: Extract task metadata for admission
+        payload = parse_envelope_payload(back_env)
+        task_id = payload.get("task_id", "") or ""
+        depends_on = payload.get("depends_on", None) or None
+        session_id = None
+        if hasattr(self._fsm, "session_id"):
+            session_id = self._fsm.session_id
+
+        # Step 4: ReadyQueue dependency check (BP-09A)
+        if ready_q is not None and depends_on:
+            status, failed_ids = ready_q.enqueue(back_env, depends_on)
+            if status == "waiting":
+                logger.debug(
+                    "back_consumer: task_id=%s waiting for depends_on=%s",
+                    task_id,
+                    depends_on,
+                )
+                return  # Held in ReadyQueue; will be released on notify_completed
+            elif status in ("dep_failed", "circular"):
+                logger.warning(
+                    "back_consumer: task_id=%s dependency %s status=%s — " "skipping dispatch",
+                    task_id,
+                    depends_on,
+                    status,
+                )
+                # ReadyQueue already handled the failure; do NOT dispatch
+                return
+            # status == 'immediate' or 'unknown_dep': proceed to capacity admission
+
+        # Step 5: BackPool capacity admission (BP-09A)
+        try:
+            cancel_token = None
+            if hasattr(self._fsm, "get_cancel_token"):
+                cancel_token = self._fsm.get_cancel_token(task_id)
+            slot = pool.acquire_worker(
+                task_id,
+                session_id=session_id,
+                cancellation_token=cancel_token,
+            )
+        except BackPoolExhausted:
+            logger.info(
+                "back_consumer: pool exhausted — enqueuing task_id=%s to overflow",
+                task_id,
+            )
+            pool.enqueue_overflow(back_env)
+            return
+        except SessionLimitReached:
+            logger.info(
+                "back_consumer: session limit reached — enqueuing task_id=%s to overflow",
+                task_id,
+            )
+            pool.enqueue_overflow(back_env)
+            return
+
+        # Step 6: Spawn worker asyncio.Task (non-blocking)
+        worker_task = asyncio.create_task(self._run_back_worker(handler, back_env, task_id))
+        slot.bind_task(worker_task)
+        logger.debug(
+            "back_consumer: spawned worker task_id=%s worker_id=%s",
+            task_id,
+            slot.worker_id,
+        )
+
+    async def _run_back_worker(
+        self,
+        handler: Any,
+        back_env: Any,
+        task_id: str,
+    ) -> None:
+        """BP-09A: Execute a Back handler in a pool worker slot.
+
+        Runs the handler, releases the worker on completion/failure, then
+        drains the next eligible envelope from the overflow queue.
+        """
+        reason = "completed"
+        result = None
+        try:
+            result = await handler(
+                envelope=back_env,
+                model=self._model,
+                ss=self._session_state,
+                bus=self._bus,
+                tool_dispatcher=self._back_dispatcher,
+                fsm_state=self._fsm,
+                hil_port=self._hil_port,
+                grounding=self._grounding,
+                temporal=self._temporal,
+                spatial=self._spatial,
+                self_model=self._self_model,
+                registry_hints=self._registry_hints,
+            )
+            # BP-18A: Detect externalized HIL suspend — the handler returned
+            # without blocking. Release the worker slot so another task can
+            # use it while the human thinks.
+            if result is not None and getattr(result, "status", None) == "suspended":
+                reason = "suspended"
+                logger.info(
+                    "back_consumer: worker suspended task_id=%s — " "releasing slot for HIL wait",
+                    task_id,
+                )
+        except asyncio.CancelledError:
+            reason = "cancelled"
+            raise
+        except Exception:
+            reason = "error"
+            logger.exception("back_consumer: worker failed task_id=%s", task_id)
+        finally:
+            # Release the worker slot
+            if self._back_pool is not None:
+                self._back_pool.release_worker(task_id, reason=reason)
+
+            # BP-09A: Drain overflow queue — try to admit the next waiting envelope
+            if self._back_pool is not None:
+                next_env = self._back_pool.dequeue_overflow()
+                if next_env is not None:
+                    logger.debug(
+                        "back_consumer: draining overflow — re-dispatching task_id=%s",
+                        getattr(next_env, "envelope_id", "?"),
+                    )
+                    try:
+                        await self._dispatch_via_back_pool(next_env)
+                    except Exception:
+                        logger.exception("back_consumer: overflow drain dispatch failed")
 
     async def _mailbox_consumer(self) -> None:
         """Legacy single-loop consumer kept for compatibility.

@@ -102,7 +102,7 @@ _CHORES_CONSTITUTION: dict[str, Any] = {
         },
         {
             "operation": "list",
-            "resource_kind": "calendar_event",
+            "resource_kind": "event",
             "reason": (
                 "Check the assignee's calendar for the chore's recurring time "
                 "window. A 'Saturdays 10am' chore may conflict with a specific "
@@ -128,7 +128,7 @@ _CHORES_CONSTITUTION: dict[str, Any] = {
         },
         {
             "check": "time_overlap",
-            "with_resource_kinds": ["calendar_event"],
+            "with_resource_kinds": ["event"],
             "description": (
                 "A chore's recurring slot conflicts with a specific calendar "
                 "event. Calendar events take precedence (specific one-time "
@@ -157,7 +157,7 @@ _CHORES_CONSTITUTION: dict[str, Any] = {
     ],
     "companion_resource_roles": [
         {
-            "resource_kind": "calendar_event",
+            "resource_kind": "event",
             "role": "conflict_source",
             "description": (
                 "Calendar events take precedence over recurring chore slots. "
@@ -261,6 +261,81 @@ _CHORES_CONSTITUTION: dict[str, Any] = {
     "degradation_policy": (
         "If read_after_write verification fails, retry once then submit degraded."
     ),
+    # ── RES-017: Teaching surface fields (2026-06-17) ──────────────
+    "how_to_sequence": [
+        "1. Read current chores + calendar for the assignee's recurring time window.",
+        "2. Create the template if no duplicate. Warn about calendar conflicts "
+        "(advisory). Check workload balance across household members (advisory).",
+        "3. Verify template was created (read_after_write).",
+    ],
+    "what_to_verify": [
+        "After create/update: Read back the template and confirm all fields "
+        "match the submitted values.",
+        "Validate the returned template matches the expected output schema.",
+    ],
+    "when_to_ask_human": [
+        {
+            "trigger": "missing_required_field",
+            "reason": "Chore title is required.",
+            "prompt": "What chore needs to be done?",
+        },
+        {
+            "trigger": "missing_required_field",
+            "reason": "Chore frequency is required.",
+            "prompt": "How often should this chore recur? (daily, weekly, every Saturday, etc.)",
+        },
+        {
+            "trigger": "ambiguous_person",
+            "reason": "Person reference could not be resolved to a single member.",
+            "prompt": "Which person did you mean? I found: {candidate_names}.",
+        },
+        {
+            "trigger": "time_conflict_detected",
+            "reason": "This chore's recurring time conflicts with a calendar event.",
+            "prompt": "This chore's time conflicts with: {conflict_summary}. What should I do?",
+        },
+    ],
+    "companion_connectors": [
+        {
+            "connector_id": "family.calendar",
+            "role": "conflict_source",
+            "description": (
+                "Calendar events take precedence over recurring chore slots. "
+                "Chores are flexible — the child works around specific events."
+            ),
+        },
+        {
+            "connector_id": "family.tasks",
+            "role": "distinct_sibling",
+            "description": (
+                "CRITICAL DISTINCTION: Chores are RECURRING + GAMIFIED (a "
+                "template with a frequency and base_points, e.g. 'vacuum every "
+                "Saturday, earn 5 points'). Tasks are ONE-SHOT ('pick up Riley "
+                "today'). If the user describes something recurring with points "
+                "or allowance — that is a CHORE, not a task."
+            ),
+        },
+    ],
+    "conflict_rules": [
+        (
+            "If duplicate with chores: New template must not duplicate an "
+            "existing template for the same assignee with the same title and "
+            "frequency. Resolution: Tell the user the chore already exists. "
+            "Offer: create anyway or update existing template."
+        ),
+        (
+            "If time_overlap with events: A chore's recurring slot conflicts "
+            "with a specific calendar event. Calendar events take precedence. "
+            "Resolution: Warn the user but do not block — the child can work "
+            "around the event."
+        ),
+        (
+            "If workload_balance with chores: One household member has "
+            "significantly more active chores than others. Resolution: "
+            "Mention the imbalance (advisory only). The parent always "
+            "decides — do NOT block creation."
+        ),
+    ],
 }
 
 _CHORES_POLICY: dict[str, Any] = {
@@ -371,7 +446,7 @@ _CHORES_ONTOLOGY: dict[str, Any] = {
             "role": "primary",
         },
         {
-            "resource_family": "calendar_event",
+            "resource_family": "event",
             "connector_id": "family.chores",
             "weight": 0.5,
             "role": "companion",
@@ -407,7 +482,7 @@ CHORES_DEFINITION = ToolDefinition(
         "display.  Distinct from Tasks (one-shot) and Reminders (time/location "
         "alerts)."
     ),
-    entity_type="chore_occurrence",
+    entity_type="chore",
     views=["board", "list", "leaderboard"],
     activity_profile="chores.v1",
     domain_tags=["chores", "recurrence", "gamification", "reward_tracking"],
@@ -425,10 +500,13 @@ CHORES_DEFINITION = ToolDefinition(
             description="Filter by status: pending | done | skipped.",
         ),
     ],
-    can_reference=["task_item", "calendar_event", "reminder"],
+    can_reference=["task", "event", "reminder"],
     feature_flags=["m15_chores"],
     # ── Phase 1.1 enrichment (Epics 12.1-12.2) ──
     resource_kinds=["chore"],
+    # ── Phase 2.6 taxonomy (Epic 23.5) ──
+    domain_id="family",
+    resource_families=["chore"],
     actor_scope=["parent", "admin", "system"],
     snapshot_types=["daily_snapshot", "weekly_overview"],
     constitution=_CHORES_CONSTITUTION,

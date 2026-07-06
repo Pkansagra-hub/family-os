@@ -1,0 +1,876 @@
+%% ======================================================================================
+%% CONCIERGE FSM — LATEST ARCHITECTURE (2026-06-25)
+%% ======================================================================================
+%% Source: k1/concierge/fsm/*.py (16 files, ~9,876 lines)
+%% Branch: feature/prompt-architecture-refactor
+%% The FSM is the event router. It does NOT drive a loop.
+%% It subscribes to 27+ bus topics, routes events, manages
+%% concurrency between Front and Back, and controls all state
+%% transitions. It is the SINGLE WRITER to SessionState
+%% (via TaskBridge + HistoryWriter + ControlExtension).
+%% ARCHITECTURE PRINCIPLES:
+%%   1. Event-driven: FSM subscribes to bus, transitions on events
+%%   2. Guard-first: Every (state, topic) has a guard action
+%%   3. Pure decision tables: response_final_table, arbiter — zero side effects
+%%   4. Single Writer: FSM alone writes SS.task_state, SS.task_artifacts, SS.history_active
+%%   5. FrontLock serializes Front: no two Front LLM calls concurrently
+
+flowchart TB
+
+%% ======================================================================================
+%% SECTION 1: FSM PACKAGE OVERVIEW
+%% ======================================================================================
+
+subgraph FSM_PACKAGE["🧠 k1/concierge/fsm/ — 16 Files, ~9,876 Lines"]
+  direction TB
+
+  %% ================================================================================
+  %% 1A. CORE CONTROLLER — ConciergeController (~5,800 lines)
+  %% ================================================================================
+
+  subgraph CONTROLLER["ConciergeController — Main Event Router"]
+    direction TB
+
+    CTRL_INIT["__init__()
+      • Creates FrontLock, FSMTurnState, TaskBridge
+      • Creates IdempotencyLedger (500 entries)
+      • Creates ControlExtension, HistoryWriter
+      • Creates CancellationHandler, SuspensionManager
+      • Creates ConversationArbiter, InterruptClassifier
+      • Creates ProactiveWakeHandler, DeadLetterConsumer
+      • Creates WeavePolicy, UserActivityTracker
+      • Creates SectionUpdateIdempotencyStore
+      • Calls _subscribe_all() → 27 topics"]:::controller
+
+    CTRL_SUBSCRIBE["_subscribe_all()
+      27 topics subscribed:
+      • Session: user.input
+      • Response: final_response
+      • Task: dispatch, complete, failed, cancel, suspended, resume
+      • Tool: tool.started, tool.completed
+      • Orchestration: dag.completed
+      • Internal: findings.ready, artifact.created, affect.update
+      • Proactive: proactive.fill, weave.batch
+      • M5 Arbiter: intent_arbitrated, task.modify
+      • M6 HITL: hitl_requested, hitl_resolved, hitl_timed_out, hitl_blocked_red
+      • M7 Pool: backpool_worker_acquired, backpool_worker_released, task.leased
+      • M8 Signals: ui_typing, weave_decided, weave_metrics"]:::controller
+
+    CTRL_LIFECYCLE["Lifecycle Wiring (10 setters)
+      set_session_state()      set_ledger()
+      set_orchestrator()       set_hil_port()
+      set_weave_batcher()      set_back_pool()
+      set_weave_policy()       set_activity_tracker()
+      set_opp_pipeline()"]:::controller
+  end
+
+  %% ================================================================================
+  %% 1B. STATES — 11 FSM states (43 lines)
+  %% ================================================================================
+
+  subgraph STATES["ConciergeState Enum — 11 States"]
+    direction LR
+
+    subgraph CORE_STATES["Core Loop (5)"]
+      S_LISTENING["LISTENING
+        Entry: response.final OR session start
+        Active: None (idle)
+        Exit: user.input → DISPATCHING"]:::state_core
+      S_DISPATCHING["DISPATCHING
+        Entry: user.input + Phase 1 complete
+        Active: Front LLM
+        Exit: task.dispatch → COMPANIONING
+              response.final → LISTENING
+              clarification.detected → CLARIFYING_USER"]:::state_core
+      S_COMPANIONING["COMPANIONING
+        Entry: ack emitted + task dispatched
+        Active: Front (idle), Back working
+        Exit: task.complete → DELIVERING
+              user.input → INTERRUPT_HANDLING
+              tool.started → PROGRESSING"]:::state_core
+      S_PROGRESSING["PROGRESSING
+        Entry: tool.started received
+        Active: Back LLM
+        Exit: tool.completed → COMPANIONING
+              task.complete → DELIVERING"]:::state_core
+      S_DELIVERING["DELIVERING
+        Entry: task.complete received
+        Active: Front LLM
+        Exit: response.final → LISTENING
+              pending_results → WEAVING"]:::state_core
+    end
+
+    subgraph INTERRUPT_STATES["Interrupt / Special (6)"]
+      S_CLARIFY_USER["CLARIFYING_USER
+        Entry: uncertainty ≥ threshold
+        Active: Front LLM
+        Exit: user.input → DISPATCHING"]:::state_interrupt
+      S_CLARIFY_WORKER["CLARIFYING_WORKER
+        Entry: task.suspended OR hil.request
+        Active: Front LLM
+        Exit: task.resume → COMPANIONING
+              task.failed/complete → DELIVERING"]:::state_interrupt
+      S_CANCELLING["CANCELLING
+        Entry: task.cancel emitted by Front
+        Active: Controller
+        Exit: task.failed → DELIVERING"]:::state_interrupt
+      S_INTERRUPT["INTERRUPT_HANDLING
+        Entry: user.input during COMPANIONING/PROGRESSING
+        Active: Front LLM (Arbiter runs first)
+        Exit: interrupt.routed → DISPATCHING"]:::state_interrupt
+      S_PROACTIVE["PROACTIVE_WAKE
+        Entry: task.complete while LISTENING
+        Active: Controller
+        Exit: proactive.routed → DELIVERING"]:::state_interrupt
+      S_WEAVING["WEAVING
+        Entry: pending_results non-empty after final
+        Active: Front LLM
+        Exit: response.final → LISTENING
+              pending_results → WEAVING (re-weave)"]:::state_interrupt
+    end
+  end
+
+  %% ================================================================================
+  %% 1C. TRANSITION TABLE — Legal transitions + Full guard matrix (~633 lines)
+  %% ================================================================================
+
+  subgraph TRANSITIONS["Transition Table + Guard Matrix"]
+    direction TB
+
+    GUARD_ENUM["GuardAction Enum (5)
+      TRANSITION  — validate + change state
+      PASSTHROUGH — forward without state change
+      OBSERVE     — log/history only, no routing
+      QUEUE       — queue in FrontLock or pending_results
+      DEAD_LETTER — reject as invalid"]:::guard
+
+    TRANS_TABLE["TRANSITION_TABLE
+      11 states × ~5-7 triggers each = ~60 legal transitions
+      Maps: (from_state, trigger) → to_state | None
+
+      Key transitions:
+      LISTENING + user.input              → DISPATCHING
+      LISTENING + task.complete           → PROACTIVE_WAKE
+      DISPATCHING + task.dispatch         → COMPANIONING
+      DISPATCHING + response.final        → LISTENING
+      DISPATCHING + task.cancel           → CANCELLING
+      DISPATCHING + clarification.detected → CLARIFYING_USER
+      COMPANIONING + task.complete        → DELIVERING
+      COMPANIONING + user.input           → INTERRUPT_HANDLING
+      COMPANIONING + tool.started         → PROGRESSING
+      DELIVERING + response.final         → LISTENING
+      DELIVERING + pending_results        → WEAVING
+      WEAVING + response.final            → LISTENING
+      CLARIFYING_WORKER + task.resume     → COMPANIONING
+      CANCELLING + task.failed            → DELIVERING"]:::transition
+
+    GUARD_TABLE["FULL_GUARD_TABLE — 11 states × 27 topics = ~297 cells
+      Every (state, topic) pair has an explicit guard action.
+      Derived from actual controller.py handler code.
+
+      Example rows:
+      LISTENING + user.input         → TRANSITION
+      LISTENING + final_response     → DEAD_LETTER (spurious)
+      DISPATCHING + user.input       → DEAD_LETTER (re-entrant)
+      DISPATCHING + task.complete    → QUEUE (pending_results)
+      COMPANIONING + task.complete   → TRANSITION
+      COMPANIONING + findings.ready  → PASSTHROUGH
+      COMPANIONING + artifact.created → OBSERVE
+      WEAVING + task.complete        → QUEUE (weave pending)"]:::guard_table
+
+    SYNTHETIC_TRIGGERS["Synthetic Triggers (6 internal)
+      clarification.detected     — Phase 1 uncertainty → CLARIFYING_USER
+      pending_results.non_empty  — Weave drain trigger
+      interrupt.routed           — Arbiter completed → DISPATCHING
+      proactive.routed           — ProactiveWakeHandler → DELIVERING
+      same_turn.task.complete    — Same-turn completion → LISTENING
+      deferred_hitl.surface      — Deferred HITL → CLARIFYING_WORKER"]:::trigger
+  end
+
+  %% ================================================================================
+  %% 1D. FRONT LOCK — Concurrency Gate (156 lines)
+  %% ================================================================================
+
+  subgraph FRONTLOCK["FrontLock — Concurrency Gate"]
+    direction TB
+
+    FL_STATE["State
+      busy: bool = False
+      event_queue: deque[tuple[int, Envelope]]
+      max_queue_depth: int (configurable, default 8)"]:::frontlock
+
+    FL_API["Core API
+      try_deliver(envelope) → bool
+        • If !busy: set busy=True, return True (delivered)
+        • If busy: enqueue at priority position, return False (queued)
+        • Backpressure: if queue > max_depth, evict lowest-priority
+
+      release() → Envelope | None
+        • Pop next queued event at head, or set busy=False
+        • Called after Front LLM finishes
+
+      drain_loop(deliver_fn) → async drain entire queue"]:::frontlock
+
+    FL_PRIORITY["Priority Levels (lower = higher)
+      P1 URGENT      (1): user.input          — user is ALWAYS first
+      P2 INTERACTIVE (2): hil.request          — worker blocked, needs answer
+                          task.suspended
+      P3 RESULT      (3): task.complete        — result ready
+                          weave.batch
+      P4 ERROR       (4): task.failed          — error notification
+      P5 INFO        (5): findings.ready       — informational
+                          proactive.fill"]:::frontlock_priority
+  end
+
+  %% ================================================================================
+  %% 1E. TURN STATE — Ephemeral Coordination (~200 lines)
+  %% ================================================================================
+
+  subgraph TURNSTATE["FSMTurnState — Ephemeral (NOT in SS)"]
+    direction TB
+
+    TS_QUEUES["Queues
+      pending_results: deque[dict]     — queued task.complete payloads
+      deferred_results: list[dict]      — M8 DEFER policy hold
+      max_depth: 16
+      max_deferred_depth: 16
+      ttl_seconds: 300 (5 min)"]:::turnstate
+
+    TS_API["API
+      enqueue_result(task_id, result, envelope, urgency)
+        → Overflow: evict oldest if at max_depth
+        → M9: emit WeaveCandidateArrived to ledger
+
+      drain_results() → (valid[], expired[])
+        → Filter by TTL, clear deque
+        → M9: emit WeaveEmitted to ledger
+
+      defer_result()           → move to deferred (M8)
+      drain_deferred()         → drain deferred queue
+      mark_deferred()          → move all pending → deferred
+      discard_task(task_id)    → remove from all queues
+
+      Properties: has_pending_results, has_deferred_results, depth"]:::turnstate
+
+    TS_LEDGER["M9 E9.4.4: Ledger Integration
+      set_ledger(writer) → write-before-mutate
+      Enqueue → WeaveCandidateArrived event
+      Drain   → WeaveEmitted event"]:::turnstate_ledger
+  end
+
+  %% ================================================================================
+  %% 1F. ARBITER — Conversation Arbiter (~1,050 lines)
+  %% ================================================================================
+
+  subgraph ARBITER["ConversationArbiter — Deterministic Routing"]
+    direction TB
+
+    ARB_INPUT["ArbiterInput (minimal signal)
+      safety_band: str = 'GREEN'
+      intent_classification: str = 'general'
+      domain_context: str = 'general'
+      primary_emotion: str = 'neutral'
+      emotion_confidence: float = 0.5
+      entities: list[dict] = []"]:::arbiter
+
+    ARB_INFLIGHT["InflightContext (read-only snapshot)
+      tasks: list[InflightTask]      — all inflight
+      pending_results: int            — queue depth
+      cancelled_task_ids: set[str]    — cancel dedup
+      fsm_state: str                  — current state
+      current_turn: int
+      active_device_id: str | None
+      pool_active_workers: int        — M7 capacity
+      pool_size: int
+      pool_available: int
+      lease_deadlines: dict[str, int]"]:::arbiter
+
+    ARB_DECISIONS["ArbiterDecision Enum (4)
+      CANCEL           — kill inflight task(s)
+      MODIFY_INFLIGHT  — update inflight task params
+      PARALLEL_NEW     — run new task alongside
+      DEFER            — queue for later"]:::arbiter
+
+    ARB_TABLE["Decision Table (7 priorities, first match wins)
+      1. RED safety band                     → CANCEL all
+      2. Cancel intent + inflight            → CANCEL (targeted or all)
+      3. Cancel intent + no inflight         → PARALLEL_NEW
+      4. Domain+entity overlap ≥ threshold   → MODIFY_INFLIGHT
+      5. Defer pattern match + inflight      → DEFER
+      6. Inflight present                    → PARALLEL_NEW
+      7. No inflight                         → PARALLEL_NEW"]:::arbiter_table
+
+    ARB_SCORING["Overlap Scoring (OPP-2 Recency Decay)
+      domain_overlap()     → [0.0, 1.0] with recency decay
+      entity_overlap()     → Jaccard coefficient with recency decay
+      is_short_input()     → <3 words = 50% overlap penalty
+      _apply_recency_decay() → raw * (1-decay)^age, decay=0.15"]:::arbiter
+
+    ARB_MULTIDEVICE["Multi-Device Conflict (M5 E5.4.2-3)
+      resolve_device_conflict()        → deterministic precedence
+      detect_high_impact_conflict()    → contradictory actions?
+      build_conflict_clarification()   → system clarification prompt"]:::arbiter
+  end
+
+  %% ================================================================================
+  %% 1G. RESPONSE FINAL TABLE — Pure Decision Function (~290 lines)
+  %% ================================================================================
+
+  subgraph RESPONSE_FINAL["ResponseFinalTable — 13-Branch Pure Function"]
+    direction TB
+
+    RF_ACTIONS["ResponseFinalAction Enum (6)
+      TRANSITION_LISTENING
+      TRANSITION_WEAVING
+      TRANSITION_COMPANIONING
+      STAY
+      IGNORE
+      DEAD_LETTER"]:::response_final
+
+    RF_DECISION["ResponseFinalDecision (immutable, frozen, slots)
+      action: ResponseFinalAction
+      target_state: ConciergeState | None
+      emit_turn_completed: bool
+      drain_front_lock: bool
+      schedule_weave: bool
+      release_front_lock: bool
+      entry_type: str  — 'final' | 'weave' | 'proactive' | 'proactive_fallback'"]:::response_final
+
+    RF_TABLE["13-Branch Truth Table
+      #1  DISPATCHING    + has_pending          → weave flush        → WEAVING
+      #2  DISPATCHING    + has_active_tasks      → wait for tasks     → COMPANIONING
+      #3  DISPATCHING    + no pending, no active → turn done          → LISTENING
+      #4  DELIVERING     + has_pending           → weave transition   → WEAVING
+      #5  WEAVING        + has_pending, no flush → re-weave           → WEAVING
+      #6  WEAVING        + has_pending, flush    → stay (flush runs)  → WEAVING
+      #7  DELIVERING     + no pending            → turn done          → LISTENING
+      #8  WEAVING        + no pending            → turn done          → LISTENING
+      #9  COMPANIONING   + has_active_tasks      → stay, wait         → COMPANIONING
+      #10 COMPANIONING   + no active             → race-safe exit     → LISTENING
+      #11 CLARIFY_WORKER + pending_hitl/active   → wait for answer    → CLARIFYING_WORKER
+      #12 CLARIFY_WORKER + no active             → turn done          → LISTENING
+      #13 LISTENING      + spurious final        → ignore             → LISTENING"]:::response_final_table
+  end
+
+  %% ================================================================================
+  %% 1H. TASK BRIDGE — SS Task Lifecycle (~680 lines)
+  %% ================================================================================
+
+  subgraph TASK_BRIDGE["TaskBridge — Single Writer to SS.task_state"]
+    direction TB
+
+    TB_LIFECYCLE["Task Lifecycle States
+      DISPATCHED → ACTIVE → COMPLETED → presented → pruned
+      DISPATCHED → ACTIVE → SUSPENDED → ACTIVE → COMPLETED  (HITL)
+      DISPATCHED → CANCELLED
+      Any        → FAILED"]:::task_bridge
+
+    TB_API["API
+      dispatch_task()          → DISPATCHED
+      activate_task()          → ACTIVE
+      suspend_task()           → SUSPENDED + store HIL data
+      resume_task()            → ACTIVE
+      complete_task()          → COMPLETED
+      fail_task()              → FAILED
+      cancel_task()            → CANCELLED
+      set_pending_hil_data()   → crash recovery
+      mark_presented()         → results shown to user
+      add_artifact()           → store durable output
+      rebind()                 → M4 E4.1.1: rebind to real SS
+      rebuild_from_projection() → M9 E9.4.1: ledger-based restore
+      prune()                  → evict completed + old artifacts"]:::task_bridge
+  end
+
+  %% ================================================================================
+  %% 1I. HISTORY WRITER — Stateless (~260 lines)
+  %% ================================================================================
+
+  subgraph HISTORY["HistoryWriter — Sole Writer to SS.history_active"]
+    direction TB
+
+    HW_ENTRY["TypedHistoryEntry (immutable)
+      turn_number: int
+      entry_type: str   — 'user' | 'final' | 'weave' | 'clarification' |
+                           'hitl_request' | 'hitl_response' | 'error' |
+                           'proactive' | 'system'
+      role: str         — 'user' | 'assistant'
+      text: str
+      metadata: dict"]:::history
+
+    HW_WRITE["write(entry_type, text, role, metadata, envelope)
+      → Creates TypedHistoryEntry
+      → Appends to SS.history_active
+      → Sliding window: max 20 entries"]:::history
+
+    HW_CONVERTERS["Converters
+      history_to_front_messages()  → last 20, type-prefixed for LLM
+      history_to_back_context()    → last 5, filtered to user/final/hitl_response
+
+      USER_ENTRY_TYPES      = {'user', 'hitl_response'}
+      ASSISTANT_ENTRY_TYPES = {'final', 'weave', 'clarification',
+                               'hitl_request', 'error', 'proactive'}
+      BACK_RELEVANT_TYPES   = {'user', 'final', 'hitl_response'}"]:::history
+  end
+
+  %% ================================================================================
+  %% 1J. REMAINING MODULES
+  %% ================================================================================
+
+  subgraph OTHER_MODULES["Supporting Modules"]
+    direction TB
+
+    IDEMPOTENCY["IdempotencyLedger (~80 lines)
+      LRU-based (OrderedDict), max 500 entries
+      check_and_mark(envelope_id) → bool
+      contains(envelope_id) → bool
+      reset() → clear all"]:::other
+
+    CONTROL_EXT["ConciergeControlExtension (~170 lines)
+      Wraps SS.control with FSM fields
+      set_fsm_state()     — called on every transition
+      add_active_task()   — register dispatched task
+      remove_active_task() — completed/failed/cancelled
+      bind_control_section() → M4 E4.1.2
+      snapshot() → dict for obs"]:::other
+
+    INTERRUPT["InterruptClassifier + ProactiveWakeHandler (~160 lines)
+      classify(text) → 'cancel' | 'chat'
+      should_wake() → bool (FSM == LISTENING?)
+      record_wake() → increment wake count"]:::other
+
+    DEAD_LETTER["DeadLetterPayload + DeadLetterConsumer (~240 lines)
+      Payload: original_topic, envelope_id, reason,
+               fsm_state_at_rejection, turn_number, task_id
+      Reasons: invalid_transition, re_entrant_drop,
+               cancel_incompatible, overflow, expired,
+               weave_overflow
+      Consumer: subscribe to dead_letter topic, record metrics,
+                snapshot counts by reason/state/topic"]:::other
+
+    ERRORS["Errors (~40 lines)
+      IllegalTransitionError  — logged, does NOT crash
+      FrontLockOverflowError  — backpressure signal"]:::other
+  end
+end
+
+%% ======================================================================================
+%% SECTION 2: DATA FLOWS — Event → Guard → Handler → Transition
+%% ======================================================================================
+
+subgraph FLOWS["Event Processing Flow"]
+  direction TB
+
+  BUS_EVENT["Bus Event Arrives
+    Envelope { topic, payload, envelope_id, parent_id,
+               cognitive_trace_id, session_id, request_id }"]:::flow
+
+  IDEMPOTENCY_CHECK["Idempotency Check
+    check_and_mark(envelope_id)
+    Duplicate → DROP (already processed)"]:::flow
+
+  GUARD_LOOKUP["Guard Lookup
+    FULL_GUARD_TABLE[fsm_state][topic] → (GuardAction, target_state | None)
+
+    TRANSITION  → validate + change state
+    PASSTHROUGH → forward to handler, no state change
+    OBSERVE     → log + history only
+    QUEUE       → FrontLock.enqueue or FSMTurnState.enqueue_result
+    DEAD_LETTER → reject + emit dead_letter event"]:::flow
+
+  HANDLER_DISPATCH["Handler Dispatch
+    _on_user_input()        → Classification + Front routing
+    _on_task_dispatch()     → Task registration + Orchestrator routing
+    _on_task_complete()     → 12-step canonical ordering (M8 adaptive weave)
+    _on_task_failed()       → Failure handling + cancel dedup
+    _on_task_cancel()       → Cancel from Front
+    _on_task_suspended()    → HITL entry (legacy/crash-recovery)
+    _on_task_resume()       → HITL exit (legacy/crash-recovery)
+    _on_hil_request()       → Unified HIL request (E4)
+    _on_dag_completed()     → Normalize orchestrator DAG events
+    _handle_interrupt()     → Arbiter-based interrupt routing
+    _route_user_turn()      → Arbiter-based normal turn routing
+    _on_response_final()    → decide_response_final() → 13 branches
+    _on_tool_started()      → → PROGRESSING
+    _on_tool_completed()    → → COMPANIONING"]:::flow
+
+  STATE_TRANSITION["State Transition
+    _transition(new_state)
+      1. Validate via is_legal()
+      2. Set self._state
+      3. ControlExtension.set_fsm_state()
+      4. Emit metric: fsm_transition_count{from, to}
+      5. On DELIVERING: tick_experience()"]:::flow
+
+  POST_HANDLER["Post-Handler Side Effects
+    • FrontLock.drain_loop() if Front became free
+    • HistoryWriter.write() for user/assistant entries
+    • TaskBridge lifecycle updates
+    • Ledger append for canonical events
+    • Bus emit for response/turn events
+    • Write Elision Gate for SS writes"]:::flow
+end
+
+%% ======================================================================================
+%% SECTION 3: ADAPTIVE WEAVE DELIVERY (M8)
+%% ======================================================================================
+
+subgraph WEAVE_ADAPTIVE["M8 Adaptive Weave Delivery"]
+  direction TB
+
+  WEAVE_SIGNAL["WeaveSignal
+    task_id, safety_band, domain, emotional_urgency,
+    user_present, user_typing, active_in_flight,
+    pending_depth, deferred_depth, time_since_last_delivery"]:::weave
+
+  WEAVE_POLICY["WeavePolicy Decision
+    WeaveDecisionResult { decision, reasoning, flush_window_ms }
+
+    Decisions:
+    IMMEDIATE  → deliver now, 0ms delay
+    BATCH      → schedule flush, dynamic window
+    DEFER      → hold until next user input
+    DIGEST     → accumulate + compress, schedule later
+    SUPPRESS   → discard, audit only
+
+    Emotional gate: CRISIS/RED → SUPPRESS all non-safety"]:::weave
+
+  WEAVE_FLOW["Flow
+    task.complete arrives
+      → WeavePolicy.evaluate(signal)
+      → IMMEDIATE: _deliver_weave_immediate() → Front now
+      → BATCH:     _schedule_weave_flush_adaptive() → dynamic window
+      → DEFER:     _mark_results_deferred() → held for next input
+      → DIGEST:    _schedule_digest_flush() → accumulate + compress
+      → SUPPRESS:  _suppress_result() → audit only"]:::weave
+
+  WEAVE_BATCHER["WeaveBatcher Integration
+    schedule_flush(window_ms)
+      → asyncio.create_task(flush_after(window_ms))
+      → On flush: drain_results() → Front re-invoke
+      → Reset on new arrival in window
+      → Max batch: 8 results/flush"]:::weave
+
+  WEAVE_FALLBACK["WeaveFallbackHandler
+    On flush failure: serialize results → WeaveBatch snapshot
+    On Front LLM failure: canned weave response
+    Metrics: batch_size, window_actual_ms, overflow_count"]:::weave
+end
+
+%% ======================================================================================
+%% SECTION 4: CONTROLLER HANDLER FLOWS (Key Methods)
+%% ======================================================================================
+
+subgraph HANDLER_FLOWS["Key Handler Flow Details"]
+  direction TB
+
+  subgraph USER_INPUT_FLOW["_on_user_input() Flow"]
+    direction TB
+    UI1["1. Parse payload → user text"]:::handler
+    UI2["2. If LISTENING: _route_user_turn()
+          → Arbiter.evaluate(ArbiterInput, InflightContext)
+          → CANCEL: emit task.cancel
+          → MODIFY: emit task.modify
+          → DEFER: queue for later
+          → PARALLEL_NEW: proceed to classification"]:::handler
+    UI3["3. If COMPANIONING/PROGRESSING: _handle_interrupt()
+          → Arbiter.evaluate()
+          → CANCEL: cancel inflight, re-classify
+          → PARALLEL_NEW: abort old, start new
+          → DEFER: queue input"]:::handler
+    UI4["4. Phase 1 Classification (UltraBERT)
+          → Intent, Safety, Domain, Emotion, Entities
+          → Write Elision Gate → SS writes
+          → Complexity tier determination"]:::handler
+    UI5["5. FrontLock.try_deliver(envelope)
+          → If delivered: Front processes immediately
+          → If queued: Front processes after current work"]:::handler
+    UI6["6. Emit intent_arbitrated event (M5 obs)
+          → _transition(DISPATCHING)"]:::handler
+  end
+
+  subgraph TASK_COMPLETE_FLOW["_on_task_complete() Flow — 12 Steps"]
+    direction TB
+    TC1["1. Parse payload → task_id, result, artifacts"]:::handler
+    TC2["2. CancellationHandler: dedup against cancelled_tasks"]:::handler
+    TC3["3. TaskBridge.complete_task(task_id)"]:::handler
+    TC4["4. TaskBridge.add_artifact() if present"]:::handler
+    TC5["5. ControlExtension.remove_active_task(task_id)"]:::handler
+    TC6["6. HistoryWriter.write('system', ...)"]:::handler
+    TC7["7. WeavePolicy.evaluate(WeaveSignal) → M8 adaptive"]:::handler
+    TC8["8. If IMMEDIATE/BATCH: FrontLock.try_deliver() OR
+              enqueue to pending_results"]:::handler
+    TC9["9. If DEFER: FSMTurnState.defer_result()"]:::handler
+    TC10["10. If DIGEST: FSMTurnState.enqueue + schedule digest"]:::handler
+    TC11["11. If SUPPRESS: audit log only"]:::handler
+    TC12["12. _transition() based on guard table
+               + same_turn check for TRIGGER_SAME_TURN_COMPLETE"]:::handler
+  end
+
+  subgraph HITL_FLOW["HITL Flow (Unified E4)"]
+    direction TB
+    HIL1["1. Back: submit_result(needs_human)"]:::handler
+    HIL2["2. Bus: task.suspended.v1 OR hil.request.v1"]:::handler
+    HIL3["3. FSM: _transition(CLARIFYING_WORKER)"]:::handler
+    HIL4["4. TaskBridge.suspend_task() + set_pending_hil_data()"]:::handler
+    HIL5["5. FrontLock.try_deliver() → Front translates to user"]:::handler
+    HIL6["6. User responds → task.resume.v1"]:::handler
+    HIL7["7. FSM: _transition(COMPANIONING)"]:::handler
+    HIL8["8. TaskBridge.resume_task() → Back continues ReAct"]:::handler
+    HIL9["GAP-HIL-006: CLARIFYING_WORKER stays open until
+          user answers, even if Back task exits early"]:::handler_gap
+  end
+end
+
+%% ======================================================================================
+%% SECTION 5: WRITE DISCIPLINE — Single Writer Invariant
+%% ======================================================================================
+
+subgraph WRITE_DISCIPLINE["Single Writer Invariant (ADR-0017)"]
+  direction TB
+
+  WD_CONCIERGE["Concierge (FSM) is the ONLY writer to:
+    • SS.task_state      → TaskBridge
+    • SS.task_artifacts  → TaskBridge
+    • SS.history_active  → HistoryWriter
+    • SS.control (FSM fields) → ControlExtension"]:::write_discipline
+
+  WD_FRONT["Front LLM writes (via cognitive tools, through MutationGuard):
+    • SS.beliefs_active
+    • SS.scoreboard
+    • SS.affective_now
+    • SS.clarifications
+    • SS.narrative_active"]:::write_front
+
+  WD_BACK["Back LLM NEVER writes SS directly.
+    Back emits deltas → bus → DeltaAggregator → FSM.apply_deltas()
+    → FSM writes SS.task_state, SS.task_artifacts"]:::write_back
+
+  WD_ELISION["Write Elision Gate
+    Per-section signal significance scoring
+    Low-signal turns: ELIDE writes, carry forward
+    Safety band: ALWAYS written (CONC-05)
+    Backchannels (ok, yeah, ummm): 1 write (safety), 5 elisions"]:::write_elision
+end
+
+%% ======================================================================================
+%% SECTION 6: EXTERNAL DEPENDENCIES
+%% ======================================================================================
+
+subgraph EXTERNAL_DEPS["External Dependencies"]
+  direction TB
+
+  DEP_BUS["k1.bus
+    Envelope, Priority, IBus, IMailboxRouter
+    ACTOR_FRONT='front_half', ACTOR_BACK='back_half'"]:::dep
+
+  DEP_PROTOCOLS["k1.concierge.protocols
+    CancellationHandler, CancellationToken
+    SuspensionManager
+    WeavePolicy, WeaveBatcher, WeaveFallbackHandler
+    UserActivityTracker
+    HILStateRecord, HILSubTask, scan_for_recovery
+    build_resume_context"]:::dep
+
+  DEP_ORCHESTRATOR["k1.concierge.orchestrator
+    route_task_sync()  → LOW direct Back / MED-HIGH envelope"]:::dep
+
+  DEP_SECTION_UPDATE["k1.concierge.section_update
+    apply_section_update_plan()
+    SectionUpdateIdempotencyStore
+    build_section_update_input()
+    classify_section_update_blocking()
+    PlanCompiler, SectionUpdateInput
+    Overlay: attach_overlay_to_task_payload()"]:::dep
+
+  DEP_TASK["k1.concierge.task
+    TaskDispatch, TaskIntent, ComplexityTier"]:::dep
+
+  DEP_ACKING["k1.concierge.acking
+    WriteElisionGate"]:::dep
+
+  DEP_K1_HIL["k1.hil
+    IHILPort (TYPE_CHECKING only)
+    SuspensionManager (relocated M5)"]:::dep
+
+  DEP_SESSIONSTATE["k1.sessionstate
+    PrivacyBand, SessionStateManager (public_types)"]:::dep
+
+  DEP_EVENTS["k1.concierge.events
+    WeaveCandidateArrived, WeaveEmitted (ledger events)"]:::dep
+end
+
+%% ======================================================================================
+%% SECTION 7: STRENGTHS & WEAKNESSES (Analysis)
+%% ======================================================================================
+
+subgraph ANALYSIS["Strengths & Weaknesses Analysis"]
+  direction TB
+
+  subgraph STRENGTHS["STRENGTHS ✅"]
+    S1["1. Guard-First Architecture
+       Every (state, topic) pair has explicit guard action.
+       297 cells in FULL_GUARD_TABLE, derived from actual code.
+       No implicit/fallthrough behavior."]:::strength
+    S2["2. Pure Decision Tables
+       response_final_table: 13 branches, zero side effects.
+       decide_response_final() is a pure function.
+       Easy to test exhaustively, impossible to have hidden state bugs."]:::strength
+    S3["3. Deterministic Arbiter
+       7-priority decision table, no LLM dependency.
+       Same inputs = same outputs. Fast (<1ms).
+       Multi-device conflict resolution built in."]:::strength
+    S4["4. Single Writer Invariant
+       Clear ownership: FSM owns 4 SS sections.
+       Front owns 5 cognitive sections.
+       Back NEVER writes SS directly — deltas only."]:::strength
+    S5["5. FrontLock Priority Queue
+       5 priority levels prevent starvation.
+       HIL requests jump ahead of bulk results.
+       Backpressure at max depth with eviction."]:::strength
+    S6["6. TTL + Overflow on pending_results
+       300s TTL prevents stale result delivery.
+       Max depth 16 prevents memory bloat.
+       Expired/evicted → dead-letter, not silent drop."]:::strength
+    S7["7. M8 Adaptive Weave
+       5 delivery decisions (IMMEDIATE/BATCH/DEFER/DIGEST/SUPPRESS).
+       Emotional gate prevents inappropriate delivery.
+       Dynamic batch windows adapt to user activity."]:::strength
+    S8["8. Idempotency
+       LRU-based dedup (500 entries) prevents double-processing.
+       Essential for at-least-once bus delivery."]:::strength
+  end
+
+  subgraph WEAKNESSES["WEAKNESSES ⚠️"]
+    W1["1. Controller Monolith (~5,800 lines)
+       Single file with 19+ handler methods.
+       Hard to navigate, harder to test in isolation.
+       Risk: change in one handler breaks another."]:::weakness
+    W2["2. Handler Extraction Incomplete
+       Some handlers externalized (response_final_table, arbiter, interrupt_handler).
+       Others still inline in controller.py (_on_task_dispatch, _on_task_complete
+       12-step flow, _on_hil_request, etc.).
+       Inconsistent extraction pattern."]:::weakness
+    W3["3. FULL_GUARD_TABLE Accuracy Risk
+       297 cells declared as 'derived from actual handler code'.
+       But the derivation is manual — if handler logic changes
+       and table isn't updated, guard says one thing, code does another.
+       No automated verification that guards match handlers."]:::weakness
+    W4["4. Synthetic Triggers Are Invisible on Bus
+       Six internal triggers (clarification.detected, interrupt.routed, etc.)
+       never appear as bus topics. They're internal state mutations.
+       Can't observe them from outside the FSM → hard to debug."]:::weakness
+    W5["5. FrontLock release() Race
+       release() returns next queued envelope OR sets busy=False.
+       But between release() and the next try_deliver(), another event
+       could arrive on the bus. The drain_loop handles this but
+       the synchronous path has a TOCTOU window."]:::weakness
+    W6["6. TaskBridge SS Dependency at Init
+       TaskBridge is created before SS is wired (set_session_state).
+       rebind() and rebuild_from_projection() handle late binding,
+       but any method called before wiring will crash.
+       No pre-wiring guard/assertion on public methods."]:::weakness
+    W7["7. HistoryWriter Sliding Window is Silent
+       Max 20 entries in history_active. No compression before eviction.
+       Old entries just disappear. No summary/compaction step.
+       OPP-6 EpisodicCompressor exists but isn't called from FSM."]:::weakness
+    W8["8. No FSM Transition Timeout
+       FSM can get stuck in any state indefinitely.
+       No watchdog that forces transition after N seconds.
+       E.g., COMPANIONING waiting for Back that crashed."]:::weakness
+    W9["9. WeavePolicy Emotional Gate is Binary
+       CRISIS/RED → SUPPRESS_ALL_NON_SAFETY.
+       But what about AMBER results? They're delivered normally.
+       The emotional gating is coarse — only 2 effective bands
+       (normal delivery vs. suppress all) despite 5 affect bands."]:::weakness
+    W10["10. DeadLetterConsumer is Passive
+        Records metrics, never retries, never alerts.
+        Dead letters are fire-and-forget. If a critical task
+        gets dead-lettered, nobody knows until user complains."]:::weakness
+  end
+
+  subgraph GAPS["GAPS 🔴"]
+    G1["GAP-1: No Automated Guard/Handler Consistency Check
+       FULL_GUARD_TABLE claims to match handler code but
+       there's no test that verifies every handler's guard action
+       matches the table. A handler returning without state change
+       when the table says TRANSITION = silent corruption."]:::gap
+    G2["GAP-2: No FSM State History / Audit Trail
+       Transitions are logged but not stored in a queryable ledger.
+       Can't answer 'what was the state 3 turns ago?'
+       The ledger tracks events, not FSM state transitions."]:::gap
+    G3["GAP-3: FrontLock Queue Not Observable
+       queue_depth is a property but not exposed as a metric.
+       Can't monitor if FrontLock is backing up in production.
+       Backpressure events are logged but not counted."]:::gap
+    G4["GAP-4: Section Update Pipeline Is Loosely Coupled
+       Section update (15 files) is wired into the controller via
+       overlay/plan_compiler imports but the FSM doesn't have
+       explicit states for section update in-progress.
+       It runs as a side effect during handlers."]:::gap
+    G5["GAP-5: No Crash Recovery Test for FSM Mid-Transition
+       Crash recovery exists (ledger/recovery.py) but what if the
+       crash happens mid-_transition() — after state change but
+       before ControlExtension update? The reconstructed state
+       from ledger projection may not match actual SS."]:::gap
+  end
+end
+
+%% ======================================================================================
+%% SECTION 8: FILE LINE COUNTS
+%% ======================================================================================
+
+subgraph LINE_COUNTS["File Sizes"]
+  LC1["controller.py           ~5,800 lines  ████████████████████████████"]:::size
+  LC2["arbiter.py              ~1,050 lines  █████"]:::size
+  LC3["task_bridge.py            ~680 lines  ███"]:::size
+  LC4["transition_table.py       ~633 lines  ███"]:::size
+  LC5["response_final_table.py   ~290 lines  █"]:::size
+  LC6["history_writer.py         ~260 lines  █"]:::size
+  LC7["turn_state.py             ~200 lines  █"]:::size
+  LC8["control_extension.py      ~170 lines  █"]:::size
+  LC9["dead_letter_consumer.py   ~160 lines  █"]:::size
+  LC10["interrupt_handler.py      ~160 lines  █"]:::size
+  LC11["front_lock.py             ~156 lines  █"]:::size
+  LC12["dead_letter.py             ~80 lines  ░"]:::size
+  LC13["idempotency.py             ~80 lines  ░"]:::size
+  LC14["__init__.py                ~74 lines  ░"]:::size
+  LC15["states.py                  ~43 lines  ░"]:::size
+  LC16["errors.py                  ~40 lines  ░"]:::size
+  LC_TOTAL["TOTAL                 ~9,876 lines"]:::size_total
+end
+
+%% ======================================================================================
+%% STYLES
+%% ======================================================================================
+classDef controller fill:#1a1a2e,stroke:#16213e,color:#e94560
+classDef state_core fill:#0f3460,stroke:#16213e,color:#53d8fb
+classDef state_interrupt fill:#533483,stroke:#16213e,color:#e0aaff
+classDef guard fill:#1b4332,stroke:#2d6a4f,color:#95d5b2
+classDef transition fill:#2d6a4f,stroke:#40916c,color:#d8f3dc
+classDef guard_table fill:#2d6a4f,stroke:#40916c,color:#d8f3dc
+classDef trigger fill:#7f4f24,stroke:#b08968,color:#ffd166
+classDef frontlock fill:#1b263b,stroke:#415a77,color:#e0e1dd
+classDef frontlock_priority fill:#1b263b,stroke:#778da9,color:#e0e1dd
+classDef turnstate fill:#2c3e50,stroke:#34495e,color:#aed6f1
+classDef turnstate_ledger fill:#2c3e50,stroke:#5dade2,color:#aed6f1
+classDef arbiter fill:#4a235a,stroke:#7d3c98,color:#d7bde2
+classDef arbiter_table fill:#4a235a,stroke:#9b59b6,color:#f5b7b1
+classDef response_final fill:#1a5276,stroke:#2980b9,color:#aed6f1
+classDef response_final_table fill:#1a5276,stroke:#3498db,color:#d4e6f1
+classDef task_bridge fill:#641e16,stroke:#922b21,color:#f5b7b1
+classDef history fill:#0e6251,stroke:#117a65,color:#a3e4d7
+classDef other fill:#424949,stroke:#707b7c,color:#d5dbdb
+classDef flow fill:#17202a,stroke:#2c3e50,color:#abb2b9
+classDef weave fill:#1b4f72,stroke:#2874a6,color:#d4e6f1
+classDef handler fill:#1e3a5f,stroke:#2e86c1,color:#d6eaf8
+classDef handler_gap fill:#78281f,stroke:#c0392b,color:#f1948a
+classDef write_discipline fill:#145a32,stroke:#1e8449,color:#a9dfbf
+classDef write_front fill:#1a5276,stroke:#2980b9,color:#aed6f1
+classDef write_back fill:#7e5109,stroke:#b9770e,color:#f9e79f
+classDef write_elision fill:#6c3483,stroke:#8e44ad,color:#d7bde2
+classDef dep fill:#5b2c6f,stroke:#76448a,color:#d2b4de
+classDef strength fill:#1b5e20,stroke:#2e7d32,color:#c8e6c9
+classDef weakness fill:#e65100,stroke:#ef6c00,color:#ffe0b2
+classDef gap fill:#b71c1c,stroke:#d32f2f,color:#ffcdd2
+classDef size fill:#263238,stroke:#546e7a,color:#b0bec5
+classDef size_total fill:#37474f,stroke:#78909c,color:#eceff1,font-weight:bold

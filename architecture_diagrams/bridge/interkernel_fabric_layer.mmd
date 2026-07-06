@@ -2,7 +2,7 @@
 %% INTERKERNEL FABRIC LANGUAGE (IFL) -- UNIVERSAL CONNECTOR PROTOCOL
 %% ======================================================================================
 %% Created: 2026-02-01
-%% Updated: 2026-02-06 -- Reworked: IFL as universal protocol (not device-only)
+%% Updated: 2026-06-14 — Native-app-as-aggregator: IFL manifests feed backend configs, not direct Fabric tools
 %% Location: architecture_diagrams/bridge/ (Bridge owns IFL Runtime)
 %%
 %% VISION: IFL is the universal language all external services speak to connect to FamilyOS.
@@ -60,66 +60,39 @@
 flowchart TB
 
     %% ======================================================================================
-    %% LAYER 1: K1 FABRIC (Auto-Registered Capabilities from Manifests)
+    %% LAYER 1: K1 RESOLVER + NATIVE APPS (Native-App-as-Aggregator Model)
     %% ======================================================================================
-    subgraph L1_K1_FABRIC["K1: Fabric Capability Registry (Auto-Populated from IFL Manifests)"]
+    subgraph L1_K1_FABRIC["K1: Native Apps (Back LLM Tools) + IFL Backend Registry"]
         direction TB
 
-        subgraph K1_MANIFEST_TRANSLATOR["ManifestTranslator (k1/fabric/manifest_translator.py)"]
+        subgraph K1_NATIVE_APPS["Native Domain Apps (GPS-Registered, Back LLM sees these)"]
+            direction LR
+
+            subgraph K1_REG_FAMILY["FamilyOS Native Apps"]
+                K1_FAM_SHOPPING["family.shopping<br/>price_check, place_order, list_items"]:::k1_native
+                K1_FAM_CALENDAR["family.calendar<br/>create_event, check_schedule, sync"]:::k1_native
+                K1_FAM_TASKS["family.tasks<br/>create_task, mark_done, assign_to"]:::k1_native
+                K1_FAM_FOOD["family.food<br/>plan_meals, place_delivery_order"]:::k1_native
+                K1_FAM_MONEY["family.money<br/>get_balances, transfer_funds"]:::k1_native
+            end
+
+            subgraph K1_REG_BACKEND["🔒 Backend Registry (GPS connector_backends)"]
+                K1_BE_WALMART["walmart-api → family.shopping"]:::k1_backend
+                K1_BE_DOORDASH["doordash-api → family.food"]:::k1_backend
+                K1_BE_CHASE["chase-api → family.money"]:::k1_backend
+                K1_BE_INSTACART["instacart-api → family.shopping"]:::k1_backend
+                K1_BE_UBEREATS["ubereats-api → family.food"]:::k1_backend
+            end
+        end
+
+        subgraph K1_BACKEND_INGESTION["IFL Manifest → Backend Config Ingestion"]
             direction TB
 
             MT_RECEIVE["receive_manifest(adapter_id, manifest)<br/>Triggered by: k1.ifl.adapter.connected.v1"]:::k1_engine
 
-            MT_TRANSLATE["translate_capabilities(manifest)<br/>For each capability in manifest:<br/>  IFL capability -> Fabric tool contract<br/>  name: tool.{type}.{category}.{adapter}.{action}<br/>  provider_type: BRIDGE (always -- routes via IFL)<br/>  safety_band_min: from manifest (FamilyOS-signed)<br/>  required_inputs: from manifest input schema<br/>  output: from manifest output schema<br/>  cost_per_call: from manifest latency_hint<br/>  description: from manifest (used for embedding)"]:::k1_engine
+            MT_TRANSLATE["translate_to_backend_config(manifest)<br/>IFL manifest → native app backend config<br/>Registers in GPS connector_backends table:<br/>  connector_id: family.shopping<br/>  backend_id: walmart-api<br/>  backend_label: Walmart<br/>NOT direct Fabric tool registration"]:::k1_engine
 
-            MT_VALIDATE["validate_contracts(contracts[])<br/>Module Validator (12 rules, FAB-12)<br/>Schema validation, name conventions,<br/>safety band checks, input/output schemas"]:::k1_validator
-
-            MT_REGISTER["register_in_fabric(contracts[])<br/>Capability Registry: register(contract)<br/>Embedding Index: add(description)<br/>Emit: k1.fabric.capability.registered.v1"]:::k1_engine
-
-            MT_UNREGISTER["unregister_adapter(adapter_id)<br/>Remove all capabilities for adapter<br/>Emit: k1.fabric.capability.unregistered.v1<br/>Triggered by: k1.ifl.adapter.disconnected.v1"]:::k1_engine
-        end
-
-        subgraph K1_AUTO_REGISTERED["Auto-Registered Tool Examples (from Manifests)"]
-            direction LR
-
-            subgraph K1_REG_FINANCE["Finance Tools"]
-                K1_CHASE_BAL["tool.read.finance.chase.check_balance"]:::k1_tool_auto
-                K1_CHASE_XFER["tool.execute.finance.chase.transfer_money"]:::k1_tool_auto
-                K1_VENMO_SEND["tool.execute.finance.venmo.send_payment"]:::k1_tool_auto
-                K1_PLAID_LINK["tool.read.finance.plaid.get_transactions"]:::k1_tool_auto
-            end
-
-            subgraph K1_REG_HOME["Smart Home Tools"]
-                K1_HUE_LIGHT["tool.execute.home.hue.set_brightness"]:::k1_tool_auto
-                K1_NEST_TEMP["tool.execute.home.nest.set_temperature"]:::k1_tool_auto
-                K1_RING_ARM["tool.execute.home.ring.arm_alarm"]:::k1_tool_auto
-                K1_SONOS_PLAY["tool.execute.home.sonos.play_music"]:::k1_tool_auto
-            end
-
-            subgraph K1_REG_HEALTH["Health Tools"]
-                K1_FITBIT_HR["tool.read.health.fitbit.heart_rate"]:::k1_tool_auto
-                K1_APPLE_SLEEP["tool.read.health.apple_health.sleep_score"]:::k1_tool_auto
-                K1_GARMIN_WORKOUT["tool.read.health.garmin.workout_log"]:::k1_tool_auto
-            end
-
-            subgraph K1_REG_TRANSPORT["Transport Tools"]
-                K1_UBER_RIDE["tool.execute.transport.uber.request_ride"]:::k1_tool_auto
-                K1_TESLA_UNLOCK["tool.execute.transport.tesla.unlock"]:::k1_tool_auto
-                K1_MAPS_ROUTE["tool.read.transport.google_maps.route"]:::k1_tool_auto
-            end
-
-            subgraph K1_REG_SHOPPING["Shopping Tools"]
-                K1_INSTACART_ORDER["tool.execute.shopping.instacart.place_order"]:::k1_tool_auto
-                K1_DOORDASH_TRACK["tool.read.shopping.doordash.track_delivery"]:::k1_tool_auto
-                K1_AMAZON_REORDER["tool.execute.shopping.amazon.reorder"]:::k1_tool_auto
-            end
-
-            subgraph K1_REG_OTHER["Calendar / Education / Communication"]
-                K1_GCAL_CREATE["tool.execute.calendar.google.create_event"]:::k1_tool_auto
-                K1_OUTLOOK_AVAIL["tool.read.calendar.outlook.check_availability"]:::k1_tool_auto
-                K1_CLASSROOM_GRADES["tool.read.education.classroom.check_grades"]:::k1_tool_auto
-                K1_GMAIL_SEND["tool.execute.communication.gmail.send_message"]:::k1_tool_auto
-            end
+            MT_REGISTER["register_backend(connector_id, backend_id)<br/>GPS connector_backends: UPSERT<br/>LPS connected_resources: populated<br/>by native app inbound API on user connect<br/>Emit: k1.connector.backend.registered.v1"]:::k1_engine
         end
     end
 
@@ -307,9 +280,9 @@ flowchart TB
 
             CONN_STEP4["Step 4: Manifest Ingestion<br/>pull_manifest() -> verify_signature()<br/>-> validate_manifest() -> store_manifest()<br/>Adapter recorded in AdapterRegistry"]:::ifl_flow
 
-            CONN_STEP5["Step 5: Auto-Registration in Fabric<br/>Emit: k1.ifl.adapter.connected.v1<br/>ManifestTranslator receives event<br/>Translates capabilities -> tool contracts<br/>Registers in Capability Registry + Embedding Index"]:::ifl_flow
+            CONN_STEP5["Step 5: Backend Registration in GPS<br/>Emit: k1.ifl.adapter.connected.v1<br/>Backend ingestion receives event<br/>Registers in GPS connector_backends:<br/>  connector_id=family.shopping<br/>  backend_id=walmart-api<br/>NOT direct Fabric tool registration"]:::ifl_flow
 
-            CONN_STEP6["Step 6: Ready<br/>User: 'What is my checking balance?'<br/>Concierge LOW -> invoke_capability<br/>-> tool.read.finance.chase.check_balance<br/>-> Fabric -> Bridge -> IFL -> Chase API"]:::ifl_flow
+            CONN_STEP6["Step 6: Ready — User connects backend in app<br/>User opens family.shopping → taps Connect Walmart<br/>→ Native app inbound API writes to LPS:<br/>  connected_resources += walmart-api<br/>→ Resolver injects enum: [walmart-api]<br/>→ Back LLM calls family.shopping.place_order()<br/>→ Native app fans out to Walmart API via IFL"]:::ifl_flow
         end
     end
 
@@ -423,13 +396,10 @@ flowchart TB
     %% DATA FLOWS: Outbound (K1 Fabric -> Bridge -> IFL -> External)
     %% ======================================================================================
 
-    %% Fabric auto-registered tools -> Bridge Gateway
-    K1_CHASE_BAL -->|"CapabilityRequest"| GATEWAY_PORT
-    K1_HUE_LIGHT -->|"CapabilityRequest"| GATEWAY_PORT
-    K1_FITBIT_HR -->|"CapabilityRequest"| GATEWAY_PORT
-    K1_UBER_RIDE -->|"CapabilityRequest"| GATEWAY_PORT
-    K1_INSTACART_ORDER -->|"CapabilityRequest"| GATEWAY_PORT
-    K1_GCAL_CREATE -->|"CapabilityRequest"| GATEWAY_PORT
+    %% Native apps → Back LLM calls → native app fans out → Bridge Gateway → IFL backends
+    K1_FAM_SHOPPING -->|"Back LLM calls<br/>place_order()<br/>→ native app fans out<br/>to Walmart/Costco APIs"| GATEWAY_PORT
+    K1_FAM_FOOD -->|"Back LLM calls<br/>place_delivery_order()<br/>→ native app fans out<br/>to DoorDash/UberEats APIs"| GATEWAY_PORT
+    K1_FAM_MONEY -->|"Back LLM calls<br/>transfer_funds()<br/>→ native app fans out<br/>to Chase/BofA APIs"| GATEWAY_PORT
 
     %% Gateway security pipeline
     GATEWAY_PORT -->|"verify token"| GW_TOKEN_VERIFY
@@ -527,6 +497,8 @@ flowchart TB
     classDef k1_engine fill:#bbdefb,stroke:#1565c0,stroke-width:2px,color:#000,font-weight:bold
     classDef k1_validator fill:#ffcdd2,stroke:#c62828,stroke-width:2px,color:#000
     classDef k1_tool_auto fill:#90caf9,stroke:#0d47a1,stroke-width:2px,color:#000
+    classDef k1_native fill:#a5d6a7,stroke:#2e7d32,stroke-width:3px,color:#000,font-weight:bold
+    classDef k1_backend fill:#e0e0e0,stroke:#757575,stroke-width:1px,color:#000,font-style:italic
 
     %% Bridge Gateway (Orange/Red)
     classDef bridge_port fill:#ff7043,stroke:#bf360c,stroke-width:3px,color:#fff,font-weight:bold

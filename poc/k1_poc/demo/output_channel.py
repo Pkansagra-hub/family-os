@@ -207,6 +207,12 @@ class OutputChannel:
         # into the conversation naturally.
         self._pending_weave_texts: list[str] = []
 
+        # Slice 6: turn-in-flight flag — set on start_turn(), cleared
+        # when any response handler calls _response_event.set().  The
+        # coordinator's activate_session() polls wait_for_idle() so it
+        # can drain the current turn before tearing down the old bus.
+        self._turn_in_flight: bool = False
+
     # -- public API --------------------------------------------------------
 
     @property
@@ -247,6 +253,7 @@ class OutputChannel:
 
     def start_turn(self, turn: int) -> None:
         """Reset per-turn tracking for a new turn."""
+        self._turn_in_flight = True  # Slice 6: gate session switch
         self._turn_number = turn
         self._turn_start_ns = time.monotonic_ns()
         self._turn_session_ops.clear()
@@ -312,6 +319,16 @@ class OutputChannel:
                 self._stop_spinner()
 
         return self._last_response_text
+
+    async def wait_for_idle(self, poll_interval: float = 0.1) -> None:
+        """Block until the current turn completes (idempotent if no turn active).
+
+        Slice 6: Called by ``UiCoordinator.activate_session()`` to drain
+        in-flight turns before tearing down the old bus and swapping
+        sessions.  Polls ``_turn_in_flight`` at ``poll_interval``.
+        """
+        while self._turn_in_flight:
+            await asyncio.sleep(poll_interval)
 
     def drain_pending_back_results(self) -> List[Dict[str, Any]]:
         """Legacy API -- returns empty list.
@@ -535,6 +552,7 @@ class OutputChannel:
         # Print the system activity box after concierge response
         self._flush_system_activity()
         self._last_response_text = text
+        self._turn_in_flight = False  # Slice 6: turn complete
         self._response_event.set()
 
     def _on_proactive(self, envelope: Envelope) -> None:
@@ -543,6 +561,7 @@ class OutputChannel:
         self._record("response", "iot", TOPIC_PROACTIVE_FILL, f"Proactive: {text[:60]}", envelope)
         self._renderer.render_proactive(text)
         self._last_response_text = text
+        self._turn_in_flight = False  # Slice 6: turn complete
         self._response_event.set()
 
     def _on_weave(self, envelope: Envelope) -> None:
@@ -582,6 +601,7 @@ class OutputChannel:
             self._renderer.render_weave(texts)
             self._flush_system_activity()
             self._last_response_text = "\n".join(texts)
+            self._turn_in_flight = False  # Slice 6: turn complete
             self._response_event.set()
 
     def _on_clarification(self, envelope: Envelope) -> None:
@@ -596,6 +616,7 @@ class OutputChannel:
         )
         self._renderer.render_response(question, self._current_member, "warm")
         self._last_response_text = question
+        self._turn_in_flight = False  # Slice 6: turn complete
         self._response_event.set()
 
     def _on_state_updated(self, envelope: Envelope) -> None:

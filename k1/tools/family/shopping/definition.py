@@ -73,7 +73,7 @@ _SHOPPING_CONSTITUTION: dict[str, Any] = {
     "prerequisite_reads": [
         {
             "operation": "list",
-            "resource_kind": "shopping_item",
+            "resource_kind": "item",
             "reason": (
                 "Check for a duplicate item (same name, same active list) before "
                 "adding. The user may have already added 'milk'."
@@ -85,7 +85,7 @@ _SHOPPING_CONSTITUTION: dict[str, Any] = {
     "conflict_analysis_rules": [
         {
             "check": "duplicate",
-            "with_resource_kinds": ["shopping_item"],
+            "with_resource_kinds": ["item"],
             "description": ("New item name matches an existing active item on the list."),
             "resolution": (
                 "Tell the user: '{item_name} is already on the list (added "
@@ -96,7 +96,7 @@ _SHOPPING_CONSTITUTION: dict[str, Any] = {
     ],
     "companion_resource_roles": [
         {
-            "resource_kind": "calendar_event",
+            "resource_kind": "event",
             "role": "suggestion_source",
             "description": (
                 "Other connectors may SUGGEST shopping items (calendar "
@@ -193,6 +193,59 @@ _SHOPPING_CONSTITUTION: dict[str, Any] = {
     "degradation_policy": (
         "If read_after_write verification fails, retry once then submit degraded."
     ),
+    # ── RES-017: Teaching surface fields (2026-06-17) ──────────────
+    "how_to_sequence": [
+        "1. Read the active shopping list to check for duplicates.",
+        "2. Add the item if no duplicate. Child-originated requests land as "
+        "pending_parent_approval — surface that to the user.",
+        "3. Verify the item was added (read_after_write).",
+    ],
+    "what_to_verify": [
+        "After add/update: Read back the list and confirm the item appears "
+        "with the correct name, quantity, and approval_status.",
+        "Validate the returned item matches the expected output schema.",
+    ],
+    "when_to_ask_human": [
+        {
+            "trigger": "missing_required_field",
+            "reason": "Item name is required.",
+            "prompt": "What item should I add to the shopping list?",
+        },
+        {
+            "trigger": "missing_required_field",
+            "reason": "Target shopping list must be selected.",
+            "prompt": "Which shopping list should I add this to?",
+        },
+        {
+            "trigger": "duplicate_detected",
+            "reason": "This item is already on the active list.",
+            "prompt": "'{item_name}' is already on the list (qty: {existing_qty}). What should I do?",
+        },
+        {
+            "trigger": "child_request_pending",
+            "reason": "A child's item request is awaiting parent approval.",
+            "prompt": "{child_name}'s request for '{item_name}' is pending parent approval. Approve it now?",
+        },
+    ],
+    "companion_connectors": [
+        {
+            "connector_id": "family.calendar",
+            "role": "suggestion_source",
+            "description": (
+                "Calendar events like 'birthday party Saturday' may suggest "
+                "shopping items ('order cake?'). Suggestions flow FROM "
+                "calendar TO shopping — shopping does not read calendar."
+            ),
+        },
+    ],
+    "conflict_rules": [
+        (
+            "If duplicate with items: New item name matches an existing active "
+            "item on the list. Resolution: Tell the user the item is already "
+            "on the list with quantity. Options: add anyway (separate entry), "
+            "update existing item, or skip. Do NOT silently duplicate."
+        ),
+    ],
 }
 
 _SHOPPING_POLICY: dict[str, Any] = {
@@ -211,14 +264,14 @@ _SHOPPING_POLICY: dict[str, Any] = {
         "delete_item": ["guardian", "parent"],
     },
     "operation_safety_bands": {
-        "create_list": "AMBER",
-        "delete_list": "AMBER",
-        "add_item": "AMBER",
-        "update_item": "AMBER",
-        "approve_item": "AMBER",
-        "reject_item": "AMBER",
-        "check_off_item": "AMBER",
-        "delete_item": "AMBER",
+        "create_list": "GREEN",
+        "delete_list": "GREEN",
+        "add_item": "GREEN",
+        "update_item": "GREEN",
+        "approve_item": "GREEN",
+        "reject_item": "GREEN",
+        "check_off_item": "GREEN",
+        "delete_item": "GREEN",
     },
 }
 
@@ -271,11 +324,11 @@ _SHOPPING_ONTOLOGY: dict[str, Any] = {
         {"alias": "supplies", "canonical_concept": "shopping_item", "weight": 0.6},
     ],
     "concept_resource_edges": [
-        {"concept": "shopping_item", "resource_family": "shopping_item", "weight": 1.0},
+        {"concept": "shopping_item", "resource_family": "item", "weight": 1.0},
     ],
     "resource_connector_edges": [
         {
-            "resource_family": "shopping_item",
+            "resource_family": "item",
             "connector_id": "family.shopping",
             "weight": 1.0,
             "role": "primary",
@@ -332,10 +385,13 @@ SHOPPING_DEFINITION = ToolDefinition(
             description="Filter by requesting member_id.",
         ),
     ],
-    can_reference=["task_item", "calendar_event", "reminder"],
+    can_reference=["task", "event", "reminder"],
     feature_flags=["m15_shopping"],
     # ── Phase 1.1 enrichment (Epics 13.1-13.2) ──
     resource_kinds=["shopping_item"],
+    # ── Phase 2.6 taxonomy (Epic 23.6) ──
+    domain_id="family",
+    resource_families=["item"],
     actor_scope=["parent", "admin", "system"],
     snapshot_types=["daily_snapshot"],
     constitution=_SHOPPING_CONSTITUTION,
@@ -350,7 +406,7 @@ SHOPPING_DEFINITION = ToolDefinition(
             summary="Create a parent-managed shopping list bucket.",
             label="New list",
             primary=True,
-            min_band="AMBER",
+            min_band="GREEN",
             allowed_roles=_APPROVER_ROLES,
             idempotent=True,
             params=[
@@ -385,7 +441,7 @@ SHOPPING_DEFINITION = ToolDefinition(
             kind="delete",
             summary="Soft-delete a shopping list bucket.",
             label="Delete list",
-            min_band="AMBER",
+            min_band="GREEN",
             allowed_roles=_APPROVER_ROLES,
             params=[_LIST_ID_FIELD],
             result=[
@@ -431,7 +487,7 @@ SHOPPING_DEFINITION = ToolDefinition(
             summary="Add an item to a shopping list; child requests require parent approval.",
             label="Add item",
             primary=True,
-            min_band="AMBER",
+            min_band="GREEN",
             allowed_roles=_REQUEST_ROLES,
             idempotent=True,
             params=[
@@ -488,7 +544,7 @@ SHOPPING_DEFINITION = ToolDefinition(
             kind="write",
             summary="Patch an existing shopping item.",
             label="Edit item",
-            min_band="AMBER",
+            min_band="GREEN",
             allowed_roles=_APPROVER_ROLES,
             params=[
                 _ITEM_ID_FIELD,
@@ -519,7 +575,7 @@ SHOPPING_DEFINITION = ToolDefinition(
             kind="write",
             summary="Approve a pending child shopping request.",
             label="Approve item",
-            min_band="AMBER",
+            min_band="GREEN",
             allowed_roles=_APPROVER_ROLES,
             params=[
                 _ITEM_ID_FIELD,
@@ -544,7 +600,7 @@ SHOPPING_DEFINITION = ToolDefinition(
             kind="write",
             summary="Reject a pending child shopping request.",
             label="Reject item",
-            min_band="AMBER",
+            min_band="GREEN",
             allowed_roles=_APPROVER_ROLES,
             params=[
                 _ITEM_ID_FIELD,
@@ -569,7 +625,7 @@ SHOPPING_DEFINITION = ToolDefinition(
             kind="write",
             summary="Mark an approved shopping item as bought or done.",
             label="Check off",
-            min_band="AMBER",
+            min_band="GREEN",
             allowed_roles=_APPROVER_ROLES,
             params=[
                 _ITEM_ID_FIELD,
@@ -592,7 +648,7 @@ SHOPPING_DEFINITION = ToolDefinition(
             kind="delete",
             summary="Soft-delete a shopping item.",
             label="Delete item",
-            min_band="AMBER",
+            min_band="GREEN",
             allowed_roles=_APPROVER_ROLES,
             params=[_ITEM_ID_FIELD],
             result=[

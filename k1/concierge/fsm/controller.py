@@ -554,6 +554,15 @@ class ConciergeController:
         )  # M5 E5.5.4: inter-iteration injection
         self._current_turn_device_id: str | None = None  # M5 E5.5.6: device_id for current turn
         self._back_pool: Any | None = None  # M7 E7.5.6: BackPool for capacity-aware arbiter
+        self._back_topic_router: Any | None = None  # M7 BP-08: BackTopicRouter for topic dispatch
+        self._ready_queue: Any | None = None  # M7 BP-08: ReadyQueue for dependency ordering
+        self._back_pool_enabled: bool = False  # M7 BP-08: config gate for BackPool wiring
+        # M7 BP-18: Active-HIL Tracker — eliminates multi-HIL race conditions
+        # by tracking exactly WHICH suspended task's HIL is shown to the user.
+        # Front reads _active_hil_task_id instead of scanning "first SUSPENDED."
+        self._active_hil_task_id: str | None = None
+        self._active_hil_request_id: str | None = None
+        self._pending_hil_queue: list[Any] = []  # Envelopes waiting to be shown
         # M8 E8.5.2: Adaptive weave policy wiring
         self._weave_policy: WeavePolicy | None = None
         self._activity_tracker: UserActivityTracker | None = None
@@ -842,6 +851,28 @@ class ConciergeController:
             "ConciergeController.set_back_pool: attached pool_size=%d",
             getattr(getattr(back_pool, "config", None), "pool_size", 0),
         )
+
+    def set_back_topic_router(self, router: Any) -> None:
+        """Attach BackTopicRouter for topic-based Back dispatch (M7 BP-08).
+
+        Replaces the inline topic-switch in route_back_envelope when
+        BackPool wiring is enabled. The router maps envelope topics to
+        handler functions and discards late envelopes for released tasks.
+        """
+        self._back_topic_router = router
+        logger.info(
+            "ConciergeController.set_back_topic_router: attached with %d routes",
+            len(getattr(router, "_routing_table", {})),
+        )
+
+    def set_ready_queue(self, queue: Any) -> None:
+        """Attach ReadyQueue for dependency-ordered dispatch (M7 BP-08).
+
+        Holds envelopes with unresolved depends_on until predecessors
+        complete. Integrated into dispatch admission (BP-09A).
+        """
+        self._ready_queue = queue
+        logger.info("ConciergeController.set_ready_queue: attached")
 
     def set_weave_policy(self, policy: WeavePolicy) -> None:
         """Attach WeavePolicy for adaptive weave decisions (M8 E8.5.2).
@@ -2707,6 +2738,75 @@ class ConciergeController:
         except Exception:
             logger.debug("FSM: pending HIL cleanup skipped for %s", task_id, exc_info=True)
 
+        # BP-18: If this task was the active HIL, clear the tracker and
+        # drain the next queued HIL envelope (if any). Skip queued HILs
+        # whose task is no longer SUSPENDED (timed out / already resolved).
+        if self._active_hil_task_id == task_id:
+            self._active_hil_task_id = None
+            self._active_hil_request_id = None
+            logger.info(
+                "FSM._cleanup_terminal_hitl_state: cleared active HIL task=%s — "
+                "draining pending queue (depth=%d)",
+                task_id,
+                len(self._pending_hil_queue),
+            )
+            self._drain_next_hil()
+
+    def _drain_next_hil(self) -> None:
+        """BP-18: Drain the next eligible HIL from the pending queue.
+
+        Called when the active HIL resolves (task completes/fails/cancels).
+        Walks the queue looking for the first HIL whose task is still
+        SUSPENDED.  Skips HILs whose task has already timed out or been
+        resolved (no longer SUSPENDED).  When a valid HIL is found, sets
+        it as the new active HIL and delivers to Front.
+
+        When the queue is empty AND no active HIL remains, the FSM may
+        exit CLARIFYING_WORKER on the next state evaluation.
+        """
+        while self._pending_hil_queue:
+            next_env = self._pending_hil_queue.pop(0)
+            env_payload = _parse_payload(next_env)
+            next_task_id = str(env_payload.get("task_id") or "")
+
+            # Check if the task is still SUSPENDED
+            still_suspended = False
+            if next_task_id and self._task_bridge is not None:
+                try:
+                    entry = self._task_bridge.get_task(next_task_id)
+                    if entry is not None:
+                        status = getattr(entry, "status", None)
+                        if status and str(status).upper() == "SUSPENDED":
+                            still_suspended = True
+                except Exception:
+                    pass
+
+            if not still_suspended:
+                logger.info(
+                    "FSM._drain_next_hil: skipping queued HIL for task=%s — "
+                    "task no longer SUSPENDED (timed out or resolved)",
+                    next_task_id,
+                )
+                continue
+
+            # Valid HIL — set as active and deliver
+            hil_request_id = str(env_payload.get("hil_request_id") or "")
+            self._active_hil_task_id = next_task_id
+            self._active_hil_request_id = hil_request_id
+            logger.info(
+                "FSM._drain_next_hil: activating queued HIL task=%s hil_id=%s "
+                "(remaining_queue=%d)",
+                next_task_id,
+                hil_request_id[:8] if hil_request_id else "?",
+                len(self._pending_hil_queue),
+            )
+            if self._front_lock.try_deliver(next_env):
+                self._deliver_to_front(next_env)
+            return
+
+        # Queue exhausted — no more HILs to show
+        logger.debug("FSM._drain_next_hil: pending HIL queue exhausted")
+
     # GAP-HIL-005 -- late-answer recovery helpers.
     def _record_expired_hil(
         self,
@@ -3743,9 +3843,25 @@ class ConciergeController:
             },
         )
 
-        # Deliver to Front for HITL presentation
-        if self._front_lock.try_deliver(envelope):
-            self._deliver_to_front(envelope)
+        # BP-18: Active-HIL Tracker — same gating as _on_hil_request.
+        # When no HIL is active, set this one as active and deliver.
+        # When another HIL is already showing, queue for later drain.
+        if self._active_hil_task_id is None:
+            self._active_hil_task_id = task_id
+            # Legacy path doesn't carry hil_request_id in the unified sense;
+            # use the HILSubTask's pending_hil_id as the correlation key.
+            self._active_hil_request_id = hil_subtask.pending_hil_id
+            if self._front_lock.try_deliver(envelope):
+                self._deliver_to_front(envelope)
+        else:
+            self._pending_hil_queue.append(envelope)
+            logger.info(
+                "FSM._on_task_suspended: task=%s queued — "
+                "active_hil=%s already showing (queue_depth=%d)",
+                task_id,
+                self._active_hil_task_id,
+                len(self._pending_hil_queue),
+            )
 
     def _on_task_resume(self, envelope: Envelope) -> None:
         """Handle k1.orchestration.task.resume.v1 (HITL exit point).
@@ -4425,8 +4541,24 @@ class ConciergeController:
             context="hil_request",
         )
 
-        if self._front_lock.try_deliver(envelope):
-            self._deliver_to_front(envelope)
+        # BP-18: Active-HIL Tracker — only deliver one HIL to Front at a time.
+        # When no HIL is currently active, set this one as active and deliver.
+        # When another HIL is already showing, queue this one for later drain.
+        if self._active_hil_task_id is None:
+            self._active_hil_task_id = task_id
+            self._active_hil_request_id = hil_request_id
+            if self._front_lock.try_deliver(envelope):
+                self._deliver_to_front(envelope)
+        else:
+            self._pending_hil_queue.append(envelope)
+            logger.info(
+                "FSM._on_hil_request: hil_id=%s task=%s queued — "
+                "active_hil=%s already showing (queue_depth=%d)",
+                hil_request_id[:8],
+                task_id,
+                self._active_hil_task_id,
+                len(self._pending_hil_queue),
+            )
 
     def _on_response_final(self, envelope: Envelope) -> None:
         """Handle k1.response.final.v1 -- the turn exit point.
@@ -4725,7 +4857,9 @@ class ConciergeController:
                 "timestamp_ms": int(time.time() * 1000),
                 "turn_number": self._turn_number,
                 "prompt_mode": "front_react",
-                "fsm_state": self._state.value if hasattr(self._state, "value") else str(self._state),
+                "fsm_state": (
+                    self._state.value if hasattr(self._state, "value") else str(self._state)
+                ),
             }
             section_update_summary = self._section_update_completion_by_turn_id.get(turn_id)
             if section_update_summary:
@@ -4970,8 +5104,11 @@ class ConciergeController:
         )
 
     async def _flush_weave_after_delay(self, parent_id: int) -> None:
-        await asyncio.sleep(WEAVE_BATCH_WINDOW_MS / 1000)
-        self._flush_weave_now(parent_id)
+        try:
+            await asyncio.sleep(WEAVE_BATCH_WINDOW_MS / 1000)
+            self._flush_weave_now(parent_id)
+        finally:
+            self._weave_flush_task = None
 
     def _flush_weave_now(self, parent_id: int) -> None:
         results, expired = self._turn_state.drain_results()
@@ -4993,13 +5130,12 @@ class ConciergeController:
         if self._front_lock.try_deliver(weave_envelope):
             self._deliver_to_front(weave_envelope)
         else:
-            # BUG-4a FIX: Re-enqueue results when FrontLock rejects delivery
-            # so they are not permanently lost.
-            for item in prepared_results:
-                self._turn_state.pending_results.append(item)
+            # Envelope is safely queued inside FrontLock; it will be delivered
+            # by _drain_front_lock_queue when Front becomes free.  Do NOT
+            # re-enqueue results into pending_results — that creates a second
+            # copy that causes duplicate weave delivery.
             logger.debug(
-                "FSM._flush_weave_now: FrontLock busy, re-enqueued %d results",
-                len(prepared_results),
+                "FSM._flush_weave_now: FrontLock busy, envelope queued (will drain on release)",
             )
 
     # ------------------------------------------------------------------
@@ -5038,12 +5174,10 @@ class ConciergeController:
             if self._front_lock.try_deliver(weave_env):
                 self._deliver_to_front(weave_env)
             else:
-                # BUG-4b FIX: Re-enqueue results when FrontLock rejects delivery.
-                for item in sorted_results:
-                    self._turn_state.pending_results.append(item)
+                # Envelope is safely queued inside FrontLock; it will be delivered
+                # by _drain_front_lock_queue when Front becomes free.
                 logger.debug(
-                    "FSM._deliver_weave_immediate: FrontLock busy, re-enqueued %d results",
-                    len(sorted_results),
+                    "FSM._deliver_weave_immediate: FrontLock busy, envelope queued (will drain on release)",
                 )
 
     def _schedule_weave_flush_adaptive(self, envelope: Envelope, window_ms: int) -> None:
@@ -5076,10 +5210,15 @@ class ConciergeController:
         _saved_envelope = envelope
 
         async def _delayed_flush() -> None:
-            if self._state in (ConciergeState.COMPANIONING, ConciergeState.PROGRESSING):
-                self._transition(ConciergeState.DELIVERING, TOPIC_TASK_COMPLETE, _saved_envelope)
-            await asyncio.sleep(window_ms / 1000)
-            self._flush_weave_now(_saved_envelope.envelope_id)
+            try:
+                if self._state in (ConciergeState.COMPANIONING, ConciergeState.PROGRESSING):
+                    self._transition(
+                        ConciergeState.DELIVERING, TOPIC_TASK_COMPLETE, _saved_envelope
+                    )
+                await asyncio.sleep(window_ms / 1000)
+                self._flush_weave_now(_saved_envelope.envelope_id)
+            finally:
+                self._weave_flush_task = None
 
         self._weave_flush_task = loop.create_task(_delayed_flush())
 

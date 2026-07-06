@@ -74,14 +74,13 @@ sse-starlette>=2.0.0
 asyncpg>=0.30.0
 
 # ==================== EMBEDDING WORKER CONTAINER ====================
-# NLP & Embeddings - UltraBERT replaces most of these
-# Install UltraBERT from wheel: pip install wheels/familyos_ultrabert-4.0.2-py3-none-any.whl
-nltk>=3.8.1
+# Bi-encoder for connector search — MiniLM-L6 (22MB, all-MiniLM-L6-v2)
+# POC-validated: 80.8% Strict C@1, 93.1% Acceptable Top-3 at 33 native apps
+sentence-transformers>=3.0.0
 
-# DEPRECATED - Replaced by UltraBERT
-# sentence-transformers -> UltraBERT embedding
-# textblob -> UltraBERT sentiment
-# vaderSentiment -> UltraBERT sentiment
+# UltraBERT — cross-encoder for other embedding tasks (not connector search)
+# Install from wheel: pip install wheels/familyos_ultrabert-4.0.2-py3-none-any.whl
+nltk>=3.8.1
 
 # ONNX Runtime (UltraBERT uses this internally)
 onnxruntime>=1.17.0

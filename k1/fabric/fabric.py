@@ -1897,7 +1897,24 @@ def _build_resolve_request(payload: Dict[str, Any]) -> "ResolveSituationRequest"
 
     actor_id = str(payload["actor_id"])
     space_id = str(payload["space_id"])
+    # Back's resolve_situation tool handler sends action_text at the top
+    # level of the payload, NOT wrapped in a ``frame`` key.  Construct a
+    # synthetic frame with a single intent when that shape is detected.
     frame_dict = payload.get("frame") or {}
+    action_text = str(payload.get("action_text") or "")
+    context_hints = payload.get("context_hints") or {}
+    if action_text and not frame_dict.get("intents"):
+        frame_dict = {
+            **frame_dict,
+            "intents": [
+                {
+                    "action": action_text,
+                    "domain": context_hints.get("domain_hint"),
+                    "operation_hint": context_hints.get("operation_hint", ""),
+                    "resource_kind_hint": context_hints.get("resource_hint"),
+                }
+            ],
+        }
     frame = build_frame_from_dict(frame_dict, actor_id=actor_id, space_id=space_id)
 
     return ResolveSituationRequest(

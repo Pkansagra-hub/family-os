@@ -27,7 +27,7 @@ def _tomorrow_ref() -> dict[str, object]:
     }
 
 
-def test_back_prompt_renders_resolved_temporal_refs_in_execution_grounding() -> None:
+def test_back_prompt_renders_resolved_temporal_refs_as_prose() -> None:
     prompt = build_back_prompt(
         task={
             "task_id": "task-m2",
@@ -38,7 +38,7 @@ def test_back_prompt_renders_resolved_temporal_refs_in_execution_grounding() -> 
         max_tool_calls=4,
     )
 
-    assert "== EXECUTION GROUNDING ==" in prompt
-    assert "resolved_temporal_refs_typed:" in prompt
+    # Epic 17: resolved refs are woven into prose, not a raw block.
+    assert "already resolved these time expressions" in prompt
     assert "tomorrow (window)" in prompt
     assert "2025-01-16T00:00:00+00:00" in prompt

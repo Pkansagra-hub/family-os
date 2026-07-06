@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import logging
 import queue
 import threading
 import time
@@ -21,6 +23,35 @@ from k1.concierge.section_update.events import (
     build_section_update_requested_payload,
 )
 from k1.concierge.section_update.types import SectionUpdateInput, SectionUpdatePlan
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Main-loop reference (set once from the event-loop thread during boot).
+# ---------------------------------------------------------------------------
+_main_loop: asyncio.AbstractEventLoop | None = None
+_main_loop_lock = threading.Lock()
+
+
+def set_section_update_main_loop(loop: asyncio.AbstractEventLoop) -> None:
+    """Cache the main event loop so worker daemon threads can schedule
+    classifier coroutines on it via ``run_coroutine_threadsafe``."""
+    global _main_loop
+    with _main_loop_lock:
+        _main_loop = loop
+
+
+def _resolve_main_loop() -> asyncio.AbstractEventLoop:
+    """Return the cached main loop, falling back to a new loop."""
+    global _main_loop
+    with _main_loop_lock:
+        if _main_loop is not None and not _main_loop.is_closed():
+            return _main_loop
+    loop = asyncio.new_event_loop()
+    with _main_loop_lock:
+        if _main_loop is None:
+            _main_loop = loop
+    return loop
 
 
 @dataclass(frozen=True)
@@ -117,22 +148,97 @@ def classify_section_update_blocking(
     classifier: ISectionUpdateClassifier,
     timeout_ms: int,
 ) -> SectionUpdateClassificationResult:
-    """Run the async classifier behind a bounded synchronous FSM gate.
+    """Run the async classifier behind a bounded synchronous gate.
 
-    The classifier runs in a daemon thread with its own event loop so a sync
-    bus handler can wait for a bounded result without trying to re-enter the
-    current asyncio loop. The worker thread only returns a plan; writer apply
-    remains on the caller thread after the timeout gate succeeds.
+    Two paths:
+      - **Worker daemon thread**: schedules the coroutine on the main
+        event loop via ``asyncio.run_coroutine_threadsafe`` and blocks
+        on ``future.result(timeout)``.  Main-loop aiohttp sessions are
+        safe because the coroutine runs on the main loop.
+      - **Main event-loop thread** (FSM controller path): cannot block
+        the loop, so spawns a short-lived daemon thread with a fresh
+        event loop (``new_event_loop()`` + ``run_until_complete``).
     """
 
     started = time.perf_counter()
+    loop = _resolve_main_loop()
+
+    # Are we on the main event loop's thread?  And is that loop actually
+    # running so we can schedule work onto it?
+    try:
+        running = asyncio.get_running_loop()
+        on_main_thread = running is loop
+    except RuntimeError:
+        on_main_thread = False
+
+    loop_usable = loop is not None and loop.is_running()
+
+    if on_main_thread or not loop_usable:
+        # Either we are on the main loop (can't block) or the cached loop is
+        # not running (tests / non-asyncio boot).  Spawn a daemon thread.
+        return _classify_in_daemon_thread(input_data, classifier, timeout_ms, started)
+    else:
+        # Worker daemon thread — schedule onto the main loop.
+        return _classify_on_main_loop(loop, input_data, classifier, timeout_ms, started)
+
+
+def _classify_on_main_loop(
+    loop: asyncio.AbstractEventLoop,
+    input_data: SectionUpdateInput,
+    classifier: ISectionUpdateClassifier,
+    timeout_ms: int,
+    started: float,
+) -> SectionUpdateClassificationResult:
+    """Schedule classifier on the main loop, blocking with a timeout."""
+    future = asyncio.run_coroutine_threadsafe(classifier.classify(input_data), loop)
+    try:
+        value = future.result(timeout=max(0.001, timeout_ms / 1000.0))
+    except concurrent.futures.TimeoutError:
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        return SectionUpdateClassificationResult(
+            status=SectionUpdateCompletionStatus.TIMED_OUT,
+            plan=None,
+            diagnostics=[{"code": "classifier_timeout", "message": f"timeout_ms={timeout_ms}"}],
+            elapsed_ms=elapsed_ms,
+        )
+    except Exception as exc:
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        return SectionUpdateClassificationResult(
+            status=SectionUpdateCompletionStatus.PROVIDER_FAILED,
+            plan=None,
+            diagnostics=[{"code": "provider_failed", "message": str(exc)}],
+            elapsed_ms=elapsed_ms,
+        )
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    return _build_classification_result(value, elapsed_ms)
+
+
+def _classify_in_daemon_thread(
+    input_data: SectionUpdateInput,
+    classifier: ISectionUpdateClassifier,
+    timeout_ms: int,
+    started: float,
+) -> SectionUpdateClassificationResult:
+    """Run classifier in a daemon thread with a fresh event loop.
+
+    Used only when the caller is on the main event-loop thread (FSM
+    controller) and cannot block the loop.  Uses explicit
+    ``new_event_loop()`` + ``run_until_complete`` instead of
+    ``asyncio.run()`` to avoid Python 3.13 daemon-thread issues.
+    """
+
     result_queue: "queue.Queue[tuple[str, Any]]" = queue.Queue(maxsize=1)
 
     def _run() -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         try:
-            result_queue.put(("ok", asyncio.run(classifier.classify(input_data))))
-        except Exception as exc:  # noqa: BLE001 - returned as lifecycle diagnostic.
+            result = loop.run_until_complete(classifier.classify(input_data))
+            result_queue.put(("ok", result))
+        except Exception as exc:
             result_queue.put(("error", exc))
+        finally:
+            loop.close()
 
     thread = threading.Thread(target=_run, name="section-update-classifier", daemon=True)
     thread.start()
@@ -154,12 +260,20 @@ def classify_section_update_blocking(
             diagnostics=[{"code": "provider_failed", "message": str(value)}],
             elapsed_ms=elapsed_ms,
         )
+    return _build_classification_result(value, elapsed_ms)
+
+
+def _build_classification_result(
+    value: Any,
+    elapsed_ms: int,
+) -> SectionUpdateClassificationResult:
+    """Convert a raw classifier return value into a result struct."""
     if isinstance(value, SectionUpdatePlan):
         plan = value
     elif isinstance(value, Mapping):
         try:
             plan = SectionUpdatePlan.from_dict(value)
-        except Exception as exc:  # noqa: BLE001 - malformed model output is diagnostic only.
+        except Exception as exc:
             return SectionUpdateClassificationResult(
                 status=SectionUpdateCompletionStatus.REJECTED,
                 plan=None,
@@ -179,7 +293,11 @@ def classify_section_update_blocking(
             elapsed_ms=elapsed_ms,
         )
     return SectionUpdateClassificationResult(
-        status=SectionUpdateCompletionStatus.NOOP if plan.is_noop else SectionUpdateCompletionStatus.REQUESTED,
+        status=(
+            SectionUpdateCompletionStatus.NOOP
+            if plan.is_noop
+            else SectionUpdateCompletionStatus.REQUESTED
+        ),
         plan=plan,
         diagnostics=[],
         elapsed_ms=elapsed_ms,

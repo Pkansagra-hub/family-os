@@ -83,7 +83,7 @@ _REMINDERS_CONSTITUTION: dict[str, Any] = {
         },
         {
             "operation": "list",
-            "resource_kind": "calendar_event",
+            "resource_kind": "event",
             "reason": (
                 "If the reminder uses an event_offset trigger, verify the "
                 "referenced calendar event still exists. If deleted, the "
@@ -109,7 +109,7 @@ _REMINDERS_CONSTITUTION: dict[str, Any] = {
         },
         {
             "check": "invalid_event_ref",
-            "with_resource_kinds": ["calendar_event"],
+            "with_resource_kinds": ["event"],
             "description": (
                 "The calendar event referenced by an event_offset trigger no "
                 "longer exists (deleted or moved)."
@@ -123,7 +123,7 @@ _REMINDERS_CONSTITUTION: dict[str, Any] = {
     ],
     "companion_resource_roles": [
         {
-            "resource_kind": "calendar_event",
+            "resource_kind": "event",
             "role": "dependency",
             "description": (
                 "Reminders can fire at event offsets ('30 minutes before "
@@ -219,6 +219,76 @@ _REMINDERS_CONSTITUTION: dict[str, Any] = {
     "degradation_policy": (
         "If read_after_write verification fails, retry once then submit degraded."
     ),
+    # ── RES-017: Teaching surface fields (2026-06-17) ──────────────
+    "how_to_sequence": [
+        "1. Read current reminders + calendar event if event_offset trigger is set.",
+        "2. Create the reminder if no duplicate detected. Warn about an "
+        "invalid event reference if applicable.",
+        "3. Verify reminder was created (read_after_write).",
+    ],
+    "what_to_verify": [
+        "After create/update: Read back the reminder and confirm all fields "
+        "match the submitted values.",
+        "Validate the returned reminder matches the expected output schema.",
+    ],
+    "when_to_ask_human": [
+        {
+            "trigger": "missing_required_field",
+            "reason": "Reminder fire time is required.",
+            "prompt": "What time should the reminder fire?",
+        },
+        {
+            "trigger": "missing_required_field",
+            "reason": "Reminder recipient is required.",
+            "prompt": "Who is this reminder for?",
+        },
+        {
+            "trigger": "missing_required_field",
+            "reason": "Reminder message is required.",
+            "prompt": "What should the reminder say?",
+        },
+        {
+            "trigger": "ambiguous_person",
+            "reason": "Person reference could not be resolved to a single member.",
+            "prompt": "Which person did you mean? I found: {candidate_names}.",
+        },
+    ],
+    "companion_connectors": [
+        {
+            "connector_id": "family.calendar",
+            "role": "dependency",
+            "description": (
+                "Reminders can fire at calendar event offsets ('30 minutes "
+                "before Riley's soccer'). The reminder depends on the event "
+                "existing."
+            ),
+        },
+        {
+            "connector_id": "family.tasks",
+            "role": "distinct_sibling",
+            "description": (
+                "CRITICAL DISTINCTION: Reminders are PURE NOTIFICATIONS "
+                "('remind Riley to take medicine at 8pm'). Tasks are ONE-SHOT "
+                "action items ('pick up Riley today'). If the user says "
+                "'remind me to X', that's a reminder. If the user says "
+                "'I need to X' or 'add X to my list', that's a task."
+            ),
+        },
+    ],
+    "conflict_rules": [
+        (
+            "If duplicate with reminders: New reminder must not duplicate an "
+            "existing reminder for the same recipient at the same time with "
+            "the same message. Resolution: Tell the user a reminder already "
+            "exists. Offer: create anyway or cancel."
+        ),
+        (
+            "If invalid_event_ref with events: The calendar event referenced "
+            "by an event_offset trigger no longer exists. Resolution: Warn "
+            "the user the event was deleted. Offer: create anyway, pick a "
+            "different event, or cancel."
+        ),
+    ],
 }
 
 _REMINDERS_POLICY: dict[str, Any] = {
@@ -304,7 +374,7 @@ _REMINDERS_ONTOLOGY: dict[str, Any] = {
             "role": "primary",
         },
         {
-            "resource_family": "calendar_event",
+            "resource_family": "event",
             "connector_id": "family.reminders",
             "weight": 0.5,
             "role": "companion",
@@ -359,10 +429,13 @@ REMINDERS_DEFINITION = ToolDefinition(
             description="Filter by status: scheduled | fired | dismissed | snoozed.",
         ),
     ],
-    can_reference=["calendar_event", "task"],
+    can_reference=["event", "task"],
     feature_flags=["m15_reminders"],
     # ── Phase 1.1 enrichment (Epics 11.1-11.2) ──
     resource_kinds=["reminder"],
+    # ── Phase 2.6 taxonomy (Epic 23.4) ──
+    domain_id="family",
+    resource_families=["reminder"],
     actor_scope=["parent", "admin", "system"],
     snapshot_types=["daily_snapshot", "weekly_overview"],
     back_execution_profile=True,

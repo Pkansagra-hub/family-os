@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import queue
@@ -26,7 +27,10 @@ from k1.concierge.section_update.events import (
 )
 from k1.concierge.section_update.idempotency import SectionUpdateIdempotencyStore
 from k1.concierge.section_update.input_builder import build_section_update_input
-from k1.concierge.section_update.lifecycle import classify_section_update_blocking
+from k1.concierge.section_update.lifecycle import (
+    classify_section_update_blocking,
+    set_section_update_main_loop,
+)
 from k1.concierge.section_update.plan_compiler import PlanCompiler
 from k1.concierge.section_update.types import SectionUpdateInput, SectionUpdatePlan
 
@@ -133,6 +137,14 @@ class SectionUpdateBackgroundWorker:
             return
         if self.is_running:
             return
+        # Cache the main event loop so daemon threads can schedule classifier
+        # coroutines on it via run_coroutine_threadsafe.
+        try:
+            set_section_update_main_loop(asyncio.get_running_loop())
+        except RuntimeError:
+            # No running loop — tests or non-asyncio boot; lifecycle module
+            # will fall back to a new loop.
+            pass
         self._stop.clear()
         self._subscription = self._bus.subscribe(TOPIC_TURN_COMPLETED, self._on_turn_completed)
         self._thread = threading.Thread(

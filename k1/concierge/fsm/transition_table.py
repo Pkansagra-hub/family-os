@@ -137,6 +137,9 @@ TRANSITION_TABLE: dict[ConciergeState, dict[str, ConciergeState | None]] = {
         # while the FSM is still parked in CLARIFYING_WORKER, surface the
         # failure to the user instead of stranding it in pending_results.
         TOPIC_TASK_FAILED: ConciergeState.DELIVERING,
+        # BP-05: task.complete in CLARIFYING_WORKER must also surface to
+        # user via DELIVERING, not be queued or dropped silently.
+        TOPIC_TASK_COMPLETE: ConciergeState.DELIVERING,
         TOPIC_FINAL_RESPONSE: None,
     },
     ConciergeState.CANCELLING: {
@@ -454,7 +457,9 @@ FULL_GUARD_TABLE: dict[
         TOPIC_FINAL_RESPONSE: (_T, None),  # target decided by response_final_table
         TOPIC_TASK_DISPATCH: (_D, None),
         TOPIC_DAG_COMPLETED: (_P, None),
-        TOPIC_TASK_COMPLETE: (_Q, None),
+        # BP-05: task.complete in CLARIFYING_WORKER must surface to
+        # user via DELIVERING, not be queued in pending_results.
+        TOPIC_TASK_COMPLETE: (_T, S.DELIVERING),
         # task.failed in CLARIFYING_WORKER (e.g. HIL watchdog cancels Back)
         # must surface to user via DELIVERING, not be queued indefinitely.
         TOPIC_TASK_FAILED: (_T, S.DELIVERING),

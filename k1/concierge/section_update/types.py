@@ -341,6 +341,7 @@ class SectionUpdatePlan:
     )
     diagnostics: dict[str, Any] = field(default_factory=dict)
     cognitive_trace_id: str = ""
+    confidence: float | None = None  # classifier self-assessed confidence [0,1]
 
     def __post_init__(self) -> None:
         self.plan_id = _require_text(self.plan_id, "plan_id")
@@ -397,6 +398,7 @@ class SectionUpdatePlan:
             "validation": _plain(self.validation),
             "diagnostics": _plain(self.diagnostics),
             "cognitive_trace_id": self.cognitive_trace_id,
+            "confidence": self.confidence,
         }
 
     @classmethod

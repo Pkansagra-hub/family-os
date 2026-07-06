@@ -218,6 +218,21 @@ class RequestRouter:
             request.constraints,
         )
         if not eligible:
+            # Debug: dump registry state
+            all_providers = self._capability_router._registry.list_providers()
+            for pinfo in all_providers:
+                cb_state = self._capability_router._circuit_breaker.get_state(pinfo.provider_id)
+                has_cap = self._capability_router._registry.get_providers_for_capability(
+                    request.capability
+                )
+                logger.warning(
+                    "NoEligibleProvider: cap=%s provider=%s caps=%s cb=%s in_cap_index=%s",
+                    request.capability.value,
+                    pinfo.provider_id,
+                    [c.value for c in pinfo.capabilities],
+                    cb_state.value if cb_state else "N/A",
+                    any(p.provider_id == pinfo.provider_id for p in has_cap),
+                )
             raise NoEligibleProviderError(
                 f"No eligible provider for {request.capability.value}",
                 request_id=request.request_id,
@@ -409,6 +424,21 @@ class RequestRouter:
             request.constraints,
         )
         if not eligible:
+            # Debug: dump registry state to understand why no provider matches
+            all_providers = self._capability_router._registry.list_providers()
+            for pinfo in all_providers:
+                cb_state = self._capability_router._circuit_breaker.get_state(pinfo.provider_id)
+                has_cap = self._capability_router._registry.get_providers_for_capability(
+                    request.capability
+                )
+                logger.warning(
+                    "NoEligibleProvider: cap=%s provider=%s caps=%s cb=%s in_cap_index=%s",
+                    request.capability.value,
+                    pinfo.provider_id,
+                    [c.value for c in pinfo.capabilities],
+                    cb_state.value if cb_state else "N/A",
+                    any(p.provider_id == pinfo.provider_id for p in has_cap),
+                )
             raise NoEligibleProviderError(
                 f"No eligible provider for {request.capability.value}",
                 request_id=request.request_id,

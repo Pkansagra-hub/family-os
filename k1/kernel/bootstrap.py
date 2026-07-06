@@ -81,7 +81,7 @@ async def start_kernel(config: KernelConfig | None = None) -> KernelRuntime:
 
     cfg = config or KernelConfig()
 
-    session_id = cfg.session_id or f"kernel-{uuid.uuid4().hex[:8]}"
+    session_id = cfg.session_id or ""  # empty → create_session() resolves from registry (Slice 3)
 
     svc = KernelService(cfg)
     await svc.startup()
@@ -116,9 +116,9 @@ async def start_kernel(config: KernelConfig | None = None) -> KernelRuntime:
         front_ctx=session.front_ctx,
         back_ctx=session.back_ctx,
         _service=svc,
-        _session_id=session_id,
+        _session_id=session.session_id,  # use resolved ID, not original empty string
     )
-    logger.info("start_kernel: session %s ready (via KernelService)", session_id)
+    logger.info("start_kernel: session %s ready (via KernelService)", session.session_id)
     return runtime
 
 

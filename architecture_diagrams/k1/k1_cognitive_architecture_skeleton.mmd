@@ -132,25 +132,55 @@ flowchart TB
     %%
     %% TWO-PHASE WRITE PER TURN:
     %% ┌─────────────────────────────────────────────────────────────────────────────────┐
-    %% │ PHASE 1: UltraBERT (22ms, pre-LLM, deterministic)                              │
+    %% │ PHASE 1: Pre-LLM Classification (deterministic, ~3ms)                           │
     %% │   Concierge FSM writes directly (NOT tool calls):                               │
-    %% │   ├─ control.intents        ← Intent Head (multi-label)                         │
-    %% │   ├─ control.domains        ← Ingress Head                                     │
-    %% │   ├─ control.safety_band    ← Safety Head                                      │
-    %% │   ├─ beliefs_active.entities← NER Head (surface: PERSON, LOC, TIME)             │
-    %% │   └─ affective_now.raw      ← Emotions + Sentiment Heads                       │
+    %% │   ├─ control.intents        ← Intent classification (multi-label)               │
+    %% │   ├─ control.domains        ← Domain classification                            │
+    %% │   ├─ control.safety_band    ← Safety band                                      │
+    %% │   ├─ beliefs_active.entities← Entity extraction (PERSON, LOC, TIME)             │
+    %% │   └─ affective_now.raw      ← Emotion + Sentiment                              │
     %% │                                                                                 │
-    %% │ PHASE 2: LLM with Tools (post-UltraBERT, semantic understanding)                │
+    %% │ PHASE 2: LLM with Tools (semantic understanding)                                │
     %% │   LLM decides which tools to call based on conversation understanding:          │
     %% │   ├─ update_scoreboard()    ← pronoun resolution, QUD, salience, topic shift    │
     %% │   ├─ update_beliefs()       ← implicit facts, corrections, invalidations        │
     %% │   ├─ update_clarifications() ← semantic gaps only LLM can detect                │
     %% │   ├─ update_narrative()     ← thread switches, resumptions                     │
-    %% │   ├─ refine_affect()        ← sarcasm/nuance UltraBERT missed                  │
+    %% │   ├─ refine_affect()        ← sarcasm/nuance the classifier missed              │
     %% │   └─ promote_belief()       ← bring old facts back to HOT                      │
     %% │   Each tool call → Concierge FSM → MutationGuard.preflight() → Write            │
     %% └─────────────────────────────────────────────────────────────────────────────────┘
     %%
+    %% THREE-TIER ROUTING (Front → Back → Planner/Orchestrator)
+    %% ┌──────────┬────────────────────────────────────────────────────────────────────┐
+    %% │ TIER 1   │ FRONT LLM: Talks to user. Reads K0 memories. Reads native app      │
+    %% │ (LOW)    │ state (read-only K1 surface). Bypasses resolver for reads.          │
+    %% │          │ Terminates: text WITHOUT tool calls.                                │
+    %% ├──────────┼────────────────────────────────────────────────────────────────────┤
+    %% │ TIER 2   │ BACK LLM: Executes actions. Calls resolve_situation(action_text).   │
+    %% │ (MEDIUM) │ Resolver returns envelope {connector, tools[], constitution}.       │
+    %% │          │ Back picks tool, calls invoke_capability. Straightforward tasks.    │
+    %% │          │ Terminates: submit_result().                                        │
+    %% ├──────────┼────────────────────────────────────────────────────────────────────┤
+    %% │ TIER 3   │ BACK LLM calls submit_result(tier=high) when task is BIG + VAGUE.  │
+    %% │ (HIGH)   │ Routes through Planner (4-stage Sketch→Expand→Validate→Commit)      │
+    %% │          │ then Orchestrator (DAG execution via Fabric).                       │
+    %% │          │ For: multi-step plans, cross-domain tasks, ambiguous objectives.    │
+    %% └──────────┴────────────────────────────────────────────────────────────────────┘
+    %% ─────────────────────────────────────────────────────────────────────────────────
+    %% HOW FAMILY NATIVE APPS CONNECT TO KERNEL:
+    %%   family.shopping, family.calendar, family.food, etc. are REGISTERED in GPS
+    %%   via manifest admission. Their tools are what Back LLM sees in the envelope.
+    %%   Front LLM reads their state (read-only K1 surface). Back LLM calls
+    %%   invoke_capability on their tools. Native app inbound API feeds LPS with
+    %%   connected backends. Native app fans out to external backends (Walmart API,
+    %%   etc.) which are HIDDEN from Back LLM — Back sees only ~50 native app tools.
+    %%
+    %% RESOLVER (MiniLM-L6, 22MB, 3ms/q, 87% Conn@1):
+    %%   action_text → MiniLM-L6 dense retrieval → namespace prior → routing decision
+    %%   → ResolutionEnvelope {verdict:can_execute, connector, tools[], constitution,
+    %%      search_confidence, alternative_connectors, is_resolved, disambiguation_signal}
+    %%   → LPS dynamic enum injection (session-aware backend_id enums)
     %% TOOL AVAILABILITY BY TIER:
     %% ┌──────────┬───────────────────┬───────────────────┬───────────────────────────────┐
     %% │ Tier     │ Cognitive Tools   │ Read Tools        │ Action Tools                  │
@@ -301,7 +331,7 @@ flowchart TB
 
             subgraph FSM_CORE_LOOP["Core Loop States (11 States)"]
                 LISTENING["LISTENING<br/>Waiting for User Input"]:::brain
-                ACKING["ACKING (Phase 1)<br/>UltraBERT 22ms Classification<br/>+ Arbiter Routing Decision"]:::brain
+                ACKING["ACKING (Phase 1)<br/>Pre-LLM Classification ~3ms<br/>+ Arbiter Routing Decision"]:::brain
                 CLARIFYING["CLARIFYING_USER<br/>Progressive Disclosure<br/>Minimal Questions"]:::brain
                 CLARIFYING_WORKER["CLARIFYING_WORKER<br/>Awaiting User HITL Answer<br/>Back Suspended"]:::brain
                 DISPATCHING["DISPATCHING<br/>Route: LOW→Back, MED→Orchestrator, HIGH→Planner"]:::brain
@@ -458,18 +488,24 @@ flowchart TB
             CONVERSATIONAL_ANTICIPATION_ENGINE["Conversational Anticipation Engine<br/>Predictive Completion"]:::brain
             CONVERSATIONAL_NARRATIVE_ENGINE["Conversational Narrative Engine<br/>Thread Management"]:::brain
 
-            subgraph ACKING_CORE["ACKING Core (UltraBERT-Powered)"]
-                subgraph ULTRABERT_ENGINE["UltraBERT v4 (22ms, 12 Heads)"]
-                    ULTRABERT_CORE["UltraBERT Core<br/>ModernBERT-base 149M params"]:::ultrabert
-                    subgraph ULTRABERT_HEADS["Classification Heads (Single Forward Pass)"]
-                        ULTRABERT_INTENT["Intent Head V2 (MULTI-LABEL)<br/>8 classes: log_memory, set_reminder...<br/>Returns: primary + all[] + scores{}"]:::ultrabert
-                        ULTRABERT_INGRESS["Ingress Head V2 (MULTI-LABEL)<br/>12 domains: HEALTH, FINANCE...<br/>Returns: domains[] above threshold"]:::ultrabert
-                        ULTRABERT_SAFETY["Safety Head<br/>4 bands: GREEN, AMBER, RED, CRISIS"]:::ultrabert
-                        ULTRABERT_EMOTIONS["Emotions Head<br/>44 classes: joy, sadness, anxiety..."]:::ultrabert
-                        ULTRABERT_SENTIMENT["Sentiment Head<br/>5 levels: very_negative to very_positive"]:::ultrabert
-                        ULTRABERT_NER["NER Head<br/>GlobalPointer: PERSON, ORG, LOC..."]:::ultrabert
-                        ULTRABERT_RELATIONS["Relations Head<br/>spouse_of, parent_of, works_at..."]:::ultrabert
+            subgraph ACKING_CORE["ACKING Core (Pre-LLM Classification + Resolver)"]
+                subgraph PRE_LLM_CLASSIFIER["Pre-LLM Classifier (~3ms)"]
+                    CLASSIFIER_CORE["Lightweight Classifier<br/>Intent + Domain + Safety + NER"]:::classifier
+                    subgraph CLASSIFIER_HEADS["Classification Heads"]
+                        CLASS_INTENT["Intent Head<br/>Multi-label: log_memory, set_reminder..."]:::classifier
+                        CLASS_DOMAIN["Domain Head<br/>family, health, finance, enterprise..."]:::classifier
+                        CLASS_SAFETY["Safety Head<br/>4 bands: GREEN, AMBER, RED, CRISIS"]:::classifier
+                        CLASS_EMOTIONS["Emotions + Sentiment<br/>Affective state detection"]:::classifier
+                        CLASS_NER["NER Head<br/>PERSON, ORG, LOC, TIME extraction"]:::classifier
                     end
+                end
+
+                subgraph RESOLVER_ARCH["Connector Resolver (MiniLM-L6, 22MB, 3ms/q, 87% Conn@1)"]
+                    RESOLVER_SEARCH["MiniLM-L6 Dense Retrieval<br/>action_text → cosine similarity<br/>against pre-computed connector docs"]:::resolver
+                    RESOLVER_PRIOR["Namespace Prior<br/>+0.20 if family.* / health.* / etc."]:::resolver
+                    RESOLVER_ROUTING["Routing Decision<br/>score_gap > 0.08 → is_resolved<br/>else → alternatives + disambiguation"]:::resolver
+                    RESOLVER_ENVELOPE["ResolutionEnvelope<br/>{verdict:can_execute, connector,<br/>tools[], constitution, confidence,<br/>alternatives, is_resolved}"]:::resolver
+                    RESOLVER_LPS["LPS Dynamic Enum Injection<br/>session-aware backend_id enums<br/>(reads LPS connected_resources)"]:::resolver
                 end
 
                 subgraph PHASE1_SS_WRITES["Phase 1 → SessionState Writes (3 Sections)"]
@@ -513,11 +549,27 @@ flowchart TB
                 end
 
                 CONTEXT_INFERENCE["Context Inference<br/>SessionState fill + entity resolution"]:::engine
-                TINY_SANITY_ARBITER["Tiny Sanity Arbiter (Fast Path)<br/>UltraBERT + cached checks"]:::engine
+                TINY_SANITY_ARBITER["Tiny Sanity Arbiter (Fast Path)<br/>Classifier + cached checks"]:::engine
 
-                UNCERTAINTY_ESTIMATOR["Uncertainty Estimator<br/>UltraBERT confidence scores"]:::engine
+                UNCERTAINTY_ESTIMATOR["Uncertainty Estimator<br/>Classifier confidence scores"]:::engine
                 ENTROPY_MIN_QUESTION_PLANNER["Entropy-Minimizing Question Planner<br/>Progressive disclosure (1–2 Qs)"]:::engine
             end
+        end
+
+        subgraph FAMILY_NATIVE_APPS["📱 Family Native Apps (GPS-Registered, Back LLM Tools)"]
+            direction LR
+            %% These are the ONLY tools Back LLM sees (~50 total across all domains).
+            %% Each app fans out to hidden data backends (Walmart API, etc.) internally.
+            %% Front LLM reads their state (read-only K1 surface).
+            %% Native app inbound API feeds LPS with connected backends.
+            FAMILY_SHOPPING["family.shopping<br/>price_check, place_order, list_items"]:::native_app
+            FAMILY_CALENDAR["family.calendar<br/>create_event, check_schedule, sync"]:::native_app
+            FAMILY_TASKS["family.tasks<br/>create_task, mark_done, assign_to"]:::native_app
+            FAMILY_CHORES["family.chores<br/>complete_chore, assign_chore, list"]:::native_app
+            FAMILY_REMINDERS["family.reminders<br/>set_reminder, dismiss, snooze"]:::native_app
+            FAMILY_FOOD["family.food<br/>plan_meals, place_delivery_order"]:::native_app
+            FAMILY_SETTINGS["family.family_settings<br/>manage_accounts, permissions"]:::native_app
+            NATIVE_BACKENDS["🔒 Hidden Data Backends<br/>walmart-api, target-api, costco-api<br/>instacart-api, doordash-api...<br/>NEVER visible to Back LLM"]:::backend
         end
 
         subgraph CONCIERGE_TOOLS["Concierge LLM Tools (Actor-Segregated)"]
@@ -533,7 +585,7 @@ flowchart TB
                     TOOL_UPDATE_BELIEFS["update_beliefs()<br/>New facts, corrections, invalidations<br/>LLM detects: implicit facts, user corrections"]:::tool_cognitive
                     TOOL_UPDATE_CLARIFICATIONS["update_clarifications()<br/>Semantic gaps, resolved gaps<br/>LLM detects: cannot proceed without user info"]:::tool_cognitive
                     TOOL_UPDATE_NARRATIVE["update_narrative()<br/>Thread switch/resume/new/continue<br/>LLM detects: topic shifts, thread resumptions"]:::tool_cognitive
-                    TOOL_REFINE_AFFECT["refine_affect()<br/>Override emotion when sarcasm/nuance detected<br/>LLM overrides UltraBERT when confident"]:::tool_cognitive
+                    TOOL_REFINE_AFFECT["refine_affect()<br/>Override emotion when sarcasm/nuance detected<br/>LLM overrides classifier when confident"]:::tool_cognitive
                     TOOL_PROMOTE_BELIEF["promote_belief()<br/>WARM to HOT fact promotion<br/>LLM detects: user referencing old context"]:::tool_cognitive
                 end
 
@@ -1169,7 +1221,7 @@ flowchart TB
 
     LISTENING -->|"k1.concierge.user_input"| ACKING
 
-    %% ACKING routes based on complexity tier (determined by UltraBERT)
+    %% ACKING routes based on complexity tier (determined by pre-LLM classifier)
     %% LOW: Skip preliminary ack, execute tool fast (<2s), then LLM response with result
     %% MEDIUM/HIGH: Generate preliminary ack for conversational continuity (tasks may take 10-30s)
     ACKING -->|"uncertainty ≥ 0.2"| CLARIFYING
@@ -1265,25 +1317,25 @@ flowchart TB
     WAL_DRIVER -->|"episodic memories"| TOOL_RECALL_MEMORY
     VECTOR_DRIVER -->|"semantic matches"| TOOL_RECALL_MEMORY
     TOOL_RECALL_MEMORY -->|"recall bundle"| CAPABILITY_CONTEXT_BUILDER
-    %% UltraBERT Flow (22ms single forward pass)
-    %% NOTE: UltraBERT runs all heads in single forward pass - shown as grouped subgraph
-    %% Heads: INTENT, INGRESS, SAFETY, EMOTIONS, SENTIMENT, NER, RELATIONS (12 total)
-    ACKING -->|"user_input"| ULTRABERT_CORE
-    ULTRABERT_CORE -->|"12 heads parallel: INTENT, INGRESS, SAFETY, EMOTIONS, NER"| ULTRABERT_ENGINE
+    %% Pre-LLM Classification Flow (~3ms single forward pass)
+    %% NOTE: Classifier runs all heads in single forward pass - shown as grouped subgraph
+    %% Heads: INTENT, DOMAIN, SAFETY, EMOTIONS, NER
+    ACKING -->|"user_input"| CLASSIFIER_CORE
+    CLASSIFIER_CORE -->|"5 heads parallel: INTENT, DOMAIN, SAFETY, EMOTIONS, NER"| PRE_LLM_CLASSIFIER
 
     %% Safety Gate (FIRST - before any routing)
-    ULTRABERT_SAFETY -->|"safety_band"| CRISIS_DETECTOR
+    CLASS_SAFETY -->|"safety_band"| CRISIS_DETECTOR
     CRISIS_DETECTOR -->|"CRISIS detected"| SAFETY_OVERRIDE
     SAFETY_OVERRIDE -->|"immediate"| TIER_CRISIS
     TIER_CRISIS -->|"safety.crisis.protocol"| SAFETY_MAILBOX
 
     %% Complexity Routing (after safety clear) - Multi-Label Flow
-    ULTRABERT_INTENT -->|"intents[] + scores{}"|MULTI_INTENT_SCORER
-    ULTRABERT_INGRESS -->|"domains[]"|CROSS_DOMAIN_DETECTOR
+    CLASS_INTENT -->|"intents[] + scores{}"|MULTI_INTENT_SCORER
+    CLASS_DOMAIN -->|"domains[]"|CROSS_DOMAIN_DETECTOR
     MULTI_INTENT_SCORER -->|"intent_complexity"|COMPLEXITY_CLASSIFIER
     CROSS_DOMAIN_DETECTOR -->|"domain_complexity"|COMPLEXITY_CLASSIFIER
-    ULTRABERT_SAFETY -->|"safety_band"| COMPLEXITY_CLASSIFIER
-    ULTRABERT_EMOTIONS -->|"emotion_intensity"| COMPLEXITY_CLASSIFIER
+    CLASS_SAFETY -->|"safety_band"| COMPLEXITY_CLASSIFIER
+    CLASS_EMOTIONS -->|"emotion_intensity"| COMPLEXITY_CLASSIFIER
 
     COMPLEXITY_CLASSIFIER -->|"LOW: single intent + single domain"| TIER_LOW
     COMPLEXITY_CLASSIFIER -->|"MEDIUM: multi-intent OR multi-domain"| TIER_MEDIUM
@@ -1298,12 +1350,12 @@ flowchart TB
     TIER_HIGH -->|"route to dispatch (LLM planning IN dispatching)"| DISPATCHING
 
     %% Feed other ACKING components (Multi-Label aware)
-    ULTRABERT_INTENT -->|"intents[] explicit"| HYPOTHESIS_GENERATOR
-    ULTRABERT_INGRESS -->|"domains[] for context"| HYPOTHESIS_GENERATOR
+    CLASS_INTENT -->|"intents[] explicit"| HYPOTHESIS_GENERATOR
+    CLASS_DOMAIN -->|"domains[] for context"| HYPOTHESIS_GENERATOR
     HYPOTHESIS_GENERATOR -->|"all_intent_requirements"| CONTRACT_SIGNAL_GAPS
     CONTRACT_SIGNAL_GAPS -->|"signals"| SIGNAL_LIBRARY
-    ULTRABERT_NER -->|"entities"| CONTEXT_INFERENCE
-    ULTRABERT_NER -->|"TIME/DATE/DURATION entities"| TIME_PARSER
+    CLASS_NER -->|"entities"| CONTEXT_INFERENCE
+    CLASS_NER -->|"TIME/DATE/DURATION entities"| TIME_PARSER
     TIME_PARSER -->|"parsed temporal expressions"| TIME_RESOLVER
     TIME_RESOLVER -->|"query user TZ"| TIMEZONE_CONTEXT
     TIMEZONE_CONTEXT -->|"TZ info"| TIME_RESOLVER
@@ -1313,7 +1365,7 @@ flowchart TB
     SIGNAL_LIBRARY -->|"time_ambiguity signal"| ENTROPY_MIN_QUESTION_PLANNER
 
     %% Spatial Resolution (parallel to Temporal)
-    ULTRABERT_NER -->|"LOC entities"| LOCATION_RESOLVER
+    CLASS_NER -->|"LOC entities"| LOCATION_RESOLVER
     LOCATION_INGRESS -->|"raw coords + signal"| LOCATION_RESOLVER
     LOCATION_RESOLVER -->|"query known places"| PLACE_REGISTRY
     PLACE_REGISTRY -->|"place match / unknown"| LOCATION_RESOLVER
@@ -1321,25 +1373,23 @@ flowchart TB
     MOTION_CLASSIFIER -->|"motion state"| SPATIAL_ANCHOR
     LOCATION_RESOLVER -->|"resolved location context"| CONTEXT_INFERENCE
     LOCATION_RESOLVER -->|"unknown place?"| SIGNAL_LIBRARY
-    ULTRABERT_RELATIONS -->|"relations"| CONTEXT_INFERENCE
     CONTRACT_SIGNAL_GAPS -->|"slot_fill_request"| CONTEXT_INFERENCE
     CONTEXT_INFERENCE -->|"filled_intent + provenance"| TINY_SANITY_ARBITER
     TINY_SANITY_ARBITER -->|"verdict + flags"| UNCERTAINTY_ESTIMATOR
-    ULTRABERT_INTENT -->|"confidence_score"| UNCERTAINTY_ESTIMATOR
+    CLASS_INTENT -->|"confidence_score"| UNCERTAINTY_ESTIMATOR
     UNCERTAINTY_ESTIMATOR -->|"score + reasons"| ENTROPY_MIN_QUESTION_PLANNER
     ENTROPY_MIN_QUESTION_PLANNER -->|"question_plan"| CLARIFYING
     CLARIFYING -->|"generate clarification (~300 tokens)"| LLM_REQUEST_BUS
-    ULTRABERT_EMOTIONS -->|"tone_hint"| AFFECTIVE_MIRRORING_ENGINE
-    ULTRABERT_SENTIMENT -->|"sentiment"| AFFECTIVE_MIRRORING_ENGINE
+    CLASS_EMOTIONS -->|"tone_hint"| AFFECTIVE_MIRRORING_ENGINE
 
-    %% UltraBERT → SessionState Updates (Multi-Label)
-    ULTRABERT_EMOTIONS -->|"update AFFECTIVE_NOW"| AFFECTIVE_NOW
-    ULTRABERT_NER -->|"update BELIEFS_ACTIVE"| BELIEFS_ACTIVE
+    %% Classifier → SessionState Updates (Multi-Label)
+    CLASS_EMOTIONS -->|"update AFFECTIVE_NOW"| AFFECTIVE_NOW
+    CLASS_NER -->|"update BELIEFS_ACTIVE"| BELIEFS_ACTIVE
     TIME_RESOLVER -->|"update CONTROL.temporal_context"| CONTROL
     SPATIAL_ANCHOR -->|"update MULTIMODAL.spatial_context"| MULTIMODAL
-    ULTRABERT_SAFETY -->|"update CONTROL.safety_band"| CONTROL
-    ULTRABERT_INTENT -->|"update CONTROL.intents{primary,all[],scores}"| CONTROL
-    ULTRABERT_INGRESS -->|"update CONTROL.domains[]"| CONTROL
+    CLASS_SAFETY -->|"update CONTROL.safety_band"| CONTROL
+    CLASS_INTENT -->|"update CONTROL.intents{primary,all[],scores}"| CONTROL
+    CLASS_DOMAIN -->|"update CONTROL.domains[]"| CONTROL
 
     CONTRACT_SIGNAL_GAPS -.->|capability requirements| CAPABILITY_REGISTRY
     ACKING -->|"pre_execution_check"| CONSTRAINT_MANAGER
@@ -1684,9 +1734,9 @@ flowchart TB
     L1_RHYTHM -->|"Pacing & Cadence"| CONCIERGE_FSM
     CONCIERGE_FSM -->|"EMOTIONAL_PROCESSING"| AFFECTIVE_MIRRORING_ENGINE
     AFFECTIVE_MIRRORING_ENGINE -->|"Adjust Emotional Tone"| CONCIERGE_FSM
-    %% AFFECT ANALYSIS: Now handled by K1 UltraBERT (not K0)
-    CONCIERGE_FSM -->|"analyze affect (local)"| ULTRABERT_EMOTIONS
-    ULTRABERT_EMOTIONS -->|"k1.affect.analyzed.v1"| EVENT_BUS
+    %% AFFECT ANALYSIS: Handled by K1 pre-LLM classifier
+    CONCIERGE_FSM -->|"analyze affect (local)"| CLASS_EMOTIONS
+    CLASS_EMOTIONS -->|"k1.affect.analyzed.v1"| EVENT_BUS
     EVENT_BUS -->|"Update affective_now"| AFFECTIVE_NOW
     %% V2 EXTENSION POINT: Speculative pre-warming based on anticipation predictions
     CONVERSATIONAL_ANTICIPATION_ENGINE -->|"Speculative Execution (V2)"| ORCHESTRATOR_ACTOR
@@ -1910,7 +1960,7 @@ flowchart TB
     COGNITIVE_LOAD_ROUTING -->|"complexity-aware selection"| CAPABILITY_RESOLVER
     CONTEXT_BUDGET -->|"token budget"| QOS_INTEGRATION
     QOS_INTEGRATION -->|"budget-aware selection"| CAPABILITY_RESOLVER
-    ULTRABERT_SAFETY -->|"safety band"| SECURITY_CONTEXT
+    CLASS_SAFETY -->|"safety band"| SECURITY_CONTEXT
     SECURITY_CONTEXT -->|"band-based access"| CAPABILITY_RESOLVER
     CAPABILITY_RESOLVER -->|"selected provider"| CAPABILITY_FABRIC
 
@@ -2077,7 +2127,10 @@ flowchart TB
     classDef external fill:#e1f5ff,stroke:#01579b,stroke-width:2px,color:#000
     classDef output fill:#a5d6a7,stroke:#2e7d32,stroke-width:3px,color:#000,font-weight:bold
     classDef protocol fill:#f3e5f5,stroke:#4a148c,stroke-width:2px,color:#000
-    classDef ultrabert fill:#ff6b6b,stroke:#c92a2a,stroke-width:3px,color:#fff,font-weight:bold
+    classDef classifier fill:#ff6b6b,stroke:#c92a2a,stroke-width:3px,color:#fff,font-weight:bold
+    classDef resolver fill:#81c784,stroke:#2e7d32,stroke-width:3px,color:#000,font-weight:bold
+    classDef native_app fill:#a5d6a7,stroke:#2e7d32,stroke-width:2px,color:#000,font-weight:bold
+    classDef backend fill:#e0e0e0,stroke:#757575,stroke-width:1px,color:#000,font-style:italic
     classDef safety fill:#ff8787,stroke:#e03131,stroke-width:2px,color:#000
     classDef router fill:#74c0fc,stroke:#1971c2,stroke-width:2px,color:#000
     classDef tier_low fill:#b2f2bb,stroke:#2f9e44,stroke-width:2px,color:#000
@@ -2175,7 +2228,7 @@ flowchart TB
     class K0_BRIDGE,BRIDGE_PROTOCOL,K0_MEMORY,K0_POSTGRESQL,K0_RECEIPTS,K0_CMD,K0_QRY,PORT_QRY,QUERY_AGG,WAL_DRIVER,VECTOR_DRIVER,PORT_CMD,BUS_DISPATCH,PIPELINE_ROUTER,PIPELINE_P02,PIPELINE_P03,PORT_SSE k0
     class K0_SESSION_CHECKPOINTS,K0_TURN_HISTORY,K0_DELTA_BATCHING k0
     class K0_WAL_BACKEND,K0_OBJECT_BACKEND,K0_EMOTIONAL_PATTERNS k0
-    %% K0_AFFECT_ANALYSIS removed - now handled by K1 UltraBERT
+    %% K0_AFFECT_ANALYSIS removed - now handled by K1 pre-LLM classifier
     %% Cross-Kernel Bridge nodes (Bridge is at root level, not inside K0 or K1)
     class BRIDGE_CLIENT,ENVELOPE_BUILDER,JSON_ENVELOPES,BRIDGE_SSE,CAPABILITY_LEARNING_BRIDGE bridge
     class CONNECTOR_GATEWAY,BRIDGE_TOOL_REGISTRY,CREDENTIAL_MANAGER,RATE_LIMITER,AUDIT_LOGGER,IFL_FORWARDER bridge
@@ -2241,7 +2294,10 @@ flowchart TB
     class DYNAMIC_INSTANCES agent
     class MUTATION_GUARD,EVICTION_ENGINE,RECONSTRUCTION_SLA engine
     class EMERGENCY_SUMMARIZE,EMERGENCY_READONLY,EMERGENCY_SHED recovery
-    class ULTRABERT_CORE,ULTRABERT_INTENT,ULTRABERT_INGRESS,ULTRABERT_SAFETY,ULTRABERT_EMOTIONS,ULTRABERT_SENTIMENT,ULTRABERT_NER,ULTRABERT_RELATIONS ultrabert
+    class CLASSIFIER_CORE,CLASS_INTENT,CLASS_DOMAIN,CLASS_SAFETY,CLASS_EMOTIONS,CLASS_NER classifier
+    class RESOLVER_SEARCH,RESOLVER_PRIOR,RESOLVER_ROUTING,RESOLVER_ENVELOPE,RESOLVER_LPS resolver
+    class FAMILY_SHOPPING,FAMILY_CALENDAR,FAMILY_TASKS,FAMILY_CHORES,FAMILY_REMINDERS,FAMILY_FOOD,FAMILY_SETTINGS native_app
+    class NATIVE_BACKENDS backend
     class CRISIS_DETECTOR,SAFETY_OVERRIDE safety
     class COMPLEXITY_CLASSIFIER,MULTI_INTENT_SCORER,CROSS_DOMAIN_DETECTOR router
     class TIER_LOW tier_low

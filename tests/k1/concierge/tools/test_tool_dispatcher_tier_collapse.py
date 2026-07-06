@@ -76,8 +76,8 @@ class TestBackAllowlists:
 
     def test_simple_back_matches_old_low(self):
         expected = {
+            "resolve_situation",
             "recall_memory",
-            "discover_capabilities",
             "invoke_capability",
             "batch_invoke_capabilities",
             "submit_result",

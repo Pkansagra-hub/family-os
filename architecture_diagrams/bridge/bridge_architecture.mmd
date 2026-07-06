@@ -1,11 +1,13 @@
 %% ======================================================================================
 %% K0-K1 BRIDGE - DETAILED ARCHITECTURE DIAGRAM
+%% ⚠️ SUPERSEDED — See bridge_architecture_v2.mmd for the merged vision + implementation diagram.
+%% This file preserved as architectural reference (v1 vision with native-app-as-aggregator).
 %% ======================================================================================
 %% Created: 2026-02-01
 %% Updated: 2026-02-01 - IFL moved to Bridge (Option B: Bridge owns IFL)
 %% Updated: 2026-02-01 - IFL reworked: Universal Connector Protocol (not devices only)
 %%   IFL adapters are company-built, FamilyOS-signed, manifest-based
-%% Updated: 2026-02-01 - Added offline-first architecture (K1 self-sufficient)
+%% Updated: 2026-06-14 — Native-app-as-aggregator: IFL tools replaced with family native apps
 %% Updated: 2026-02-01 - Added complete envelope, query, SSE schemas from K0 ports
 %% Updated: 2026-02-01 - Added observability/feedback flow from FEEDBACK.md + observe.py
 %% Updated: 2026-02-01 - Fixed flow directions per K0/K1 skeleton diagrams
@@ -132,17 +134,17 @@ graph LR
             MW_GAP_ANSWER["Gap Answer Writer<br/>topic: memory.write<br/>body.correlation.gap_id"]:::k1_caller
         end
 
-        subgraph K1_TOOLS["IFL-Connected Tools (Auto-Registered from Manifests)"]
-            TOOL_HOME["Home Tools<br/>tool.execute.home.hue.*<br/>tool.execute.home.nest.*<br/>via IFL -> company adapters"]:::k1_tool
-            TOOL_TRANSPORT["Transport Tools<br/>tool.execute.transport.tesla.*<br/>tool.execute.transport.uber.*<br/>via IFL -> company adapters"]:::k1_tool
-            TOOL_FINANCE["Finance Tools<br/>tool.read.finance.chase.*<br/>tool.execute.finance.venmo.*<br/>via IFL -> company adapters"]:::k1_tool
-            TOOL_HEALTH["Health Tools<br/>tool.read.health.fitbit.*<br/>tool.read.health.apple_health.*<br/>via IFL -> company adapters<br/>inbound: ifl.health.*.heart_rate"]:::k1_tool
-            TOOL_CALENDAR["Calendar Tools<br/>tool.execute.calendar.google.*<br/>tool.read.calendar.outlook.*<br/>via IFL -> company adapters"]:::k1_tool
-            TOOL_SHOPPING["Shopping Tools<br/>tool.execute.shopping.instacart.*<br/>tool.read.shopping.doordash.*<br/>via IFL -> company adapters"]:::k1_tool
+        subgraph K1_NATIVE_APPS["📱 Family Native Apps (GPS-Registered, Back LLM Tools)"]
+            NATIVE_SHOPPING["family.shopping<br/>price_check, place_order, list_items<br/>→ fans out to Walmart, Costco, Kroger..."]:::k1_native
+            NATIVE_CALENDAR["family.calendar<br/>create_event, check_schedule, sync<br/>→ fans out to Google Cal, Outlook..."]:::k1_native
+            NATIVE_TASKS["family.tasks<br/>create_task, mark_done, assign_to<br/>→ fans out to Todoist, TickTick..."]:::k1_native
+            NATIVE_FOOD["family.food<br/>plan_meals, place_delivery_order<br/>→ fans out to DoorDash, UberEats..."]:::k1_native
+            NATIVE_MONEY["family.money<br/>get_balances, transfer_funds<br/>→ fans out to Chase, BofA, Venmo..."]:::k1_native
+            NATIVE_BACKENDS["🔒 Hidden Data Backends<br/>walmart-api, doordash-api, chase-api...<br/>Native apps call these internally<br/>NEVER visible to Back LLM"]:::k1_backend
         end
 
         subgraph K1_FABRIC["Capability Fabric (L2.5)"]
-            FAB_INVOKE["fabric.invoke(adapter, action)<br/>ALL external services via IFL<br/>-> GATEWAY_PORT -> IFL Runtime"]:::k1_caller
+            FAB_INVOKE["fabric.invoke(capability_name, params)<br/>Back LLM calls native app tools<br/>→ Native app fans out to IFL backends"]:::k1_caller
             FAB_RECALL["fabric.invoke(k0.query)<br/>Memory recall<br/>-> QUERY_PORT for K0"]:::k1_caller
             FAB_SPAWN["fabric.spawn()<br/>Agent creation<br/>K1-INTERNAL (no K0)"]:::k1_caller
         end
@@ -593,16 +595,14 @@ graph LR
     PROACTIVE_BUDGET -->|"budget ok"| CURIOSITY_AGENT
     CURIOSITY_AGENT -->|"user answers"| MW_GAP_ANSWER
 
-    %% Tools -> Bridge (All external services via IFL)
-    TOOL_HOME -->|"execute(adapter, action)"| GATEWAY_PORT
-    TOOL_TRANSPORT -->|"execute(adapter, action)"| GATEWAY_PORT
-    TOOL_FINANCE -->|"execute(adapter, action)"| GATEWAY_PORT
-    TOOL_HEALTH -->|"execute(adapter, action)"| GATEWAY_PORT
-    TOOL_CALENDAR -->|"execute(adapter, action)"| GATEWAY_PORT
-    TOOL_SHOPPING -->|"execute(adapter, action)"| GATEWAY_PORT
+    %% Native Apps → Bridge (Back LLM calls native app → native app fans out to IFL backends)
+    NATIVE_SHOPPING -->|"Back LLM invokes<br/>→ native app fans out<br/>to IFL backends"| GATEWAY_PORT
+    NATIVE_FOOD -->|"Back LLM invokes<br/>→ native app fans out<br/>to IFL backends"| GATEWAY_PORT
+    NATIVE_MONEY -->|"Back LLM invokes<br/>→ native app fans out<br/>to IFL backends"| GATEWAY_PORT
+    NATIVE_BACKENDS -->|"native app calls<br/>IFL backends via<br/>Gateway internally"| GATEWAY_PORT
 
-    %% Fabric -> Bridge (Capability invocation via IFL)
-    FAB_INVOKE -->|"invoke(adapter, action)"| GATEWAY_PORT
+    %% Fabric → Bridge (Back LLM calls invoke_capability on native app tools)
+    FAB_INVOKE -->|"invoke_capability(name, params)"| GATEWAY_PORT
     FAB_RECALL -->|"invoke(k0.query)"| QUERY_PORT
     %% FAB_SPAWN is K1-internal - no flow to Bridge/K0
 
@@ -841,6 +841,8 @@ graph LR
     %% K1 Touchpoints (Blue shades)
     classDef k1_caller fill:#bbdefb,stroke:#1565c0,stroke-width:2px,color:#000
     classDef k1_tool fill:#90caf9,stroke:#0d47a1,stroke-width:2px,color:#000
+    classDef k1_native fill:#a5d6a7,stroke:#2e7d32,stroke-width:3px,color:#000,font-weight:bold
+    classDef k1_backend fill:#e0e0e0,stroke:#757575,stroke-width:1px,color:#000,font-style:italic
 
     %% Bridge Components (Orange/Red shades - security focus)
     classDef bridge_port fill:#ff7043,stroke:#bf360c,stroke-width:3px,color:#fff,font-weight:bold

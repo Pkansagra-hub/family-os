@@ -48,6 +48,11 @@ _GOOGLE_PROVIDER_IDS = {
     "google-ai",
     "google_ai",
 }
+_DEEPSEEK_PROVIDER_IDS = {
+    "deepseek",
+    "deepseek-v4",
+    "deepseek_v4",
+}
 
 
 def _truthy(value: str | None) -> bool:
@@ -133,8 +138,16 @@ async def chat_repl() -> None:
                     "Set it and retry, set LLM_PROVIDER=vertex for Google Cloud billing, or omit --model-hub for test mode."
                 )
                 return
+        elif llm_provider in _DEEPSEEK_PROVIDER_IDS:
+            api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+            if not api_key:
+                print("ERROR: LLM_PROVIDER=deepseek requires DEEPSEEK_API_KEY env var.")
+                print("Set it and retry, or omit --model-hub for test mode.")
+                return
         else:
-            print(f"ERROR: unsupported LLM_PROVIDER={llm_provider!r}. Supported: google, vertex.")
+            print(
+                f"ERROR: unsupported LLM_PROVIDER={llm_provider!r}. Supported: google, vertex, deepseek."
+            )
             return
 
     # ── Boot kernel with correct model_mode ───────────────────────────

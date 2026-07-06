@@ -97,6 +97,7 @@ class ManifestAdmissionService:
         self._ingest_constitution(definition)
         self._ingest_resource_kinds(definition)
         self._ingest_ontology(definition)
+        self._ingest_connector_fts_text(definition)  # RES-004: connector-level FTS
 
         return ManifestAdmissionRecord(
             manifest_id="manifest-" + uuid.uuid4().hex[:12],
@@ -377,6 +378,43 @@ class ManifestAdmissionService:
                     operation_family=str(operation_family),
                     effect=str(effect),
                 )
+
+    def _ingest_connector_fts_text(self, d: ConnectorDefinition) -> None:
+        """Build and upsert connector-level FTS search_text from the definition.
+
+        Aggregates label, description, capability names/descriptions,
+        resource kinds, and ontology aliases into a single searchable
+        text field for FTS5 + embedding retrieval.
+        """
+        parts: list[str] = [
+            d.label or "",
+            d.description or "",
+        ]
+        for cap in d.capabilities or []:
+            parts.append(cap.name or "")
+            parts.append(cap.description or "")
+        for rk in d.resource_kinds or []:
+            parts.append(str(rk))
+        ont = getattr(d, "ontology", None) or {}
+        for alias in ont.get("concept_aliases", []) or []:
+            if isinstance(alias, dict):
+                parts.append(alias.get("alias", ""))
+            else:
+                parts.append(str(alias))
+        for alias in ont.get("operation_aliases", []) or []:
+            if isinstance(alias, dict):
+                parts.append(alias.get("alias", ""))
+            else:
+                parts.append(str(alias))
+        search_text = " ".join(p for p in parts if p)
+        if not search_text.strip():
+            return
+        self.store.upsert_connector_fts_text(
+            connector_id=d.connector_id,
+            label=d.label or "",
+            description=d.description or "",
+            search_text=search_text,
+        )
 
 
 # ── Helpers ────────────────────────────────────────────────────────────

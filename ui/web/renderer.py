@@ -32,6 +32,8 @@ class WebSocketRenderer:
     def __init__(self) -> None:
         self._connections: list[Any] = []  # list of WebSocket objects
         self._lock = asyncio.Lock()
+        self._queue: asyncio.Queue[dict[str, Any]] | None = None
+        self._pump_task: asyncio.Task[None] | None = None
         self.animated: bool = False
 
     async def add_connection(self, ws: Any) -> None:
@@ -43,29 +45,82 @@ class WebSocketRenderer:
             if ws in self._connections:
                 self._connections.remove(ws)
 
+    async def _ensure_pump(self) -> None:
+        if self._queue is None:
+            self._queue = asyncio.Queue(maxsize=1000)
+
+        if self._pump_task is None or self._pump_task.done():
+            self._pump_task = asyncio.create_task(
+                self._broadcast_pump(),
+                name="websocket-renderer-broadcast-pump",
+            )
+
+    async def _broadcast_pump(self) -> None:
+        assert self._queue is not None
+
+        while True:
+            message = await self._queue.get()
+            try:
+                await self._broadcast(message)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("WEB: broadcast pump failed")
+            finally:
+                self._queue.task_done()
+
     async def _broadcast(self, message: dict[str, Any]) -> None:
-        """Send a JSON message to all connected clients."""
+        """Send a JSON message to all connected clients.
+
+        Lock held only for snapshotting connections — never during socket I/O.
+        """
         data = json.dumps(message)
+
         async with self._lock:
-            dead: list[Any] = []
-            for ws in self._connections:
-                try:
-                    await ws.send_text(data)
-                except Exception:
-                    dead.append(ws)
-            for ws in dead:
-                self._connections.remove(ws)
+            connections = list(self._connections)
+
+        dead: list[Any] = []
+
+        for ws in connections:
+            try:
+                await ws.send_text(data)
+            except Exception:
+                dead.append(ws)
+
+        if dead:
+            async with self._lock:
+                for ws in dead:
+                    if ws in self._connections:
+                        self._connections.remove(ws)
 
     def _broadcast_sync(self, message: dict[str, Any]) -> None:
-        """Fire-and-forget broadcast from sync context (bus handlers)."""
+        """Fire-and-forget broadcast from sync context (bus handlers).
+
+        Queues the message through a single pump task so streaming
+        chunks don't create a task storm that chokes Python 3.13's
+        task-context tracking when aiohttp connection cleanup races
+        with WebSocket writes.
+        """
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.ensure_future(self._broadcast(message))
-            else:
-                loop.run_until_complete(self._broadcast(message))
+            loop = asyncio.get_running_loop()
         except RuntimeError:
-            pass
+            return
+
+        def _enqueue() -> None:
+            async def _put() -> None:
+                await self._ensure_pump()
+                assert self._queue is not None
+                try:
+                    self._queue.put_nowait(message)
+                except asyncio.QueueFull:
+                    logger.warning(
+                        "WEB: broadcast queue full, dropping message type=%s",
+                        message.get("type"),
+                    )
+
+            asyncio.create_task(_put(), name="websocket-renderer-enqueue")
+
+        loop.call_soon(_enqueue)
 
     # -- IRenderer protocol ------------------------------------------------
 
@@ -273,5 +328,20 @@ class WebSocketRenderer:
                 "error_message": error_message,
                 "error_code": error_code,
                 "timestamp": time.time(),
+            }
+        )
+
+    def send_session_updated(self, session_id: str, title: str) -> None:
+        """Push a session title update to all connected browsers.
+
+        Slice 7: Called from the coordinator's ``TOPIC_SESSION_TITLE_UPDATED``
+        bus subscription.  The browser handles ``type:session_updated`` by
+        updating the sidebar item's title text.
+        """
+        self._broadcast_sync(
+            {
+                "type": "session_updated",
+                "session_id": session_id,
+                "title": title,
             }
         )

@@ -38,6 +38,7 @@ if (-not $env:LLM_PROVIDER) {
 $llmProvider = $env:LLM_PROVIDER.Trim().ToLowerInvariant()
 $vertexProviders = @("vertex", "vertex-ai", "vertex_ai", "agent-platform", "agent_platform", "gemini-enterprise", "gemini_enterprise", "google-cloud", "google_cloud")
 $googleProviders = @("google", "gemini", "developer", "ai-studio", "ai_studio", "google-ai", "google_ai")
+$deepseekProviders = @("deepseek", "deepseek-v4", "deepseek_v4")
 
 if (-not $Test) {
     if ($vertexProviders -contains $llmProvider) {
@@ -62,8 +63,14 @@ if (-not $Test) {
             exit 1
         }
     }
+    elseif ($deepseekProviders -contains $llmProvider) {
+        if (-not $env:DEEPSEEK_API_KEY) {
+            Write-Error "LLM_PROVIDER=deepseek requires DEEPSEEK_API_KEY"
+            exit 1
+        }
+    }
     else {
-        Write-Error "Unsupported LLM_PROVIDER '$llmProvider'. Supported: google, vertex."
+        Write-Error "Unsupported LLM_PROVIDER '$llmProvider'. Supported: google, vertex, deepseek."
         exit 1
     }
 }

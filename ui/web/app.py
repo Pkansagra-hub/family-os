@@ -28,6 +28,7 @@ from fastapi.staticfiles import StaticFiles
 
 from ui.web.coordinator import UiCoordinator, get_web_coordinator, reset_coordinator
 from ui.web.routes.family_tools import build_family_tools_api
+from ui.web.routes.sessions import build_sessions_api
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,9 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 # Family-tool adapter discovery API (lazy: coordinator resolved per-request).
 app.include_router(build_family_tools_api(lambda: _coordinator))
+
+# Chat session persistence API (Slice 4: lazy, coordinator resolved per-request).
+app.include_router(build_sessions_api(lambda: _coordinator))
 
 # Process-wide shared state (lazy-init on first WebSocket connection)
 _coordinator: UiCoordinator | None = None
@@ -422,6 +426,50 @@ async def websocket_endpoint(ws: WebSocket) -> None:
     await coord.renderer.add_connection(ws)
 
     try:
+        # ── Slice 5: load chat history + session metadata from kernel.db ──
+        messages_payload: list[dict[str, Any]] = []
+        resolved_session_id = ""
+        turn_count_from_db = 0
+
+        _runtime = getattr(coord, "_runtime", None)
+        if _runtime is not None:
+            _svc = getattr(_runtime, "_service", None)
+            if _svc is not None:
+                _kdb = getattr(_svc, "_kernel_db", None)
+                _reg = getattr(_svc, "_session_registry", None)
+                _sid = getattr(_runtime, "_session_id", "")
+                resolved_session_id = str(_sid or "")
+                if _kdb is not None and _sid:
+                    try:
+                        rows = _kdb.get_messages(_sid)
+                        # Group into turn pairs {turn_num: {user, assistant, timestamp}}
+                        by_turn: dict[int, dict[str, Any]] = {}
+                        for row in rows:
+                            tn = row["turn_num"]
+                            if tn not in by_turn:
+                                by_turn[tn] = {"turn_num": tn, "timestamp": row["timestamp"]}
+                            by_turn[tn][row["role"]] = row["content"]
+                        for tn in sorted(by_turn):
+                            t = by_turn[tn]
+                            messages_payload.append(
+                                {
+                                    "turn_num": tn,
+                                    "user": t.get("user", ""),
+                                    "assistant": t.get("assistant", ""),
+                                    "timestamp": t["timestamp"],
+                                }
+                            )
+                    except Exception:
+                        logger.warning("Failed to load chat history from kernel.db", exc_info=True)
+                if _reg is not None and _sid:
+                    sess = _reg.get(_sid)
+                    if sess:
+                        turn_count_from_db = int(sess.get("turn_count", 0) or 0)
+
+        # Restore turn counter from DB (or keep 0 for new sessions)
+        if turn_count_from_db > 0:
+            _turn_counter = turn_count_from_db
+
         await ws.send_text(
             json.dumps(
                 {
@@ -432,6 +480,9 @@ async def websocket_endpoint(ws: WebSocket) -> None:
                     "turn": _turn_counter,
                     "system_ready": coord.system_ready,
                     "fsm_state": coord.fsm.state.name if coord.fsm else "UNKNOWN",
+                    # Slice 5: session identity + chat history for UI restore
+                    "session_id": resolved_session_id,
+                    "messages": messages_payload,
                 }
             )
         )
@@ -484,6 +535,18 @@ async def websocket_endpoint(ws: WebSocket) -> None:
 async def _handle_user_message(coord: UiCoordinator, ws: WebSocket, msg: dict) -> None:
     """Process a user message: publish to bus, await response, send activity."""
     global _turn_counter
+
+    # Slice 6: block input during session switch
+    if getattr(coord, "_switching", False):
+        await ws.send_text(
+            json.dumps(
+                {
+                    "type": "system",
+                    "text": "Switching sessions, please wait...",
+                }
+            )
+        )
+        return
 
     text = (msg.get("text") or "").strip()
     if not text:

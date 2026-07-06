@@ -523,12 +523,32 @@ def _extract_scenario_data(
         from k1.concierge.actors.front_hil_envelope import unwrap_hil_request_payload
 
         flat = unwrap_hil_request_payload(payload)
+        # Extract task context so Front can phrase a better question.
+        # The HIL envelope carries caller_key (e.g. "back:<task_id>")
+        # and the inner payload includes the task's action description
+        # and any context the Back LLM attached.
+        inner = (
+            flat.get("_hil_envelope", {}).get("payload", {})
+            if isinstance(flat.get("_hil_envelope"), dict)
+            else {}
+        )
+        task_action = str(inner.get("context", {}).get("task_action", "") or "")
+        if not task_action:
+            task_state = _safe_get_section(ss, "task_state")
+            if task_state and hasattr(task_state, "get_all"):
+                for t in task_state.get_all():
+                    if _task_has_status(t, "SUSPENDED"):
+                        task_action = _task_field(t, "action", "")
+                        break
+        task_context = str(inner.get("context", {}).get("task_context", "") or "")
         return {
             "hil_type": flat.get("hil_type", ""),
             "hil_question": flat.get("question", ""),
             "hil_options": flat.get("options", []),
             "hil_side_effects": flat.get("side_effects", []),
             "_hil_envelope": flat.get("_hil_envelope"),
+            "task_action": task_action,
+            "task_context": task_context,
         }
 
     if mode == PromptMode.HITL_RESOLVE:
@@ -1125,9 +1145,22 @@ def _build_event_turn_text(mode: PromptMode, scenario_data: dict[str, Any]) -> s
 
     if mode == PromptMode.HITL_RELAY:
         question = str(scenario_data.get("hil_question") or "the worker's question")
+        task_action = str(scenario_data.get("task_action") or "")
+        task_context = str(scenario_data.get("task_context") or "")
+        if task_action:
+            if task_context:
+                return (
+                    "A background task working on '{}' needs the user's input. "
+                    "The task has done: {}. "
+                    "Ask this question naturally and briefly: {}"
+                ).format(task_action, task_context, question)
+            return (
+                "A background task working on '{}' needs the user's input. "
+                "Ask this question naturally and briefly: {}"
+            ).format(task_action, question)
         return (
             "A background task needs the user's input. Ask this question naturally "
-            f"and briefly: {question}"
+            "and briefly: {}".format(question)
         )
 
     if mode == PromptMode.CANCEL:
@@ -1135,6 +1168,97 @@ def _build_event_turn_text(mode: PromptMode, scenario_data: dict[str, Any]) -> s
         return f"Confirm the cancellation status for {task} in one concise message."
 
     return ""
+
+
+# =========================================================================
+# M7 BP-20: HIL response classification (Thin Front)
+# =========================================================================
+
+
+async def _classify_hil_response(
+    *,
+    model: Any,
+    hil_question: str,
+    user_answer: str,
+    trace_id: str = "",
+) -> str:
+    """Classify a user response to an active HIL question.
+
+    Uses a tiny LLM call (NOT a full react_loop) to determine whether the
+    user is answering the HIL question (HIL_ANSWER), starting a new topic
+    (NEW_TOPIC), or cancelling the active task (CANCEL_ACTIVE_TASK).
+
+    Returns one of: "HIL_ANSWER", "NEW_TOPIC", "CANCEL_ACTIVE_TASK"
+    """
+    prompt = (
+        "You are a message classifier. A background task asked the user a "
+        "question and the user responded. Classify the user's response as "
+        "EXACTLY ONE of:\n\n"
+        "HIL_ANSWER — the user is answering the question (even partially, "
+        "even with a follow-up detail like 'yes, but use my work calendar')\n"
+        "NEW_TOPIC — the user is clearly starting a completely new, unrelated "
+        "request (not answering the question at all)\n"
+        "CANCEL_ACTIVE_TASK — the user wants to cancel or abandon the task "
+        'entirely (e.g., "never mind", "cancel that", "stop")\n\n'
+        "QUESTION: {question}\n\n"
+        "USER RESPONSE: {answer}\n\n"
+        "CLASSIFICATION (exactly one word):"
+    ).format(question=hil_question, answer=user_answer)
+
+    try:
+        from k1.model_hub.types import (
+            CapabilityType,
+            ChatPayload,
+            HubRequest,
+            Message,
+            RequestConstraints,
+        )
+
+        request = HubRequest(
+            capability=CapabilityType.CHAT,
+            payload=ChatPayload(
+                messages=[Message(role="user", content=prompt)],
+            ),
+            constraints=RequestConstraints(
+                max_tokens=16,
+                consumer_id="concierge.front.hil_classifier",
+            ),
+            trace_id=trace_id or "hil-classify",
+        )
+
+        # Use model.execute() — the standard LLM port interface.
+        # Falls back gracefully if the model doesn't support execute.
+        if hasattr(model, "execute"):
+            response = await model.execute(request)
+            text = ""
+            if hasattr(response, "text"):
+                text = str(response.text or "").strip().upper()
+            elif hasattr(response, "content"):
+                text = str(response.content or "").strip().upper()
+            else:
+                # Try unwrapping
+                from k1.model_hub.types import HubResponse
+                if isinstance(response, HubResponse):
+                    text = str(getattr(response, "text", "") or "").strip().upper()
+        else:
+            logger.warning(
+                "_classify_hil_response: model has no execute method; "
+                "defaulting to HIL_ANSWER"
+            )
+            return "HIL_ANSWER"
+
+        if "NEW_TOPIC" in text or "NEWTOPIC" in text:
+            return "NEW_TOPIC"
+        if "CANCEL" in text:
+            return "CANCEL_ACTIVE_TASK"
+        return "HIL_ANSWER"
+    except Exception:
+        logger.warning(
+            "_classify_hil_response: classification call failed; "
+            "defaulting to HIL_ANSWER",
+            exc_info=True,
+        )
+        return "HIL_ANSWER"
 
 
 # =========================================================================
@@ -1155,6 +1279,7 @@ async def front_handler(
     spatial: Any = None,
     grounding: Any = None,
     self_model: Any = None,
+    fsm_controller: Any = None,  # M7 BP-18/19/20: Active-HIL + Thin Front access
 ) -> ReactResult:
     """Front handler with mode-driven prompt assembly.
 
@@ -1580,6 +1705,116 @@ async def front_handler(
     async def _on_text_response(text: str) -> None:
         """Emit k1.response.final.v1 on bus -- Epic 6.3.3."""
         await _publish_final_text(text)
+
+    # ── M7 BP-19/BP-20: Thin Front HIL paths (gated behind BackPool) ──
+    # When BackPool is enabled, HITL_RELAY becomes a zero-LLM pass-through
+    # and HITL_RESOLVE uses a tiny classification call instead of a full
+    # react_loop.  Both reduce LLM calls per HIL round-trip from 2 to 1.
+    _thin_front = (
+        fsm_controller is not None
+        and getattr(fsm_controller, "_back_pool_enabled", False)
+    )
+
+    if _thin_front and mode == PromptMode.HITL_RELAY:
+        # BP-19: Zero-LLM pass-through.  Back already formatted the question
+        # in user-facing language.  Front publishes directly — no LLM call.
+        _hil_question = str(scenario_data.get("hil_question") or "").strip()
+        if _hil_question:
+            logger.info(
+                "front_handler: Thin Front HITL_RELAY — pass-through "
+                "question_len=%d (0 LLM calls)",
+                len(_hil_question),
+            )
+            # Publish hil.presented ack (arms the human-response timer)
+            try:
+                _publish_hil_presented(
+                    bus=bus,
+                    hil_envelope=scenario_data.get("_hil_envelope"),
+                    scenario_data=scenario_data,
+                    parent_id=parent_id,
+                    trace_id=trace_id,
+                )
+            except Exception:
+                logger.warning(
+                    "front_handler: Thin Front hil_presented publish failed",
+                    exc_info=True,
+                )
+            # Publish response.final with Back's question text verbatim
+            clean_text = _strip_leaked_reasoning(_hil_question)
+            clean_text = _strip_leaked_system_blocks(clean_text)
+            clean_text = _strip_leaked_back_frame(clean_text)
+            if clean_text:
+                await _on_text_response(clean_text)
+            return ReactResult(status="complete", text=clean_text or _hil_question)
+        else:
+            logger.warning(
+                "front_handler: Thin Front HITL_RELAY — no hil_question "
+                "in scenario_data; falling through to LLM path"
+            )
+
+    if _thin_front and mode == PromptMode.HITL_RESOLVE:
+        # BP-20: Tiny LLM classification call instead of full react_loop.
+        _hil_question = str(scenario_data.get("original_question") or "").strip()
+        _user_answer = str(scenario_data.get("user_answer") or "").strip()
+        if _hil_question and _user_answer:
+            logger.info(
+                "front_handler: Thin Front HITL_RESOLVE — classification "
+                "question_len=%d answer_len=%d (1 tiny LLM call)",
+                len(_hil_question),
+                len(_user_answer),
+            )
+            try:
+                classification = await _classify_hil_response(
+                    model=model,
+                    hil_question=_hil_question,
+                    user_answer=_user_answer,
+                    trace_id=trace_id,
+                )
+            except Exception:
+                logger.warning(
+                    "front_handler: Thin Front HIL classification failed — "
+                    "defaulting to HIL_ANSWER",
+                    exc_info=True,
+                )
+                classification = "HIL_ANSWER"
+
+            logger.info(
+                "front_handler: Thin Front HIL classification result=%s",
+                classification,
+            )
+
+            if classification == "CANCEL_ACTIVE_TASK":
+                _active_task_id = getattr(fsm_controller, "_active_hil_task_id", None)
+                if _active_task_id:
+                    logger.info(
+                        "front_handler: Thin Front HIL classification=CANCEL "
+                        "— cancelling active task=%s",
+                        _active_task_id,
+                    )
+                    from k1.concierge.actors.front_emitters import emit_task_cancel
+                    emit_task_cancel(
+                        bus=bus,
+                        task_id=_active_task_id,
+                        reason="User cancelled via HIL classification",
+                        parent_id=parent_id,
+                        trace_id=trace_id,
+                    )
+                return ReactResult(status="complete", text="")
+            elif classification == "NEW_TOPIC":
+                logger.info(
+                    "front_handler: Thin Front HIL classification=NEW_TOPIC "
+                    "— switching to STANDARD mode, preserving active HIL"
+                )
+                mode = PromptMode.STANDARD
+                # Fall through to normal STANDARD react_loop below
+            # HIL_ANSWER: fall through to normal post-loop HITL_RESOLVE
+        else:
+            logger.warning(
+                "front_handler: Thin Front HITL_RESOLVE — missing "
+                "question or answer; falling through to LLM path"
+            )
+
+    # ── End Thin Front ────────────────────────────────────────────────
 
     result = await react_loop(
         actor="front",

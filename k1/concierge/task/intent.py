@@ -40,6 +40,11 @@ class TaskIntent:
                  e.g. {"near": "$prev.result.address"}.
         domain:  Optional domain hint (travel, health, productivity).
                  Helps Back select domain-specific capabilities.
+        resource_family: Optional taxonomy family hint (e.g. "item", "event").
+                 Populated by Front LLM from registry hints; passed through
+                 to Back's resolve_situation call.
+        operation_hint: Optional operation hint (e.g. "create", "read").
+                 Helps Back select the right capability mode.
         urgency: Priority hint: "normal" (default), "urgent", "background".
                  Maps to bus Envelope priority during dispatch.
     """
@@ -47,6 +52,11 @@ class TaskIntent:
     action: str
     params: dict[str, Any] = field(default_factory=dict)
     domain: str | None = None
+    # DEPRECATED (2026-06-16): resolver no longer uses domain/rf/op hints as
+    # filters.  These fields survive for backward compat but are dead weight.
+    resource_family: str | None = None
+    # DEPRECATED (2026-06-16): see resource_family note above.
+    operation_hint: str | None = None
     urgency: str = "normal"
 
     _VALID_URGENCIES = frozenset({"normal", "urgent", "background"})
@@ -91,6 +101,10 @@ class TaskIntent:
         d: dict[str, Any] = {"action": self.action, "params": self.params}
         if self.domain is not None:
             d["domain"] = self.domain
+        if self.resource_family is not None:
+            d["resource_family"] = self.resource_family
+        if self.operation_hint is not None:
+            d["operation_hint"] = self.operation_hint
         if self.urgency != "normal":
             d["urgency"] = self.urgency
         return d
@@ -102,5 +116,7 @@ class TaskIntent:
             action=data["action"],
             params=data.get("params", {}),
             domain=data.get("domain"),
+            resource_family=data.get("resource_family"),
+            operation_hint=data.get("operation_hint"),
             urgency=data.get("urgency", "normal"),
         )

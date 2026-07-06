@@ -15,5 +15,6 @@ async def test_back_renders_execution_grounding_from_task_projection() -> None:
         {"grounding": projection_to_dict(projection)}, None
     )
 
-    assert block.startswith("== EXECUTION GROUNDING ==")
+    # Epic 17: grounding renders as provenance prose, not a raw block.
+    assert "verified grounding" in block
     assert projection.envelope_id in block

@@ -50,6 +50,82 @@ You do NOT need to understand the kernel internals. You provide these artifacts 
 | `VerificationPlanRunner` | Post-write verification (read_after_write / output_schema) via NativeReadbackPort |
 | `IdempotencyStore` | State machine: not_seen→in_flight→succeeded/failed; succeeded is immutable |
 | `FabricFactory` | STEP 21 wires all Phase 1 components (gated on enable_fabric_stores=True) |
+| `GlobalProjectionStore` | Phase 2.6 taxonomy tables (`domains`, `resource_families`, `domain_resource_families`, `connector_resource_families`) — governs which domains and resource families exist |
+
+---
+
+## 1a. Domain & Resource Family Taxonomy
+
+Before you write your manifest, you need to know which **domain** your connector belongs to and which **resource families** it manages. These are governed by the FamilyOS taxonomy — a set of SQLite tables that every connector must align with.
+
+### What Is a Domain?
+
+A **domain** is the broadest category your connector operates in. FamilyOS defines 16 domains:
+
+| Domain | Label | Example Connectors |
+|--------|-------|--------------------|
+| `family` | Family & Household | Calendar, Tasks, Chores, Shopping, Reminders, Family Settings |
+| `health` | Health & Wellness | Fitbit, Apple Health, MyFitnessPal, CVS Pharmacy |
+| `finance` | Banking & Finance | Chase, Plaid, Mint, TurboTax |
+| `education` | Education & Learning | Canvas, Google Classroom, Duolingo |
+| `productivity` | Work & Productivity | Notion, Todoist, Google Docs |
+| `home` | Smart Home & Living | Nest, Philips Hue, Ring |
+| `transport` | Transport & Travel | Uber, Lyft, Delta, Marriott |
+| `food` | Food & Cooking | Instacart, HelloFresh, Yummly |
+| `fitness` | Fitness & Activity | Strava, Peloton, Whoop |
+| `entertainment` | Media & Entertainment | Netflix, Spotify, Steam |
+| `communication` | Messaging & Social | WhatsApp, Slack, Discord |
+| `government` | Government & Civic | DMV, IRS, USPS |
+| `legal` | Legal & Compliance | DocuSign, LexisNexis |
+| `utilities` | Utilities & Services | PG&E, Comcast, Verizon |
+| `agriculture` | Agriculture & Farming | John Deere, Climate FieldView |
+| `automotive` | Automotive & Vehicles | Tesla, Carfax, Geico |
+
+Your connector's domain determines its `connector_id` prefix: `{domain}.{your_connector_name}`. Example: `family.acme_calendar`.
+
+**You cannot create a new domain.** Domains are governed by the FamilyOS team. If you believe a new domain is needed, see `RESOURCE_FAMILY_TAXONOMY.md` §6.
+
+### What Is a Resource Family?
+
+A **resource family** names the real-world kind of thing your connector operates on. It is NOT an implementation detail — it's a governed taxonomy term. Multiple connectors in the same domain can share a family.
+
+| Good (real-world concept) | Bad (implementation detail) |
+|---------------------------|----------------------------|
+| `event` | `calendar_event` |
+| `item` | `shopping_list_entry` |
+| `account` | `chase_checking_account` |
+| `prescription` | `cvs_medication_refill` |
+
+The **`family`** domain has these families: `chore`, `contact`, `event`, `item`, `meal`, `message`, `notification`, `pet`, `recipe`, `record`, `reminder`, `setting`, `subscription`, `task` (14 total).
+
+The full list of 57 families across all 16 domains is in `RESOURCE_FAMILY_TAXONOMY.md` §2-3.
+
+### How This Affects Your Manifest
+
+Your IFL manifest's `connector_id` MUST use a valid domain prefix. Your `resource_models` MUST list `resource_kind` values that correspond to valid resource families. When you submit for admission, the kernel validates these against the taxonomy tables.
+
+**Manifest example with taxonomy fields:**
+
+```yaml
+connector_id: "family.acme_calendar"    # ← domain prefix MUST be a valid domain
+adapter_id: "acme_calendar_adapter"
+
+# Taxonomy declaration (Phase 2.6+):
+domain_id: "family"                     # ← matches connector_id prefix
+resource_families: ["event"]            # ← from the family domain's approved list
+
+resource_models:
+  - resource_kind: "calendar_event"     # ← your connector-specific kind
+    # This maps to taxonomy family_id="event" via resource_families above
+```
+
+### Finding the Right Family
+
+1. Check `RESOURCE_FAMILY_TAXONOMY.md` §2-3 for the full domain→family mapping.
+2. Pick your domain from §1 of that document.
+3. Find families in your domain that match what your connector manages.
+4. If no existing family fits, you can propose a new one (see §6 of the taxonomy doc).
+5. Set `resource_families` to the taxonomy family IDs, and `resource_kind` to your connector-specific name.
 
 ---
 

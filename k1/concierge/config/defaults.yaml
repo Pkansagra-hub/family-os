@@ -84,10 +84,10 @@ actors:
     lease_renewal_extension_s: 60.0
 
     # Max lease renewals before hard expiry (M7 7.2.5)
-    max_lease_renewals: 3
+    max_renewals: 3
 
     # Grace period in seconds before hard-killing a cancelled worker (M7 7.2.3)
-    grace_period_s: 5.0
+    lease_grace_period_s: 5.0
 
 
 # ── bus/setup.py ────────────────────────────────────────────────────────

@@ -346,12 +346,19 @@ def register_definition_to_store(
 
     now_iso = datetime.now(timezone.utc).isoformat()
     connector_id = f"family.{definition.adapter_id}"
-    domain = "family"
+    domain = getattr(definition, "domain_id", None) or "family"
 
     resource_kinds = list(definition.resource_kinds or [])
     if not resource_kinds and definition.entity_type:
         resource_kinds = [definition.entity_type]
     primary_resource_kind = resource_kinds[0] if resource_kinds else None
+
+    # Phase 2.6: prefer definition.resource_families (taxonomy family IDs)
+    # over resource_kinds (legacy connector-specific strings).
+    family_ids: list[str] = list(getattr(definition, "resource_families", None) or [])
+    if not family_ids:
+        family_ids = list(resource_kinds)
+    primary_family_id: str | None = family_ids[0] if family_ids else primary_resource_kind
 
     # ── Connector ──────────────────────────────────────────────────────
     store.upsert_connector(
@@ -367,10 +374,25 @@ def register_definition_to_store(
             policy_declarations=dict(definition.policy_declarations or {}),
             resource_kinds=resource_kinds,
             guide_cards=list(definition.guide_cards or []),
+            domain_id=domain,
             created_at=now_iso,
             updated_at=now_iso,
         )
     )
+
+    # ── Connector resource families (Phase 2.6) ────────────────────────
+    # Only insert when definition.resource_families is explicitly set
+    # (post-Epic-23).  Pre-Epic-23 definitions use resource_kinds values
+    # like "calendar_event" that are connector-specific strings, not
+    # taxonomy family IDs — these would fail FK validation.
+    if getattr(definition, "resource_families", None):
+        for fid in family_ids:
+            if fid:
+                store._db.execute(
+                    "INSERT OR IGNORE INTO connector_resource_families "
+                    "(connector_id, family_id, is_primary) VALUES (?, ?, ?)",
+                    (connector_id, fid, 1 if fid == primary_family_id else 0),
+                )
 
     # ── Capabilities + typed index ─────────────────────────────────────
     count = 0
@@ -387,6 +409,8 @@ def register_definition_to_store(
                 action_name=action.name,
                 effect=action.kind,
                 resource_kind=primary_resource_kind,
+                domain_id=domain,
+                family_id=primary_family_id,
                 description=_description_for_action(action),
                 required_inputs=required_inputs,
                 optional_inputs=optional_inputs,
@@ -401,12 +425,12 @@ def register_definition_to_store(
             )
         )
 
-        if primary_resource_kind:
+        if primary_family_id:
             store.upsert_capability_type_index(
                 capability_name=cap_name,
                 connector_id=connector_id,
                 domain=domain,
-                resource_family=primary_resource_kind,
+                resource_family=primary_family_id,
                 operation_family=_operation_family(action),
                 effect=_TYPE_INDEX_EFFECT.get(action.kind, "write"),
                 side_effect_class=None,

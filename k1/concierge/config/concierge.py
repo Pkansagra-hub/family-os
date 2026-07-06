@@ -28,6 +28,9 @@ class ConciergeConfig:
     enable_delta: bool = True
     enable_hitl: bool = True
     enable_orchestrator: bool = True
+    # M7 BP-06: BackPool worker leasing. When False (default), Back dispatch
+    # uses the legacy single-worker path. Flip True after Milestone A wiring.
+    enable_back_pool: bool = True
     # M16.E1.I3: see ``KernelConfig.allow_planner_passthrough``.
     allow_planner_passthrough: bool = False
     # M17.E1.I1: see ``KernelConfig.allow_dispatch_passthrough``.
@@ -60,6 +63,7 @@ class ConciergeConfig:
             enable_delta=getattr(kc, "enable_delta", True),
             enable_hitl=getattr(kc, "enable_hitl", True),
             enable_orchestrator=getattr(kc, "enable_orchestrator", True),
+            enable_back_pool=getattr(kc, "enable_back_pool", False),
             allow_planner_passthrough=getattr(kc, "allow_planner_passthrough", False),
             allow_dispatch_passthrough=getattr(kc, "allow_dispatch_passthrough", False),
             auto_start_consumer=getattr(kc, "auto_start_consumer", True),

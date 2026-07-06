@@ -3,8 +3,8 @@ from __future__ import annotations
 from k1.concierge.prompt.back_prompt import build_back_prompt
 
 
-def test_back_prompt_injects_execution_profile_block_before_tool_rules() -> None:
-    block = "== EXECUTION PROFILES ==\n- calendar.v1: Calendar guidance"
+def test_back_prompt_injects_execution_profile_narrative_in_situational_context() -> None:
+    block = "This task matches the 'Family Calendar' operating profile (calendar.v1)."
     prompt = build_back_prompt(
         task={"task_id": "task-1", "tier": "LOW", "action": "create event"},
         safety_band="AMBER",
@@ -13,11 +13,12 @@ def test_back_prompt_injects_execution_profile_block_before_tool_rules() -> None
     )
 
     assert block in prompt
-    assert prompt.index("== EXECUTION PROFILES ==") < prompt.index("STEP 1 -- ORIENT")
-    assert prompt.index("STEP 1 -- ORIENT") < prompt.index("== TOOL SELECTION RULES ==")
+    # Profile narrative lives in SITUATIONAL CONTEXT, before the protocol.
+    assert prompt.index("== SITUATIONAL CONTEXT ==") < prompt.index(block)
+    assert prompt.index(block) < prompt.index("== EXECUTION PROTOCOL ==")
 
 
-def test_back_prompt_empty_execution_profile_block_keeps_existing_shape() -> None:
+def test_back_prompt_empty_execution_profile_renders_default_prose() -> None:
     prompt = build_back_prompt(
         task={"task_id": "task-1", "tier": "LOW", "action": "recall routine"},
         safety_band="AMBER",
@@ -25,6 +26,7 @@ def test_back_prompt_empty_execution_profile_block_keeps_existing_shape() -> Non
         execution_profile_block="",
     )
 
-    assert "== EXECUTION PROFILES ==" not in prompt
-    assert "STEP 1 -- ORIENT" in prompt
-    assert "== TOOL SELECTION RULES ==" in prompt
+    # Empty profile renders an explicit absence statement, not a blank.
+    assert "No domain operating profile matched this task" in prompt
+    assert "STEP 1 -- RESOLVE" in prompt
+    assert "== TOOL REFERENCE ==" in prompt

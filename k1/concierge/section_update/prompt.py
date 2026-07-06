@@ -255,7 +255,7 @@ def build_section_update_tool_schema() -> ToolSchema:
                 "mutations": {
                     "type": "array",
                     "items": {
-                        "oneOf": [
+                        "anyOf": [
                             _mutation_schema(section, operation)
                             for section, operations in CLASSIFIER_OPERATION_REGISTRY.items()
                             for operation in operations

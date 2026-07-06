@@ -1,51 +1,25 @@
-"""CapabilityTypeResolver — graph-based typed resolution.
+"""ConnectorResolver — MiniLM dense-retrieval connector routing.
 
-Traverses the 5 graph ontology tables in ``GlobalProjectionStore`` to
-deterministically map an intent (operation_hint + resource_kind_hint) to a
-specific capability.
+Replaces the old 4-step graph traversal with POC-v2-validated MiniLM-L6
+cosine-similarity search over connector documents (80.8% Strict C@1).
 
-Spec: Epic 3.5.
+Spec: Epic 3.5 → Resolver Redesign M2 (RES-006 + RES-007a, 2026-06-17).
 """
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from k1.fabric.resolver.request_frame import RequestFrame, RequestFrameIntent
-from k1.fabric.resolver.resource_projection import ResourceUniverse
 from k1.fabric.stores.global_projection_store import GlobalProjectionStore
-from k1.fabric.stores.local_projection_store import LocalProjectionStore
 
-# ── Constant sets ──────────────────────────────────────────────────────
-_WRITE_OPERATIONS = frozenset({"create", "update", "delete", "send", "fire", "write"})
-_READ_OPERATIONS = frozenset({"list", "read", "search"})
-
-# Stop-words skipped during concept extraction from action text
-_STOP_WORDS = frozenset(
-    {
-        "the",
-        "a",
-        "an",
-        "to",
-        "for",
-        "of",
-        "in",
-        "on",
-        "at",
-        "is",
-        "me",
-        "my",
-        "and",
-        "or",
-        "with",
-        "from",
-        "by",
-    }
-)
+logger = logging.getLogger(__name__)
 
 # ── Universal operation aliases ────────────────────────────────────────
 # Common LLM verbs → (operation_family, effect).  POC-proven at 96%.
+# NOTE: Still imported by manifest_admission.py for effect classification.
+# Will be migrated to a shared location in a later RES.
 UNIVERSAL_OPERATION_ALIASES: dict[str, tuple[str, str]] = {
     # Reads
     "find": ("search", "read"),
@@ -90,232 +64,116 @@ UNIVERSAL_OPERATION_ALIASES: dict[str, tuple[str, str]] = {
 }
 
 
-# ── ResolvedIntentType ─────────────────────────────────────────────────
+# ── ResolvedIntentType (DEPRECATED) ─────────────────────────────────────
+# Kept for backward compatibility — still imported by situated_resolver,
+# capability_binder, and policy/selector.  Will be removed when those
+# consumers are migrated (RES-007b, RES-010, RES-013).
 
 
 @dataclass
 class ResolvedIntentType:
-    """Typed output of CapabilityTypeResolver."""
+    """Legacy typed output.  Superseded by RankedConnectorSet."""
 
     intent_id: str
     domain: str
-    resource_family: str | None  # canonical resource family
-    operation_family: str  # canonical operation
-    effect: str  # "read" | "write"
-    role: str = "primary"  # "primary" | "companion" | "prerequisite" | "verifier"
+    resource_family: str | None
+    operation_family: str
+    effect: str
+    role: str = "primary"
     evidence: list[str] = field(default_factory=list)
-    confidence: str = "low"  # "high" | "medium" | "low"
+    confidence: str = "low"
     rejected: list[dict[str, str]] = field(default_factory=list)
     fallback_capabilities: list[dict[str, Any]] = field(default_factory=list)
 
 
-# ── CapabilityTypeResolver ─────────────────────────────────────────────
+# ── RankedConnectorSet ─────────────────────────────────────────────────
 
 
-class CapabilityTypeResolver:
-    """Traverses concept→resource→connector→capability graph tables.
+@dataclass
+class RankedConnectorSet:
+    """Output of ConnectorResolver.resolve().
 
-    Uses the 5 graph ontology tables in ``GlobalProjectionStore``:
-      concept_aliases → concept_resource_edges → resource_connector_edges
-      operation_aliases → capability_type_index
-
-    Fallback: when graph confidence is low, delegates to FTS5 BM25 search
-    as a concept suggestion layer (not a decision layer).
+    Primary is the top-ranked connector (or None if no match).
+    Alternatives are the next best matches for the resolution envelope.
     """
 
-    def __init__(
-        self,
-        global_store: GlobalProjectionStore,
-        local_store: LocalProjectionStore,
-    ) -> None:
-        self.global_store = global_store
-        self.local_store = local_store
+    primary: dict[str, Any] | None
+    alternatives: list[dict[str, Any]]
+
+
+# ── ConnectorResolver ──────────────────────────────────────────────────
+
+
+class ConnectorResolver:
+    """MiniLM dense-retrieval connector router.
+
+    Replaces the old 4-step graph traversal with POC-v2-validated
+    MiniLM-L6 cosine-similarity search (80.8% Strict C@1).
+
+    No domain facts in resolver code.  No graph tables.  No knobs.
+    All connector semantics live in the GPS connector documents.
+    """
+
+    def __init__(self, global_store: GlobalProjectionStore) -> None:
+        self.gps = global_store
 
     # ── Public API ─────────────────────────────────────────────────
 
     def resolve(
         self,
-        frame: RequestFrame,
-        universe: ResourceUniverse,
-    ) -> list[ResolvedIntentType]:
-        """Resolve every intent in the frame to its typed capability target."""
-        results: list[ResolvedIntentType] = []
-        for intent in frame.intents:
-            resolved = self._resolve_one(intent, universe)
-            results.append(resolved)
-        return results
+        action_text: str,
+        context_hints: dict[str, Any] | None = None,
+    ) -> RankedConnectorSet:
+        """Resolve a raw user utterance to the best-matching connector.
 
-    # ── Internal 4-step traversal ───────────────────────────────────
+        Args:
+            action_text: Raw user utterance (no LLM pre-processing).
+            context_hints: Optional advisory hints (active_os_domains, etc.).
 
-    def _resolve_one(
-        self,
-        intent: RequestFrameIntent,
-        universe: ResourceUniverse,
-    ) -> ResolvedIntentType:
-        """4-step graph traversal:
-        1. Resolve operation: operation_hint → (operation_family, effect)
-        2. Resolve concept: resource_kind_hint → canonical concepts
-        3. Map concept → resource_family
-        4. Typed capability lookup: domain + resource_family + operation_family + effect
+        Returns:
+            RankedConnectorSet with primary connector and alternatives.
         """
-        evidence: list[str] = []
-        rejected: list[dict[str, str]] = []
+        active_os_domains: list[str] | None = None
+        if context_hints:
+            active_os_domains = context_hints.get("active_os_domains")
 
-        # ── Step 1: Resolve operation ──
-        op_hint = (intent.operation_hint or "").lower().strip()
-        op_family, effect = self._resolve_operation(op_hint, intent)
-        if op_family:
-            evidence.append(f"operation: {op_hint} → {op_family}/{effect}")
-
-        # ── Step 2: Resolve concept ──
-        rk = (intent.resource_kind_hint or "").strip()
-        action = (intent.action or "").strip()
-        domain = intent.domain or ""
-
-        concept_hits = self._resolve_concept(rk, action, domain)
-        if concept_hits:
-            best = concept_hits[0]
-            evidence.append(f"concept: {rk}|{action[:40]} → {best}")
-        else:
-            concept_hits = self._extract_concept_from_action(action, domain)
-
-        # ── Step 3: Map concept → resource_family ──
-        resource_family: str | None = None
-        for concept in concept_hits[:3]:
-            rfs = self.global_store.get_concept_resource_family(concept, domain)
-            if rfs:
-                resource_family = rfs[0]["resource_family"]
-                evidence.append(f"resource_family: {concept} → {resource_family}")
-                break
-            rejected.append({"concept": concept, "reason": "no_resource_family_edge"})
-
-        if not resource_family:
-            # Fallback 1: try concepts directly as resource_family
-            for concept in concept_hits[:3]:
-                caps = self.global_store.lookup_capability_by_type(
-                    domain=domain,
-                    resource_family=concept,
-                    operation_family=op_family or "",
-                    effect=effect,
-                )
-                if caps:
-                    resource_family = concept
-                    evidence.append(f"resource_family: direct concept match → {concept}")
-                    break
-            # Fallback 2: use resource_kind_hint directly
-            if not resource_family and rk:
-                resource_family = rk
-                evidence.append(f"resource_family: fallback from rk_hint={rk}")
-
-        # ── Step 4: Typed capability lookup ──
-        capabilities: list[dict[str, Any]] = []
-        if resource_family and op_family:
-            caps = self.global_store.lookup_capability_by_type(
-                domain=domain,
-                resource_family=resource_family,
-                operation_family=op_family,
-                effect=effect,
-            )
-            if caps:
-                capabilities = caps
-                evidence.append(
-                    f"typed_lookup: {domain}.{resource_family}.{op_family}.{effect} "
-                    f"→ {len(caps)} matches"
-                )
-
-        # ── Confidence scoring ──
-        conf = "low"
-        if len(evidence) >= 4:
-            conf = "high"
-        elif len(evidence) >= 2:
-            conf = "medium"
-
-        return ResolvedIntentType(
-            intent_id=intent.intent_id,
-            domain=domain,
-            resource_family=resource_family,
-            operation_family=op_family or op_hint,
-            effect=effect,
-            evidence=evidence,
-            confidence=conf,
-            rejected=rejected,
-            fallback_capabilities=capabilities,
+        hits = self.gps.search_connectors(
+            action_text,
+            top_k=5,
+            active_os_domains=active_os_domains,
+        )
+        return RankedConnectorSet(
+            primary=hits[0] if hits else None,
+            alternatives=hits[1:] if len(hits) > 1 else [],
         )
 
-    # ── Step 1 helper ───────────────────────────────────────────────
+    # ── Graph traversal methods DELETED (RES-006, 2026-06-17) ────────
+    # _resolve_one, _resolve_operation, _resolve_concept,
+    # _extract_concept_from_action, and all knob/embedding fields
+    # have been removed.  The new resolve() above uses GPS MiniLM
+    # dense retrieval instead of graph traversal.
+    pass
 
-    def _resolve_operation(
-        self,
-        op_hint: str,
-        intent: RequestFrameIntent,
-    ) -> tuple[str, str]:
-        """Resolve operation alias → operation_family + effect."""
-        # Check universal aliases first
-        if op_hint in UNIVERSAL_OPERATION_ALIASES:
-            op_family, effect = UNIVERSAL_OPERATION_ALIASES[op_hint]
-            return op_family, effect
 
-        # Check graph table
-        hits = self.global_store.resolve_operation(op_hint)
-        if hits:
-            return hits[0]["operation_family"], hits[0]["effect"]
+# ── Legacy graph traversal (deleted — kept as comment for archaeology) ─
+# The following methods were removed in RES-006:
+#   _resolve_one()        — 4-step graph walk orchestrator
+#   _resolve_operation()  — universal alias + graph table + first-word fallback
+#   _resolve_concept()    — concept_aliases table traversal + word splitting
+#   _extract_concept_from_action() — multi-word phrase fallback
+#
+# Replaced by: ConnectorResolver.resolve() → GPS.search_connectors()
+# (MiniLM-L6 dense retrieval, POC-validated at 80.8% Strict C@1).
 
-        # Derive from known operation sets
-        if op_hint in _READ_OPERATIONS:
-            return op_hint, "read"
-        if op_hint in _WRITE_OPERATIONS:
-            return op_hint, "write"
 
-        return op_hint, "read"  # default
+# Prevent the file from ending with a docstring that could be misread as active code
+__all__ = [
+    "ConnectorResolver",
+    "RankedConnectorSet",
+    "ResolvedIntentType",
+    "UNIVERSAL_OPERATION_ALIASES",
+]
 
-    # ── Step 2 helpers ──────────────────────────────────────────────
-
-    def _resolve_concept(
-        self,
-        rk: str,
-        action: str,
-        domain: str,
-    ) -> list[str]:
-        """Resolve resource_kind_hint or action text → canonical concepts."""
-        concepts: list[str] = []
-
-        # Exact lookup via concept_aliases table
-        if rk:
-            hits = self.global_store.resolve_concept(rk, domain)
-            for h in hits:
-                if h["canonical_concept"] not in concepts:
-                    concepts.append(h["canonical_concept"])
-
-        # Also try the action text words as aliases
-        if action:
-            words = action.lower().split()
-            for word in words[:5]:
-                if word in _STOP_WORDS:
-                    continue
-                hits = self.global_store.resolve_concept(word, domain)
-                for h in hits:
-                    if h["canonical_concept"] not in concepts:
-                        concepts.append(h["canonical_concept"])
-
-        return concepts
-
-    def _extract_concept_from_action(
-        self,
-        action: str,
-        domain: str,
-    ) -> list[str]:
-        """Fallback: extract potential concept words from action text."""
-        concepts: list[str] = []
-        if not action:
-            return concepts
-
-        words = action.lower().split()
-        # Try multi-word phrases first, then individual words
-        for i in range(len(words)):
-            for j in range(i + 1, min(i + 4, len(words) + 1)):
-                phrase = " ".join(words[i:j])
-                hits = self.global_store.resolve_concept(phrase, domain)
-                for h in hits:
-                    if h["canonical_concept"] not in concepts:
-                        concepts.append(h["canonical_concept"])
-        return concepts
+# ── Legacy graph traversal methods deleted in RES-006 (2026-06-17).
+# See git history for the old _resolve_one, _resolve_operation,
+# _resolve_concept, _extract_concept_from_action implementations.

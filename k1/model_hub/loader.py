@@ -41,6 +41,7 @@ _KNOWN_PROVIDERS: tuple[str, ...] = (
     "google",
     "openai",
     "anthropic",
+    "deepseek",
 )
 
 _PROVIDER_ALIASES: dict[str, str] = {
@@ -58,6 +59,8 @@ _PROVIDER_ALIASES: dict[str, str] = {
     "google_cloud": "vertex",
     "vertex-ai": "vertex",
     "vertex_ai": "vertex",
+    "deepseek-v4": "deepseek",
+    "deepseek_v4": "deepseek",
 }
 
 

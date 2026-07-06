@@ -36,6 +36,7 @@ TOPIC_USER_INPUT = "k1.session.user.input.v1"
 TOPIC_ARTIFACT_CREATED = "k1.session.artifact.created.v1"
 TOPIC_TURN_STARTED = "k1.session.turn.started.v1"
 TOPIC_TURN_COMPLETED = "k1.session.turn.completed.v1"
+TOPIC_SESSION_TITLE_UPDATED = "k1.session.title.updated.v1"  # Slice 7: auto-title push
 TOPIC_STATE_UPDATED = "k1.session.state.updated.v1"
 
 # ---------------------------------------------------------------------------

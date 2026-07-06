@@ -1,0 +1,226 @@
+%% ========================================================================================================
+%% K1 CHAT SESSION PERSISTENCE — END-TO-END ARCHITECTURE
+%% ========================================================================================================
+%% STATUS: Design complete — 8-slice implementation plan. All 30 gaps resolved.
+%% GOAL:   Multi-chat UI with persistent sessions, boot restore, session switch, auto-title.
+%%         kernel.db (SQLite WAL) for chat transcript + session registry.
+%%         sessionstate.db (existing, unchanged) for cognitive state checkpoints.
+%% ========================================================================================================
+%% DOCUMENT: k1/docs/under_work/chat_session_persistence.md
+%% ========================================================================================================
+%% IMMUTABLE DESIGN DECISIONS:
+%%   1. kernel.db is a NEW SQLite file (Pattern B: lazy open/close like GlobalProjectionStore).
+%%   2. Chat messages (user + assistant) stored in st_chat_messages — SEPARATE from cognitive state.
+%%   3. Session identity is STABLE across reboots (no more f"web-{uuid4().hex[:8]}").
+%%   4. SessionRegistry wraps KernelDB for CRUD — single source of truth for session lifecycle.
+%%   5. Turn completion hooks via bus subscription (turn.completed.v1) — additive, no FSM changes.
+%%   6. Boot restore uses registry.get_most_recent() — SSM restore_if_exists already works.
+%%   7. Session switch uses STAGED ACTIVATION (create-before-destroy) — old never dies before new is proven.
+%%   8. Auto-title fires on turn 1 only — truncates first user message to 50 chars.
+%%   9. UI sidebar lives inside existing #sidebar (286px) — visible only on chat view.
+%%  10. All REST endpoints follow router factory pattern (matching family_tools.py).
+%% ========================================================================================================
+%% DATA MODEL — Two databases, different purposes:
+%%   kernel.db:        Session identity, chat transcript (NEW)
+%%   sessionstate.db:  Cognitive state checkpoints (existing, unchanged)
+%% ========================================================================================================
+%% RESTORE FIDELITY — What survives a switch:
+%%   ✅ Chat messages (kernel.db)           ✅ Session title (kernel.db)
+%%   ✅ Conversation beliefs (sessionstate)  ✅ Scoreboard/QUD (sessionstate)
+%%   ✅ Affective state (sessionstate)       ✅ Narrative thread (sessionstate)
+%%   ✅ Clarifications (sessionstate)        ✅ Trust level (sessionstate)
+%%   ⚠️  FSM resets to LISTENING             ❌ In-progress LLM streaming lost
+%%   ❌ Tool calls in flight cancelled       ❌ MemoryWriter batch flushed
+%% ========================================================================================================
+%% SLICE DEPENDENCY MAP:
+%%   Slice 1 (kernel.db) ──→ Slice 2 (messages) ──→ Slice 3 (registry) ──→ Slice 4 (REST API)
+%%                                                    │                        │
+%%                                                    └──→ Slice 5 (boot) ──→ Slice 6 (switch)
+%%                                                                                │
+%%                                          Slice 7 (auto-title) ←────────────────┘
+%%                                                    │
+%%                                          Slice 8 (UI sidebar) ←───────────────┘
+%% ========================================================================================================
+
+flowchart TB
+
+    %% ========================================================================
+    %% DATA LAYER — Persistent storage
+    %% ========================================================================
+    subgraph DATA_LAYER["DATA LAYER — Persistent Storage"]
+        direction LR
+
+        subgraph KERNEL_DB["kernel.db (NEW — Slice 1) — SQLite WAL, lazy open/close"]
+            direction TB
+            ST_SESSIONS["st_sessions<br/>session_id TEXT PK<br/>title TEXT DEFAULT 'New Chat'<br/>created_at INTEGER (unix ms)<br/>last_active INTEGER (unix ms)<br/>turn_count INTEGER DEFAULT 0<br/>member_id TEXT (reserved v2)<br/>device_id TEXT (reserved v2)"]:::db_table
+            ST_MESSAGES["st_chat_messages<br/>id INTEGER AUTOINCREMENT PK<br/>session_id TEXT FK → st_sessions<br/>turn_num INTEGER<br/>role TEXT ('user'|'assistant')<br/>content TEXT<br/>timestamp INTEGER (unix ms)<br/>INDEX (session_id, turn_num)"]:::db_table
+            KERNEL_META["kernel_meta (schema versioning)<br/>key TEXT PK<br/>value TEXT<br/>INSERT OR IGNORE schema_version=1"]:::db_table
+        end
+
+        subgraph SS_DB["sessionstate.db (EXISTING, unchanged) — Cognitive checkpoints"]
+            direction TB
+            SS_CHECKPOINTS["st_session_checkpoints<br/>FlatBuffers-encoded cognitive state<br/>HOT+WARM sections: beliefs, scoreboard,<br/>affect, narrative, control, clarifications,<br/>trust, history_archive<br/>Keyed by session_id — no schema change"]:::db_existing
+        end
+    end
+
+    %% ========================================================================
+    %% INFRASTRUCTURE LAYER — KernelService + KernelDB + SessionRegistry
+    %% ========================================================================
+    subgraph INFRA_LAYER["INFRASTRUCTURE LAYER — KernelService Tier 1 (S0.5/S2.12)"]
+        direction TB
+
+        KERNEL_SVC["KernelService (k1/kernel/service.py)<br/>_kernel_db: KernelDB | None (Slice 1)<br/>_session_registry: SessionRegistry | None (Slice 3)<br/>_sessions: dict[str, SessionInstance]<br/><br/>Tier 1 Startup (S0.5/S2.12):<br/>  1. open kernel_db + ensure schema<br/>  2. create SessionRegistry(kernel_db)<br/>Tier 2 (P1→P6): _create_session_tier2()"]:::svc
+
+        KERNEL_DB_CLASS["KernelDB (adapters/kernel_db.py)<br/>Pattern B: lazy open()/close()<br/>  open(): mkdir + sqlite3.connect<br/>  close(): commit + close (idempotent)<br/>  is_open: property → bool<br/>  execute(sql, params) → cursor<br/>  _ensure_schema(): CREATE TABLE IF NOT EXISTS<br/>PRAGMA: journal_mode=WAL, foreign_keys=ON,<br/>  busy_timeout=5000"]:::adapter
+
+        SESSION_REG["SessionRegistry (session_registry.py)<br/>Wraps KernelDB for session CRUD<br/>  create(title, origin) → session_id<br/>  get(session_id) → dict | None<br/>  get_most_recent() → dict | None<br/>  list_all() → List[dict]<br/>  update_title(id, title) → bool<br/>  touch(id) → bool<br/>  increment_turn(id) → bool<br/>  delete(id) → bool (cascade messages)<br/>ID format: {origin}-{12 hex chars}<br/>  48 bits entropy, collision < 1e-7"]:::registry
+    end
+
+    %% ========================================================================
+    %% TURN COMPLETION FLOW — Slice 2 + Slice 7
+    %% ========================================================================
+    subgraph TURN_FLOW["TURN COMPLETION FLOW — Slice 2 (messages) + Slice 7 (auto-title)"]
+        direction TB
+
+        FSM_EMIT["FSM: _emit_turn_completed()<br/>controller.py:4797<br/>Publishes on per-session bus:<br/>  topic: turn.completed.v1<br/>  payload: {turn_id, session_id,<br/>    user_message, assistant_response,<br/>    turn_number, timestamp_ms}"]:::fsm
+
+        WIRE_PERSIST["_wire_chat_persistence()<br/>service.py — called after P6 assembly<br/>  Subscribes to turn.completed.v1<br/>  on per-session bus<br/>  Guards: kernel_db open + is_open"]:::handler
+
+        HANDLER_BODY["on_turn_completed(envelope)<br/>  ── Slice 2: persist messages ──<br/>  kernel_db.insert_message(user)<br/>  kernel_db.insert_message(assistant)<br/>  ── Slice 3: increment turn ──<br/>  registry.increment_turn(session_id)<br/>  ── Slice 7: auto-title turn 1 ──<br/>  if turn_num == 1 and user_msg:<br/>    title = _auto_title(user_msg, 50)<br/>    registry.update_title(id, title)<br/>    publish title.updated.v1 on session bus"]:::handler_body
+
+        TITLE_FLOW["Auto-Title → UI (Slice 7)<br/>  Service: update_title + publish event<br/>  Coordinator web hook:<br/>    subscribe TOPIC_SESSION_TITLE_UPDATED<br/>    → renderer.send_session_updated()<br/>  Renderer: _broadcast_sync()<br/>    → WebSocket to all browsers<br/>    → {type: session_updated, ...}<br/>  UI: handleSessionUpdated()<br/>    → update sidebar item title"]:::title_flow
+    end
+
+    %% ========================================================================
+    %% BOOT RESTORE FLOW — Slice 5
+    %% ========================================================================
+    subgraph BOOT_FLOW["BOOT RESTORE FLOW — Slice 5 (coordinator + bootstrap + service)"]
+        direction TB
+
+        COORD_BOOT["UiCoordinator._phase2_kernel_startup()<br/>coordinator.py:466 (BEFORE Slice 5)<br/>  session_id = f'web-{uuid4().hex[:8]}'<br/>coordinator.py:466 (AFTER Slice 5)<br/>  session_id = ''<br/>  → KernelConfig(session_id='')<br/>  → start_kernel(config)<br/>  → read back runtime._session_id"]:::boot_step
+
+        BOOTSTRAP["bootstrap.start_kernel()<br/>bootstrap.py:84 (BEFORE Slice 5)<br/>  session_id = cfg.session_id or f'kernel-{uuid4()}'<br/>bootstrap.py:84 (AFTER Slice 5)<br/>  session_id = cfg.session_id or ''<br/>  → KernelService(cfg).startup()<br/>  → KernelService.create_session('')"]:::boot_step
+
+        CREATE_SESSION["KernelService.create_session('')<br/>service.py:952 — ID resolution BEFORE guards<br/>  1. if registry exists and session_id empty:<br/>     most_recent = registry.get_most_recent()<br/>     if found: use that ID (RESTORE)<br/>       registry.touch(id) — update last_active<br/>     if none: registry.create('New Chat') (NEW)<br/>  2. if no registry: fallback f'kernel-{uuid4()}'<br/>  3. existing guards (unchanged)<br/>  4. _create_session_tier2(session_id)<br/>     → P2: ssm.start(restore_if_exists=True)<br/>     → finds checkpoint for stable session_id<br/>     → WARM-RESTORE all cognitive state"]:::boot_step
+
+        WS_INIT["WebSocket init (app.py ~line 430)<br/>  After _ensure_coordinator() returns<br/>  → kernel_db.get_messages(session_id)<br/>  → group by turn_num into pairs<br/>  → registry.get(session_id) → turn_count<br/>  → emit: {type: init, session_id,<br/>     messages: [...], turn: turn_count}"]:::ws_init
+    end
+
+    %% ========================================================================
+    %% SESSION SWITCH FLOW — Slice 6 (STAGED ACTIVATION)
+    %% ========================================================================
+    subgraph SWITCH_FLOW["SESSION SWITCH — Slice 6 (create-before-destroy staged activation)"]
+        direction TB
+
+        SWITCH_GUARDS["Guards (order matters!)<br/>  1. _switching flag → 409 if already switching<br/>  2. session_id == active → 409 already active<br/>  3. coord._switching = True<br/>  4. wait_for_idle() (max 30s timeout)<br/>  5. teardown OutputChannel + web hooks"]:::switch_phase
+
+        PHASE_A["Phase A: Checkpoint old SSM (old STAYS ALIVE)<br/>  old_session.session_state.stop()<br/>  → synchronous, writes checkpoint<br/>  → bus, consumer, MW, worker all still running<br/>  → coordinator still serves old session"]:::switch_phase
+
+        PHASE_B["Phase B: Create new in staging<br/>  _create_session_tier2(new_session_id)<br/>  → registers in _sessions on success<br/>  → BOTH old and new coexist briefly<br/>  → new consumer task runs idle (no input)<br/>  FAIL: _create_session_tier2 cleans itself up<br/>  → old untouched, RuntimeError raised"]:::switch_phase
+
+        PHASE_C["Phase C: Validate new session<br/>  _validate_session(new_session)<br/>  PASS → continue to Phase D<br/>  FAIL → destroy new (rollback)<br/>  → old untouched, RuntimeError raised<br/>  → user message: 'Current session still active'"]:::switch_phase
+
+        PHASE_DE["Phase D: Destroy old (only after new proven)<br/>  destroy_session(old_session_id)<br/>  → reverse P6→P1 teardown<br/>Phase E: Touch registry<br/>  registry.touch(new_session_id)<br/>  → update last_active"]:::switch_phase
+
+        COORD_REPOINT["Coordinator re-point (after replace_session returns)<br/>  self._runtime._session_id = new_id<br/>  self.bus = new_session.bus<br/>  self.router, .fsm, .session_state,<br/>  .front_mailbox, .back_mailbox,<br/>  .front_dispatcher, .back_dispatcher,<br/>  .experience_layer, .delta_* ,<br/>  .hil_port, .ledger, .ledger_store,<br/>  .dead_letter_consumer, .front_ctx, .back_ctx<br/>  ALL re-pointed to new SessionInstance"]:::switch_phase
+
+        REWIRE_PHASE3["Re-wire Phase 3<br/>  1. New OutputChannel(bus=new_bus, renderer)<br/>  2. output_channel.subscribe_all()<br/>  3. _wire_web_timeline_hooks() — idempotent<br/>  4. Load chat history: kernel_db.get_messages()<br/>  5. Broadcast: {type: session_activated, ...}<br/>  6. REST response: {session_id, title,<br/>     turn_count, messages}<br/>  7. finally: self._switching = False"]:::switch_phase
+    end
+
+    %% ========================================================================
+    %% REST API LAYER — Slice 4
+    %% ========================================================================
+    subgraph API_LAYER["REST API LAYER — Slice 4 (router factory pattern)"]
+        direction LR
+
+        API_ROUTER["ui/web/routes/sessions.py<br/>build_sessions_api(lambda: _coordinator)<br/>  → APIRouter(prefix=/api/sessions)<br/><br/>Endpoints (all guard: 503 if !coordinator):<br/>  GET    /api/sessions<br/>    → registry.list_all() + active_session_id<br/>  POST   /api/sessions?title=...<br/>    → registry.create(title) → {session_id}<br/>  DELETE /api/sessions/{id}<br/>    → guard: id != active → 409<br/>    → registry.delete(id) → {deleted: true}<br/>  PATCH  /api/sessions/{id}?title=...<br/>    → registry.update_title(id, title)<br/>  GET    /api/sessions/{id}/history<br/>    → kernel_db.get_messages(id)<br/>    → grouped by turn_num → {turns: [...]}<br/>  POST   /api/sessions/{id}/activate<br/>    → guard: _switching → 409<br/>    → guard: id == active → 409<br/>    → coord.activate_session(id)"]:::api_router
+
+        APP_MOUNT["ui/web/app.py mounts<br/>  app.include_router(<br/>    build_sessions_api(lambda: _coordinator)<br/>  )<br/>Imported alongside family_tools.py mount"]:::api_mount
+    end
+
+    %% ========================================================================
+    %% UI LAYER — Slice 8
+    %% ========================================================================
+    subgraph UI_LAYER["UI LAYER — Slice 8 (Chat Sidebar in existing #sidebar)"]
+        direction TB
+
+        UI_HTML["index.html — New section in sidebar<br/>  #chat-sessions (between nav#nav-primary<br/>    and .nav-divider)<br/>  .chat-sessions__head: CHATS label + [+ New Chat] button<br/>  .chat-sessions__list: scrollable flex column<br/>  Session items: .chat-session-item with<br/>    .chat-session-item__title (text-overflow: ellipsis)<br/>    .chat-session-item__delete (trash SVG, hover-only)<br/>  Active item: .chat-session-item--active with<br/>    cyan→blue gradient left bar"]:::ui_html
+
+        UI_CSS["styles.css — ~100 lines, all existing tokens<br/>  .chat-sessions: display:none (hidden when !chat)<br/>  .chat-sessions--visible: display:flex<br/>  .chat-sessions__list: overflow-y:auto, flex:1<br/>  .chat-session-item: 36px min-height, 13px font<br/>  .chat-session-item--active: indigo bg + gradient bar<br/>  Dark mode: html[data-theme='dark'] overrides<br/>  Hover: delete icon opacity 0→1<br/>  Delete hover: red bg on trash icon"]:::ui_css
+
+        UI_JS_STATE["app.js — State additions<br/>  activeSessionId: '' (from init message)<br/>  sessions: [] (from GET /api/sessions)<br/>  sessionsLoading: false (concurrency guard)"]:::ui_js
+
+        UI_JS_FUNCS["app.js — New functions (~200 lines)<br/>  fetchSessions() → GET /api/sessions → render<br/>  renderSessionList() → sort (active first, then<br/>    last_active desc) → map to DOM<br/>  createNewChat() → POST + activateSession<br/>  activateSession(id) → POST /{id}/activate<br/>    → loadMessagesIntoChat() OR clearChatMessages()<br/>  deleteSession(id) → confirm() → DELETE<br/>    → if active: switch to most recent remaining<br/>    → if none left: createNewChat()<br/>  loadMessagesIntoChat(messages) → forEach:<br/>    addUserMessage(turn.user)<br/>    addAssistantMessage(turn.assistant)<br/>  clearChatMessages() → dom.messages.innerHTML=''<br/>  setChatSessionsVisible(bool) → toggle CSS class<br/>  setupSessionSidebar() → event delegation:<br/>    click [data-session-id] → activateSession<br/>    click [data-action='delete-session'] → deleteSession<br/>    click #btn-new-chat → createNewChat"]:::ui_js
+
+        UI_JS_EVENTS["app.js — WebSocket handler extensions<br/>  handleInit(msg):<br/>    state.activeSessionId = msg.session_id<br/>    loadMessagesIntoChat(msg.messages)<br/>    fetchSessions()<br/>  handleSessionUpdated(msg):<br/>    update session.title in state.sessions<br/>    renderSessionList()<br/>  handleSessionActivated(msg):<br/>    state.activeSessionId = msg.session_id<br/>    state.turn = msg.turn_count<br/>    loadMessagesIntoChat(msg.messages)<br/>    localStorage.setItem(active_session_id, id)<br/>    renderSessionList()<br/>  navigateTo(viewId):<br/>    setChatSessionsVisible(viewId === 'chat')"]:::ui_js
+    end
+
+    %% ========================================================================
+    %% DATA FLOW DIAGRAMS — Cross-slice interactions
+    %% ========================================================================
+
+    %% ── Flow 1: Message Persistence (Slice 2+3+7) ──
+    FSM_EMIT -->|"turn.completed.v1<br/>per-session bus"| WIRE_PERSIST
+    WIRE_PERSIST --> HANDLER_BODY
+    HANDLER_BODY -->|"insert_message(user)"| KERNEL_DB_CLASS
+    HANDLER_BODY -->|"insert_message(assistant)"| KERNEL_DB_CLASS
+    HANDLER_BODY -->|"increment_turn(id)"| SESSION_REG
+    HANDLER_BODY -->|"turn 1: update_title + publish"| TITLE_FLOW
+
+    %% ── Flow 2: Boot Restore (Slice 5) ──
+    COORD_BOOT -->|"session_id=''"| BOOTSTRAP
+    BOOTSTRAP -->|"create_session('')"| CREATE_SESSION
+    CREATE_SESSION -->|"get_most_recent()"| SESSION_REG
+    CREATE_SESSION -->|"ssm.start(restore_if_exists=True)"| SS_DB
+    CREATE_SESSION -->|"resolved session_id"| COORD_BOOT
+    COORD_BOOT -->|"kernel_db.get_messages()"| WS_INIT
+    WS_INIT -->|"{type:init, messages:[...]}"| UI_JS_EVENTS
+
+    %% ── Flow 3: Session Switch (Slice 6) ──
+    SWITCH_GUARDS --> PHASE_A
+    PHASE_A -->|"old checkpointed, still alive"| PHASE_B
+    PHASE_B -->|"new created in staging"| PHASE_C
+    PHASE_C -->|"PASS: new valid"| PHASE_DE
+    PHASE_DE -->|"returns new SessionInstance"| COORD_REPOINT
+    COORD_REPOINT -->|"re-point 19 fields"| REWIRE_PHASE3
+    REWIRE_PHASE3 -->|"{type:session_activated}"| UI_JS_EVENTS
+
+    %% ── Flow 4: Auto-Title → UI (Slice 7) ──
+    TITLE_FLOW -->|"session_updated WS message"| UI_JS_EVENTS
+
+    %% ── Flow 5: REST API → Registry (Slice 4) ──
+    API_ROUTER -->|"list_all / create / delete / update"| SESSION_REG
+    API_ROUTER -->|"get_messages"| KERNEL_DB_CLASS
+    API_ROUTER -->|"activate → coord.activate_session()"| SWITCH_GUARDS
+
+    %% ── Flow 6: UI REST calls (Slice 8) ──
+    UI_JS_FUNCS -->|"fetch / POST / DELETE / PATCH"| API_ROUTER
+
+    %% ── Infrastructure wiring ──
+    KERNEL_SVC -->|"owns"| KERNEL_DB_CLASS
+    KERNEL_SVC -->|"owns"| SESSION_REG
+    SESSION_REG -->|"wraps"| KERNEL_DB_CLASS
+    KERNEL_DB_CLASS -->|"manages"| ST_SESSIONS
+    KERNEL_DB_CLASS -->|"manages"| ST_MESSAGES
+    KERNEL_DB_CLASS -->|"manages"| KERNEL_META
+
+    %% ========================================================================
+    %% CLASS DEFINITIONS FOR STYLING
+    %% ========================================================================
+    classDef db_table fill:#1a1a2e,stroke:#16213e,color:#e0e0e0,font-size:12px
+    classDef db_existing fill:#2d2d1a,stroke:#5c5c0a,color:#cccc99,font-size:12px
+    classDef svc fill:#0d1b2a,stroke:#1b3a5c,color:#a8d8ff,font-size:13px
+    classDef adapter fill:#1a2a1a,stroke:#2d5a2d,color:#a8ffa8,font-size:12px
+    classDef registry fill:#1a1a2e,stroke:#3a3a6e,color:#c8c8ff,font-size:12px
+    classDef fsm fill:#2a1a1a,stroke:#6e3a3a,color:#ffc8c8,font-size:12px
+    classDef handler fill:#1a2a2a,stroke:#3a6e6e,color:#a8ffff,font-size:12px
+    classDef handler_body fill:#0a1a2a,stroke:#1a3a5c,color:#a8d8ff,font-size:11px
+    classDef title_flow fill:#2a1a2a,stroke:#6e3a6e,color:#ffa8ff,font-size:12px
+    classDef boot_step fill:#1a2a1a,stroke:#3a6e3a,color:#a8ffa8,font-size:12px
+    classDef ws_init fill:#2a2a1a,stroke:#6e6e3a,color:#ffffa8,font-size:12px
+    classDef switch_phase fill:#1a0a0a,stroke:#5c1a1a,color:#ffaaaa,font-size:11px
+    classDef api_router fill:#0a1a2a,stroke:#1a5c8a,color:#a8d8ff,font-size:12px
+    classDef api_mount fill:#1a1a0a,stroke:#5c5c1a,color:#ffffa8,font-size:12px
+    classDef ui_html fill:#2a0a0a,stroke:#8a2a2a,color:#ffaaaa,font-size:11px
+    classDef ui_css fill:#0a2a2a,stroke:#2a8a8a,color:#a8ffff,font-size:11px
+    classDef ui_js fill:#2a2a0a,stroke:#8a8a2a,color:#ffffa8,font-size:11px

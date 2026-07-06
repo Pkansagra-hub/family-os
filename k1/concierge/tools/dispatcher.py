@@ -84,11 +84,6 @@ BUDGET_LIMITS: dict[str, int] = {
 # =========================================================================
 
 _FRONT_SIMPLE: set[str] = {
-    "update_beliefs",
-    "update_scoreboard",
-    "update_clarifications",
-    "update_narrative",
-    "refine_affect",
     "recall_memory",
     "summarize_context",
     "dispatch_task",
@@ -98,12 +93,12 @@ _FRONT_SIMPLE: set[str] = {
 
 FRONT_TIER_ALLOWLISTS: dict[str, set[str]] = {
     "simple": _FRONT_SIMPLE,
-    "plan": _FRONT_SIMPLE | {"promote_belief"},
+    "plan": _FRONT_SIMPLE,
     "crisis": set(),
     # Legacy aliases:
     "LOW": _FRONT_SIMPLE,
-    "MEDIUM": _FRONT_SIMPLE | {"promote_belief"},
-    "HIGH": _FRONT_SIMPLE | {"promote_belief"},
+    "MEDIUM": _FRONT_SIMPLE,
+    "HIGH": _FRONT_SIMPLE,
     "CRISIS": set(),
 }
 

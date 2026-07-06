@@ -93,6 +93,10 @@ class PortBundle:
     temporal: Any | None = None
     spatial: Any | None = None
     grounding: Any | None = None
+    # Phase 2: live registry hints (domains + resource_families) queried from
+    # GPS at kernel boot and injected into Back's prompt so the LLM can frame
+    # intents with domain-aware hints.
+    registry_hints: dict[str, Any] | None = None
     # P4B.6: writer is passed explicitly (was reach-through into ssm._writer_port)
     writer: IWriterPort | None = None
 
@@ -734,6 +738,53 @@ class ConciergeFactory:
                 "HITL gates will no-op until kernel wires HumanInTheLoopService",
             )
 
+        # Step 11.5: BackPool + BackTopicRouter + ReadyQueue (M7 BP-06)
+        # Gate behind enable_back_pool (default False) for zero behavioral
+        # change until explicitly enabled. Constructs BackPool with default
+        # sizing (pool_size=3, max_concurrent_per_session=2, lease_ttl_s=300).
+        back_pool = None
+        back_topic_router = None
+        ready_queue = None
+        if config.enable_back_pool:
+            from k1.concierge.actors.back_pool import BackPool
+            from k1.concierge.actors.back_pool import BackPoolConfig as BPCfg
+            from k1.concierge.actors.back_router import BackTopicRouter
+            from k1.concierge.actors.ready_queue import ReadyQueue
+
+            bp_cfg = BPCfg(
+                pool_size=3,
+                max_concurrent_per_session=2,
+                lease_ttl_s=300.0,
+                reclaim_check_interval_s=30.0,
+                enable_dependency_ordering=True,
+                max_renewals=3,
+                lease_grace_period_s=5.0,
+            )
+            back_pool = BackPool(config=bp_cfg)
+            back_topic_router = BackTopicRouter(back_pool=back_pool)
+            ready_queue = ReadyQueue()
+
+            fsm.set_back_pool(back_pool)
+            fsm.set_back_topic_router(back_topic_router)
+            fsm.set_ready_queue(ready_queue)
+            # Propagate enabled flag so controller gates pool-aware paths
+            if hasattr(fsm, "_back_pool_enabled"):
+                fsm._back_pool_enabled = True
+
+            logger.info(
+                "ConciergeFactory: BackPool wired pool_size=%d max_per_session=%d "
+                "lease_ttl=%.1fs router=%d routes",
+                bp_cfg.pool_size,
+                bp_cfg.max_concurrent_per_session,
+                bp_cfg.lease_ttl_s,
+                len(getattr(back_topic_router, "_routing_table", {})),
+            )
+        else:
+            logger.debug(
+                "ConciergeFactory: enable_back_pool=False — BackPool not wired; "
+                "using legacy single-worker Back dispatch"
+            )
+
         # Step 12: Weave + Activity tracker
         if hasattr(fsm, "set_weave_batcher"):
             from k1.concierge.protocols.weave_batcher import WeaveBatcher
@@ -817,6 +868,9 @@ class ConciergeFactory:
             ledger=ledger,
             ledger_store=ledger_store,
             dead_letter_consumer=dead_letter,
+            back_pool=back_pool,
+            back_topic_router=back_topic_router,
+            ready_queue=ready_queue,
         )
         if ports.temporal is not None:
             runtime.set_temporal(ports.temporal)
@@ -824,6 +878,8 @@ class ConciergeFactory:
             runtime.set_spatial(ports.spatial)
         if ports.grounding is not None:
             runtime.set_grounding(ports.grounding)
+        if ports.registry_hints is not None:
+            runtime.set_registry_hints(ports.registry_hints)
         return runtime
 
 

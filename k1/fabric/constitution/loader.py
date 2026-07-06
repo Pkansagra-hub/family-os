@@ -61,6 +61,9 @@ class ConstitutionLoader:
 
         artifact = validate_constitution(raw)
 
+        # RES-016: populate teaching-surface fields from old structured fields
+        artifact = _populate_teaching_fields(artifact)
+
         if known_resource_kinds is not None:
             violations = validate_constitution_semantics(artifact, known_resource_kinds)
             if violations:
@@ -141,6 +144,73 @@ class ConstitutionLoader:
     def _row_to_artifact(self, record: ConstitutionRecord) -> ConstitutionArtifact:
         """Validate a ``ConstitutionRecord`` into a typed artifact."""
         return validate_constitution(_record_to_dict(record))
+
+
+# ── RES-016: Teaching field population (2026-06-17) ────────────────────
+
+
+def _populate_teaching_fields(artifact: ConstitutionArtifact) -> ConstitutionArtifact:
+    """Map old structured constitution fields into new teaching-surface prose fields.
+
+    This is a lazy, additive transform — old fields are preserved, new
+    fields are derived.  Call from ConstitutionLoader.load() after validation.
+    """
+    # 1. mutation_sequencing → how_to_sequence
+    if not artifact.how_to_sequence and artifact.mutation_sequencing:
+        steps: list[str] = []
+        for m in sorted(artifact.mutation_sequencing, key=lambda s: s.order):
+            desc = getattr(m, "description", "") or ""
+            steps.append(f"{m.order}. [{m.phase}] {m.operation}: {desc}")
+        artifact = dataclasses.replace(artifact, how_to_sequence=steps)
+
+    # 2. verification_requirements → what_to_verify
+    if not artifact.what_to_verify and artifact.verification_requirements:
+        checks: list[str] = []
+        for v in artifact.verification_requirements:
+            method = getattr(v, "method", "") or ""
+            desc = getattr(v, "description", "") or ""
+            checks.append(f"After {method}: {desc}")
+        artifact = dataclasses.replace(artifact, what_to_verify=checks)
+
+    # 3. hil_gates → when_to_ask_human
+    if not artifact.when_to_ask_human and artifact.hil_gates:
+        gates: list[dict] = []
+        for g in artifact.hil_gates:
+            trigger = getattr(g, "trigger", "") or ""
+            prompt = getattr(g, "prompt", "") or ""
+            gates.append({"trigger": trigger, "reason": prompt, "prompt": prompt})
+        artifact = dataclasses.replace(artifact, when_to_ask_human=gates)
+
+    # 4. companion_resource_roles → companion_connectors
+    if not artifact.companion_connectors and artifact.companion_resource_roles:
+        companions: list[dict] = []
+        for c in artifact.companion_resource_roles:
+            rk = getattr(c, "resource_kind", "") or ""
+            role = getattr(c, "role", "") or ""
+            desc = getattr(c, "description", "") or ""
+            companions.append(
+                {
+                    "connector_id": "",  # resolved at runtime via GPS lookup
+                    "resource_kind": rk,
+                    "role": role,
+                    "description": desc,
+                }
+            )
+        artifact = dataclasses.replace(artifact, companion_connectors=companions)
+
+    # 5. conflict_analysis_rules → conflict_rules
+    if not artifact.conflict_rules and artifact.conflict_analysis_rules:
+        rules: list[str] = []
+        for r in artifact.conflict_analysis_rules:
+            check = getattr(r, "check", "") or ""
+            with_kinds = getattr(r, "with_resource_kinds", []) or []
+            desc = getattr(r, "description", "") or ""
+            resolution = getattr(r, "resolution", "") or ""
+            kinds_str = ", ".join(with_kinds) if with_kinds else "other resources"
+            rules.append(f"If {check} with {kinds_str}: {desc}. Resolution: {resolution}")
+        artifact = dataclasses.replace(artifact, conflict_rules=rules)
+
+    return artifact
 
 
 # ── Helpers ────────────────────────────────────────────────────────────

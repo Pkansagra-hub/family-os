@@ -20,7 +20,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -70,6 +72,9 @@ from k1.hil.safety import SafetyBandPolicy
 from k1.hil.service import HumanInTheLoopService
 from k1.kernel.adapters.bridge_adapter import OfflineBridgeAdapter, SinkBridgeAdapter
 from k1.kernel.adapters.device_context import InMemoryDeviceContextPort
+
+# Slice 1: kernel.db chat session persistence
+from k1.kernel.adapters.kernel_db import KernelDB
 
 # Issue 2.2.6: Planner adapters + factory
 from k1.kernel.adapters.model_hub_llm_bus import ModelHubRequestBus
@@ -151,6 +156,15 @@ from k1.temporal.kernel.handle import TemporalHandle, build_temporal_handle
 _TEARDOWN_TIMEOUT: float = 10.0
 
 logger = logging.getLogger(__name__)
+
+
+# ── Slice 7: auto-title helper (module-level, pure function) ──
+def _auto_title(text: str, max_len: int = 50) -> str:
+    """Generate a session title from the first user message."""
+    title = text.strip()
+    if len(title) > max_len:
+        title = title[:max_len].rstrip() + "..."
+    return title if title else "New Chat"
 
 
 class _NullSSMShim:
@@ -269,6 +283,16 @@ class KernelService:
         # ``None`` when the flag is off (default).
         self._global_projection_store: Any | None = None
         self._idempotency_store: Any | None = None
+
+        # Slice 1: kernel.db (chat session persistence)
+        self._kernel_db: KernelDB | None = None
+
+        # Slice 3: session registry (stable IDs + CRUD)
+        self._session_registry: Any | None = None
+
+        # Phase 2: live registry snapshot queried from GPS after S8, injected
+        # into Back's prompt as domain + resource_family hint lists.
+        self._registry_hints: dict[str, Any] | None = None
 
         # M4: optional hidden per-session SectionUpdateBackgroundWorker.
         # The worker is disabled by default in KernelConfig and receives an
@@ -779,6 +803,18 @@ class KernelService:
                 logger.warning("shutdown: IdempotencyStore close failed: %s", exc)
             self._idempotency_store = None
 
+        # ── Reverse S2.12: Close kernel.db + registry ───────
+        if self._session_registry is not None:
+            self._session_registry = None
+        if self._kernel_db is not None:
+            try:
+                self._kernel_db.close()
+                self._log_lifecycle("S2.12_closed", "KernelDB")
+            except Exception as exc:
+                errors.append(exc)
+                logger.warning("shutdown: KernelDB close failed: %s", exc)
+            self._kernel_db = None
+
         # ── Reverse S2: ModelHub plugin drain (P2.3) ──────────
         if self._model_hub is not None:
             try:
@@ -947,16 +983,20 @@ class KernelService:
 
     async def create_session(
         self,
-        session_id: str,
+        session_id: str = "",
         device_id: str | None = None,
     ) -> SessionInstance:
         """Create a new session with all Tier 2 components (P1→P6).
+
+        Slice 3: If ``session_id`` is empty and ``_session_registry``
+        exists, the ID is generated via ``registry.create()``.
+        Explicit ``session_id`` values (CLI, tests) bypass the registry.
 
         Issue 2.4.3 #5: If ``_validate_session()`` fails after the session
         is registered, the zombie session is destroyed before re-raising.
 
         Args:
-            session_id: Unique identifier for the session.
+            session_id: Unique identifier for the session (empty = auto).
             device_id: Optional device identifier.
 
         Returns:
@@ -967,6 +1007,33 @@ class KernelService:
             ValueError: If a session with the given ID already exists.
             TypeError: If the session fails port validation (after cleanup).
         """
+        # ── Slice 5 / Slice 3: resolve session ID from registry ──
+        # Slice 5: restore most-recent session on reboot so session_id
+        #          stays stable across restarts. Falls back to create
+        #          when no prior sessions exist (first boot / deleted).
+        if not session_id and self._session_registry is not None:
+            most_recent = self._session_registry.get_most_recent()
+            if most_recent is not None:
+                session_id = most_recent["session_id"]
+                self._session_registry.touch(session_id)  # G3: update last_active on restore
+                logger.info(
+                    "create_session: restoring session %s (title=%r, turns=%d)",
+                    session_id,
+                    most_recent.get("title"),
+                    most_recent.get("turn_count", 0),
+                )
+            else:
+                session_id = self._session_registry.create(title="New Chat", origin="web")
+                logger.info(
+                    "create_session: new session %s (first boot or all sessions deleted)",
+                    session_id,
+                )
+        elif not session_id:
+            # Fallback: no registry available (kernel.db disabled / test mode)
+            session_id = f"kernel-{uuid.uuid4().hex[:8]}"
+            logger.warning("create_session: no registry — using random session_id=%s", session_id)
+
+        # ── existing guards (unchanged) ──
         if not self._running:
             raise RuntimeError("Kernel not running")
         if session_id in self._sessions:
@@ -1237,12 +1304,123 @@ class KernelService:
             logger.warning("destroy_session(%s): Router close failed: %s", session_id, exc)
         self._log_lifecycle("P1_teardown_complete", f"session:{session_id}")
 
+        # Slice 6: registry.delete is NOT called here — destroy_session is a
+        # runtime teardown (switch, shutdown, zombie cleanup).  Persistent
+        # deletion of st_sessions + st_chat_messages only happens via
+        # delete_session_permanently() or the REST DELETE endpoint.
+
         if errors:
             logger.error(
                 "destroy_session(%s): %d error(s) during teardown",
                 session_id,
                 len(errors),
             )
+
+    async def delete_session_permanently(self, session_id: str) -> None:
+        """Tear down runtime AND delete persistent record from kernel.db.
+
+        Slice 6: Called from the REST DELETE endpoint when a user
+        explicitly deletes a chat.  Unlike ``destroy_session`` (which
+        only tears down runtime components), this method also removes
+        the ``st_sessions`` row and cascade-deletes all
+        ``st_chat_messages`` rows.
+
+        If the session is currently active, ``destroy_session`` is
+        called first to stop the bus, SSM, concierge, and workers.
+        """
+        if session_id in self._sessions:
+            await self.destroy_session(session_id)
+        if self._session_registry is not None:
+            self._session_registry.delete(session_id)
+
+    async def replace_session(self, old_session_id: str, new_session_id: str) -> SessionInstance:
+        """Stage a new session, hand off, then destroy old.  Create-before-destroy.
+
+        Slice 6: Staged activation for session switch.  The new session
+        is fully created and validated BEFORE the old session is torn
+        down.  If new-session creation or validation fails, the old
+        session is untouched and the caller receives an error.
+
+        Phases:
+            A. Deferred — old SSM stays fully alive.  Checkpoint happens
+               inside destroy_session() during Phase D, AFTER new is validated.
+            B. Create new session via ``_create_session_tier2``.
+            C. Validate new session.
+               → FAIL: destroy new (rollback), old untouched → RuntimeError.
+               → PASS: continue.
+            D. Destroy old session (only after new is proven valid).
+            E. Touch registry on new session.
+
+        Args:
+            old_session_id: Currently active session to checkpoint and retire.
+            new_session_id: Target session to activate (must exist in registry).
+
+        Returns:
+            The newly created ``SessionInstance``.
+
+        Raises:
+            KeyError: If ``old_session_id`` is not active.
+            ValueError: If old == new.
+            RuntimeError: If kernel is not running, or new session creation
+                          or validation fails.
+        """
+        if not self._running:
+            raise RuntimeError("Kernel not running")
+        if old_session_id == new_session_id:
+            raise ValueError(f"Already active: {new_session_id}")
+        if old_session_id not in self._sessions:
+            raise KeyError(f"Old session not active: {old_session_id}")
+
+        logger.info("replace_session: staging switch %s → %s", old_session_id, new_session_id)
+
+        # ── Phase A: Deferred — old SSM is NOT stopped here. ──
+        # The old session stays fully alive (bus, SSM, concierge, MW, worker
+        # all running) until Phase D when new is proven valid.  If Phase A
+        # checkpointed the old SSM and Phase B/C failed, the coordinator
+        # would still point to a stopped SSM — a half-dead session.
+        #
+        # Instead, SSM.stop() (which checkpoints) happens inside
+        # destroy_session() during Phase D, AFTER new is validated.
+        old_session = self._sessions[old_session_id]
+
+        # ── Phase B: Create new session in staging ──
+        new_session = None
+        try:
+            new_session = await self._create_session_tier2(new_session_id)
+        except Exception:
+            logger.error("replace_session: new session creation failed, old intact", exc_info=True)
+            raise RuntimeError(
+                f"Failed to create session '{new_session_id}'. "
+                f"Current session '{old_session_id}' is still active."
+            ) from None
+
+        # ── Phase C: Validate new session ──
+        try:
+            self._validate_session(new_session)
+        except Exception:
+            logger.error(
+                "replace_session: new session validation failed, rolling back",
+                exc_info=True,
+            )
+            try:
+                await self.destroy_session(new_session_id)
+            except Exception:
+                logger.warning("replace_session: rollback destroy failed", exc_info=True)
+            raise RuntimeError(
+                f"Session '{new_session_id}' failed validation. "
+                f"Current session '{old_session_id}' is still active."
+            ) from None
+
+        # ── Phase D: Hand-off — destroy old, commit new ──
+        logger.info("replace_session: new session valid, retiring old %s", old_session_id)
+        await self.destroy_session(old_session_id)
+
+        # ── Phase E: Touch registry ──
+        if self._session_registry is not None:
+            self._session_registry.touch(new_session_id)
+
+        logger.info("replace_session: switch complete %s → %s", old_session_id, new_session_id)
+        return new_session
 
     def get_session(self, session_id: str) -> SessionInstance | None:
         """Look up a session by ID."""
@@ -1939,6 +2117,17 @@ class KernelService:
                 gps.open()
                 self._global_projection_store = gps
 
+                # Eager-warm the MiniLM embedding index so the first
+                # resolve_situation call doesn't pay ~30s lazy-load cost.
+                try:
+                    gps.warmup_embedding_index()
+                    self._log_lifecycle("S2.10_embedding_warm", "MiniLM-L6 index built")
+                except Exception:
+                    logger.warning(
+                        "GPS embedding warmup failed — will lazy-load on first use",
+                        exc_info=True,
+                    )
+
                 idem = IdempotencyStore(self._config.idempotency_db_path or ":memory:")
                 idem.open()
                 self._idempotency_store = idem
@@ -1947,6 +2136,20 @@ class KernelService:
                 await self._bridge.disconnect()
                 self._bus.close()
                 self._router.close()
+                raise
+
+        # ── S2.12: KernelDB (chat session persistence, Slice 1) ──
+        if self._config.enable_kernel_db:
+            try:
+                from k1.kernel.adapters.kernel_db import KernelDB
+                from k1.kernel.session_registry import SessionRegistry
+
+                self._kernel_db = KernelDB(self._config.kernel_db_path)
+                self._kernel_db.open()
+                self._session_registry = SessionRegistry(self._kernel_db)
+                self._log_lifecycle("S2.12_complete", "KernelDB+SessionRegistry")
+            except Exception:
+                await self._cleanup_tier1_partial()
                 raise
 
         # ── S3: Shared Fabric ─────────────────────────────
@@ -2156,6 +2359,17 @@ class KernelService:
             # connectors / no verifier.  Gated behind enable_fabric_stores.
             if self._config.enable_fabric_stores and self._global_projection_store is not None:
                 self._load_phase1_catalog_and_verifier()
+                # Phase 2: snapshot live registry metadata (domains + resource
+                # families) from GPS so Back's prompt can teach the LLM what
+                # categories are currently registered.  Queried once at boot —
+                # the lists are small (10s of values) and stable across sessions.
+                self._registry_hints = self._build_registry_hints(self._global_projection_store)
+                _domains = len((self._registry_hints or {}).get("domains", []))
+                _rfs = len((self._registry_hints or {}).get("resource_families", []))
+                self._log_lifecycle(
+                    "PostS8_registry_hints",
+                    f"domains={_domains} resource_families={_rfs}",
+                )
         except Exception:
             # S7 or verification failed — tear down S6 through S1.
             if self._planner_task is not None:
@@ -2253,24 +2467,22 @@ class KernelService:
         if gps is None:
             return
         try:
-            from k1.fabric.connectors.domain_catalog import (
-                DOMAIN_SERVICES,
-                build_domain_corpus,
-            )
             from k1.fabric.manifest_admission import ManifestAdmissionService
 
             admission = ManifestAdmissionService(gps)
-            for domain_id in DOMAIN_SERVICES:
-                corpus = build_domain_corpus(domain_id)
-                results = admission.admit_all(corpus)
-                admitted = sum(1 for r in results if r.admission_verdict == "admitted")
-                logger.info(
-                    "Phase 1 catalog loaded: domain=%s connectors=%d admitted=%d",
-                    domain_id,
-                    len(corpus),
-                    admitted,
-                )
-            self._log_lifecycle("Phase1_catalog_loaded", "DomainCatalog")
+            # Phase 2.6: skip ALL domain-catalog connectors.  The explicit
+            # family-tools bootstrap (S8) is the ONLY source of capabilities.
+            # The Phase 1 domain catalog is legacy scaffolding — it populated
+            # generic CRUD placeholders that shadowed explicit, contract-backed
+            # capabilities and polluted the resolver with irrelevant connectors
+            # (healthcare.appointments, agriculture.shipment, etc.).
+            # When a domain needs connectors that don't have explicit
+            # ToolDefinitions, add them via the family-tools bootstrap path,
+            # not through the domain catalog.
+            logger.info(
+                "Phase 1 catalog: SKIPPED (family-tools bootstrap is the sole " "capability source)"
+            )
+            self._log_lifecycle("Phase1_catalog_skipped", "DomainCatalog")
         except Exception:
             logger.warning(
                 "Phase 1 domain catalog load failed (resolve_situation will have "
@@ -2339,6 +2551,102 @@ class KernelService:
             bundle.tool_registry.adapter_ids(),
         )
         return bundle
+
+    @staticmethod
+    def _build_registry_hints(gps: Any) -> dict[str, Any]:
+        """Query GPS for live registry metadata — domains + resource families.
+
+        Called once at kernel boot after S8 (family tools bootstrap).
+        The returned dict is injected into Back's system prompt so the
+        LLM can frame intents with domain-aware hints that match the
+        actually-registered connectors.
+
+        Returns a dict with keys:
+        * ``domains`` — list of {domain_id, label, description} dicts.
+          Falls back to flat strings when taxonomy tables are absent.
+        * ``resource_families`` — list of {domain_id, label,
+          families: [{family_id, label, description}]} grouped by domain.
+          Falls back to flat strings when taxonomy tables are absent.
+        """
+        hints: dict[str, Any] = {"domains": [], "resource_families": []}
+        try:
+            # Phase 2.6: query ONLY domains that have admitted connectors.
+            # The taxonomy has 16 domains seeded; showing all of them to the
+            # Back LLM is a 9,750-char dump.  Filter to active-only.
+            rows = gps._db.execute(
+                "SELECT d.domain_id, d.label, d.description "
+                "FROM domains d "
+                "WHERE d.domain_id IN ("
+                "  SELECT DISTINCT c.domain_id FROM connectors c"
+                "  WHERE c.admission_verdict = 'admitted' AND c.domain_id != ''"
+                ") ORDER BY d.domain_id"
+            ).fetchall()
+            hints["domains"] = [
+                {"domain_id": r[0], "label": r[1], "description": r[2]} for r in rows
+            ]
+        except Exception:
+            # Pre-Epic-22 GPS: fall back to connector_id prefix extraction
+            try:
+                rows = gps._db.execute(
+                    "SELECT DISTINCT "
+                    "  CASE WHEN instr(connector_id, '.') > 0 "
+                    "    THEN substr(connector_id, 1, instr(connector_id, '.') - 1) "
+                    "    ELSE connector_id END AS domain "
+                    "FROM connectors ORDER BY domain"
+                ).fetchall()
+                hints["domains"] = [r[0] for r in rows if r[0]]
+            except Exception:
+                pass
+        try:
+            # Phase 2.6: per-domain family lists, filtered to families that
+            # have at least one admitted connector registered via
+            # connector_resource_families.  Only include a family under a
+            # domain when that domain has an active connector using it.
+            # The full taxonomy has 130+ domain→family mappings; showing
+            # all of them is 9,750 chars of prompt bloat.
+            rows = gps._db.execute("""SELECT d.domain_id, d.label as domain_label,
+                          rf.family_id, rf.label as family_label, rf.description
+                   FROM domains d
+                   JOIN domain_resource_families drf ON d.domain_id = drf.domain_id
+                   JOIN resource_families rf ON drf.family_id = rf.family_id
+                   WHERE (d.domain_id, rf.family_id) IN (
+                     SELECT DISTINCT c.domain_id, crf.family_id
+                     FROM connector_resource_families crf
+                     JOIN connectors c ON crf.connector_id = c.connector_id
+                     WHERE c.admission_verdict = 'admitted'
+                       AND c.domain_id != ''
+                   )
+                   ORDER BY d.domain_id, rf.family_id""").fetchall()
+            # Group families by domain
+            by_domain: dict[str, dict[str, Any]] = {}
+            for row in rows:
+                did, dlabel, fid, flabel, fdesc = row
+                if did not in by_domain:
+                    by_domain[did] = {
+                        "domain_id": did,
+                        "label": dlabel or did.title(),
+                        "families": [],
+                    }
+                by_domain[did]["families"].append(
+                    {
+                        "family_id": fid,
+                        "label": flabel or fid,
+                        "description": fdesc or "",
+                    }
+                )
+            hints["resource_families"] = list(by_domain.values())
+        except Exception:
+            # Pre-Epic-22 GPS: fall back to flat resource_kind list
+            try:
+                rows = gps._db.execute(
+                    "SELECT DISTINCT resource_kind FROM capabilities "
+                    "WHERE resource_kind IS NOT NULL AND resource_kind != '' "
+                    "ORDER BY resource_kind"
+                ).fetchall()
+                hints["resource_families"] = [r[0] for r in rows if r[0]]
+            except Exception:
+                pass
+        return hints
 
     def _build_shared_phase1_pipeline(self) -> Any:
         """Deprecated -- Phase 1 has been removed (returns None).
@@ -2442,6 +2750,16 @@ class KernelService:
                 pass
             self._family_tools = None
 
+        # Slice 1+3: close kernel.db + registry on partial startup failure
+        if self._session_registry is not None:
+            self._session_registry = None
+        if self._kernel_db is not None:
+            try:
+                self._kernel_db.close()
+            except Exception:
+                pass
+            self._kernel_db = None
+
         # P2.3: drain ModelHub plugin connections before nulling the field.
         # Pre-P2.2 there was no shutdown() to call; post-P2.2 omitting this
         # leaks aiohttp ClientSessions on partial-boot recovery. Errors are
@@ -2541,6 +2859,91 @@ class KernelService:
                 "Tier 1 startup (Issue 2.2.2) must run first."
             )
         return ModelHubAdapter(hub=self._model_hub)
+
+    # ------------------------------------------------------------------
+    # Slice 2: Chat message persistence (turn.completed → kernel.db)
+    # ------------------------------------------------------------------
+
+    def _wire_chat_persistence(self, session_bus: Any, session_id: str) -> None:
+        """Subscribe to turn.completed.v1 and persist user + assistant messages.
+
+        Called once per session from ``_create_session_tier2()`` after
+        the session is fully assembled and registered in ``_sessions``.
+
+        The handler is fire-and-forget — it never raises to the bus.
+        kernel.db guard: silently no-ops if the db is not open.
+        """
+        if self._kernel_db is None or not self._kernel_db.is_open:
+            return
+
+        from k1.concierge.bus.topics import TOPIC_TURN_COMPLETED
+
+        def _on_turn_completed(envelope: Any) -> None:
+            # NOTE: the local bus calls handlers synchronously:
+            #   handler(envelope)  — NOT  await handler(envelope)
+            # So this MUST be a plain `def`, never `async def`.
+            # All DB writes + bus publishes inside are synchronous.
+            try:
+                # Envelope payload is compact JSON bytes.
+                import json as _json
+
+                raw = envelope.payload
+                if isinstance(raw, (bytes, bytearray, memoryview)):
+                    payload = _json.loads(raw)
+                elif isinstance(raw, str):
+                    payload = _json.loads(raw)
+                elif isinstance(raw, dict):
+                    payload = raw
+                else:
+                    return
+
+                user_msg: str = str(payload.get("user_message", "") or "")
+                asst_msg: str = str(payload.get("assistant_response", "") or "")
+                turn_num: int = int(payload.get("turn_number", 0))
+                ts: int = int(payload.get("timestamp_ms", 0))
+
+                if user_msg:
+                    self._kernel_db.insert_message(session_id, turn_num, "user", user_msg, ts)
+                if asst_msg:
+                    self._kernel_db.insert_message(session_id, turn_num, "assistant", asst_msg, ts)
+
+                # Slice 3: increment turn_count + touch last_active
+                if self._session_registry is not None:
+                    self._session_registry.increment_turn(session_id)
+
+                # ── Slice 7: auto-title on turn 1 ──
+                if turn_num == 1 and user_msg and self._session_registry is not None:
+                    title = _auto_title(user_msg)
+                    updated = self._session_registry.update_title(session_id, title)
+                    if updated:
+                        logger.info("Auto-title: session=%s title=%r", session_id, title)
+                        try:
+                            from k1.bus.envelope import Envelope
+                            from k1.concierge.bus.topics import (
+                                TOPIC_SESSION_TITLE_UPDATED,
+                            )
+
+                            session_bus.publish(
+                                Envelope(
+                                    topic=TOPIC_SESSION_TITLE_UPDATED,
+                                    payload=_json.dumps(
+                                        {
+                                            "session_id": session_id,
+                                            "title": title,
+                                        }
+                                    ).encode(),
+                                )
+                            )
+                        except Exception:
+                            logger.debug("Auto-title: bus publish failed", exc_info=True)
+            except Exception:
+                logger.warning(
+                    "chat_persistence: turn.completed handler failed (session=%s)",
+                    session_id,
+                    exc_info=True,
+                )
+
+        session_bus.subscribe(TOPIC_TURN_COMPLETED, _on_turn_completed)
 
     async def _create_session_tier2(
         self,
@@ -2915,6 +3318,7 @@ class KernelService:
                 temporal=session_temporal,
                 spatial=session_spatial,
                 grounding=session_grounding,
+                registry_hints=self._registry_hints,  # Phase 2: live GPS registry snapshot
                 # P5.2 / MS-3c: Wire recall through the typed paired-contract
                 # surface (``recall.request.v1`` / ``recall.response.v1``).
                 # ``build_recall_fn`` resolves the typed client out of the
@@ -3073,12 +3477,22 @@ class KernelService:
                     # ModelHub is unavailable, in which case the worker
                     # will publish noop plans rather than crashing.
                     if self._model_hub is not None:
-                        provider_id = (
-                            str(getattr(self._config, "section_update_provider", "") or "")
-                            or "vertex"
+                        # Env var takes priority over config default (so
+                        # LLM_PROVIDER=deepseek overrides config's "vertex").
+                        _env_provider = os.environ.get("LLM_PROVIDER", "")
+                        _cfg_provider = str(
+                            getattr(self._config, "section_update_provider", "") or ""
                         )
+                        provider_id = _env_provider or _cfg_provider or "vertex"
+                        _env_model_ds = os.environ.get("DEEPSEEK_MODEL", "")
+                        _env_model_vx = os.environ.get("VERTEX_MODEL", "")
+                        _env_model_goog = os.environ.get("GOOGLE_MODEL", "")
+                        _cfg_model = str(getattr(self._config, "section_update_model", "") or "")
                         model_id = (
-                            str(getattr(self._config, "section_update_model", "") or "")
+                            _env_model_ds
+                            or _env_model_vx
+                            or _env_model_goog
+                            or _cfg_model
                             or "gemini-2.5-flash-lite"
                         )
                         timeout_ms = int(
@@ -3090,6 +3504,16 @@ class KernelService:
                             provider_id=provider_id,
                             model_id=model_id,
                             timeout_ms=timeout_ms,
+                        )
+                        logger.info(
+                            "P5.5: section_update classifier resolved: "
+                            "LLM_PROVIDER=%s DEEPSEEK_MODEL=%s VERTEX_MODEL=%s → "
+                            "provider=%s model=%s",
+                            os.environ.get("LLM_PROVIDER", "<unset>"),
+                            os.environ.get("DEEPSEEK_MODEL", "<unset>"),
+                            os.environ.get("VERTEX_MODEL", "<unset>"),
+                            provider_id,
+                            model_id,
                         )
                         logger.info(
                             "P5.5: no external section_update classifier wired; "
@@ -3134,8 +3558,8 @@ class KernelService:
                             )
                             or "section-update-v0"
                         ),
-                        provider_id=str(getattr(self._config, "section_update_provider", "") or ""),
-                        model_id=str(getattr(self._config, "section_update_model", "") or ""),
+                        provider_id=provider_id,
+                        model_id=model_id,
                     ),
                 )
                 section_update_worker.start()
@@ -3195,5 +3619,9 @@ class KernelService:
             grounding=session_grounding,
         )
         self._sessions[session_id] = session
+
+        # Slice 2: wire chat message persistence (turn.completed → kernel.db)
+        self._wire_chat_persistence(session_bus, session_id)
+
         self._log_lifecycle("P6_complete", f"session:{session_id}")
         return session

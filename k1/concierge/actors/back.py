@@ -64,7 +64,6 @@ from k1.concierge.obs.actor_metrics import (
 )
 from k1.concierge.prompt.back_profiles import (
     BackProfileSelection,
-    render_back_execution_profile_block,
     select_back_execution_profiles,
 )
 from k1.concierge.prompt.back_prompt import build_back_prompt
@@ -137,8 +136,44 @@ def _bind_tool_context(
         ]
 
 
+def _extract_identity_ref(task: dict[str, Any]) -> str | None:
+    """Extract the actor identity from a task dispatch payload.
+
+    Checks (in order):
+      1. ``task["grounding"]["metadata"]["identity_ref"]``
+      2. ``task["reference_context"]["grounding"]["metadata"]["identity_ref"]``
+      3. ``task.get("actor_id")``
+    Returns ``None`` when no identity is found.
+    """
+    if not isinstance(task, dict):
+        return None
+    # Direct grounding metadata
+    grounding = task.get("grounding")
+    if isinstance(grounding, dict):
+        meta = grounding.get("metadata")
+        if isinstance(meta, dict):
+            ref = meta.get("identity_ref")
+            if ref:
+                return str(ref)
+    # Nested via reference_context
+    ref_ctx = task.get("reference_context")
+    if isinstance(ref_ctx, dict):
+        g = ref_ctx.get("grounding")
+        if isinstance(g, dict):
+            meta = g.get("metadata")
+            if isinstance(meta, dict):
+                ref = meta.get("identity_ref")
+                if ref:
+                    return str(ref)
+    # Fallback: explicit actor_id
+    raw = task.get("actor_id")
+    if raw:
+        return str(raw)
+    return None
+
+
 async def _build_execution_grounding_block(task: dict[str, Any], grounding: Any | None) -> str:
-    """Render Back's execution grounding block from task payload or handle."""
+    """Render Back's grounding provenance as natural-language prose."""
     projection = None
     grounding_payload = task.get("grounding") if isinstance(task, dict) else None
     if isinstance(grounding_payload, dict):
@@ -159,11 +194,7 @@ async def _build_execution_grounding_block(task: dict[str, Any], grounding: Any 
 
     if projection is not None:
         try:
-            from k1.grounding.service.prompt_block_renderer import (
-                render_execution_grounding_block,
-            )
-
-            return render_execution_grounding_block(projection)
+            return _grounding_projection_to_prose(projection)
         except Exception:
             logger.warning("back_handler: execution grounding render failed", exc_info=True)
 
@@ -180,14 +211,67 @@ async def _build_execution_grounding_block(task: dict[str, Any], grounding: Any 
     }
     if not fields:
         return ""
-    lines = ["== EXECUTION GROUNDING =="]
-    for key, value in fields.items():
-        if isinstance(value, (dict, list)):
-            rendered = json.dumps(value, sort_keys=True)
-        else:
-            rendered = str(value)
-        lines.append(f"{key}: {rendered}")
-    return "\n".join(lines)
+    sentences: list[str] = []
+    ref_parts: list[str] = []
+    if fields.get("grounding_envelope_id"):
+        ref_parts.append(f"grounding envelope {fields['grounding_envelope_id']}")
+    if fields.get("temporal_anchor_id"):
+        ref_parts.append(f"temporal anchor {fields['temporal_anchor_id']}")
+    if fields.get("spatial_context_id"):
+        ref_parts.append(f"spatial context {fields['spatial_context_id']}")
+    if ref_parts:
+        sentences.append(
+            "The dispatcher attached grounding references for provenance: "
+            + ", ".join(ref_parts)
+            + "."
+        )
+    for refs_key, label in (
+        ("resolved_temporal_refs", "time expressions"),
+        ("resolved_spatial_refs", "place references"),
+    ):
+        refs = fields.get(refs_key)
+        if isinstance(refs, dict) and refs:
+            pairs = "; ".join(
+                f"'{k}' means {json.dumps(v, sort_keys=True, default=str)}" for k, v in refs.items()
+            )
+            sentences.append(
+                f"The dispatcher already resolved these {label} — use them "
+                f"exactly as given: {pairs}."
+            )
+    return " ".join(sentences)
+
+
+def _grounding_projection_to_prose(projection: Any) -> str:
+    """Convert a GroundingProjection into provenance prose for Back."""
+    sentences: list[str] = []
+    envelope_id = str(getattr(projection, "envelope_id", "") or "")
+    anchor = getattr(getattr(projection, "temporal", None), "anchor", None)
+    anchor_id = str(getattr(anchor, "anchor_id", "") or "")
+    ref_parts: list[str] = []
+    if envelope_id:
+        ref_parts.append(f"grounding envelope {envelope_id}")
+    if anchor_id:
+        ref_parts.append(f"temporal anchor {anchor_id}")
+    if ref_parts:
+        sentences.append("This task carries verified grounding (" + ", ".join(ref_parts) + ").")
+    spatial_obj = getattr(projection, "spatial", None)
+    place = getattr(spatial_obj, "semantic_place", None)
+    precision = str(getattr(spatial_obj, "precision", "") or "")
+    if place:
+        sentences.append(
+            f"The user's resolved place is {place}"
+            + (f" (at {precision} precision)" if precision else "")
+            + "."
+        )
+    else:
+        sentences.append("The user's place could not be resolved for this task.")
+    freshness = str(getattr(getattr(projection, "freshness", None), "status", "") or "")
+    if freshness and freshness not in ("fresh", "live"):
+        sentences.append(
+            f"Grounding freshness is {freshness} — prefer fresh capability "
+            "reads for anything time- or location-critical."
+        )
+    return " ".join(sentences)
 
 
 # =========================================================================
@@ -200,28 +284,142 @@ async def _build_execution_grounding_block(task: dict[str, Any], grounding: Any 
 
 
 async def _build_temporal_context_block(temporal: Any | None) -> str:
-    """Render Back's temporal execution context from TemporalHandle.
+    """Render Back's temporal context as natural-language prose.
 
-    Calls ``temporal.get_projection("back")`` → ``render_execution_block()``.
-    Returns empty string when the handle is None or projection fails.
+    Calls ``temporal.get_projection("back")`` and converts the typed
+    projection into sentences with minute precision: "It is Tuesday
+    night, June 9, 2026 — the local time is 11:16 PM in the
+    America/Chicago timezone..."  Returns empty string when the handle
+    is None or projection fails.
     """
     if temporal is None:
         return ""
     try:
         projection = await temporal.get_projection("back")
-        from k1.temporal.service.projection_renderer import render_execution_block
-
-        return render_execution_block(projection)
+        return _temporal_projection_to_prose(projection)
     except Exception:
         logger.warning("back_handler: temporal context block failed", exc_info=True)
         return ""
 
 
-async def _build_spatial_context_block(spatial: Any | None) -> str:
-    """Render Back's spatial context from SpatialHandle.
+def _parse_local_dt(value: Any) -> Any | None:
+    from datetime import datetime
 
-    Calls ``spatial.get_projection("back")`` → formatted text block.
-    Returns empty string when the handle is None or projection fails.
+    try:
+        return datetime.fromisoformat(str(value))
+    except Exception:
+        return None
+
+
+def _format_clock(dt: Any) -> str:
+    """'11:16 PM' — minute precision, no leading zero."""
+    return dt.strftime("%I:%M %p").lstrip("0")
+
+
+def _format_day(dt: Any, *, with_year: bool = False) -> str:
+    """'Tuesday, June 9' (optionally '+ 2026')."""
+    base = f"{dt.strftime('%A, %B')} {dt.day}"
+    return f"{base}, {dt.year}" if with_year else base
+
+
+def _temporal_projection_to_prose(projection: Any) -> str:
+    """Convert a TemporalProjection into time-awareness prose for Back."""
+    from datetime import timedelta
+
+    anchor = getattr(projection, "anchor", None)
+    if anchor is None:
+        return ""
+
+    sentences: list[str] = []
+
+    day_of_week = str(getattr(anchor, "day_of_week", "") or "")
+    time_of_day = str(getattr(anchor, "time_of_day", "") or "")
+    timezone = str(getattr(anchor, "timezone", "") or "")
+    tz_source = str(getattr(anchor, "timezone_source", "") or "")
+
+    now_dt = _parse_local_dt(getattr(anchor, "now_local", None))
+    if now_dt is not None:
+        clock = _format_clock(now_dt)
+        date_label = _format_day(now_dt, with_year=True)
+        opening = f"It is {day_of_week} {time_of_day}, {date_label} — the local time is {clock}"
+    else:
+        local_date = str(getattr(anchor, "local_date", "") or "")
+        opening = f"It is {day_of_week} {time_of_day}, {local_date}"
+    if timezone:
+        opening += f" in the {timezone} timezone"
+        if tz_source:
+            opening += f" (from the user's {tz_source})"
+    sentences.append(opening + ".")
+
+    windows = getattr(projection, "windows", {}) or {}
+
+    def _window_day(key: str, *, end: bool = False) -> Any | None:
+        window = windows.get(key)
+        if window is None:
+            return None
+        raw = getattr(window, "end_local" if end else "start_local", None)
+        dt = _parse_local_dt(raw)
+        if dt is not None and end:
+            dt = dt - timedelta(days=1)  # exclusive end → inclusive last day
+        return dt
+
+    today_dt = _window_day("today")
+    tomorrow_dt = _window_day("tomorrow")
+    if today_dt is not None and tomorrow_dt is not None:
+        sentences.append(
+            f"Today is {_format_day(today_dt)}; tomorrow is " f"{_format_day(tomorrow_dt)}."
+        )
+
+    week_start = _window_day("this_week")
+    week_end = _window_day("this_week", end=True)
+    next_week_start = _window_day("next_week")
+    if week_start is not None and week_end is not None:
+        week_sentence = (
+            f"This week runs {_format_day(week_start)} through " f"{_format_day(week_end)}"
+        )
+        if next_week_start is not None:
+            week_sentence += f"; next week begins {_format_day(next_week_start)}"
+        sentences.append(week_sentence + ".")
+
+    weekend_start = _window_day("this_weekend")
+    weekend_end = _window_day("this_weekend", end=True)
+    next_weekend_start = _window_day("next_weekend")
+    if weekend_start is not None and weekend_end is not None:
+        weekend_sentence = (
+            f"The upcoming weekend is {_format_day(weekend_start)} through "
+            f"{_format_day(weekend_end)}"
+        )
+        if next_weekend_start is not None:
+            weekend_sentence += (
+                f", and the following weekend starts {_format_day(next_weekend_start)}"
+            )
+        sentences.append(weekend_sentence + ".")
+
+    resolved = getattr(projection, "resolved_expressions", None) or []
+    for resolution in resolved:
+        raw_text = str(getattr(resolution, "raw_text", "") or "")
+        label = str(getattr(resolution, "normalized_label", "") or "")
+        if raw_text and label:
+            sentences.append(
+                f"The phrase '{raw_text}' was already resolved to {label} — " "use it as-is."
+            )
+
+    freshness = str(getattr(projection, "freshness", "") or "")
+    if freshness and freshness not in ("fresh", "live"):
+        sentences.append(
+            f"Note: this temporal snapshot is {freshness} — re-verify before "
+            "timing-critical writes."
+        )
+
+    return " ".join(sentences)
+
+
+async def _build_spatial_context_block(spatial: Any | None) -> str:
+    """Render Back's spatial context as natural-language prose.
+
+    "The user is currently at home. Their device reports... Home base
+    is..."  Returns empty string when the handle is None, the
+    projection fails, or no location data is present.
     """
     if spatial is None:
         return ""
@@ -229,27 +427,29 @@ async def _build_spatial_context_block(spatial: Any | None) -> str:
         projection = await spatial.get_projection("back")
         if projection is None:
             return ""
-        # SpatialProjection fields: device_location, home_location, nearby_places.
-        # Back needs lightweight context — just device + home.
-        lines = ["== SPATIAL CONTEXT =="]
+        sentences: list[str] = []
+        semantic = getattr(projection, "semantic_place", None)
         device = getattr(projection, "device_location", None)
         home = getattr(projection, "home_location", None)
-        if device is not None:
-            lines.append(f"device: {device}")
-        if home is not None:
-            lines.append(f"home: {home}")
-        return "\n".join(lines) if len(lines) > 1 else ""
+        if semantic:
+            sentences.append(f"The user is currently at {semantic}.")
+        if device:
+            sentences.append(f"Their device reports its location as {device}.")
+        if home:
+            sentences.append(f"Home base is {home}.")
+        return " ".join(sentences)
     except Exception:
         logger.warning("back_handler: spatial context block failed", exc_info=True)
         return ""
 
 
 async def _build_selfmodel_context_block(self_model: Any | None) -> str:
-    """Render Back's selfmodel context from SelfModelHandle.
+    """Render Back's selfmodel context wrapped in explanatory prose.
 
-    Calls ``self_model.render_capsule()`` → ``capsule.as_prompt_text()``.
-    This is the EXACT same pattern Front uses at ``front.py:1433``.
-    Returns empty string when the handle is None or rendering fails.
+    Calls ``self_model.render_capsule()`` → ``capsule.as_prompt_text()``
+    (the same capsule Front receives) and frames it with English so Back
+    knows what the data is and how to honor it.  Returns empty string
+    when the handle is None or rendering fails.
     """
     if self_model is None:
         return ""
@@ -257,7 +457,17 @@ async def _build_selfmodel_context_block(self_model: Any | None) -> str:
         capsule = self_model.render_capsule()
         if capsule is None:
             return ""
-        return capsule.as_prompt_text() if hasattr(capsule, "as_prompt_text") else str(capsule)
+        text = capsule.as_prompt_text() if hasattr(capsule, "as_prompt_text") else str(capsule)
+        text = (text or "").strip()
+        if not text:
+            return ""
+        return (
+            "You are acting on behalf of a real person. Below is their "
+            "verified profile — who they are, their household members, "
+            "their preferences and routines, and the conscience rules you "
+            "must honor. Conscience rules override task instructions "
+            "whenever they conflict:\n" + text
+        )
     except Exception:
         logger.warning("back_handler: selfmodel context block failed", exc_info=True)
         return ""
@@ -627,7 +837,30 @@ def _record_execution_profile_selection(
 
 
 def _execution_profile_block_for_selection(selection: BackProfileSelection) -> str:
-    return render_back_execution_profile_block(selection)
+    """Render the selected Back execution profiles as operating-guidance prose."""
+    selected = getattr(selection, "selected", None) or ()
+    if not selected:
+        return ""
+    lines: list[str] = []
+    for item in selected:
+        profile = item.profile
+        title = profile.title or profile.profile_id
+        evidence = ", ".join(item.evidence[:3]) or "selector heuristics"
+        lines.append(
+            f"This task matches the '{title}' operating profile "
+            f"(profile id {profile.profile_id}, selected via {evidence})."
+        )
+        guidance = list(profile.guidance or ())
+        if guidance:
+            lines.append("While executing in this domain, follow these rules:")
+            for hint in guidance[:5]:
+                lines.append(f"  - {hint}")
+    lines.append(
+        "These are operating hints only — they grant no tools or authority. "
+        "Registry schemas, policy, HIL, and tool recovery contracts always "
+        "override them."
+    )
+    return "\n".join(lines)
 
 
 def _build_react_checkpoint(
@@ -711,22 +944,86 @@ def _resume_task_after_unified_hil(fsm_state: Any | None, task_id: str) -> None:
         resume_task(task_id)
 
 
-def _hil_response_resume_message(response: Any) -> ModelMessage:
+def _hil_response_resume_message(
+    response: Any,
+    checkpoint: Any | None = None,  # ReActCheckpoint
+    round_index: int = 0,
+) -> ModelMessage:
+    """Build a Resume-After-HIL message with checkpoint-awareness.
+
+    When a ReActCheckpoint is available the message includes a structured
+    summary of completed tools, remaining budget, and suspension count so
+    the Back LLM can continue precisely where it left off without
+    re-executing already-completed work.
+    """
     payload = {
         "hil_request_id": getattr(response, "hil_request_id", ""),
         "decision": getattr(response, "decision", ""),
-        "resolution": getattr(response, "resolution", {}) or {},
         "raw_user_text": getattr(response, "raw_user_text", None),
     }
-    return ModelMessage(
-        role="user",
-        content=(
+    resolution = getattr(response, "resolution", None)
+    if isinstance(resolution, dict) and resolution:
+        payload["resolution"] = resolution
+
+    # Checkpoint-aware resume preamble
+    checkpoint_lines: list[str] = []
+    if checkpoint is not None:
+        try:
+            from k1.concierge.react.checkpoint import ReActCheckpoint
+
+            if isinstance(checkpoint, ReActCheckpoint):
+                cp = checkpoint
+            elif isinstance(checkpoint, dict):
+                cp = ReActCheckpoint.from_dict(checkpoint)
+            else:
+                cp = None
+
+            if cp is not None:
+                completed_names = list(
+                    {
+                        str(r.get("tool_name", ""))
+                        for r in cp.tool_history
+                        if isinstance(r, dict)
+                        and str(r.get("result_status", "")).lower() in {"ok", "partial"}
+                    }
+                )
+                checkpoint_lines = [
+                    "== RESUME AFTER HUMAN INPUT (round {}) ==".format(round_index + 1),
+                    "Suspension #{}. Budget remaining: {} iterations.".format(
+                        cp.suspension_count, cp.budget_remaining
+                    ),
+                ]
+                if completed_names:
+                    checkpoint_lines.append(
+                        "Already completed tools: {}.".format(", ".join(completed_names))
+                    )
+                else:
+                    checkpoint_lines.append("No tools completed before suspension.")
+                checkpoint_lines.append(
+                    "Continue the task. Do NOT re-execute already-completed tools "
+                    "unless the human explicitly asked for a different outcome."
+                )
+                checkpoint_lines.append(
+                    "Do not ask the same question again unless the answer is insufficient."
+                )
+        except Exception:
+            logger.warning("_hil_response_resume_message: checkpoint decode failed", exc_info=True)
+
+    if checkpoint_lines:
+        preamble = "\n".join(checkpoint_lines)
+        content = "{}\n\nHuman response:\n{}".format(
+            preamble,
+            json.dumps(payload, indent=2, default=str),
+        )
+    else:
+        content = (
             "HIL_RESPONSE\n"
             "Use this human-provided answer to continue the task. Do not ask the "
             "same question again unless the answer is insufficient.\n"
-            f"{json.dumps(payload, indent=2, default=str)}"
-        ),
-    )
+            "{}".format(json.dumps(payload, indent=2, default=str))
+        )
+
+    return ModelMessage(role="user", content=content)
 
 
 async def _resolve_needs_human_in_process(
@@ -747,7 +1044,16 @@ async def _resolve_needs_human_in_process(
     control_queue: asyncio.Queue[BackControlEvent] | None,
     fsm_state: Any | None,
     on_stream: Any | None = None,
+    react_checkpoint: Any | None = None,  # ReActCheckpoint from _build_react_checkpoint
 ) -> ReactResult:
+    """Resolve suspended Back task via unified HIL, resuming with checkpoint state.
+
+    When ``react_checkpoint`` is provided the resumed ``react_loop`` call
+    receives ``completed_tool_call_ids`` and ``completed_tool_arg_keys``
+    from the checkpoint so the Back LLM does not re-execute already-completed
+    tools.  The checkpoint's ``budget_remaining`` replaces the default
+    ``max(2, max_iterations)`` floor.
+    """
     needs_human = getattr(hil_port, "needs_human", None) if hil_port is not None else None
     if not callable(needs_human):
         if result.status == "suspended":
@@ -757,6 +1063,40 @@ async def _resolve_needs_human_in_process(
                 task_id,
             )
         return result
+
+    # Resolve checkpoint dedup state once (same across HIL rounds).
+    completed_call_ids: set[str] = set()
+    completed_arg_keys: set[str] = set()
+    cp_budget_remaining: int | None = None
+    cp_suspension_count: int = 0
+
+    if react_checkpoint is not None:
+        try:
+            from k1.concierge.react.checkpoint import ReActCheckpoint
+
+            cp: ReActCheckpoint | None = None
+            if isinstance(react_checkpoint, ReActCheckpoint):
+                cp = react_checkpoint
+            elif isinstance(react_checkpoint, dict):
+                cp = ReActCheckpoint.from_dict(react_checkpoint)
+
+            if cp is not None:
+                completed_call_ids = set(cp.completed_tool_call_ids)
+                completed_arg_keys = cp.completed_tool_keys()
+                cp_budget_remaining = cp.budget_remaining
+                cp_suspension_count = cp.suspension_count
+                logger.info(
+                    "back_handler: HIL resume checkpoint loaded "
+                    "task_id=%s completed_tools=%d budget_remaining=%d suspension=%d",
+                    task_id,
+                    len(completed_call_ids),
+                    cp_budget_remaining,
+                    cp_suspension_count,
+                )
+        except Exception:
+            logger.warning(
+                "back_handler: HIL checkpoint decode failed task_id=%s", task_id, exc_info=True
+            )
 
     max_rounds = max(1, int(getattr(get_config().protocols, "max_suspensions_per_task", 2) or 2))
     current = result
@@ -819,13 +1159,27 @@ async def _resolve_needs_human_in_process(
             )
 
         _resume_task_after_unified_hil(fsm_state, task_id)
-        messages.append(_hil_response_resume_message(response))
+
+        # Build checkpoint-aware resume message and compute effective budget.
+        # The checkpoint's budget_remaining (if available) wins over the
+        # default max(2, max_iterations) floor so multi-round suspensions
+        # respect the original dispatch budget.
+        effective_budget = (
+            cp_budget_remaining if cp_budget_remaining is not None else max(2, max_iterations)
+        )
+        messages.append(
+            _hil_response_resume_message(
+                response,
+                checkpoint=react_checkpoint,
+                round_index=round_index,
+            )
+        )
         current = await react_loop(
             actor="back",
             system_prompt=system_prompt,
             messages=messages,
             tools=tools,
-            max_iterations=max(2, max_iterations),
+            max_iterations=effective_budget,
             model=model,
             tool_dispatcher=tool_dispatcher,
             on_text_response=_noop_text,
@@ -835,7 +1189,17 @@ async def _resolve_needs_human_in_process(
             validator=validator,
             on_stream=on_stream,
             control_queue=control_queue,
+            completed_tool_call_ids=completed_call_ids or None,
+            completed_tool_arg_keys=completed_arg_keys or None,
         )
+
+        # On subsequent rounds the checkpoint is consumed; do not re-apply
+        # the original dedup state (it would prevent new tool calls).
+        # Future rounds carry forward whatever the just-completed loop
+        # already recorded in messages history.
+        completed_call_ids = set()
+        completed_arg_keys = set()
+        cp_budget_remaining = None
 
     if current.status == "suspended":
         return ReactResult(
@@ -1023,6 +1387,7 @@ async def back_handler(
     temporal: Any | None = None,  # Phase 2 Epic 15.1
     spatial: Any | None = None,  # Phase 2 Epic 15.1
     self_model: Any | None = None,  # Phase 2 Epic 15.1
+    registry_hints: dict[str, Any] | None = None,  # Phase 2: live GPS registry snapshot
 ) -> ReactResult:
     """Back handler: ReAct agent for task execution.
 
@@ -1105,6 +1470,21 @@ async def back_handler(
         effective_safety_band,
         len(snapshot["history_entries"]),
     )
+    # Phase 2: wire actor identity into ToolContext for resolve_situation.
+    # The identity_ref comes from the task's grounding metadata (set by the
+    # kernel / selfmodel at session bootstrap).
+    _principal = _extract_identity_ref(task)
+    if not _principal and self_model is not None:
+        _principal = getattr(self_model, "principal_id", None)
+    if _principal:
+        ctx = getattr(tool_dispatcher, "ctx", None)
+        if ctx is not None:
+            ctx.active_principal_id = _principal
+            logger.debug("back_handler: wired principal_id=%s into ToolContext", _principal)
+    else:
+        logger.warning(
+            "back_handler: could not resolve principal_id — resolve_situation will use 'unknown'"
+        )
     overlay_summary = summarize_task_overlay(task)
     if overlay_summary["present"]:
         logger.info(
@@ -1169,6 +1549,8 @@ async def back_handler(
         temporal_context_block=temporal_context_block,  # Phase 2 Epic 15.6
         spatial_context_block=spatial_context_block,  # Phase 2 Epic 15.6
         selfmodel_context_block=selfmodel_context_block,  # Phase 2 Epic 15.6
+        history_entries=snapshot["history_entries"],  # Phase 2 Epic 17
+        registry_hints=registry_hints,  # Phase 2: live GPS registry snapshot
     )
 
     # 3. Build messages: last N entries + task as "user" message
@@ -1246,6 +1628,55 @@ async def back_handler(
     # 6b. Live needs_human is resolved through the unified HIL port. The
     # residual task.suspended emission path remains only for no-port legacy
     # fixtures and crash-recovery compatibility.
+    #
+    # Build the ReAct checkpoint BEFORE entering the HIL round-trip so the
+    # resume loop receives completed_tool_call_ids, completed_tool_arg_keys,
+    # and budget_remaining — preventing re-execution of already-completed
+    # tools when the Back LLM resumes after human input.
+    pre_hil_checkpoint = (
+        _build_react_checkpoint(
+            task_id=task_id,
+            messages=messages,
+            tool_dispatcher=tool_dispatcher,
+            max_iterations=max_iterations,
+            result=result,
+        )
+        if result.status == "suspended"
+        else None
+    )
+
+    # BP-18A: When BackPool is enabled, externalize HIL — do NOT block the
+    # asyncio.Task inside _resolve_needs_human_in_process.  Instead emit
+    # task.suspended with the checkpoint and return immediately.  The pool
+    # wrapper releases the worker slot, and the legacy task.suspended →
+    # task.resume pipeline (via BackTopicRouter → back_resume_handler)
+    # handles the rest.  When BackPool is disabled (legacy single-worker),
+    # the existing in-process HIL resolution is unchanged.
+    _pool_enabled = fsm_state is not None and getattr(fsm_state, "_back_pool_enabled", False)
+    if result.status == "suspended" and _pool_enabled:
+        _emit_back_result(
+            bus,
+            envelope,
+            task_id,
+            result,
+            react_history=messages,
+            original_task=task,
+            tool_call_summaries=[],
+            react_checkpoint=pre_hil_checkpoint,
+            trace_id=trace_id,
+        )
+        logger.info(
+            "back_handler: externalized HIL suspend task_id=%s — "
+            "emitted task.suspended, worker slot released by pool wrapper",
+            task_id,
+        )
+        return result
+
+    # Snapshot pre-HIL call summary count so the emission below only
+    # includes summaries from the post-HIL run.  Without this the
+    # dispatcher's accumulated history from BOTH react_loop calls
+    # would inflate the task.complete payload.
+    pre_hil_summary_count = len(tool_dispatcher.get_call_summaries())
     result = await _resolve_needs_human_in_process(
         result=result,
         hil_port=hil_port,
@@ -1263,12 +1694,18 @@ async def back_handler(
         control_queue=control_queue,
         fsm_state=fsm_state,
         on_stream=on_stream,
+        react_checkpoint=pre_hil_checkpoint,
     )
 
     # 7. Emit result to bus (Epic 7.3)
     # M3 E3.3.4: Pass react history + original task for suspended payloads
-    # Phase P: Extract tool call summaries for MW persistence
-    call_summaries = [s.to_dict() for s in tool_dispatcher.get_call_summaries()]
+    # Phase P: Extract only post-HIL tool call summaries for MW persistence.
+    # The dispatcher accumulates summaries across both react_loop calls;
+    # we slice at pre_hil_summary_count so the payload reflects the
+    # post-resume execution only (pre-HIL summaries are already captured
+    # in the checkpoint's tool_history).
+    all_summaries = [s.to_dict() for s in tool_dispatcher.get_call_summaries()]
+    call_summaries = all_summaries[pre_hil_summary_count:]
     react_checkpoint = (
         _build_react_checkpoint(
             task_id=task_id,
@@ -1328,10 +1765,12 @@ async def back_resume_handler(
     tool_dispatcher: ToolDispatcher,
     fsm_state: Any | None = None,
     cancel_token: CancellationToken | None = None,
+    hil_port: Any | None = None,  # M7 BP-09: accepted for uniform pool-worker dispatch
     grounding: Any | None = None,  # Phase 2 Epic 15.1
     temporal: Any | None = None,  # Phase 2 Epic 15.1
     spatial: Any | None = None,  # Phase 2 Epic 15.1
     self_model: Any | None = None,  # Phase 2 Epic 15.1
+    registry_hints: dict[str, Any] | None = None,  # Phase 2: live GPS registry snapshot
 ) -> ReactResult:
     """Resume a suspended Back task with user's resolution.
 
@@ -1537,6 +1976,8 @@ async def back_resume_handler(
         temporal_context_block=await _build_temporal_context_block(temporal),  # Phase 2
         spatial_context_block=await _build_spatial_context_block(spatial),  # Phase 2
         selfmodel_context_block=await _build_selfmodel_context_block(self_model),  # Phase 2
+        history_entries=snapshot["history_entries"],  # Phase 2 Epic 17
+        registry_hints=registry_hints,  # Phase 2: live GPS registry snapshot
     )
 
     # 4. Hydrate resolution into messages (copy to avoid mutation)
@@ -1688,6 +2129,8 @@ def back_cancel_handler(
     envelope: Envelope,
     fsm_state: Any | None = None,
     cancel_token: CancellationToken | None = None,
+    hil_port: Any | None = None,  # M7 BP-09: accepted for uniform pool-worker dispatch
+    **kwargs: Any,  # absorb unused pool-worker kwargs (model, ss, bus, etc.)
 ) -> None:
     """Handle task cancellation via CancellationToken.
 
@@ -1765,6 +2208,7 @@ async def route_back_envelope(
     temporal: Any | None = None,  # Phase 2 Epic 15.1
     spatial: Any | None = None,  # Phase 2 Epic 15.1
     self_model: Any | None = None,  # Phase 2 Epic 15.1
+    registry_hints: dict[str, Any] | None = None,  # Phase 2: live GPS registry snapshot
 ) -> ReactResult | None:
     """Central topic-based dispatcher for all back-bound envelopes.
 
@@ -1827,6 +2271,7 @@ async def route_back_envelope(
             temporal=temporal,  # Phase 2 Epic 15.1
             spatial=spatial,  # Phase 2 Epic 15.1
             self_model=self_model,  # Phase 2 Epic 15.1
+            registry_hints=registry_hints,  # Phase 2: live GPS registry snapshot
         )
 
     if topic == TOPIC_TASK_RESUME:
@@ -1843,6 +2288,7 @@ async def route_back_envelope(
             temporal=temporal,  # Phase 2 Epic 15.1
             spatial=spatial,  # Phase 2 Epic 15.1
             self_model=self_model,  # Phase 2 Epic 15.1
+            registry_hints=registry_hints,  # Phase 2: live GPS registry snapshot
         )
 
     if topic == TOPIC_CLARIFICATION_RESPONSE:
@@ -1862,6 +2308,7 @@ async def route_back_envelope(
             temporal=temporal,  # Phase 2 Epic 15.1
             spatial=spatial,  # Phase 2 Epic 15.1
             self_model=self_model,  # Phase 2 Epic 15.1
+            registry_hints=registry_hints,  # Phase 2: live GPS registry snapshot
         )
 
     if topic == TOPIC_TASK_CANCEL:

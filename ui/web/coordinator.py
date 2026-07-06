@@ -153,6 +153,10 @@ class UiCoordinator:
         self.output_channel: Any = None  # poc.k1_poc.demo.output_channel.OutputChannel
         self._web_subscriptions: List[Any] = []
 
+        # Slice 6: session switch guard — blocks concurrent switch requests
+        # and user input during the staged handoff window.
+        self._switching: bool = False
+
     # -----------------------------------------------------------------
     # Timeline helpers
     # -----------------------------------------------------------------
@@ -463,7 +467,7 @@ class UiCoordinator:
             test_mode=self._test_mode,
             model_mode=self._model_mode,
             session_mode="standalone",
-            session_id=f"web-{uuid.uuid4().hex[:8]}",
+            session_id="",  # Slice 3: empty → kernel generates via SessionRegistry
             active_member_id=active_member_id,
             enable_experience=True,
             enable_delta=True,
@@ -521,6 +525,11 @@ class UiCoordinator:
             logger.info("Phase 2: kernel connected to K0 at %s", k0_endpoint)
         else:
             logger.info("Phase 2: kernel in offline bridge mode (outbox)")
+
+        # Slice 5: read back the resolved session_id (stable across reboots)
+        resolved_id = getattr(self._runtime, "_session_id", "")
+        if resolved_id:
+            logger.info("Phase 2: kernel resolved session_id=%s", resolved_id)
 
         # M15: record Fabric auto-registration outcome in the boot timeline.
         _service = getattr(self._runtime, "_service", None)
@@ -736,13 +745,13 @@ class UiCoordinator:
     def _wire_web_timeline_hooks(self) -> None:
         """Subscribe FSM/affect/tool topics; forward to the WebSocketRenderer."""
         from k1.bus import Envelope
+        from k1.concierge.bus.topics import TOPIC_TOOL_STATE_CHANGED  # E15.10
         from k1.concierge.bus.topics import (
             TOPIC_AFFECT_UPDATE,
             TOPIC_STATE_UPDATED,
             TOPIC_TASK_FAILED,
             TOPIC_TOOL_COMPLETED,
             TOPIC_TOOL_STARTED,
-            TOPIC_TOOL_STATE_CHANGED,  # E15.10
         )
         from k1.hil.topics import TOPIC_HIL_REQUEST as _TOPIC_HIL_REQUEST
 
@@ -848,6 +857,172 @@ class UiCoordinator:
                 logger.debug("Task failed web hook failed", exc_info=True)
 
         self._web_subscriptions.append(bus.subscribe(TOPIC_TASK_FAILED, _on_task_failed))
+
+        # Slice 7: forward session title updates to browser sidebar
+        from k1.concierge.bus.topics import TOPIC_SESSION_TITLE_UPDATED
+
+        def _on_session_title_updated(envelope: Envelope) -> None:
+            p = _safe_payload(envelope)
+            try:
+                self.renderer.send_session_updated(
+                    session_id=str(p.get("session_id", "")),
+                    title=str(p.get("title", "New Chat")),
+                )
+            except Exception:
+                logger.debug("Session title web hook failed", exc_info=True)
+
+        self._web_subscriptions.append(
+            bus.subscribe(TOPIC_SESSION_TITLE_UPDATED, _on_session_title_updated)
+        )
+
+    # -----------------------------------------------------------------
+    # Slice 6: Session switch
+    # -----------------------------------------------------------------
+
+    async def activate_session(self, target_session_id: str) -> dict[str, Any]:
+        """Switch the active session to ``target_session_id``.
+
+        Staged handoff via ``KernelService.replace_session()``:
+            1. Block input (``_switching=True``).
+            2. Wait for in-flight turn to complete (max 30s).
+            3. Tear down output channel + web hooks on old bus.
+            4. Call ``replace_session()`` → stage/create/validate/destroy.
+            5. Re-point all coordinator runtime fields to new session.
+            6. Re-wire OutputChannel + web hooks on new bus.
+            7. Load chat history from kernel.db.
+            8. Broadcast ``session_activated`` to all WebSocket clients.
+            9. Unblock input.
+
+        Returns a dict with ``session_id``, ``title``, ``turn_count``,
+        and ``messages`` for the REST endpoint to relay.
+        """
+        if target_session_id == getattr(self._runtime, "_session_id", ""):
+            raise ValueError(f"Already active: {target_session_id}")
+
+        svc = getattr(self._runtime, "_service", None)
+        if svc is None:
+            raise RuntimeError("KernelService not available")
+
+        old_id = getattr(self._runtime, "_session_id", "")
+
+        self._switching = True
+        logger.info("activate_session: switching %s → %s", old_id, target_session_id)
+
+        try:
+            # ── Wait for in-flight turn ──
+            output = self.output_channel
+            if output is not None and hasattr(output, "_turn_in_flight") and output._turn_in_flight:
+                logger.info("activate_session: waiting for in-flight turn...")
+                try:
+                    await asyncio.wait_for(output.wait_for_idle(), timeout=30.0)
+                except asyncio.TimeoutError:
+                    logger.warning("activate_session: turn did not complete in 30s, forcing switch")
+
+            # ── Tear down phase 3 ──
+            if self.output_channel is not None:
+                self.output_channel.teardown()
+                self.output_channel = None
+            for handle in self._web_subscriptions:
+                try:
+                    if hasattr(handle, "unsubscribe"):
+                        handle.unsubscribe()
+                except Exception:
+                    pass
+            self._web_subscriptions.clear()
+
+            # ── Replace session in KernelService ──
+            new_session = await svc.replace_session(old_id, target_session_id)
+
+            # ── Update runtime._session_id ──
+            self._runtime._session_id = target_session_id
+
+            # ── Re-point coordinator fields ──
+            self.bus = new_session.bus
+            self.router = new_session.router
+            self.fsm = new_session.concierge.fsm
+            self.session_state = new_session.session_state
+            self.front_mailbox = new_session.front_mailbox
+            self.back_mailbox = new_session.back_mailbox
+            self.front_dispatcher = new_session.front_dispatcher
+            self.back_dispatcher = new_session.back_dispatcher
+            self.experience_layer = new_session.experience_layer
+            self.delta_aggregator = new_session.delta_aggregator
+            self.delta_applicator = new_session.delta_applicator
+            self.hil_port = new_session.hil_port
+            self.ledger = new_session.ledger
+            self.ledger_store = new_session.ledger_store
+            self.dead_letter_consumer = new_session.dead_letter_consumer
+            self.front_ctx = new_session.front_ctx
+            self.back_ctx = new_session.back_ctx
+
+            # ── Re-wire phase 3 on new bus ──
+            from poc.k1_poc.demo.output_channel import OutputChannel as _OC
+
+            self.output_channel = _OC(
+                bus=self.bus,
+                renderer=self.renderer,
+                current_member="Alex",
+                enable_spinner=False,
+            )
+            self.output_channel.subscribe_all()
+            self._wire_web_timeline_hooks()
+
+            # ── Load chat history ──
+            kdb = getattr(svc, "_kernel_db", None)
+            messages_payload: list[dict[str, Any]] = []
+            turn_count = 0
+            title = ""
+            if kdb is not None:
+                rows = kdb.get_messages(target_session_id)
+                by_turn: dict[int, dict[str, Any]] = {}
+                for row in rows:
+                    tn = row["turn_num"]
+                    if tn not in by_turn:
+                        by_turn[tn] = {"turn_num": tn, "timestamp": row["timestamp"]}
+                    by_turn[tn][row["role"]] = row["content"]
+                for tn in sorted(by_turn):
+                    t = by_turn[tn]
+                    messages_payload.append(
+                        {
+                            "turn_num": tn,
+                            "user": t.get("user", ""),
+                            "assistant": t.get("assistant", ""),
+                            "timestamp": t["timestamp"],
+                        }
+                    )
+            reg = getattr(svc, "_session_registry", None)
+            if reg is not None:
+                sess = reg.get(target_session_id)
+                if sess:
+                    turn_count = int(sess.get("turn_count", 0) or 0)
+                    title = str(sess.get("title", "") or "")
+
+            # ── Notify all WebSocket clients ──
+            await self.renderer._broadcast(
+                {
+                    "type": "session_activated",
+                    "session_id": target_session_id,
+                    "title": title,
+                    "turn_count": turn_count,
+                    "messages": messages_payload,
+                }
+            )
+
+            logger.info(
+                "activate_session: switched to %s (%d turns, %d messages)",
+                target_session_id,
+                turn_count,
+                len(messages_payload),
+            )
+            return {
+                "session_id": target_session_id,
+                "title": title,
+                "turn_count": turn_count,
+                "messages": messages_payload,
+            }
+
+        finally:
+            self._switching = False
 
     # =================================================================
     # PHASE 4 — Health check

@@ -17,9 +17,13 @@ def test_back_prompt_uses_registry_owned_capability_names() -> None:
         max_tool_calls=6,
     )
 
-    assert "invoke_capability(capability_name=<name>" in prompt
-    assert "tool.execute.calendar.create_event" in prompt
-    assert "tool.execute.reminders.create_reminder" in prompt
+    # Epic 17: names come from resolve_situation's envelope, copied verbatim.
+    assert "CAPABILITY NAMES ARE REGISTRY-OWNED" in prompt
+    assert "resolve_situation tells you the" in prompt
+    assert "exact names" in prompt
+    assert "Copy them verbatim" in prompt
+    assert "A guessed name fails and wastes budget" in prompt
+    # Invented names must never appear as teaching examples.
     assert "tool.execute.send_reminder" not in prompt
     assert "tool.execute.set_alarm" not in prompt
     assert "tool.execute.calendar.create_reminder" not in prompt
@@ -36,7 +40,9 @@ def test_back_prompt_describes_domain_agnostic_semantic_envelope() -> None:
     assert "future_weave" in prompt
     assert "authority" in prompt
     assert "requires_external_authority" in prompt
-    assert "Do NOT fabricate specialized requirements" in prompt
+    # Template line-wraps this across lines in its section; confirm the words appear.
+    assert "fabricate specialized" in prompt
+    assert "requirements" in prompt
 
 
 def test_prompts_route_existing_artifact_note_updates_without_domain_shortcuts() -> None:
@@ -51,9 +57,10 @@ def test_prompts_route_existing_artifact_note_updates_without_domain_shortcuts()
         safety_band="AMBER",
         max_tool_calls=6,
     )
-    assert "add/attach/include/update notes" in back_prompt
-    assert "Treat the target record as system-of-record work" in back_prompt
-    assert "Do NOT search an unrelated domain" in back_prompt
+    # Epic 17: provenance teaching lives in IDENTITY's built-in knowledge
+    # section; artifact-note routing is enforced by the resolution envelope.
+    assert "source=model_general_knowledge" in back_prompt
+    assert "requires_external_authority=true" in back_prompt
 
 
 def test_front_modes_include_native_intelligence_after_role_contract() -> None:

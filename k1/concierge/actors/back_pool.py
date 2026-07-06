@@ -376,8 +376,12 @@ class BackPool:
             )
             return None
 
-        # E7.3.4: Track released task_ids for late-envelope discard
-        self._released_task_ids.add(task_id)
+        # E7.3.4: Track released task_ids for late-envelope discard.
+        # Suspended tasks are NOT terminal — they can resume. Only
+        # terminal reasons (completed, cancelled, lease_expired, error)
+        # should cause late envelopes to be discarded.
+        if reason != "suspended":
+            self._released_task_ids.add(task_id)
 
         # Update lease status (E7.2.2)
         if slot.lease is not None:

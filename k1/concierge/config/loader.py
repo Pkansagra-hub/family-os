@@ -338,8 +338,8 @@ class BackPoolConfig:
     reclaim_check_interval_s: float = 30.0
     enable_dependency_ordering: bool = True
     lease_renewal_extension_s: float = 60.0
-    max_lease_renewals: int = 3
-    grace_period_s: float = 5.0
+    max_renewals: int = 3
+    lease_grace_period_s: float = 5.0
 
 
 # =========================================================================
@@ -1032,14 +1032,14 @@ def _build_back_pool(raw: dict[str, Any]) -> BackPoolConfig:
     cfg = BackPoolConfig()
     if not raw:
         return cfg
-    for attr in ("pool_size", "max_concurrent_per_session", "max_lease_renewals"):
+    for attr in ("pool_size", "max_concurrent_per_session", "max_renewals"):
         if attr in raw:
             setattr(cfg, attr, int(raw[attr]))
     for attr in (
         "lease_ttl_s",
         "reclaim_check_interval_s",
         "lease_renewal_extension_s",
-        "grace_period_s",
+        "lease_grace_period_s",
     ):
         if attr in raw:
             setattr(cfg, attr, float(raw[attr]))

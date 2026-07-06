@@ -47,6 +47,10 @@ class KernelConfig:
     enable_delta: bool = True
     enable_hitl: bool = True
     enable_orchestrator: bool = True
+    # M7: BackPool worker leasing (BP-02). When False (default), BackPool
+    # is not wired into ConciergeFactory and all Back dispatch uses the
+    # legacy single-worker path. Flip True after Milestone A wiring.
+    enable_back_pool: bool = True
     # M16.E1.I3: when False (default), HIGH-tier dispatch with no
     # OrchestratorService wired raises ``OrchestratorNotWired`` instead
     # of silently falling back to the legacy ``PassthroughPlannerStub``
@@ -199,6 +203,12 @@ class KernelConfig:
     # deployments and the existing test suite are unchanged.
     enable_family_tools: bool = True
     family_tools_db_path: str = "./data/k1_family.db"
+    # Slice 1: kernel.db chat session persistence.
+    # When True, KernelService opens kernel_db at S2.12 and creates a
+    # SessionRegistry.  Set to False for test/deployments that don't
+    # need multi-chat persistence (kernel starts without kernel.db).
+    enable_kernel_db: bool = True
+    kernel_db_path: str = "./data/kernel.db"
     # Dotted import paths to ``BaseToolService`` subclasses to register, e.g.
     # ``("k1.tools.family.adapters.calendar:CalendarToolService",)``. Empty
     # by default; ui/web populates this from environment when needed.

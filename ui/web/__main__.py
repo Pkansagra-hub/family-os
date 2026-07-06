@@ -11,6 +11,46 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import sys
+
+# Python 3.13 on Windows: ProactorEventLoop (IOCP) has broken task-context
+# tracking that corrupts SSL/shutdown for aiohttp, httpx, and httpcore.
+# SelectorEventLoop avoids this entirely.
+if sys.platform == "win32":
+    import asyncio
+
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+# Python 3.13 strict task-context tracking raises RuntimeError when
+# aiohttp connection cleanup callbacks run in a different task context
+# than WebSocket broadcasts. These are harmless — tasks still complete.
+# Filter them at the event-loop level so real errors stay visible.
+_py313_original_new_event_loop = asyncio.get_event_loop_policy().new_event_loop
+
+
+def _py313_patched_new_event_loop(policy_self):
+    loop = _py313_original_new_event_loop(policy_self)
+    if sys.platform == "win32":
+        original_handler = loop.get_exception_handler()
+
+        def _filter(loop_ctx, context):
+            exc = context.get("exception")
+            if isinstance(exc, RuntimeError):
+                s = str(exc)
+                if "Cannot enter into task" in s or "does not match the current task" in s:
+                    return
+            if original_handler is not None:
+                original_handler(loop_ctx, context)
+            else:
+                loop_ctx.default_exception_handler(context)
+
+        loop.set_exception_handler(_filter)
+    return loop
+
+
+# Patch the policy class so all future event loops get the filter
+_policy_cls = type(asyncio.get_event_loop_policy())
+_policy_cls.new_event_loop = _py313_patched_new_event_loop
 
 _VERTEX_PROVIDER_IDS = {
     "vertex",
@@ -32,6 +72,11 @@ _GOOGLE_PROVIDER_IDS = {
     "ai_studio",
     "google-ai",
     "google_ai",
+}
+_DEEPSEEK_PROVIDER_IDS = {
+    "deepseek",
+    "deepseek-v4",
+    "deepseek_v4",
 }
 
 
@@ -150,10 +195,18 @@ def main() -> None:
                     "or pass --test-mode for local stub mode."
                 )
                 raise SystemExit(1)
+        elif provider in _DEEPSEEK_PROVIDER_IDS:
+            api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+            if not api_key:
+                print(
+                    "ERROR: LLM_PROVIDER=deepseek requires DEEPSEEK_API_KEY env var.\n"
+                    "  Set it and retry, or pass --test-mode for local stub mode."
+                )
+                raise SystemExit(1)
         else:
             print(
                 f"ERROR: unsupported LLM_PROVIDER={provider!r}.\n"
-                "  Supported production providers here: google, vertex. "
+                "  Supported production providers here: google, vertex, deepseek. "
                 "Use --test-mode for local stub mode."
             )
             raise SystemExit(1)

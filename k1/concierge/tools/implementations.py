@@ -46,7 +46,6 @@ from k1.concierge.task.intent import TaskIntent
 from k1.concierge.tools.recovery_contract import recovery_for_unsatisfied_contract
 from k1.concierge.tools.result_protocol import ToolResult
 from k1.fabric.types import CapabilityRequest
-from k1.sessionstate.public_types import BatchRequest, MutationRequest
 
 if TYPE_CHECKING:
     # E4.M1.3: HILCoordinatorLike import removed -- the L2 HIL enforcement
@@ -121,6 +120,9 @@ class ToolContext:
     # M17.E1.I1: hard-fail (False, default) vs legacy POC fallback (True)
     # when ``dispatch`` is None for back-actor capability tools.
     allow_dispatch_passthrough: bool = False
+    # Phase 2: actor identity for resolve_situation / capability routing.
+    # Set from the task's grounding metadata (identity_ref) by the back_handler.
+    active_principal_id: str | None = None
 
 
 # =========================================================================
@@ -433,668 +435,6 @@ def _request_prompt_metadata(
     if prompt_template or context_override:
         context_override.setdefault("prompt_variables", dict(params))
     return prompt_template, context_override or None
-
-
-# =========================================================================
-# COGNITIVE (6) -- Front only, all write to SS
-# =========================================================================
-
-
-@_register("update_beliefs")
-def execute_update_beliefs(args: dict, ctx: ToolContext) -> ToolResult:
-    """Store or update factual beliefs in beliefs_active section.
-
-    Each belief is a subject-predicate-object triple with confidence.
-    Routes writes through writer_port for MutationGuard preflight,
-    SizeTracker update, and pressure management (M4 E4.2.3).
-    """
-    beliefs = args.get("beliefs", [])
-    logger.info("tool:update_beliefs  count=%d actor=%s", len(beliefs), ctx.actor)
-    if not beliefs:
-        return ToolResult(
-            tool_name="update_beliefs",
-            status="error",
-            error="beliefs array is required and must not be empty",
-        )
-
-    # Read-only access to check for existing SPO triples
-    beliefs_section = ctx.session_manager.get_section("beliefs_active")
-    writer_id = f"tool:{ctx.actor}"
-    stored = 0
-    updated = 0
-
-    for belief in beliefs:
-        subject = belief.get("subject", "")
-        predicate = belief.get("predicate", "")
-        obj = belief.get("object", "")
-        confidence = belief.get("confidence", 1.0)
-
-        if not subject or not predicate or not obj:
-            continue
-
-        # Check if a matching fact already exists (same SPO) -- read-only
-        existing = None
-        for fact in beliefs_section.find_by_subject(subject):
-            if fact.predicate == predicate and fact.object == obj:
-                existing = fact
-                break
-
-        if existing:
-            # Update confidence via writer port
-            req = MutationRequest.create(
-                section="beliefs_active",
-                operation="update_confidence",
-                data={"id": existing.id, "confidence": confidence},
-                writer_id=writer_id,
-                cognitive_trace_id=ctx.cognitive_trace_id,
-            )
-            resp = ctx.writer_port.request_mutation(req)
-            if not resp.approved:
-                return ToolResult(
-                    tool_name="update_beliefs",
-                    status="error",
-                    error=resp.reason,
-                )
-            updated += 1
-        else:
-            # Add new fact via writer port
-            req = MutationRequest.create(
-                section="beliefs_active",
-                operation="add_fact",
-                data={
-                    "subject": subject,
-                    "predicate": predicate,
-                    "obj": obj,
-                    "confidence": confidence,
-                    "source": f"llm:{ctx.actor}",
-                },
-                writer_id=writer_id,
-                cognitive_trace_id=ctx.cognitive_trace_id,
-            )
-            resp = ctx.writer_port.request_mutation(req)
-            if not resp.approved:
-                return ToolResult(
-                    tool_name="update_beliefs",
-                    status="error",
-                    error=resp.reason,
-                )
-            stored += 1
-
-    return ToolResult(
-        tool_name="update_beliefs",
-        status="ok",
-        data={"stored": stored, "updated": updated},
-    )
-
-
-@_register("update_scoreboard")
-def execute_update_scoreboard(args: dict, ctx: ToolContext) -> ToolResult:
-    """Update the conversational scoreboard.
-
-    Handles QUD push/pop, referent resolution, and topic shifts.
-    Routes each sub-action through writer_port (M4 E4.2.3).
-    """
-    logger.info(
-        "tool:update_scoreboard  qud_push=%s qud_pop=%s referents=%d topic_shift=%s commitment_add=%s commitment_fulfill=%s",
-        bool(args.get("qud_push")),
-        args.get("qud_pop", False),
-        len(args.get("referent_updates", {})),
-        bool(args.get("topic_shift")),
-        bool(args.get("commitment_add")),
-        bool(args.get("commitment_fulfill")),
-    )
-
-    writer_id = f"tool:{ctx.actor}"
-    qud_push = args.get("qud_push")
-    qud_pop = args.get("qud_pop", False)
-    referent_updates = args.get("referent_updates", {})
-    topic_shift = args.get("topic_shift")
-
-    # Pop QUD if requested (before push, so push replaces it)
-    if qud_pop:
-        req = MutationRequest.create(
-            section="scoreboard",
-            operation="pop_question",
-            data={},
-            writer_id=writer_id,
-            cognitive_trace_id=ctx.cognitive_trace_id,
-        )
-        resp = ctx.writer_port.request_mutation(req)
-        if not resp.approved:
-            return ToolResult(tool_name="update_scoreboard", status="error", error=resp.reason)
-
-    # Push new QUD
-    if qud_push:
-        req = MutationRequest.create(
-            section="scoreboard",
-            operation="push_question",
-            data={"text": qud_push, "asked_by": "user"},
-            writer_id=writer_id,
-            cognitive_trace_id=ctx.cognitive_trace_id,
-        )
-        resp = ctx.writer_port.request_mutation(req)
-        if not resp.approved:
-            return ToolResult(tool_name="update_scoreboard", status="error", error=resp.reason)
-
-    # Update referents (pronoun -> resolved entity)
-    for ref_text, entity_id in referent_updates.items():
-        req = MutationRequest.create(
-            section="scoreboard",
-            operation="add_referent",
-            data={
-                "text": ref_text,
-                "entity_id": entity_id,
-                "entity_type": "resolved",
-                "salience": 0.8,
-            },
-            writer_id=writer_id,
-            cognitive_trace_id=ctx.cognitive_trace_id,
-        )
-        resp = ctx.writer_port.request_mutation(req)
-        if not resp.approved:
-            return ToolResult(tool_name="update_scoreboard", status="error", error=resp.reason)
-
-    # Topic shift
-    if topic_shift:
-        req = MutationRequest.create(
-            section="scoreboard",
-            operation="push_topic",
-            data={"name": topic_shift, "is_primary": True},
-            writer_id=writer_id,
-            cognitive_trace_id=ctx.cognitive_trace_id,
-        )
-        resp = ctx.writer_port.request_mutation(req)
-        if not resp.approved:
-            return ToolResult(tool_name="update_scoreboard", status="error", error=resp.reason)
-
-    # Add commitment (deferred promise)
-    commitment_add = args.get("commitment_add")
-    if commitment_add:
-        req = MutationRequest.create(
-            section="scoreboard",
-            operation="add_commitment",
-            data={
-                "description": commitment_add["description"],
-                "trigger_condition": commitment_add["trigger_condition"],
-                "linked_entities": commitment_add.get("linked_entities", []),
-                "linked_content_summary": commitment_add.get("linked_content_summary", ""),
-            },
-            writer_id=writer_id,
-            cognitive_trace_id=ctx.cognitive_trace_id,
-        )
-        resp = ctx.writer_port.request_mutation(req)
-        if not resp.approved:
-            return ToolResult(tool_name="update_scoreboard", status="error", error=resp.reason)
-
-    # Fulfill commitment
-    commitment_fulfill = args.get("commitment_fulfill")
-    if commitment_fulfill:
-        req = MutationRequest.create(
-            section="scoreboard",
-            operation="fulfill_commitment",
-            data={"commitment_id": commitment_fulfill},
-            writer_id=writer_id,
-            cognitive_trace_id=ctx.cognitive_trace_id,
-        )
-        resp = ctx.writer_port.request_mutation(req)
-        if not resp.approved:
-            return ToolResult(tool_name="update_scoreboard", status="error", error=resp.reason)
-
-    # Read-only access for response counts
-    scoreboard = ctx.session_manager.get_section("scoreboard")
-    return ToolResult(
-        tool_name="update_scoreboard",
-        status="ok",
-        data={
-            "qud_depth": len(scoreboard._qud_stack),
-            "active_referents": len(scoreboard._referents),
-            "open_commitments": len(scoreboard.get_open_commitments()),
-        },
-    )
-
-
-@_register("update_clarifications")
-def execute_update_clarifications(args: dict, ctx: ToolContext) -> ToolResult:
-    """Record or resolve semantic gaps in user intent.
-
-    Adds new gaps and resolves existing ones through writer_port (M4 E4.2.3).
-    """
-    gaps = args.get("gaps", [])
-    resolved_gaps = args.get("resolved_gaps", [])
-    logger.info(
-        "tool:update_clarifications  new_gaps=%d resolve=%d",
-        len(gaps),
-        len(resolved_gaps),
-    )
-
-    writer_id = f"tool:{ctx.actor}"
-
-    # Add new gaps via writer port
-    for gap in gaps:
-        gap_field = gap.get("field", "")
-        question = gap.get("question", "")
-        severity = gap.get("severity", "helpful")
-
-        if not gap_field or not question:
-            continue
-
-        # Map severity to priority value
-        priority_map = {
-            "blocking": 2,  # ClarificationPriority.URGENT
-            "helpful": 1,  # ClarificationPriority.HIGH
-            "minor": 0,  # ClarificationPriority.NORMAL
-        }
-        priority_val = priority_map.get(severity, 0)
-
-        req = MutationRequest.create(
-            section="clarifications",
-            operation="request",
-            data={
-                "agent_id": f"llm:{ctx.actor}",
-                "question": question,
-                "priority": priority_val,
-                "related_entity": gap_field,
-                "blocking": severity == "blocking",
-            },
-            writer_id=writer_id,
-            cognitive_trace_id=ctx.cognitive_trace_id,
-        )
-        resp = ctx.writer_port.request_mutation(req)
-        if not resp.approved:
-            return ToolResult(tool_name="update_clarifications", status="error", error=resp.reason)
-
-    # Resolve existing gaps -- read-only lookup then write via port
-    clarifications = ctx.session_manager.get_section("clarifications")
-    for field_name in resolved_gaps:
-        for clar in clarifications.list_pending():
-            if clar.related_entity == field_name:
-                req = MutationRequest.create(
-                    section="clarifications",
-                    operation="answer",
-                    data={
-                        "clarification_id": clar.id,
-                        "answer": f"Resolved: {field_name}",
-                    },
-                    writer_id=writer_id,
-                    cognitive_trace_id=ctx.cognitive_trace_id,
-                )
-                resp = ctx.writer_port.request_mutation(req)
-                if not resp.approved:
-                    return ToolResult(
-                        tool_name="update_clarifications",
-                        status="error",
-                        error=resp.reason,
-                    )
-                break
-
-    # Count results -- read-only
-    pending = clarifications.list_pending()
-    open_gaps = len(pending)
-    blocking_gaps = sum(1 for c in pending if c.is_blocking)
-
-    return ToolResult(
-        tool_name="update_clarifications",
-        status="ok",
-        data={
-            "open_gaps": open_gaps,
-            "blocking_gaps": blocking_gaps,
-        },
-    )
-
-
-@_register("update_narrative")
-def execute_update_narrative(args: dict, ctx: ToolContext) -> ToolResult:
-    """Track conversation thread switches, resumptions, and closures.
-
-    Routes writes through writer_port (M4 E4.2.3). Read-only section
-    access for thread existence checks and response data.
-    """
-    narrative = ctx.session_manager.get_section("narrative_active")
-    writer_id = f"tool:{ctx.actor}"
-
-    action = args.get("action", "")
-    thread_id = args.get("thread_id", "")
-    summary = args.get("summary", "")
-
-    if not action or not thread_id:
-        return ToolResult(
-            tool_name="update_narrative",
-            status="error",
-            error="action and thread_id are required",
-        )
-
-    if action == "switch":
-        # Check if thread exists (read-only); if not, create it
-        existing = narrative.get_thread(thread_id)
-        if existing:
-            req = MutationRequest.create(
-                section="narrative_active",
-                operation="switch_to",
-                data={"thread_id": thread_id},
-                writer_id=writer_id,
-                cognitive_trace_id=ctx.cognitive_trace_id,
-            )
-        else:
-            req = MutationRequest.create(
-                section="narrative_active",
-                operation="create_thread",
-                data={
-                    "title": thread_id,
-                    "goal": summary or "",
-                    "auto_switch": True,
-                },
-                writer_id=writer_id,
-                cognitive_trace_id=ctx.cognitive_trace_id,
-            )
-        resp = ctx.writer_port.request_mutation(req)
-        if not resp.approved:
-            return ToolResult(tool_name="update_narrative", status="error", error=resp.reason)
-
-    elif action == "resume":
-        existing = narrative.get_thread(thread_id)
-        if existing:
-            req = MutationRequest.create(
-                section="narrative_active",
-                operation="switch_to",
-                data={"thread_id": thread_id},
-                writer_id=writer_id,
-                cognitive_trace_id=ctx.cognitive_trace_id,
-            )
-        else:
-            # Thread not yet opened -- auto-create (same as switch)
-            req = MutationRequest.create(
-                section="narrative_active",
-                operation="create_thread",
-                data={
-                    "title": thread_id,
-                    "goal": summary or "",
-                    "auto_switch": True,
-                },
-                writer_id=writer_id,
-                cognitive_trace_id=ctx.cognitive_trace_id,
-            )
-        resp = ctx.writer_port.request_mutation(req)
-        if not resp.approved:
-            return ToolResult(tool_name="update_narrative", status="error", error=resp.reason)
-
-    elif action == "close":
-        existing = narrative.get_thread(thread_id)
-        if not existing:
-            # Idempotent: thread never opened or already closed -- succeed
-            primary = narrative._primary_thread
-            active_thread = primary.title if primary else ""
-            total_threads = len(narrative._thread_index)
-            return ToolResult(
-                tool_name="update_narrative",
-                status="ok",
-                data={
-                    "active_thread": active_thread,
-                    "total_threads": total_threads,
-                    "note": "thread already closed or never opened",
-                },
-            )
-        req = MutationRequest.create(
-            section="narrative_active",
-            operation="resolve_thread",
-            data={"thread_id": thread_id},
-            writer_id=writer_id,
-            cognitive_trace_id=ctx.cognitive_trace_id,
-        )
-        resp = ctx.writer_port.request_mutation(req)
-        if not resp.approved:
-            return ToolResult(tool_name="update_narrative", status="error", error=resp.reason)
-    else:
-        return ToolResult(
-            tool_name="update_narrative",
-            status="error",
-            error=f"Unknown action: {action}. Must be switch/resume/close.",
-        )
-
-    # Build response -- read-only
-    primary = narrative._primary_thread
-    active_thread = primary.title if primary else ""
-    total_threads = len(narrative._thread_index)
-
-    return ToolResult(
-        tool_name="update_narrative",
-        status="ok",
-        data={
-            "active_thread": active_thread,
-            "total_threads": total_threads,
-        },
-    )
-
-
-@_register("refine_affect")
-def execute_refine_affect(args: dict, ctx: ToolContext) -> ToolResult:
-    """Override Phase 1 emotion classification with LLM assessment.
-
-    Routes update through writer_port (M4 E4.2.3). Read-only section
-    access to capture previous emotion for observation.
-    """
-    affect = ctx.session_manager.get_section("affective_now")
-
-    emotion = args.get("emotion", "")
-    valence = args.get("valence")
-    arousal = args.get("arousal")
-    confidence = args.get("confidence", 0.8)
-    logger.info(
-        "tool:refine_affect  emotion=%s valence=%s arousal=%s confidence=%.2f",
-        emotion,
-        valence,
-        arousal,
-        confidence,
-    )
-
-    if not emotion or valence is None or arousal is None:
-        return ToolResult(
-            tool_name="refine_affect",
-            status="error",
-            error="emotion, valence, and arousal are required",
-        )
-
-    # Capture previous for observation (read-only)
-    previous_emotion = affect._current_emotion
-
-    # Apply via writer port
-    req = MutationRequest.create(
-        section="affective_now",
-        operation="update",
-        data={
-            "emotion": emotion,
-            "intensity": abs(valence),
-            "valence": valence,
-            "arousal": arousal,
-            "confidence": confidence,
-            "source": f"llm:{ctx.actor}",
-        },
-        writer_id=f"tool:{ctx.actor}",
-        cognitive_trace_id=ctx.cognitive_trace_id,
-    )
-    resp = ctx.writer_port.request_mutation(req)
-    if not resp.approved:
-        return ToolResult(tool_name="refine_affect", status="error", error=resp.reason)
-
-    return ToolResult(
-        tool_name="refine_affect",
-        status="ok",
-        data={
-            "previous_emotion": previous_emotion,
-            "updated": True,
-        },
-    )
-
-
-@_register("promote_belief")
-def execute_promote_belief(args: dict, ctx: ToolContext) -> ToolResult:
-    """Promote a belief to higher confidence.
-
-    Finds the belief by ID (read-only) then routes write through
-    writer_port (M4 E4.2.3).
-    """
-    # Read-only lookup for existence check and tier calculation
-    beliefs = ctx.session_manager.get_section("beliefs_active")
-
-    belief_id = args.get("belief_id", "")
-    new_confidence = args.get("new_confidence")
-
-    if not belief_id or new_confidence is None:
-        return ToolResult(
-            tool_name="promote_belief",
-            status="error",
-            error="belief_id and new_confidence are required",
-        )
-
-    # Get current fact (read-only)
-    fact = beliefs.get_fact(belief_id)
-    if not fact:
-        return ToolResult(
-            tool_name="promote_belief",
-            status="error",
-            error=f"Belief '{belief_id}' not found",
-        )
-
-    # Determine tier before promotion
-    if fact.confidence >= 0.8:
-        from_tier = "HOT"
-    elif fact.confidence >= 0.5:
-        from_tier = "WARM"
-    else:
-        from_tier = "COLD"
-
-    # Apply confidence update via writer port
-    req = MutationRequest.create(
-        section="beliefs_active",
-        operation="update_confidence",
-        data={"id": belief_id, "confidence": new_confidence},
-        writer_id=f"tool:{ctx.actor}",
-        cognitive_trace_id=ctx.cognitive_trace_id,
-    )
-    resp = ctx.writer_port.request_mutation(req)
-    if not resp.approved:
-        return ToolResult(tool_name="promote_belief", status="error", error=resp.reason)
-
-    return ToolResult(
-        tool_name="promote_belief",
-        status="ok",
-        data={
-            "promoted": True,
-            "from_tier": from_tier,
-        },
-    )
-
-
-# =========================================================================
-# BUNDLE (1) -- Front only, batched writes to SS
-# =========================================================================
-
-
-@_register("update_session_bundle")
-def execute_update_session_bundle(args: dict, ctx: ToolContext) -> ToolResult:
-    """Write to multiple SS sections in a single tool call.
-
-    Accepts an ordered list of mutations, an idempotency_key to prevent
-    duplicate application on retry, and stop_on_rejection to control
-    whether remaining mutations are cancelled on first failure.
-
-    Routes through writer_port.batch_mutations for batch-level
-    authorization, consistent trace ID, and aggregate result tracking
-    (M4 E4.3.1 / E4.3.2 / E4.3.3).
-    """
-    mutations = args.get("mutations", [])
-    idempotency_key = args.get("idempotency_key", "")
-    stop_on_rejection = args.get("stop_on_rejection", True)
-
-    logger.info(
-        "tool:update_session_bundle  mutations=%d key=%s stop_on_reject=%s actor=%s",
-        len(mutations),
-        idempotency_key[:20] if idempotency_key else "(none)",
-        stop_on_rejection,
-        ctx.actor,
-    )
-
-    # Lazy-init idempotency cache on first use
-    if ctx.bundle_idempotency_cache is None:
-        ctx.bundle_idempotency_cache = {}
-
-    # Idempotency check: return cached result without re-applying
-    if idempotency_key and idempotency_key in ctx.bundle_idempotency_cache:
-        logger.info(
-            "tool:update_session_bundle  idempotency hit key=%s",
-            idempotency_key[:20],
-        )
-        return ctx.bundle_idempotency_cache[idempotency_key]
-
-    if not mutations:
-        return ToolResult(
-            tool_name="update_session_bundle",
-            status="error",
-            error="mutations array is required and must not be empty",
-        )
-
-    # Build BatchRequest from tool args (E4.3.2)
-    writer_id = f"tool:{ctx.actor}"
-    requests = []
-    for m in mutations:
-        section = m.get("section", "")
-        operation = m.get("operation", "")
-        data = m.get("data", {})
-        if not section or not operation:
-            return ToolResult(
-                tool_name="update_session_bundle",
-                status="error",
-                error="Each mutation must have 'section' and 'operation'",
-            )
-        requests.append(
-            MutationRequest.create(
-                section=section,
-                operation=operation,
-                data=data,
-                writer_id=writer_id,
-                cognitive_trace_id=ctx.cognitive_trace_id,
-            )
-        )
-
-    batch = BatchRequest.create(
-        requests=requests,
-        writer_id=writer_id,
-        cognitive_trace_id=ctx.cognitive_trace_id,
-        stop_on_rejection=stop_on_rejection,
-    )
-    result = ctx.writer_port.batch_mutations(batch)
-
-    # Map BatchResult to ToolResult (E4.3.3)
-    if result.applied_count == result.total_requests:
-        status = "ok"
-    elif result.applied_count == 0:
-        status = "error"
-    else:
-        status = "partial"
-
-    tool_result = ToolResult(
-        tool_name="update_session_bundle",
-        status=status,
-        data={
-            "applied": result.applied_count,
-            "rejected": result.rejected_count,
-            "cancelled": result.cancelled_count,
-            "stopped_early": result.stopped_early,
-            "details": [
-                {
-                    "section": r.section,
-                    "status": r.status.value,
-                    "reason": r.reason,
-                }
-                for r in result.responses
-            ],
-        },
-    )
-
-    # Cache for idempotency dedup
-    if idempotency_key:
-        ctx.bundle_idempotency_cache[idempotency_key] = tool_result
-
-    return tool_result
 
 
 # =========================================================================
@@ -1529,20 +869,20 @@ async def execute_discover_capabilities(args: dict, ctx: ToolContext) -> ToolRes
 async def execute_resolve_situation(args: dict, ctx: ToolContext) -> ToolResult:
     """Resolve a task situation through Fabric's situated resolver.
 
-    Phase 2 Epic 16: Back's PRIMARY tool.  Auto-fills identity fields
+    RES-001b (2026-06-16): Back's PRIMARY tool.  Auto-fills identity fields
     (actor_id, space_id, session_id) from ToolContext so the LLM only
-    provides the ``frame`` (intents, time_window, person_refs, etc.)
-    and optional overrides.
+    provides ``action_text`` (raw user utterance) and optional
+    ``context_hints`` (advisory boost signals — NEVER hard filters).
 
     Delegates to ``ctx.dispatch.resolve_situation(payload)`` — never
     imports Fabric directly.
     """
-    frame = args.get("frame")
-    if not isinstance(frame, dict):
+    action_text = args.get("action_text", "")
+    if not action_text or not isinstance(action_text, str):
         return ToolResult(
             tool_name="resolve_situation",
             status="error",
-            error="frame is required and must be an object",
+            error="action_text is required and must be a non-empty string",
         )
 
     if ctx.dispatch is None:
@@ -1555,7 +895,8 @@ async def execute_resolve_situation(args: dict, ctx: ToolContext) -> ToolResult:
     # Auto-fill identity from context (LLM never sees these)
     sm = ctx.session_manager
     actor_id = (
-        getattr(sm, "principal_id", None)
+        getattr(ctx, "active_principal_id", None)
+        or getattr(sm, "principal_id", None)
         or getattr(sm, "active_principal_id", None)
         or getattr(getattr(sm, "session", None), "principal_id", None)
         or "unknown"
@@ -1563,8 +904,13 @@ async def execute_resolve_situation(args: dict, ctx: ToolContext) -> ToolResult:
     space_id = getattr(ctx, "active_space_id", None) or "family:default"
     session_id = ctx.session_id or getattr(sm, "session_id", "") or "unknown"
 
+    context_hints = args.get("context_hints") or {}
+    if not isinstance(context_hints, dict):
+        context_hints = {}
+
     payload: dict[str, Any] = {
-        "frame": frame,
+        "action_text": action_text,
+        "context_hints": context_hints,
         "actor_id": str(actor_id),
         "space_id": str(space_id),
         "session_id": str(session_id),
@@ -1584,10 +930,10 @@ async def execute_resolve_situation(args: dict, ctx: ToolContext) -> ToolResult:
             payload[key] = value
 
     logger.info(
-        "tool:resolve_situation  actor=%s space=%s frame_intents=%d",
+        "tool:resolve_situation  actor=%s space=%s action_text_len=%d",
         actor_id,
         space_id,
-        len(frame.get("intents", [])),
+        len(action_text),
     )
 
     try:

@@ -106,6 +106,12 @@ const state = {
     browserLocationRequested: false,
     browserLocationPromise: null,
     browserLocationLastAttemptMs: 0,
+
+    // Slice 8: chat session persistence
+    sessions: [],
+    activeSessionId: "",
+    sessionsLoading: false,
+    switching: false,  // guard: true during activateSession
 };
 
 const DEFAULT_STREAMING_LABEL = "Understanding request...";
@@ -302,6 +308,10 @@ const dom = {
     navItems:          $$(".nav-item"),
     views:             $$(".view"),
 
+    // Slice 8: chat session sidebar (nested under Assistant)
+    chatSessionsList:   $("#chat-sessions-list"),
+    btnNewChat:         $("#btn-new-chat"),
+
     // Home stats
     statTasks:     $("#stat-tasks"),
     statEvents:    $("#stat-events"),
@@ -382,6 +392,7 @@ function init() {
     setupProgressiveDisclosure();
     setupActivityRail();
     setupMermaidViewer();
+    setupSessionSidebar();  // Slice 8
     renderActivityRail();
     setChatWelcomeVisible();
     connect();
@@ -1785,6 +1796,9 @@ function handleMessage(msg) {
         case "hil_request":     handleHilRequest(msg); break;
         case "hil_presented":   handleHilPresented(msg); break;
         case "task_failed":     handleTaskFailed(msg); break;
+        // ── Slice 8: session sidebar events ──
+        case "session_updated":   handleSessionUpdated(msg); break;
+        case "session_activated": handleSessionActivated(msg); break;
     }
 }
 
@@ -1797,6 +1811,14 @@ function handleInit(msg) {
     state.member = msg.member || state.member;
     state.device = msg.device || state.device;
     state.turn = msg.turn || 0;
+
+    // ── Slice 8: session persistence ──
+    state.activeSessionId = msg.session_id || "";
+    if (msg.messages && msg.messages.length > 0) {
+        loadMessagesIntoChat(msg.messages);
+    }
+    fetchSessions();
+
     applyShellState();
     setFsmBadge(msg.fsm_state || "READY");
     renderMemberDropdown();
@@ -1805,6 +1827,197 @@ function handleInit(msg) {
     _ensureBrowserLocation().then(_sendDeviceContext).catch(_sendDeviceContext);
     if (dom.turnBadge) dom.turnBadge.textContent = `Turn ${state.turn}`;
     if (state.currentView === "home") loadHomeDashboard();
+}
+
+// ============================================================================
+// Slice 8: Chat session sidebar
+// ============================================================================
+
+async function fetchSessions() {
+    if (state.sessionsLoading) return;
+    state.sessionsLoading = true;
+    try {
+        const resp = await fetch("/api/sessions");
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        state.sessions = data.sessions || [];
+        state.activeSessionId = data.active_session_id || state.activeSessionId;
+        renderSessionList();
+    } catch (e) {
+        console.warn("fetchSessions failed:", e);
+    } finally {
+        state.sessionsLoading = false;
+    }
+}
+
+function renderSessionList() {
+    if (!dom.chatSessionsList) return;
+    const activeId = state.activeSessionId;
+    const sessions = state.sessions;
+
+    if (sessions.length === 0) {
+        dom.chatSessionsList.innerHTML = `<p class="chat-sessions__empty">No chats yet</p>`;
+        return;
+    }
+
+    const sorted = [...sessions].sort((a, b) => {
+        if (a.session_id === activeId) return -1;
+        if (b.session_id === activeId) return 1;
+        return (b.last_active || 0) - (a.last_active || 0);
+    });
+
+    dom.chatSessionsList.innerHTML = sorted.map(s => {
+        const isActive = s.session_id === activeId;
+        const title = escapeHtml(s.title || "New Chat");
+        return `
+            <button class="chat-session-item ${isActive ? "chat-session-item--active" : ""}"
+                    data-session-id="${escapeHtml(s.session_id)}"
+                    role="option"
+                    aria-selected="${isActive ? "true" : "false"}">
+                <span class="chat-session-item__title">${title}</span>
+                <span class="chat-session-item__delete"
+                      data-action="delete-session"
+                      data-session-id="${escapeHtml(s.session_id)}"
+                      title="Delete chat"
+                      aria-label="Delete ${title}">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+                        <polyline points="3 6 5 6 21 6"/>
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                    </svg>
+                </span>
+            </button>`;
+    }).join("");
+}
+
+async function createNewChat() {
+    if (state.switching) return;  // debounce
+    try {
+        const resp = await fetch("/api/sessions?title=New%20Chat", { method: "POST" });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        await activateSession(data.session_id);
+    } catch (e) {
+        console.error("createNewChat failed:", e);
+    }
+}
+
+async function activateSession(sessionId) {
+    if (sessionId === state.activeSessionId) return;
+    if (state.switching) return;  // debounce: switch already in progress
+    state.switching = true;
+
+    // Show loading indicator in the target session item
+    const targetItem = dom.chatSessionsList?.querySelector(`[data-session-id="${CSS.escape(sessionId)}"]`);
+    if (targetItem) targetItem.classList.add("chat-session-item--switching");
+
+    try {
+        const resp = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/activate`, {
+            method: "POST",
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        state.activeSessionId = data.session_id;
+        if (data.messages && data.messages.length > 0) {
+            loadMessagesIntoChat(data.messages);
+        } else {
+            clearChatMessages();
+        }
+        state.turn = data.turn_count || 0;
+        if (dom.turnBadge) dom.turnBadge.textContent = `Turn ${state.turn}`;
+        renderSessionList();
+    } catch (e) {
+        console.error("activateSession failed:", e);
+    } finally {
+        state.switching = false;
+        if (targetItem) targetItem.classList.remove("chat-session-item--switching");
+    }
+}
+
+async function deleteSession(sessionId) {
+    if (!confirm("Delete this chat? This cannot be undone.")) return;
+    try {
+        const resp = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+            method: "DELETE",
+        });
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            alert(err.detail || "Cannot delete this session.");
+            return;
+        }
+        state.sessions = state.sessions.filter(s => s.session_id !== sessionId);
+        if (sessionId === state.activeSessionId) {
+            const mostRecent = state.sessions[0];
+            if (mostRecent) {
+                await activateSession(mostRecent.session_id);
+            } else {
+                await createNewChat();
+            }
+        } else {
+            renderSessionList();
+        }
+    } catch (e) {
+        console.error("deleteSession failed:", e);
+    }
+}
+
+function loadMessagesIntoChat(messages) {
+    if (!dom.messages) return;
+    clearChatMessages();
+    messages.forEach(turn => {
+        if (turn.user) addUserMessage(turn.user);
+        if (turn.assistant) addAssistantMessage(turn.assistant);
+    });
+}
+
+function clearChatMessages() {
+    if (!dom.messages) return;
+    dom.messages.innerHTML = "";
+    setChatWelcomeVisible();
+}
+
+function setupSessionSidebar() {
+    dom.chatSessionsList?.addEventListener("click", (event) => {
+        const deleteBtn = event.target.closest("[data-action='delete-session']");
+        if (deleteBtn) {
+            event.stopPropagation();
+            const sid = deleteBtn.dataset.sessionId;
+            if (sid) deleteSession(sid);
+            return;
+        }
+        const item = event.target.closest("[data-session-id]");
+        if (item) {
+            const sid = item.dataset.sessionId;
+            if (sid && sid !== state.activeSessionId) activateSession(sid);
+        }
+    });
+
+    dom.btnNewChat?.addEventListener("click", createNewChat);
+}
+
+function handleSessionUpdated(msg) {
+    const sid = msg.session_id;
+    const title = msg.title;
+    const session = state.sessions.find(s => s.session_id === sid);
+    if (session) {
+        session.title = title;
+        renderSessionList();
+    } else {
+        fetchSessions();
+    }
+}
+
+function handleSessionActivated(msg) {
+    state.activeSessionId = msg.session_id;
+    state.turn = msg.turn_count || 0;
+    if (dom.turnBadge) dom.turnBadge.textContent = `Turn ${state.turn}`;
+    if (msg.messages && msg.messages.length > 0) {
+        loadMessagesIntoChat(msg.messages);
+    } else {
+        clearChatMessages();
+    }
+    renderSessionList();
+    fetchSessions();
+    try { localStorage.setItem("familyos.active_session_id", msg.session_id); } catch {}
 }
 
 function handleResponse(msg) {

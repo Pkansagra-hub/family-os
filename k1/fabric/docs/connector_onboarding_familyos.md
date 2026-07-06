@@ -51,9 +51,10 @@ policy_declarations:                     # See §1.4 — embedded or ref
 capabilities: []                         # See §1.2 — list of capability records
 ```
 
-**Fields (16 total):** See `k1/fabric/connectors/definition.py` `ConnectorDefinition` dataclass.
+**Fields (18 total with Phase 2.6):** See `k1/tools/family/definition.py` `ToolDefinition` dataclass.
 
 11 identity fields: `connector_id`, `connector_type`, `provider_type`, `label`, `description`, `version`, `provider_id`, `resource_kinds`, `actor_scope`, `admission_verdict`, `registration_type`.
+2 Phase 2.6 taxonomy fields: `domain_id`, `resource_families`.
 5 payload fields: `capabilities`, `constitution`, `policy`, `guide_cards`, `ontology`.
 
 ### 1.2 Capability Schemas
@@ -356,6 +357,67 @@ ontology:
 
 ---
 
+### 1.7 Domain & Resource Family Taxonomy (Phase 2.6)
+
+Every connector MUST declare which **domain** it belongs to and which **resource families** it manages. These are validated against the GPS taxonomy tables.
+
+#### The Taxonomy Tables
+
+| Table | Purpose | Populated By |
+|-------|---------|-------------|
+| `domains` | 16 governed domains (family, health, finance, ...) | `_DOMAINS_SEED` in `global_projection_store.py` |
+| `resource_families` | 57 governed resource families (event, task, account, ...) | `_RESOURCE_FAMILIES_SEED` |
+| `domain_resource_families` | Which families are valid in which domain | `_DOMAIN_RESOURCE_FAMILIES_SEED` |
+| `connector_resource_families` | Which families YOUR connector manages | `manifest_translator.py` at bootstrap |
+
+Full reference: `RESOURCE_FAMILY_TAXONOMY.md`.
+
+#### What This Means for Your Connector
+
+Your `ToolDefinition` (in `k1/tools/family/your_adapter/definition.py`) now carries two Phase 2.6 fields:
+
+```python
+CALENDAR_DEFINITION = ToolDefinition(
+    adapter_id="calendar",
+    # ... existing fields ...
+    resource_kinds=["calendar_event", "appointment"],   # legacy — still required
+    # ── Phase 2.6 taxonomy (Epic 23) ──
+    domain_id="family",              # MUST match a row in the domains table
+    resource_families=["event"],     # MUST match rows in resource_families table
+)
+```
+
+**`domain_id`**: The domain your connector belongs to. Currently all family tools use `"family"`. Must match a `domain_id` in the `domains` table.
+
+**`resource_families`**: The taxonomy family IDs your connector manages. These are **real-world concepts** (e.g., `"event"`), NOT connector-specific strings (e.g., `"calendar_event"`). The mapping:
+
+| Connector | `resource_kinds` (legacy) | `resource_families` (taxonomy) |
+|-----------|--------------------------|-------------------------------|
+| Calendar | `["calendar_event", "appointment"]` | `["event"]` |
+| Tasks | `["task"]` | `["task"]` |
+| Reminders | `["reminder"]` | `["reminder"]` |
+| Chores | `["chore"]` | `["chore"]` |
+| Shopping | `["shopping_item"]` | `["item"]` |
+| Family Settings | `["setting"]` | `["setting"]` |
+
+#### How It Flows into GPS
+
+At bootstrap, `register_definition_to_store()` in `manifest_translator.py`:
+1. Reads `definition.domain_id` → writes `connectors.domain_id` and `capabilities.domain_id`
+2. Reads `definition.resource_families` → writes `capabilities.family_id` and `connector_resource_families` rows
+3. Falls back to `definition.resource_kinds` if `resource_families` is not set (backward compat)
+4. Only inserts into `connector_resource_families` when `resource_families` is explicitly declared (FK safety)
+
+#### Migration from Pre-Phase-2.6
+
+If your connector was created before Phase 2.6:
+- `resource_kinds` values like `"calendar_event"` were connector-specific strings.
+- Add `domain_id="family"` and `resource_families=["event"]` (or whichever family matches).
+- The old `resource_kinds` field stays — both coexist.
+- No DDL changes needed — `entity_type` changes are cosmetic only (the SQLite tables use plural names like `calendar_events`, not `entity_type`).
+
+---
+
 ## 2. Adapter Implementation
 
 ### 2.1 Provider Type Decision Tree
@@ -646,7 +708,10 @@ FrameScenario(
 Before marking `admission_verdict: "admitted"`, verify:
 
 ```text
-□ Manifest: All 14 required fields present and valid.
+□ Manifest: All 18 required fields present and valid (including Phase 2.6: domain_id, resource_families).
+□ Taxonomy: domain_id matches a row in the domains table. Every entry in resource_families
+  matches a row in the resource_families table and is valid for the declared domain
+  (domain_resource_families FK). connector_resource_families populated at bootstrap.
 □ Capabilities: Every operation has full JSON Schema inputs/outputs.
 □ Constitution: prerequisite_reads, conflict_analysis_rules, companion_resource_roles,
   hil_gates, mutation_sequencing, verification_requirements all populated.
